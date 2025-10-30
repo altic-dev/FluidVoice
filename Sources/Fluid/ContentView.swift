@@ -19,6 +19,17 @@ import CoreGraphics
 // Import the talking animations from TalkingAnimations.swift
 // The TalkingAudioVisualizationView is now defined in TalkingAnimations.swift
 
+// MARK: - Sidebar Item Enum
+
+enum SidebarItem: Hashable {
+    case welcome
+    case recording
+    case aiProcessing
+    case settings
+    case meetingTools
+    case feedback
+}
+
 // MARK: - Listening Overlay View (using modular components)
 struct ListeningOverlayView: View
 {
@@ -67,6 +78,7 @@ struct ContentView: View {
     @StateObject private var asr = ASRService()
     @StateObject private var mouseTracker = MousePositionTracker()
     @EnvironmentObject private var menuBarManager: MenuBarManager
+    @Environment(\.theme) private var theme
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
     
@@ -216,6 +228,64 @@ struct ContentView: View {
                 await preloadASRModel()
             }
             
+            // Load saved provider ID first
+            selectedProviderID = SettingsStore.shared.selectedProviderID
+            
+            // Establish provider context first
+            updateCurrentProvider()
+
+            enableAIProcessing = SettingsStore.shared.enableAIProcessing
+            enableDebugLogs = SettingsStore.shared.enableDebugLogs
+            availableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+            selectedModelByProvider = SettingsStore.shared.selectedModelByProvider
+            providerAPIKeys = SettingsStore.shared.providerAPIKeys
+            savedProviders = SettingsStore.shared.savedProviders
+
+            // Migration & cleanup: normalize provider keys and drop legacy flat lists
+            var normalized: [String: [String]] = [:]
+            for (key, models) in availableModelsByProvider {
+                let lower = key.lowercased()
+                let newKey: String
+                if lower == "openai" || lower == "groq" { newKey = lower }
+                else { newKey = key.hasPrefix("custom:") ? key : "custom:\\(key)" }
+                // Keep only unique, trimmed models
+                let clean = Array(Set(models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
+                if !clean.isEmpty { normalized[newKey] = clean }
+            }
+            availableModelsByProvider = normalized
+            SettingsStore.shared.availableModelsByProvider = normalized
+
+            // Normalize selectedModelByProvider keys similarly and drop invalid selections
+            var normalizedSel: [String: String] = [:]
+            for (key, model) in selectedModelByProvider {
+                let lower = key.lowercased()
+                let newKey: String = (lower == "openai" || lower == "groq") ? lower : (key.hasPrefix("custom:") ? key : "custom:\\(key)")
+                if let list = normalized[newKey], list.contains(model) { normalizedSel[newKey] = model }
+            }
+            selectedModelByProvider = normalizedSel
+            SettingsStore.shared.selectedModelByProvider = normalizedSel
+
+            // Determine initial model list without legacy flat-list fallback
+            if let saved = savedProviders.first(where: { $0.id == selectedProviderID }) {
+                // Use models from saved provider
+                availableModels = saved.models
+                openAIBaseURL = saved.baseURL
+                providerAPIKeys[currentProvider] = saved.apiKey
+            } else if let stored = availableModelsByProvider[currentProvider], !stored.isEmpty {
+                // Use provider-specific stored list if present
+                availableModels = stored
+            } else {
+                // Built-in defaults
+                availableModels = defaultModels(for: providerKey(for: selectedProviderID))
+            }
+
+            // Restore previously selected model if valid
+            if let sel = selectedModelByProvider[currentProvider], availableModels.contains(sel) {
+                selectedModel = sel
+            } else if let first = availableModels.first {
+                selectedModel = first
+            }
+            
             NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
                 let eventModifiers = event.modifierFlags.intersection([.function, .command, .option, .control, .shift])
                 let shortcutModifiers = hotkeyShortcut.modifierFlags.intersection([.function, .command, .option, .control, .shift])
@@ -318,6 +388,20 @@ struct ContentView: View {
                 hotkeyManager?.reinitialize()
             }
         }
+        .onChange(of: enableAIProcessing) { newValue in
+            SettingsStore.shared.enableAIProcessing = newValue
+            // Sync to menu bar immediately
+            menuBarManager.aiProcessingEnabled = newValue
+        }
+        .onChange(of: selectedModel) { newValue in
+            if newValue != "__ADD_MODEL__" {
+                selectedModelByProvider[currentProvider] = newValue
+                SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+            }
+        }
+        .onChange(of: selectedProviderID) { newValue in
+            SettingsStore.shared.selectedProviderID = newValue
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             let trusted = AXIsProcessTrusted()
             if trusted != accessibilityEnabled {
@@ -391,118 +475,54 @@ struct ContentView: View {
                 Label("Welcome", systemImage: "house.fill")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
 
             NavigationLink(value: SidebarItem.recording) {
                 Label("Recording", systemImage: "mic.fill")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
-
+            
             NavigationLink(value: SidebarItem.aiProcessing) {
                 Label("AI Processing", systemImage: "sparkles")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
-            
-            NavigationLink(value: SidebarItem.audio) {
-                Label("Audio", systemImage: "speaker.wave.2.fill")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .listRowBackground(sidebarRowBackground)
             
             NavigationLink(value: SidebarItem.settings) {
                 Label("Settings", systemImage: "gearshape.fill")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
 
             NavigationLink(value: SidebarItem.meetingTools) {
                 Label("Meeting Tools", systemImage: "person.2.wave.2.fill")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
 
             NavigationLink(value: SidebarItem.feedback) {
                 Label("Feedback", systemImage: "envelope.fill")
                     .font(.system(size: 15, weight: .medium))
             }
-            .listRowBackground(sidebarRowBackground)
         }
         .listStyle(.sidebar)
         .navigationTitle("FluidVoice")
-        .background(sidebarBackground)
         .scrollContentBackground(.hidden)
-    }
-    
-    private var sidebarRowBackground: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(.ultraThinMaterial.opacity(0.8))
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.10, green: 0.12, blue: 0.20).opacity(0.3), // Deep blue tint
-                                Color(red: 0.06, green: 0.08, blue: 0.15).opacity(0.2), // Blue-charcoal
-                                Color(red: 0.04, green: 0.05, blue: 0.10).opacity(0.1)  // Dark blue
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
-            )
-    }
-    
-    private var sidebarBackground: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 0.10, green: 0.12, blue: 0.22), // Deep blue-charcoal (more blue at top)
-                Color(red: 0.06, green: 0.08, blue: 0.16), // Rich blue-black
-                Color(red: 0.04, green: 0.05, blue: 0.10), // Ultra dark blue
-                Color(red: 0.02, green: 0.03, blue: 0.06)  // Deepest blue
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+        .background {
+            ZStack {
+                theme.palette.sidebarBackground
+                Rectangle().fill(theme.materials.sidebar)
+            }
+            .ignoresSafeArea()
+        }
+        .tint(theme.palette.accent)
     }
     
     private var detailView: some View {
         ZStack {
-            // Tech blue gradient background
-            ZStack {
-                // Base dark blue layer
-                Color(red: 0.04, green: 0.05, blue: 0.09)
+            theme.palette.windowBackground
+                .ignoresSafeArea()
 
-                // Tech blue gradient overlay
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.08, green: 0.10, blue: 0.18).opacity(0.8), // Deep tech blue (more blue)
-                        Color(red: 0.05, green: 0.07, blue: 0.14).opacity(0.6), // Rich blue-black
-                        Color(red: 0.06, green: 0.06, blue: 0.12).opacity(0.7), // Blue-charcoal
-                        Color(red: 0.04, green: 0.05, blue: 0.10).opacity(0.5)  // Base dark blue
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+            Rectangle()
+                .fill(theme.materials.window)
+                .ignoresSafeArea()
 
-                // Subtle radial gradient for depth
-                RadialGradient(
-                    colors: [
-                        Color.clear,
-                        Color(red: 0.02, green: 0.03, blue: 0.06).opacity(0.3)
-                    ],
-                    center: .center,
-                    startRadius: 100,
-                    endRadius: 400
-                )
-            }
-            .ignoresSafeArea()
-            
             Group {
                 switch selectedSidebarItem ?? .welcome {
                 case .welcome:
@@ -511,8 +531,6 @@ struct ContentView: View {
                     recordingView
                 case .aiProcessing:
                     aiProcessingView
-                case .audio:
-                    audioView
                 case .settings:
                     settingsView
                 case .meetingTools:
@@ -521,608 +539,42 @@ struct ContentView: View {
                     feedbackView
                 }
             }
+            .transition(.opacity)
         }
     }
 
     // MARK: - Welcome Guide
     private var welcomeView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "book.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading) {
-                            Text("Welcome to FluidVoice")
-                                .font(.system(size: 28, weight: .bold))
-                            Text("Your AI-powered voice transcription assistant")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Follow this quick setup to start using FluidVoice.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
-                }
-                .padding(.bottom, 8)
-
-                // Quick Setup Checklist
-                HoverableGlossyCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.blue)
-                            Text("Quick Setup")
-                                .font(.headline)
-                        }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            SetupStepView(
-                                step: 1,
-                                title: "Grant Microphone Permission",
-                                description: "Allow FluidVoice to access your microphone for voice input",
-                                status: asr.micStatus == .authorized ? .completed : .pending,
-                                action: {
-                                    selectedSidebarItem = .recording
-                                }
-                            )
-
-                            SetupStepView(
-                                step: 2,
-                                title: "Enable Accessibility",
-                                description: "Grant accessibility permission to type text into other apps",
-                                status: accessibilityEnabled ? .completed : .pending,
-                                action: {
-                                    selectedSidebarItem = .recording
-                                }
-                            )
-
-                            SetupStepView(
-                                step: 3,
-                                title: "Set Up AI Enhancement (Optional)",
-                                description: "Configure API keys for AI-powered text enhancement",
-                                status: {
-                                    let hasApiKey = providerAPIKeys[currentProvider]?.isEmpty == false
-                                    let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
-                                    let hasModel = availableModels.contains(selectedModel)
-                                    return ((isLocal || hasApiKey) && hasModel) ? .completed : .pending
-                                }(),
-                                action: {
-                                    selectedSidebarItem = .aiProcessing
-                                }
-                            )
-
-                            SetupStepView(
-                                step: 4,
-                                title: "Test Your Setup below",
-                                description: "Try the playground below to test your complete setup",
-                                status: playgroundUsed ? .completed : .pending,
-                                action: {
-                                    // No action needed - playground is right below
-                                },
-                                showConfigureButton: false
-                            )
-                        }
-                    }
-                    .padding(20)
-                }
-
-                // Test Playground - Right after setup checklist
-                HoverableGlossyCard(excludeInteractiveElements: true) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "text.bubble")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Test Playground")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-
-                            Spacer()
-
-                            if !asr.finalText.isEmpty {
-                                Button(action: {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(asr.finalText, forType: .string)
-                                }) {
-                                    HStack {
-                                        Image(systemName: "doc.on.doc")
-                                        Text("Copy")
-                                    }
-                                }
-                                .buttonStyle(InlineButtonStyle())
-                                .buttonHoverEffect()
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Test your voice transcription here!")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(.secondary)
-
-                                    Text("• Click 'Start Recording' or use hotkey (Right Option/Alt)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                    Text("• Speak naturally - words appear in real-time")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                    Text("• Click 'Stop Recording' when finished")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                VStack(alignment: .trailing, spacing: 4) {
-                                    if asr.isRunning {
-                                        HStack {
-                                            Image(systemName: "waveform")
-                                                .foregroundStyle(.red)
-                                            Text("Recording...")
-                                                .font(.caption)
-                                                .foregroundStyle(.red)
-                                        }
-                                    } else if !asr.finalText.isEmpty {
-                                        Text("\(asr.finalText.count) characters")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-
-                            // Recording Controls
-                            HStack(spacing: 16) {
-                                if asr.isRunning {
-                                    Button(action: {
-                                        Task {
-                                            await stopAndProcessTranscription()
-                                        }
-                                    }) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "stop.fill")
-                                                .foregroundStyle(.red)
-                                            Text("Stop Recording")
-                                                .fontWeight(.medium)
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 8)
-                                        .background(Color.red.opacity(0.1))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    }
-                                } else {
-                                    Button(action: {
-                                        startRecording()
-                                    }) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "mic.fill")
-                                                .foregroundStyle(.green)
-                                            Text("Start Recording")
-                                                .fontWeight(.medium)
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 8)
-                                        .background(Color.green.opacity(0.1))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    }
-                                }
-
-                                if !asr.isRunning && !asr.finalText.isEmpty {
-                                    Button("Clear Results") {
-                                        asr.finalText = ""
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-                            }
-
-                            // TRANSCRIPTION TEXT AREA - ACTUAL TEXT FIELD
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("Transcription Playground")
-                                        .font(.headline)
-                                        .fontWeight(.semibold)
-
-                                    Spacer()
-
-                                    if !asr.finalText.isEmpty {
-                                        Text("\(asr.finalText.count) characters")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-
-                                // REAL TEXT EDITOR - Can receive focus and display transcription
-                                TextEditor(text: $asr.finalText)
-                                    .font(.system(size: 16))
-                                    .focused($isTranscriptionFocused)
-                                    .frame(height: 200)
-                                    .padding(16)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .fill(asr.isRunning ? Color.blue.opacity(0.05) : Color.gray.opacity(0.05))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .stroke(asr.isRunning ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2), lineWidth: asr.isRunning ? 2 : 1)
-                                            )
-                                    )
-                                    .overlay(
-                                        VStack {
-                                            if asr.isRunning {
-                                                VStack(spacing: 12) {
-                                                    // Animated recording indicator overlay
-                                                    HStack(spacing: 8) {
-                                                        Image(systemName: "waveform")
-                                                            .font(.system(size: 24))
-                                                            .foregroundStyle(.blue)
-                                                            .scaleEffect(1.0)
-                                                            .animation(.easeInOut(duration: 0.8).repeatForever(), value: asr.isRunning)
-
-                                                        Image(systemName: "waveform")
-                                                            .font(.system(size: 20))
-                                                            .foregroundStyle(.blue.opacity(0.7))
-                                                            .scaleEffect(1.0)
-                                                            .animation(.easeInOut(duration: 0.6).repeatForever(), value: asr.isRunning)
-
-                                                        Image(systemName: "waveform")
-                                                            .font(.system(size: 16))
-                                                            .foregroundStyle(.blue.opacity(0.5))
-                                                            .scaleEffect(1.0)
-                                                            .animation(.easeInOut(duration: 0.4).repeatForever(), value: asr.isRunning)
-                                                    }
-
-                                                    VStack(spacing: 4) {
-                                                        Text("Listening... Speak now!")
-                                                            .font(.title3)
-                                                            .fontWeight(.semibold)
-                                                            .foregroundStyle(.blue)
-
-                                                        Text("Your words will appear here in real-time")
-                                                            .font(.subheadline)
-                                                            .foregroundStyle(.blue.opacity(0.8))
-                                                    }
-                                                }
-                                            } else if asr.finalText.isEmpty {
-                                                VStack(spacing: 12) {
-                                                    Image(systemName: "text.bubble")
-                                                        .font(.system(size: 32))
-                                                        .foregroundStyle(.secondary.opacity(0.6))
-
-                                                    VStack(spacing: 4) {
-                                                        Text("Ready to test!")
-                                                            .font(.title3)
-                                                            .fontWeight(.semibold)
-                                                            .foregroundStyle(.primary)
-
-                                                        Text("Click 'Start Recording' or press your hotkey")
-                                                            .font(.subheadline)
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .allowsHitTesting(false) // Don't block text editor interaction
-                                    )
-
-                                // Quick Action Buttons
-                                if !asr.finalText.isEmpty {
-                                    HStack(spacing: 12) {
-                                        Button(action: {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(asr.finalText, forType: .string)
-                                        }) {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "doc.on.doc")
-                                                Text("Copy Text")
-                                            }
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 8)
-                                            .background(Color.blue.opacity(0.1))
-                                            .foregroundStyle(.blue)
-                                            .cornerRadius(8)
-                                        }
-
-                                        Button("Clear & Test Again") {
-                                            asr.finalText = ""
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.regular)
-
-                                        Spacer()
-                                    }
-                                    .padding(.top, 8)
-                                }
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-
-                // How to Use
-                HoverableGlossyCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "play.fill")
-                                .foregroundStyle(.green)
-                            Text("How to Use")
-                                .font(.headline)
-                        }
-
-                        VStack(alignment: .leading, spacing: 16) {
-                            InstructionStep(
-                                number: 1,
-                                title: "Start Recording",
-                                description: "Use your hotkey (default: Right Option/Alt) or click the record button in the main window"
-                            )
-
-                            InstructionStep(
-                                number: 2,
-                                title: "Speak Clearly",
-                                description: "Speak your text naturally. The app works best in quiet environments"
-                            )
-
-                            InstructionStep(
-                                number: 3,
-                                title: "AI Enhancement",
-                                description: "Your speech is transcribed, then enhanced by AI for better grammar and clarity"
-                            )
-
-                            InstructionStep(
-                                number: 4,
-                                title: "Auto-Type Result",
-                                description: "The enhanced text is automatically typed into your focused application"
-                            )
-                        }
-                    }
-                    .padding(20)
-                }
-
-                // API Configuration Guide
-                HoverableGlossyCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "key.fill")
-                                .foregroundStyle(.purple)
-                            Text("Get API Keys")
-                                .font(.headline)
-                        }
-
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Choose your AI provider:")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            ProviderGuide(
-                                name: "OpenAI",
-                                url: "https://platform.openai.com/api-keys",
-                                description: "Most popular choice with GPT-4.1 models",
-                                baseURL: "https://api.openai.com/v1",
-                                keyPrefix: "sk-"
-                            )
-
-                            ProviderGuide(
-                                name: "Groq",
-                                url: "https://console.groq.com/keys",
-                                description: "Fast inference with Llama and Mixtral models",
-                                baseURL: "https://api.groq.com/openai/v1",
-                                keyPrefix: "gsk_"
-                            )
-
-
-                            // Local Models Coming Soon
-                            HoverableGlossyCard(excludeInteractiveElements: true) {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text("Local Models")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(.secondary)
-
-                                        Spacer()
-
-                                        Text("Coming Soon")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.orange)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 2)
-                                            .background(Color.orange.opacity(0.1))
-                                            .cornerRadius(8)
-                                    }
-
-                                    Text("Run models locally for privacy and offline use")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(12)
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-
-
-            }
-            .padding(20)
-        }
+        WelcomeView(
+            asr: asr,
+            selectedSidebarItem: $selectedSidebarItem,
+            isTranscriptionFocused: $isTranscriptionFocused,
+            accessibilityEnabled: accessibilityEnabled,
+            providerAPIKeys: providerAPIKeys,
+            currentProvider: currentProvider,
+            openAIBaseURL: openAIBaseURL,
+            availableModels: availableModels,
+            selectedModel: selectedModel,
+            playgroundUsed: playgroundUsed,
+            stopAndProcessTranscription: { await stopAndProcessTranscription() },
+            startRecording: startRecording,
+            isLocalEndpoint: isLocalEndpoint
+        )
     }
-
-    // MARK: - Getting Started Helper Views
-
-    private struct SetupStepView: View {
-        let step: Int
-        let title: String
-        let description: String
-        let status: SetupStatus
-        let action: () -> Void
-        var showConfigureButton: Bool = true
-
-        enum SetupStatus {
-            case pending, completed, inProgress
-        }
-
-        var body: some View {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(statusColor.opacity(0.2))
-                        .frame(width: 32, height: 32)
-
-                    if status == .completed {
-                        Image(systemName: "checkmark")
-                            .foregroundStyle(statusColor)
-                            .font(.system(size: 14, weight: .bold))
-                    } else {
-                        Text("\(step)")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(statusColor)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(title)
-                            .font(.system(size: 14, weight: .semibold))
-
-                        Spacer()
-
-                        if status != .completed && showConfigureButton {
-                            Button("Configure") {
-                                action()
-                            }
-                            .font(.system(size: 12))
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-
-                    Text(description)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.vertical, 8)
-        }
-
-        private var statusColor: Color {
-            switch status {
-            case .completed: return .green
-            case .inProgress: return .blue
-            case .pending: return .secondary
-            }
-        }
-    }
-
-
-
-    private struct InstructionStep: View {
-        let number: Int
-        let title: String
-        let description: String
-
-        var body: some View {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.blue.opacity(0.2))
-                        .frame(width: 28, height: 28)
-
-                    Text("\(number)")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.blue)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-
-                    Text(description)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-        }
-    }
-
-    private struct ProviderGuide: View {
-        let name: String
-        let url: String
-        let description: String
-        let baseURL: String
-        let keyPrefix: String
-
-        var body: some View {
-            HoverableGlossyCard(excludeInteractiveElements: true) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(name)
-                            .font(.system(size: 14, weight: .semibold))
-
-                        Spacer()
-
-                        if !url.isEmpty {
-                            Button("Get API Key") {
-                                if let url = URL(string: url) {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .font(.system(size: 12))
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-
-                    Text(description)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Base URL:")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                            Text(baseURL)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                        }
-
-                        HStack {
-                            Text("Key Format:")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                            Text(keyPrefix == "not-needed" ? "Not required" : "Starts with: \(keyPrefix)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.primary)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(12)
-            }
-        }
-    }
-
-
-
+    
+    // MARK: - Microphone Permission View (Kept inline for RecordingView)
     private var microphonePermissionView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 // Status indicator
                 Circle()
-                    .fill(asr.micStatus == .authorized ? .green : .red)
+                    .fill(asr.micStatus == .authorized ? theme.palette.success : theme.palette.warning)
                     .frame(width: 10, height: 10)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(labelFor(status: asr.micStatus))
                         .fontWeight(.medium)
-                        .foregroundStyle(asr.micStatus == .authorized ? .primary : Color.red)
+                        .foregroundStyle(asr.micStatus == .authorized ? theme.palette.primaryText : theme.palette.warning)
                     
                     if asr.micStatus != .authorized {
                         Text("Microphone access is required for voice recording")
@@ -1176,7 +628,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(theme.palette.accent)
                     .font(.caption)
                 Text("How to enable microphone access:")
                     .font(.caption)
@@ -1197,7 +649,7 @@ struct ContentView: View {
             .padding(.leading, 4)
         }
         .padding(12)
-        .background(Color.blue.opacity(0.1))
+        .background(theme.palette.accent.opacity(0.12))
         .cornerRadius(8)
     }
     
@@ -1205,7 +657,7 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Text(number + ".")
                 .font(.caption2)
-                .foregroundStyle(.blue)
+                .foregroundStyle(theme.palette.accent)
                 .fontWeight(.semibold)
                 .frame(width: 16)
             Text(text)
@@ -1216,140 +668,52 @@ struct ContentView: View {
 
     // MARK: - Settings View
     private var settingsView: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 24) {
-                // Header
-                HoverableGlossyCard {
-                    VStack(spacing: 16) {
-                        HStack {
-                            Image(systemName: "gear")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.white)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Settings")
-                                    .font(.title2)
-                                    .fontWeight(.bold)
-                                Text("App behavior and preferences")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-                        }
-                    }
-                    .padding(24)
-                }
-
-                // Settings Card
-                HoverableGlossyCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "power")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("App Settings")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
-
-                        VStack(spacing: 16) {
-                            Toggle(isOn: Binding(
-                                get: { SettingsStore.shared.launchAtStartup },
-                                set: { SettingsStore.shared.launchAtStartup = $0 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Launch at startup")
-                                        .font(.headline)
-                                    Text("Automatically start FluidVoice when you log in")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .toggleStyle(.switch)
-
-                            Text("Note: Requires app to be signed for this to work.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary.opacity(0.7))
-
-                            Divider()
-
-                            Toggle(isOn: Binding(
-                                get: { SettingsStore.shared.showInDock },
-                                set: { SettingsStore.shared.showInDock = $0 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Show in Dock")
-                                        .font(.headline)
-                                    Text("Display FluidVoice icon in the Dock")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .toggleStyle(.switch)
-
-                            Text("Note: May require app restart to take effect.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary.opacity(0.7))
-
-                            Divider()
-
-                            Toggle(isOn: Binding(
-                                get: { SettingsStore.shared.autoUpdateCheckEnabled },
-                                set: { SettingsStore.shared.autoUpdateCheckEnabled = $0 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Automatic Updates")
-                                        .font(.headline)
-                                    Text("Check for updates automatically once per day")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .toggleStyle(.switch)
-
-                            if let lastCheck = SettingsStore.shared.lastUpdateCheckDate {
-                                Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary.opacity(0.7))
-                            }
-                            
-                            // What's New Button
-                            Button(action: {
-                                DispatchQueue.main.async {
-                                    showWhatsNewSheet = true
-                                }
-                            }) {
-                                Text("What's New")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [Color.blue.opacity(0.8), Color.blue.opacity(0.6)],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.top, 8)
-                        }
-                    }
-                    .padding(24)
-                }
-            }
-            .padding(24)
-        }
+        SettingsView(
+            asr: asr,
+            appear: $appear,
+            showWhatsNewSheet: $showWhatsNewSheet,
+            visualizerNoiseThreshold: $visualizerNoiseThreshold,
+            selectedInputUID: $selectedInputUID,
+            selectedOutputUID: $selectedOutputUID,
+            inputDevices: $inputDevices,
+            outputDevices: $outputDevices,
+            startRecording: startRecording,
+            refreshDevices: refreshDevices
+        )
     }
 
     private var recordingView: some View {
+        RecordingView(
+            asr: asr,
+            appear: $appear,
+            accessibilityEnabled: $accessibilityEnabled,
+            hotkeyShortcut: $hotkeyShortcut,
+            isRecordingShortcut: $isRecordingShortcut,
+            hotkeyManagerInitialized: $hotkeyManagerInitialized,
+            pressAndHoldModeEnabled: $pressAndHoldModeEnabled,
+            enableStreamingPreview: $enableStreamingPreview,
+            copyToClipboard: $copyToClipboard,
+            hotkeyManager: hotkeyManager,
+            menuBarManager: menuBarManager,
+            stopAndProcessTranscription: { await stopAndProcessTranscription() },
+            startRecording: startRecording,
+            downloadModels: { await downloadModels() },
+            deleteModels: { await deleteModels() },
+            openAccessibilitySettings: openAccessibilitySettings,
+            restartApp: restartApp,
+            revealAppInFinder: revealAppInFinder,
+            openApplicationsFolder: openApplicationsFolder,
+            getModelStatusText: getModelStatusText,
+            labelFor: labelFor
+        )
+    }
+    
+    // MARK: - OLD Recording View (To Remove Later)
+    private var _oldRecordingView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 24) {
                 // Hero Header Card
-                HoverableGlossyCard {
+                ThemedCard(style: .standard) {
                     VStack(spacing: 16) {
                         HStack {
                             Image(systemName: "waveform.circle.fill")
@@ -1410,7 +774,7 @@ struct ContentView: View {
                 .modifier(CardAppearAnimation(delay: 0.1, appear: $appear))
 
                 // Permissions Card
-                HoverableGlossyCard {
+                ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
                             Image(systemName: "shield.checkered")
@@ -1428,7 +792,7 @@ struct ContentView: View {
                 .modifier(CardAppearAnimation(delay: 0.2, appear: $appear))
 
                 // Model Configuration Card (disable hover transforms to avoid AppKit constraint logs)
-                HoverableGlossyCard(excludeInteractiveElements: true) {
+                ThemedCard(hoverEffect: false) {
                     VStack(alignment: .leading, spacing: 16) {
                     HStack {
                         Image(systemName: "brain.head.profile")
@@ -1497,7 +861,7 @@ struct ContentView: View {
                             } else if asr.modelsExistOnDisk {
                                 HStack(spacing: 8) {
                                     Image(systemName: "doc.fill")
-                                        .foregroundStyle(.blue)
+                                        .foregroundStyle(theme.palette.accent)
                                     Text("Models on Disk (Not Loaded)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -1532,7 +896,7 @@ struct ContentView: View {
                                         Text("Download")
                                     }
                                     .font(.caption)
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(theme.palette.accent)
                                 }
                                 .buttonStyle(.plain)
                                 .help("Download ASR models (~500MB)")
@@ -1570,7 +934,7 @@ struct ContentView: View {
 
 
                 // Global Hotkey Card
-                HoverableGlossyCard {
+                ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 16) {
                     HStack {
                         Image(systemName: "keyboard")
@@ -1768,16 +1132,16 @@ struct ContentView: View {
                             HStack(spacing: 12) {
                                 // Status indicator
                                 Circle()
-                                    .fill(.red)
+                                    .fill(theme.palette.warning)
                                     .frame(width: 10, height: 10)
                                 
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
                                         Image(systemName: "exclamationmark.triangle.fill")
-                                            .foregroundStyle(.orange)
+                                            .foregroundStyle(theme.palette.warning)
                                         Text("Accessibility permissions required")
                                             .fontWeight(.medium)
-                                            .foregroundStyle(Color.red)
+                                            .foregroundStyle(theme.palette.warning)
                                     }
                                     Text("Required for global hotkey functionality")
                                         .font(.caption)
@@ -1796,7 +1160,7 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack(spacing: 8) {
                                     Image(systemName: "info.circle.fill")
-                                        .foregroundStyle(.blue)
+                                        .foregroundStyle(theme.palette.accent)
                                         .font(.caption)
                                     Text("Follow these steps to enable Accessibility:")
                                         .font(.caption)
@@ -1808,7 +1172,7 @@ struct ContentView: View {
                                     HStack(spacing: 8) {
                                         Text("1.")
                                             .font(.caption2)
-                                            .foregroundStyle(.blue)
+                                            .foregroundStyle(theme.palette.accent)
                                             .fontWeight(.semibold)
                                             .frame(width: 16)
                                         Text("Click **Open Accessibility Settings** above")
@@ -1818,7 +1182,7 @@ struct ContentView: View {
                                     HStack(spacing: 8) {
                                         Text("2.")
                                             .font(.caption2)
-                                            .foregroundStyle(.blue)
+                                            .foregroundStyle(theme.palette.accent)
                                             .fontWeight(.semibold)
                                             .frame(width: 16)
                                         Text("In the Accessibility window, click the **+ button**")
@@ -1828,7 +1192,7 @@ struct ContentView: View {
                                     HStack(spacing: 8) {
                                         Text("3.")
                                             .font(.caption2)
-                                            .foregroundStyle(.blue)
+                                            .foregroundStyle(theme.palette.accent)
                                             .fontWeight(.semibold)
                                             .frame(width: 16)
                                         Text("Navigate to Applications and select **FluidVoice**")
@@ -1838,7 +1202,7 @@ struct ContentView: View {
                                     HStack(spacing: 8) {
                                         Text("4.")
                                             .font(.caption2)
-                                            .foregroundStyle(.blue)
+                                            .foregroundStyle(theme.palette.accent)
                                             .fontWeight(.semibold)
                                             .frame(width: 16)
                                         Text("Click **Open**, then toggle **FluidVoice ON** in the list")
@@ -1864,7 +1228,7 @@ struct ContentView: View {
                                 }
                             }
                             .padding(12)
-                            .background(Color.orange.opacity(0.1))
+                            .background(theme.palette.warning.opacity(0.12))
                             .cornerRadius(8)
                         }
                     }
@@ -1874,7 +1238,7 @@ struct ContentView: View {
                 .modifier(CardAppearAnimation(delay: 0.5, appear: $appear))
 
                 // Debug Settings Card
-                HoverableGlossyCard {
+                ThemedCard(style: .prominent) {
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
                             Image(systemName: "ladybug.fill")
@@ -1918,12 +1282,20 @@ struct ContentView: View {
     // MARK: - AI Prompts Tab
     private var aiProcessingView: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // Header Section
-            VStack(alignment: .leading, spacing: 8) {
+            aiProcessingHeader
+            aiConfigurationCard
+            
+            Spacer()
+        }
+        .padding(20)
+    }
+    
+    private var aiProcessingHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Image(systemName: "sparkles")
                         .font(.title2)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(theme.palette.accent)
                     Text("AI Post-Processing")
                         .font(.title2)
                         .fontWeight(.bold)
@@ -1931,7 +1303,7 @@ struct ContentView: View {
                     Button(action: { showHelp.toggle() }) {
                         Image(systemName: "questionmark.circle")
                             .font(.title3)
-                            .foregroundStyle(.blue.opacity(0.7))
+                                        .foregroundStyle(theme.palette.accent.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                     .buttonHoverEffect()
@@ -2037,264 +1409,325 @@ struct ContentView: View {
                         }
                     }
                     .padding(16)
-                    .background(Color.blue.opacity(0.05))
+                    .background(theme.palette.accent.opacity(0.08))
                     .cornerRadius(12)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                            .stroke(theme.palette.accent.opacity(0.2), lineWidth: 1)
                     )
                     .transition(.opacity)
                 }
             }
             .padding(.bottom, 8)
-
-            // Status Overview
-            HoverableGlossyCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: "info.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.blue)
-                        Text("Setup Status")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                    }
-
-                    // Status indicators
-                    HStack(spacing: 16) {
-                        // API Key status (or local endpoint indicator)
-                        HStack(spacing: 4) {
-                            let hasApiKey = !(providerAPIKeys[currentProvider] ?? "").isEmpty
-                            let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
-                            let isConfigured = hasApiKey || isLocal
-                            
-                            Image(systemName: isConfigured ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(isConfigured ? .green : .red)
-                                .font(.caption)
-                            Text(isLocal ? "Local" : "API Key")
-                                .font(.caption)
-                                .foregroundStyle(isConfigured ? .green : .red)
-                        }
-
-                        // Connection status
-                        HStack(spacing: 4) {
-                            Image(systemName: connectionStatus == .success ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(connectionStatus == .success ? .green : .secondary)
-                                .font(.caption)
-                            Text("Connection")
-                                .font(.caption)
-                                .foregroundStyle(connectionStatus == .success ? .green : .secondary)
-                        }
-
-                        // Model status
-                        HStack(spacing: 4) {
-                            Image(systemName: availableModels.contains(selectedModel) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(availableModels.contains(selectedModel) ? .green : .secondary)
-                                .font(.caption)
-                            Text("Model")
-                                .font(.caption)
-                                .foregroundStyle(availableModels.contains(selectedModel) ? .green : .secondary)
-                        }
-                    }
-                }
-                .padding(16)
-            }
-            .modifier(CardAppearAnimation(delay: 0.05, appear: $appear))
-
+    }
+    
+    private var aiConfigurationCard: some View {
+        ScrollView {
+            VStack(spacing: 20) {
             // API Configuration Section
-            HoverableGlossyCard {
-                VStack(alignment: .leading, spacing: 16) {
+            ThemedCard(style: .prominent, hoverEffect: false) {
+                VStack(alignment: .leading, spacing: 18) {
                     HStack {
                         Image(systemName: "key.fill")
                             .font(.title3)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(theme.palette.accent)
                         Text("API Configuration")
                             .font(.headline)
                             .fontWeight(.semibold)
                     }
 
-            // Saved Providers Dropdown
-            // Provider Selection
-            HStack(spacing: 8) {
-                Text("Provider:")
-                Picker("Provider", selection: $selectedProviderID) {
-                    // Built-in providers
-                    Text("OpenAI").tag("openai")
-                    Text("Groq").tag("groq")
-                    
-                    if !savedProviders.isEmpty {
-                        Divider()
-                        ForEach(savedProviders) { provider in
-                            Text(provider.name).tag(provider.id)
-                        }
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 180, alignment: .leading)
-                .layoutPriority(1)
-                .onChange(of: selectedProviderID) { newValue in
-                    switch newValue {
-                    case "openai":
-                        openAIBaseURL = "https://api.openai.com/v1"
-                        updateCurrentProvider()
-                        let key = "openai"
-                        if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
-                        else { availableModels = defaultModels(for: key) }
-                        if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                        else { selectedModel = availableModels.first ?? selectedModel }
-                    case "groq":
-                        openAIBaseURL = "https://api.groq.com/openai/v1"
-                        updateCurrentProvider()
-                        let key = "groq"
-                        if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
-                        else { availableModels = defaultModels(for: key) }
-                        if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                        else { selectedModel = availableModels.first ?? selectedModel }
-                    default:
-                        if let provider = savedProviders.first(where: { $0.id == newValue }) {
-                            openAIBaseURL = provider.baseURL
-                            updateCurrentProvider()
-                            // Load the saved API key for this provider
-                            providerAPIKeys[currentProvider] = provider.apiKey
-                            saveProviderAPIKeys()
-                            // Load provider-specific models
-                            let key = providerKey(for: newValue)
-                            availableModels = provider.models.isEmpty ? (availableModelsByProvider[key] ?? defaultModels(for: key)) : provider.models
-                            if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                            else { selectedModel = availableModels.first ?? selectedModel }
-                        }
-                    }
-                }
-                
-                Spacer()
-                
-                Button("+ Add Provider") {
-                    showingSaveProvider = true
-                    newProviderName = ""
-                    newProviderBaseURL = ""
-                    newProviderApiKey = ""
-                    newProviderModels = ""
-                }
-                .buttonStyle(GlassButtonStyle())
-                .buttonHoverEffect()
-            }
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+                GridRow(alignment: .center) {
+                    Text("Provider:")
+                        .frame(width: 72, alignment: .trailing)
 
-            // Delete button for custom providers - positioned near model catalogs
-            HStack(spacing: 8) {
-                // Delete button for custom providers
-                if !selectedProviderID.isEmpty && selectedProviderID != "openai" && selectedProviderID != "groq" {
-                    Button(action: {
-                        // Remove the provider
-                        savedProviders.removeAll { $0.id == selectedProviderID }
-                        saveSavedProviders()
-                        
-                        // Remove associated data
-                        let key = providerKey(for: selectedProviderID)
-                        availableModelsByProvider.removeValue(forKey: key)
-                        selectedModelByProvider.removeValue(forKey: key)
-                        providerAPIKeys.removeValue(forKey: key)
-                        saveProviderAPIKeys()
-                        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                        
-                        // Switch to OpenAI if we just deleted the current provider
-                        selectedProviderID = "openai"
-                        openAIBaseURL = "https://api.openai.com/v1"
-                        updateCurrentProvider()
-                        availableModels = defaultModels(for: "openai")
-                        selectedModel = availableModels.first ?? selectedModel
-                    }) {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                            .font(.caption)
+                    HStack(spacing: 8) {
+                        Picker("", selection: $selectedProviderID) {
+                            Text("OpenAI").tag("openai")
+                            Text("Groq").tag("groq")
+
+                            if !savedProviders.isEmpty {
+                                Divider()
+                                ForEach(savedProviders) { provider in
+                                    Text(provider.name).tag(provider.id)
+                                }
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: 190, alignment: .leading)
+                        .onChange(of: selectedProviderID) { newValue in
+                            switch newValue {
+                            case "openai":
+                                openAIBaseURL = "https://api.openai.com/v1"
+                                updateCurrentProvider()
+                                let key = "openai"
+                                if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
+                                else { availableModels = defaultModels(for: key) }
+                                if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
+                                else { selectedModel = availableModels.first ?? selectedModel }
+                            case "groq":
+                                openAIBaseURL = "https://api.groq.com/openai/v1"
+                                updateCurrentProvider()
+                                let key = "groq"
+                                if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
+                                else { availableModels = defaultModels(for: key) }
+                                if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
+                                else { selectedModel = availableModels.first ?? selectedModel }
+                            default:
+                                if let provider = savedProviders.first(where: { $0.id == newValue }) {
+                                    openAIBaseURL = provider.baseURL
+                                    updateCurrentProvider()
+                                    providerAPIKeys[currentProvider] = provider.apiKey
+                                    saveProviderAPIKeys()
+                                    let key = providerKey(for: newValue)
+                                    availableModels = provider.models.isEmpty ? (availableModelsByProvider[key] ?? defaultModels(for: key)) : provider.models
+                                    if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
+                                    else { selectedModel = availableModels.first ?? selectedModel }
+                                }
+                            }
+                        }
+
+                        if !selectedProviderID.isEmpty && selectedProviderID != "openai" && selectedProviderID != "groq" {
+                            Button(action: {
+                                savedProviders.removeAll { $0.id == selectedProviderID }
+                                saveSavedProviders()
+                                let key = providerKey(for: selectedProviderID)
+                                availableModelsByProvider.removeValue(forKey: key)
+                                selectedModelByProvider.removeValue(forKey: key)
+                                providerAPIKeys.removeValue(forKey: key)
+                                saveProviderAPIKeys()
+                                SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+                                SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+                                selectedProviderID = "openai"
+                                openAIBaseURL = "https://api.openai.com/v1"
+                                updateCurrentProvider()
+                                availableModels = defaultModels(for: "openai")
+                                selectedModel = availableModels.first ?? selectedModel
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Delete this provider")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .help("Delete this provider")
+
+                    Button("+ Add Provider") {
+                        showingSaveProvider = true
+                        newProviderName = ""
+                        newProviderBaseURL = ""
+                        newProviderApiKey = ""
+                        newProviderModels = ""
+                    }
+                    .buttonStyle(CompactButtonStyle())
+                    .buttonHoverEffect()
                 }
-                
-                Spacer()
+
+                GridRow(alignment: .center) {
+                    Text("Model:")
+                        .frame(width: 72, alignment: .trailing)
+
+                    HStack(spacing: 8) {
+                        Menu {
+                            ForEach(availableModels, id: \.self) { model in
+                                Button(action: {
+                                    selectedModel = model
+                                }) {
+                                    HStack {
+                                        Text(model)
+                                        Spacer()
+                                        if selectedModel == model {
+                                            Image(systemName: "checkmark")
+                                                .foregroundStyle(theme.palette.accent)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Divider()
+
+                            Button("Add Model...") {
+                                showingAddModel = true
+                                newModelName = ""
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(selectedModel)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary)
+                            .cornerRadius(6)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 240)
+
+                        if availableModels.isEmpty {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                        } else if availableModels.contains(selectedModel) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    EmptyView()
+                }
+
+                if !["openai", "groq"].contains(selectedProviderID) {
+                    GridRow(alignment: .center) {
+                        Text("Base URL:")
+                            .frame(width: 72, alignment: .trailing)
+
+                        TextField("e.g., http://localhost:11434/v1", text: $openAIBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: 380)
+                            .onChange(of: openAIBaseURL) { _ in
+                                updateCurrentProvider()
+                            }
+
+                        EmptyView()
+                    }
+                }
+
+                if showingAddModel {
+                    GridRow(alignment: .center) {
+                        Color.clear
+                            .frame(width: 72)
+
+                        HStack(spacing: 8) {
+                            TextField("Enter model name (e.g., gpt-4.1-nano)", text: $newModelName)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 320)
+
+                            Button("Add") {
+                                if !newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+                                    let modelName = newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                                    let key = providerKey(for: selectedProviderID)
+                                    var list = availableModelsByProvider[key] ?? availableModels
+                                    if !list.contains(modelName) { list.append(modelName) }
+                                    availableModelsByProvider[key] = list
+                                    SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+
+                                    if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+                                        let updatedProvider = SettingsStore.SavedProvider(
+                                            id: savedProviders[providerIndex].id,
+                                            name: savedProviders[providerIndex].name,
+                                            baseURL: savedProviders[providerIndex].baseURL,
+                                            apiKey: savedProviders[providerIndex].apiKey,
+                                            models: list
+                                        )
+                                        savedProviders[providerIndex] = updatedProvider
+                                        saveSavedProviders()
+                                    }
+
+                                    availableModels = list
+                                    selectedModel = modelName
+                                    selectedModelByProvider[key] = modelName
+                                    SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+                                    showingAddModel = false
+                                    newModelName = ""
+                                }
+                            }
+                            .buttonStyle(CompactButtonStyle())
+                            .buttonHoverEffect()
+                            .disabled(newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty)
+
+                            Button("Cancel") {
+                                showingAddModel = false
+                                newModelName = ""
+                            }
+                            .buttonStyle(CompactButtonStyle())
+                            .buttonHoverEffect()
+                        }
+
+                        EmptyView()
+                    }
+                    .transition(.opacity)
+                }
             }
+            
+            Divider()
+                .padding(.vertical, 4)
+            
+            // API Key Management
+            Button(action: {
+                newProviderApiKey = providerAPIKeys[currentProvider] ?? ""
+                showAPIKeyEditor = true
+            }) {
+                Label("Add or Modify API Key", systemImage: "key.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption)
+            }
+            .buttonStyle(GlassButtonStyle())
+            .buttonHoverEffect()
             
             // Provider model catalogs quick links
             HStack(spacing: 6) {
                 Image(systemName: "link")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                 Text("Model catalogs:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
 
                 if selectedProviderID == "openai" {
                     Link("OpenAI", destination: URL(string: "https://platform.openai.com/docs/models")!)
-                        .font(.caption)
-                    Text("·").font(.caption).foregroundStyle(.secondary)
+                        .font(.caption2)
+                    Text("·").font(.caption2).foregroundStyle(.tertiary)
                     Link("Groq", destination: URL(string: "https://console.groq.com/docs/models")!)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else if selectedProviderID == "groq" {
                     Link("Groq", destination: URL(string: "https://console.groq.com/docs/models")!)
-                        .font(.caption)
-                    Text("·").font(.caption).foregroundStyle(.secondary)
+                        .font(.caption2)
+                    Text("·").font(.caption2).foregroundStyle(.tertiary)
                     Link("OpenAI", destination: URL(string: "https://platform.openai.com/docs/models")!)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
                     Link("OpenAI", destination: URL(string: "https://platform.openai.com/docs/models")!)
-                        .font(.caption)
-                    Text("·").font(.caption).foregroundStyle(.secondary)
+                        .font(.caption2)
+                    Text("·").font(.caption2).foregroundStyle(.tertiary)
                     Link("Groq", destination: URL(string: "https://console.groq.com/docs/models")!)
-                        .font(.caption)
+                        .font(.caption2)
                 }
             }
-            .padding(.top, 2)
 
-            HStack(spacing: 8) {
-                Button(action: {
-                    newProviderApiKey = providerAPIKeys[currentProvider] ?? ""
-                    showAPIKeyEditor = true
-                }) {
-                    Label("Add or Modify API Key", systemImage: "key.fill")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption)
-                }
-                .buttonStyle(GlassButtonStyle())
-                .buttonHoverEffect()
+            // Connection Test
+            HStack(spacing: 12) {
+                Label("Verify connection", systemImage: "network")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
+                Spacer(minLength: 12)
 
-
-                Spacer(minLength: 8)
-
-                // Connection Test Button
                 Button(action: {
                     DebugLogger.shared.info("=== TEST CONNECTION BUTTON PRESSED ===", source: "ContentView")
                     Task { await testAPIConnection() }
                 }) {
-                    HStack(spacing: 4) {
-                        if isTestingConnection {
-                            ProgressView()
-                                .frame(width: 12, height: 12)
-                        } else {
-                            Image(systemName: "network")
-                                .font(.caption)
-                        }
-                        Text(isTestingConnection ? "Testing..." : "Test")
-                            .font(.caption)
-                    }
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text(isTestingConnection ? "Verifying..." : "Verify")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .frame(minWidth: 68)
                 }
-                .buttonStyle(.plain)
-                .disabled(isTestingConnection || 
-                         (!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
-                          (providerAPIKeys[currentProvider] ?? "").isEmpty))
+                .buttonStyle(CompactButtonStyle())
                 .buttonHoverEffect()
-
-                Text("(\(currentProvider.capitalized))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                .disabled(isTestingConnection ||
+                         (!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
+                          (providerAPIKeys[currentProvider] ?? "").isEmpty))
             }
 
             .sheet(isPresented: $showAPIKeyEditor) {
@@ -2332,70 +1765,55 @@ struct ContentView: View {
                 .frame(minWidth: 350, minHeight: 150)
             }
 
-            // Connection Status Display
-            HStack(spacing: 8) {
-                // Real-time validation indicator
-                // Only show API key warning for non-local endpoints
-                if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
-                   !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                    Text("API key required")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                } else if connectionStatus == .success {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
-                    Text("Ready to test")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                } else if connectionStatus == .failed {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .font(.caption)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Connection failed")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                        if !connectionErrorMessage.isEmpty {
-                            Text(connectionErrorMessage)
-                                .font(.caption2)
-                                .foregroundStyle(.red.opacity(0.8))
-                                .lineLimit(1)
-                        }
-                    }
-                } else if connectionStatus == .testing {
-                    ProgressView()
-                        .frame(width: 16, height: 16)
-                    Text("Testing...")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                } else {
-                    Image(systemName: "network")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                    Text("Test connection to verify setup")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(.top, 6)
-
-            // Show Base URL only for custom providers (not built-in ones)
-            if !["openai", "groq"].contains(selectedProviderID) {
+            // Connection Status Display (only shown when there's something to show)
+            if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
+               !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) ||
+               connectionStatus == .success ||
+               connectionStatus == .failed ||
+               connectionStatus == .testing {
                 HStack(spacing: 8) {
-                    TextField("Base URL (e.g., http://localhost:11434/v1)", text: $openAIBaseURL)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 350)
-                        .layoutPriority(1)
-                        .onChange(of: openAIBaseURL) { _ in
-                            updateCurrentProvider()
+                    // Only show API key warning for non-local endpoints
+                    if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
+                       !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                        Text("API key required")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else if connectionStatus == .success {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                        Text("Connection verified")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else if connectionStatus == .failed {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Connection failed")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                            if !connectionErrorMessage.isEmpty {
+                                Text(connectionErrorMessage)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red.opacity(0.8))
+                                    .lineLimit(1)
+                            }
                         }
+                    } else if connectionStatus == .testing {
+                        ProgressView()
+                            .frame(width: 16, height: 16)
+                        Text("Verifying...")
+                            .font(.caption)
+                            .foregroundStyle(theme.palette.accent)
+                    }
+
+                    Spacer()
                 }
+                .padding(.top, 6)
             }
             
             // Add Provider Modal
@@ -2497,274 +1915,8 @@ struct ContentView: View {
                 .padding(20)
             }
             .modifier(CardAppearAnimation(delay: 0.1, appear: $appear))
-
-            // Model Configuration Section
-            HoverableGlossyCard {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Image(systemName: "brain.head.profile")
-                            .font(.title3)
-                            .foregroundStyle(.purple)
-                        Text("Model Configuration")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                    }
-
-                    // Model Selection with Validation
-                    HStack(spacing: 8) {
-                        HStack(spacing: 4) {
-                            Text("Model:")
-                            if availableModels.isEmpty {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                    .font(.caption)
-                            } else if !availableModels.isEmpty && availableModels.contains(selectedModel) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .font(.caption)
-                            }
-                        }
-                        Menu {
-                            ForEach(availableModels, id: \.self) { model in
-                                Button(action: {
-                                    selectedModel = model
-                                }) {
-                                    HStack {
-                                        Text(model)
-                                        Spacer()
-                                        if selectedModel == model {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(.blue)
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            Divider()
-                            
-                            Button("Add Model...") {
-                                showingAddModel = true
-                                newModelName = ""
-                            }
-                        } label: {
-                            HStack {
-                                Text(selectedModel)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.quaternary)
-                            .cornerRadius(6)
-                        }
-                        .frame(width: 220, alignment: .leading)
-                        .layoutPriority(1)
             }
-            
-            // Add Model Input (shown when plus button is clicked)
-            if showingAddModel {
-                HStack(spacing: 8) {
-                    TextField("Enter model name (e.g., gpt-4.1-nano)", text: $newModelName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 250)
-                        .layoutPriority(1)
-                    
-                    Button("Add") {
-                        if !newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-                            let modelName = newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                            // Append to current provider's list only
-                            let key = providerKey(for: selectedProviderID)
-                            var list = availableModelsByProvider[key] ?? availableModels
-                            if !list.contains(modelName) { list.append(modelName) }
-                            availableModelsByProvider[key] = list
-                            SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                            
-                            // If this is a saved custom provider, update its models array too
-                            if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-                                let updatedProvider = SettingsStore.SavedProvider(
-                                    id: savedProviders[providerIndex].id,
-                                    name: savedProviders[providerIndex].name,
-                                    baseURL: savedProviders[providerIndex].baseURL,
-                                    apiKey: savedProviders[providerIndex].apiKey,
-                                    models: list
-                                )
-                                savedProviders[providerIndex] = updatedProvider
-                                saveSavedProviders()
-                            }
-                            
-                            // Reflect in UI list
-                            availableModels = list
-                            selectedModel = modelName
-                            selectedModelByProvider[key] = modelName
-                            SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                            showingAddModel = false
-                            newModelName = ""
-                        }
-                    }
-                    .buttonStyle(GlassButtonStyle())
-                    .buttonHoverEffect()
-                .buttonHoverEffect()
-                    .disabled(newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty)
-                    
-                    Button("Cancel") {
-                        showingAddModel = false
-                        newModelName = ""
-                    }
-                    .buttonStyle(GlassButtonStyle())
-                    .buttonHoverEffect()
-                .buttonHoverEffect()
-                }
-                .transition(.opacity)
-            }
-
-            // Manage Models List
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Models for this provider")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                ForEach(availableModels, id: \.self) { model in
-                    HStack {
-                        Text(model)
-                        Spacer()
-                        if isCustomModel(model) {
-                            Button(action: { removeModel(model) }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Image(systemName: "lock.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-
-                HStack {
-                    Button("Reset to defaults") {
-                        // Clear stored list for this provider and show defaults
-                        availableModelsByProvider[currentProvider] = []
-                        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                        availableModels = defaultModels(for: providerKey(for: selectedProviderID))
-                        selectedModel = availableModels.first ?? selectedModel
-                        selectedModelByProvider[currentProvider] = selectedModel
-                        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                        
-                        // If this is a saved custom provider, reset its models array too
-                        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-                            let updatedProvider = SettingsStore.SavedProvider(
-                                id: savedProviders[providerIndex].id,
-                                name: savedProviders[providerIndex].name,
-                                baseURL: savedProviders[providerIndex].baseURL,
-                                apiKey: savedProviders[providerIndex].apiKey,
-                                models: availableModels
-                            )
-                            savedProviders[providerIndex] = updatedProvider
-                            saveSavedProviders()
-                        }
-                    }
-                    .buttonStyle(GlassButtonStyle())
-                    .buttonHoverEffect()
-                }
-            }
-
-                }
-                .padding(20)
-            }
-            .modifier(CardAppearAnimation(delay: 0.2, appear: $appear))
-
-
-
-            Spacer()
-        }
-        .padding(20)
-        .onAppear {
-            // Load saved provider ID first
-            selectedProviderID = SettingsStore.shared.selectedProviderID
-            
-            // Establish provider context first
-            updateCurrentProvider()
-
-            enableAIProcessing = SettingsStore.shared.enableAIProcessing
-            enableDebugLogs = SettingsStore.shared.enableDebugLogs
-            availableModelsByProvider = SettingsStore.shared.availableModelsByProvider
-            selectedModelByProvider = SettingsStore.shared.selectedModelByProvider
-            providerAPIKeys = SettingsStore.shared.providerAPIKeys
-            savedProviders = SettingsStore.shared.savedProviders
-
-            // Migration & cleanup: normalize provider keys and drop legacy flat lists
-            var normalized: [String: [String]] = [:]
-            for (key, models) in availableModelsByProvider {
-                let lower = key.lowercased()
-                let newKey: String
-                if lower == "openai" || lower == "groq" { newKey = lower }
-                else { newKey = key.hasPrefix("custom:") ? key : "custom:\\(key)" }
-                // Keep only unique, trimmed models
-                let clean = Array(Set(models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
-                if !clean.isEmpty { normalized[newKey] = clean }
-            }
-            availableModelsByProvider = normalized
-            SettingsStore.shared.availableModelsByProvider = normalized
-
-            // Normalize selectedModelByProvider keys similarly and drop invalid selections
-            var normalizedSel: [String: String] = [:]
-            for (key, model) in selectedModelByProvider {
-                let lower = key.lowercased()
-                let newKey: String = (lower == "openai" || lower == "groq") ? lower : (key.hasPrefix("custom:") ? key : "custom:\\(key)")
-                if let list = normalized[newKey], list.contains(model) { normalizedSel[newKey] = model }
-            }
-            selectedModelByProvider = normalizedSel
-            SettingsStore.shared.selectedModelByProvider = normalizedSel
-
-            // Determine initial model list without legacy flat-list fallback
-            if let saved = savedProviders.first(where: { $0.id == selectedProviderID }) {
-                // Use models from saved provider
-                availableModels = saved.models
-                openAIBaseURL = saved.baseURL
-                providerAPIKeys[currentProvider] = saved.apiKey
-            } else if let stored = availableModelsByProvider[currentProvider], !stored.isEmpty {
-                // Use provider-specific stored list if present
-                availableModels = stored
-            } else {
-                // Built-in defaults
-                availableModels = defaultModels(for: providerKey(for: selectedProviderID))
-            }
-
-            // Restore previously selected model if valid
-            if let sel = selectedModelByProvider[currentProvider], availableModels.contains(sel) {
-                selectedModel = sel
-            } else if let first = availableModels.first {
-                selectedModel = first
-            }
-        }
-        .onChange(of: asr.isRunning) { newValue in
-            // Mark playground as used when user starts recording
-            if newValue && !playgroundUsed {
-                playgroundUsed = true
-            }
-        }
-        .onChange(of: asr.finalText) { newValue in
-            // Also mark as used when text appears in playground
-            if !newValue.isEmpty && !playgroundUsed {
-                playgroundUsed = true
-            }
-        }
-        .onChange(of: enableAIProcessing) { newValue in
-            SettingsStore.shared.enableAIProcessing = newValue
-            // Sync to menu bar immediately
-            menuBarManager.aiProcessingEnabled = newValue
-        }
-        .onChange(of: selectedModel) { newValue in
-            if newValue != "__ADD_MODEL__" {
-                selectedModelByProvider[currentProvider] = newValue
-                SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-            }
-        }
-        .onChange(of: selectedProviderID) { newValue in
-            SettingsStore.shared.selectedProviderID = newValue
+            .padding()
         }
     }
 
@@ -2783,7 +1935,7 @@ struct ContentView: View {
                     HStack {
                         Image(systemName: "envelope.fill")
                             .font(.system(size: 32))
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(theme.palette.accent)
                         VStack(alignment: .leading) {
                             Text("Send Feedback")
                                 .font(.system(size: 28, weight: .bold))
@@ -2796,7 +1948,7 @@ struct ContentView: View {
                 .padding(.bottom, 8)
 
                 // Feedback Form
-                HoverableGlossyCard {
+                ThemedCard(style: .standard, hoverEffect: false) {
                     VStack(alignment: .leading, spacing: 16) {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Email")
@@ -2818,10 +1970,10 @@ struct ContentView: View {
                                 .padding(12)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.gray.opacity(0.1))
+                                        .fill(theme.palette.cardBackground.opacity(0.6))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 8)
-                                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                                .stroke(theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
                                         )
                                 )
                                 .overlay(
@@ -2882,110 +2034,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Audio Tab
-    private var audioView: some View
-    {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Input Device")
-                Spacer()
-                Picker("Input Device", selection: $selectedInputUID) {
-                    ForEach(inputDevices, id: \.uid) { dev in
-                        Text(dev.name).tag(dev.uid)
-                    }
-                }
-                .frame(width: 280)
-                .onChange(of: selectedInputUID) { newUID in
-                    SettingsStore.shared.preferredInputDeviceUID = newUID
-                    _ = AudioDevice.setDefaultInputDevice(uid: newUID)
-                    if asr.isRunning {
-                        asr.stopWithoutTranscription()
-                        startRecording()
-                    }
-                }
-            }
-
-            HStack {
-                Text("Output Device")
-                Spacer()
-                Picker("Output Device", selection: $selectedOutputUID) {
-                    ForEach(outputDevices, id: \.uid) { dev in
-                        Text(dev.name).tag(dev.uid)
-                    }
-                }
-                .frame(width: 280)
-                .onChange(of: selectedOutputUID) { newUID in
-                    SettingsStore.shared.preferredOutputDeviceUID = newUID
-                    _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
-                }
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    refreshDevices()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-
-                if let defIn = AudioDevice.getDefaultInputDevice()?.name, let defOut = AudioDevice.getDefaultOutputDevice()?.name {
-                    Text("Default In: \(defIn) · Default Out: \(defOut)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            // Visualization Sensitivity Section
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Visualization Sensitivity")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Control how sensitive the audio visualizer is to sound input")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    Button("Reset") {
-                        visualizerNoiseThreshold = 0.4
-                        SettingsStore.shared.visualizerNoiseThreshold = visualizerNoiseThreshold
-                    }
-                    .font(.system(size: 12))
-                }
-                
-                HStack(spacing: 12) {
-                    Text("More Sensitive")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 70)
-                    
-                    Slider(value: $visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
-                        .controlSize(.regular)
-                    
-                    Text("Less Sensitive")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 70)
-                    
-                    Text(String(format: "%.2f", visualizerNoiseThreshold))
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .frame(width: 40)
-                }
-            }
-            .padding(20)
-            
-            // Removed Debug Settings section
-
-            Spacer()
-        }
-        .padding(20)
-        .onAppear { refreshDevices() }
-        .onChange(of: visualizerNoiseThreshold) { newValue in
-            SettingsStore.shared.visualizerNoiseThreshold = newValue
-        }
-    }
+    // Audio settings merged into SettingsView
 
     private func refreshDevices()
     {
@@ -3860,486 +2909,9 @@ struct ContentView: View {
     // Deprecated: hotkey persistence is handled via SettingsStore
 }
 
-private enum SidebarItem: Hashable {
-    case welcome
-    case recording
-    case aiProcessing
-    case audio
-    case settings
-    case meetingTools
-    case feedback
-}
+// SidebarItem enum moved to top of file
 
-// MARK: - Embedded CoreAudio Device Manager
-enum AudioDevice
-{
-    struct Device: Identifiable, Hashable
-    {
-        let id: AudioObjectID
-        let uid: String
-        let name: String
-        let hasInput: Bool
-        let hasOutput: Bool
-    }
-
-    static func listAllDevices() -> [Device]
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize)
-        if status != noErr || dataSize == 0
-        {
-            return []
-        }
-
-        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
-        var deviceIDs = [AudioObjectID](repeating: 0, count: count)
-        status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceIDs)
-        if status != noErr
-        {
-            return []
-        }
-
-        var devices: [Device] = []
-        devices.reserveCapacity(deviceIDs.count)
-
-        for devId in deviceIDs
-        {
-            let name = getStringProperty(devId, selector: kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal) ?? "Unknown"
-            let uid = getStringProperty(devId, selector: kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal) ?? ""
-            let hasIn = hasChannels(devId, scope: kAudioObjectPropertyScopeInput)
-            let hasOut = hasChannels(devId, scope: kAudioObjectPropertyScopeOutput)
-            devices.append(Device(id: devId, uid: uid, name: name, hasInput: hasIn, hasOutput: hasOut))
-        }
-
-        return devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    static func listInputDevices() -> [Device]
-    {
-        return listAllDevices().filter { $0.hasInput }
-    }
-
-    static func listOutputDevices() -> [Device]
-    {
-        return listAllDevices().filter { $0.hasOutput }
-    }
-
-    static func getDefaultInputDevice() -> Device?
-    {
-        guard let devId: AudioObjectID = getDefaultDeviceId(selector: kAudioHardwarePropertyDefaultInputDevice) else { return nil }
-        return listAllDevices().first { $0.id == devId }
-    }
-
-    static func getDefaultOutputDevice() -> Device?
-    {
-        guard let devId: AudioObjectID = getDefaultDeviceId(selector: kAudioHardwarePropertyDefaultOutputDevice) else { return nil }
-        return listAllDevices().first { $0.id == devId }
-    }
-
-    @discardableResult
-    static func setDefaultInputDevice(uid: String) -> Bool
-    {
-        guard let device = listInputDevices().first(where: { $0.uid == uid }) else { return false }
-        return setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultInputDevice)
-    }
-
-    @discardableResult
-    static func setDefaultOutputDevice(uid: String) -> Bool
-    {
-        guard let device = listOutputDevices().first(where: { $0.uid == uid }) else { return false }
-        return setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultOutputDevice)
-    }
-
-    private static func getDefaultDeviceId(selector: AudioObjectPropertySelector) -> AudioObjectID?
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var devId = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devId)
-        return status == noErr ? devId : nil
-    }
-
-    private static func setDefaultDeviceId(_ devId: AudioObjectID, selector: AudioObjectPropertySelector) -> Bool
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var mutableDevId = devId
-        let size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, size, &mutableDevId)
-        return status == noErr
-    }
-
-    private static func getStringProperty(_ devId: AudioObjectID, selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope) -> String?
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: scope,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(devId, &address, 0, nil, &dataSize)
-        if status != noErr || dataSize == 0
-        {
-            return nil
-        }
-
-        let rawPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<Int8>.alignment)
-        defer { rawPtr.deallocate() }
-
-        status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, rawPtr)
-        if status != noErr
-        {
-            return nil
-        }
-
-        let cfStr = rawPtr.load(as: CFString.self)
-        return cfStr as String
-    }
-
-    private static func hasChannels(_ devId: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool
-    {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: scope,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(devId, &address, 0, nil, &dataSize)
-        if status != noErr || dataSize == 0
-        {
-            return false
-        }
-
-        let rawPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<Int8>.alignment)
-        defer { rawPtr.deallocate() }
-
-        status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, rawPtr)
-        if status != noErr
-        {
-            return false
-        }
-
-        let ablPtr = rawPtr.bindMemory(to: AudioBufferList.self, capacity: 1)
-        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
-        var channelCount = 0
-        for buffer in buffers
-        {
-            channelCount += Int(buffer.mNumberChannels)
-        }
-        return channelCount > 0
-    }
-}
-
-// MARK: - Low-overhead CoreAudio hardware observer
-final class AudioHardwareObserver: ObservableObject
-{
-    private let subject = PassthroughSubject<Void, Never>()
-    var changePublisher: AnyPublisher<Void, Never> { subject.eraseToAnyPublisher() }
-
-    private var installed: Bool = false
-
-    init()
-    {
-        register()
-    }
-
-    deinit
-    {
-        unregister()
-    }
-
-    private func register()
-    {
-        guard installed == false else { return }
-        var addrDevices = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var addrDefaultIn = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var addrDefaultOut = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let queue = DispatchQueue.main
-        let sys = AudioObjectID(kAudioObjectSystemObject)
-
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDevices, queue) { [weak self] _, _ in
-            self?.subject.send(())
-        }
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultIn, queue) { [weak self] _, _ in
-            self?.subject.send(())
-        }
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultOut, queue) { [weak self] _, _ in
-            self?.subject.send(())
-        }
-
-        installed = true
-    }
-
-    private func unregister()
-    {
-        guard installed else { return }
-        // Intentionally omitted: removing blocks is optional; listeners end with object lifetime.
-        installed = false
-    }
-}
-
-// MARK: - Custom Styles for Premium UI
-
-struct GlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .fontWeight(.semibold)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(.regularMaterial) // Less transparent for better contrast
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.08),
-                                        Color(red: 0.2, green: 0.3, blue: 0.5).opacity(0.05),
-                                        .black.opacity(0.02),
-                                        .white.opacity(0.04)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(.white.opacity(0.25), lineWidth: 1.0) // Less harsh border
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.6), .clear, .clear, .white.opacity(0.2)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    )
-                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                    .shadow(color: .white.opacity(0.1), radius: 1, x: 0, y: 1)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
-    }
-}
-
-struct PremiumButtonStyle: ButtonStyle {
-    let isRecording: Bool
-    let height: CGFloat
-    
-    init(isRecording: Bool = false, height: CGFloat = 44) {
-        self.isRecording = isRecording
-        self.height = height
-    }
-    
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .fontWeight(.semibold)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .foregroundColor(isRecording ? .white : .black)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(
-                        isRecording ? 
-                        LinearGradient(colors: [.red.opacity(0.8), .red.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing) :
-                        LinearGradient(colors: [Color.white.opacity(0.8), Color(red: 0.6, green: 0.7, blue: 0.9)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .shadow(color: (isRecording ? Color.red : Color.black).opacity(0.3), radius: 8, x: 0, y: 4)
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
-    }
-}
-
-struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .fontWeight(.semibold)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .foregroundColor(.primary)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(.white.opacity(0.3), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
-    }
-}
-
-struct CompactButtonStyle: ButtonStyle {
-    let isReady: Bool
-    
-    init(isReady: Bool = false) {
-        self.isReady = isReady
-    }
-    
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .fontWeight(.medium)
-            .frame(maxWidth: .infinity)
-            .frame(height: 36)
-            .foregroundColor(.primary)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(
-                        isReady ?
-                        LinearGradient(colors: [Color(red: 0.4, green: 0.5, blue: 0.7).opacity(0.3), Color(red: 0.2, green: 0.3, blue: 0.5).opacity(0.1)], startPoint: .top, endPoint: .bottom) :
-                        LinearGradient(colors: [Color(red: 0.2, green: 0.3, blue: 0.5).opacity(0.1), Color(red: 0.1, green: 0.15, blue: 0.3).opacity(0.05)], startPoint: .top, endPoint: .bottom)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(isReady ? .white.opacity(0.3) : Color(red: 0.4, green: 0.5, blue: 0.7).opacity(0.3), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
-    }
-}
-
-struct InlineButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.caption)
-            .fontWeight(.medium)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .foregroundColor(.white)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 0.3, green: 0.4, blue: 0.6).opacity(0.2))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
-                    )
-                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-    }
-}
-
-struct GlassToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack {
-            configuration.label
-                .foregroundStyle(.primary)
-            
-            Spacer()
-            
-            ZStack {
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(configuration.isOn ? 
-                          AnyShapeStyle(LinearGradient(colors: [Color.white.opacity(0.9), Color(red: 0.6, green: 0.7, blue: 0.9)], startPoint: .leading, endPoint: .trailing)) :
-                          AnyShapeStyle(.quaternary))
-                    .frame(width: 44, height: 24)
-                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                
-                Circle()
-                    .fill(configuration.isOn ? .black : .white)
-                    .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
-                    .frame(width: 20, height: 20)
-                    .offset(x: configuration.isOn ? 10 : -10)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isOn)
-            }
-            .onTapGesture {
-                configuration.isOn.toggle()
-            }
-        }
-    }
-}
-
-// MARK: - Glossy Card Style
-struct GlossyCardBackground: View {
-    let cornerRadius: CGFloat
-    let isElevated: Bool
-    
-    init(cornerRadius: CGFloat = 20, isElevated: Bool = false) {
-        self.cornerRadius = cornerRadius
-        self.isElevated = isElevated
-    }
-    
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(.ultraThinMaterial)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(0.15),
-                                .white.opacity(0.05),
-                                .black.opacity(0.02),
-                                .white.opacity(0.08)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(.white.opacity(isElevated ? 0.7 : 0.5), lineWidth: isElevated ? 2 : 1.5)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(
-                        LinearGradient(
-                            colors: [.white.opacity(0.7), .clear, .clear, .white.opacity(0.3)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .shadow(color: .black.opacity(isElevated ? 0.6 : 0.4), radius: isElevated ? 35 : 25, x: 0, y: isElevated ? 18 : 12)
-            .shadow(color: .black.opacity(isElevated ? 0.3 : 0.2), radius: isElevated ? 12 : 8, x: 0, y: isElevated ? 6 : 4)
-            .shadow(color: .white.opacity(isElevated ? 0.25 : 0.15), radius: isElevated ? 3 : 2, x: 0, y: 1)
-    }
-}
+// AudioDevice and AudioHardwareObserver moved to Services/AudioDeviceService.swift
 
 // MARK: - Card Animation Modifier
 struct CardAppearAnimation: ViewModifier {

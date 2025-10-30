@@ -14,20 +14,17 @@ struct fluidApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var showWhatsNew = false
+    @State private var theme = AppTheme.dark
 
-    init() {
-        // Note: App UI is designed with dark color scheme in mind
-        // All gradients and effects are optimized for dark mode
-        // AppDelegate handles initialization and permissions
-    }
-    
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(menuBarManager)
-                .preferredColorScheme(.dark) // Force dark mode to prevent UI issues
+                .appTheme(theme)
+                .preferredColorScheme(.dark)
                 .sheet(isPresented: $showWhatsNew) {
                     WhatsNewView()
+                        .appTheme(theme)
                 }
                 .onAppear {
                     // Check if we should show what's new after a short delay
@@ -39,5 +36,7 @@ struct fluidApp: App {
                     showWhatsNew = true
                 }
         }
+        .defaultSize(width: 1000, height: 700)
+        .windowResizability(.contentSize)
     }
 }

@@ -85,8 +85,7 @@ final class ASRService: ObservableObject
     private var isProcessingChunk: Bool = false
     private var skipNextChunk: Bool = false
     private var previousFullTranscription: String = ""
-    private let processingLock = NSLock() // Prevent concurrent CoreML access
-    private let transcriptionExecutor = TranscriptionExecutor()
+    private let transcriptionExecutor = TranscriptionExecutor() // Serializes all CoreML access
 
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> { audioLevelSubject.eraseToAnyPublisher() }
@@ -229,11 +228,7 @@ final class ASRService: ObservableObject
     {
         guard isRunning else { return "" }
         
-        // CRITICAL: Wait for any in-flight transcription to complete
-        DebugLogger.shared.debug("stop(): waiting for processing lock", source: "ASRService")
-        processingLock.lock()
-        processingLock.unlock()
-        DebugLogger.shared.debug("stop(): processing lock cleared", source: "ASRService")
+        DebugLogger.shared.debug("stop(): cancelling streaming and preparing final transcription", source: "ASRService")
         
         stopStreamingTimer()
         removeEngineTap()
@@ -285,10 +280,6 @@ final class ASRService: ObservableObject
     func stopWithoutTranscription()
     {
         guard isRunning else { return }
-        
-        // CRITICAL: Wait for any in-flight transcription to complete
-        processingLock.lock()
-        processingLock.unlock()
         
         stopStreamingTimer()
         removeEngineTap()
@@ -736,19 +727,7 @@ final class ASRService: ObservableObject
     private func processStreamingChunk() async {
         guard isRunning else { return }
         
-        // Use lock to prevent race conditions with CoreML
-        guard processingLock.try() else {
-            DebugLogger.shared.debug("⚠️ Skipping chunk - lock held by previous transcription", source: "ASRService")
-            skipNextChunk = true
-            return
-        }
-        
-        defer {
-            DebugLogger.shared.debug("Streaming chunk releasing processing lock", source: "ASRService")
-            processingLock.unlock()
-        }
-        
-        // Double-check processing flag
+        // Skip if already processing to prevent queue buildup
         guard !isProcessingChunk else {
             DebugLogger.shared.debug("⚠️ Skipping chunk - previous transcription still in progress", source: "ASRService")
             skipNextChunk = true
@@ -771,6 +750,8 @@ final class ASRService: ObservableObject
         let chunk = Array(recordedPCM[0..<currentSampleCount])
         
         isProcessingChunk = true
+        defer { isProcessingChunk = false }
+        
         let startTime = Date()
         
         do {
@@ -804,8 +785,6 @@ final class ASRService: ObservableObject
             DebugLogger.shared.error("❌ Streaming failed: \(error)", source: "ASRService")
             skipNextChunk = true
         }
-        
-        isProcessingChunk = false
     }
     
     /// Smart diff to prevent text from jumping around

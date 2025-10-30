@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WhatsNewView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @State private var showContent = false
     @State private var features: [WhatsNewFeature] = []
     @State private var isLoading = true
@@ -24,95 +25,74 @@ struct WhatsNewView: View {
     
     var body: some View {
         ZStack {
-            // Background
-            Color.black
-                .opacity(0.95)
+            theme.palette.windowBackground
                 .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                // Header
-                VStack(spacing: 12) {
-                    // App Icon or Logo
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .frame(width: 80, height: 80)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .shadow(color: .blue.opacity(0.3), radius: 20, x: 0, y: 10)
-                        .scaleEffect(showContent ? 1 : 0.5)
-                        .opacity(showContent ? 1 : 0)
+
+            Rectangle()
+                .fill(theme.materials.window)
+                .ignoresSafeArea()
+
+            ThemedCard(style: .prominent, padding: 0, hoverEffect: false) {
+                VStack(spacing: 0) {
+                    // Header
+                    VStack(spacing: theme.metrics.spacing.md) {
+                        // App Icon or Logo
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
+                            .shadow(color: theme.palette.accent.opacity(0.3), radius: 18, x: 0, y: 8)
+                            .scaleEffect(showContent ? 1 : 0.5)
+                            .opacity(showContent ? 1 : 0)
+                        
+                        Text("What's New in v\(version)")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(theme.palette.primaryText)
+                            .opacity(showContent ? 1 : 0)
+                            .offset(y: showContent ? 0 : -20)
+                        
+                        Text("FluidVoice keeps getting better")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(theme.palette.secondaryText)
+                            .opacity(showContent ? 1 : 0)
+                            .offset(y: showContent ? 0 : -20)
+                    }
+                    .padding(.top, theme.metrics.spacing.xl)
+                    .padding(.bottom, theme.metrics.spacing.lg)
                     
-                    Text("What's New in v\(version)")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.white, .white.opacity(0.8)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .opacity(showContent ? 1 : 0)
-                        .offset(y: showContent ? 0 : -20)
+                    // Features List
+                    ScrollView {
+                        VStack(spacing: theme.metrics.spacing.lg) {
+                            ForEach(Array(features.enumerated()), id: \.offset) { index, feature in
+                                FeatureRow(feature: feature)
+                                    .opacity(showContent ? 1 : 0)
+                                    .offset(y: showContent ? 0 : 24)
+                                    .animation(
+                                        .spring(response: 0.6, dampingFraction: 0.8)
+                                            .delay(Double(index) * 0.1),
+                                        value: showContent
+                                    )
+                            }
+                        }
+                        .padding(.horizontal, theme.metrics.spacing.xl)
+                        .padding(.vertical, theme.metrics.spacing.md)
+                    }
                     
-                    Text("FluidVoice keeps getting better")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .opacity(showContent ? 1 : 0)
-                        .offset(y: showContent ? 0 : -20)
-                }
-                .padding(.top, 40)
-                .padding(.bottom, 30)
-                
-                // Features List
-                ScrollView {
-                    VStack(spacing: 20) {
-                        ForEach(Array(features.enumerated()), id: \.offset) { index, feature in
-                            FeatureRow(feature: feature)
-                                .opacity(showContent ? 1 : 0)
-                                .offset(y: showContent ? 0 : 30)
-                                .animation(
-                                    .spring(response: 0.6, dampingFraction: 0.8)
-                                        .delay(Double(index) * 0.1),
-                                    value: showContent
-                                )
+                    // Continue Button
+                    Button("Continue") {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            SettingsStore.shared.markWhatsNewAsSeen()
+                            dismiss()
                         }
                     }
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 20)
+                    .buttonStyle(PremiumButtonStyle(height: 48))
+                    .buttonHoverEffect()
+                    .padding(.horizontal, theme.metrics.spacing.xl)
+                    .padding(.vertical, theme.metrics.spacing.lg)
+                    .opacity(showContent ? 1 : 0)
                 }
-                
-                // Continue Button
-                Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        SettingsStore.shared.markWhatsNewAsSeen()
-                        dismiss()
-                    }
-                }) {
-                    Text("Continue")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(
-                            LinearGradient(
-                                colors: [Color.blue, Color.blue.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 40)
-                .padding(.vertical, 30)
-                .opacity(showContent ? 1 : 0)
             }
-            .frame(width: 500, height: 600)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color(NSColor.windowBackgroundColor).opacity(0.95))
-                    .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 15)
-            )
+            .frame(width: 520, height: 620)
         }
         .onAppear {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.1)) {
@@ -255,52 +235,39 @@ struct WhatsNewView: View {
 
 struct FeatureRow: View {
     let feature: WhatsNewFeature
+    @Environment(\.theme) private var theme
     
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            // Icon
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.blue.opacity(0.2),
-                                Color.blue.opacity(0.1)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+        ThemedCard(style: .subtle, hoverEffect: false) {
+            HStack(alignment: .top, spacing: theme.metrics.spacing.md) {
+                ZStack {
+                    Circle()
+                        .fill(theme.palette.accent.opacity(0.12))
+                        .frame(width: 46, height: 46)
+                        .overlay(
+                            Circle()
+                                .stroke(theme.palette.accent.opacity(0.2), lineWidth: 1)
                         )
-                    )
-                    .frame(width: 50, height: 50)
+                    
+                    Image(systemName: feature.icon)
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(theme.palette.accent)
+                }
                 
-                Image(systemName: feature.icon)
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundColor(.blue)
-            }
-            
-            // Text
-            VStack(alignment: .leading, spacing: 6) {
-                Text(feature.title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(feature.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(theme.palette.primaryText)
+                    
+                    Text(feature.description)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 
-                Text(feature.description)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.white.opacity(0.7))
-                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
             }
-            
-            Spacer()
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
     }
 }
 

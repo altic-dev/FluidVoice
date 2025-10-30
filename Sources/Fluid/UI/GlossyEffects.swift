@@ -1,118 +1,47 @@
 import SwiftUI
 
 
-// MARK: - 3D Hoverable Card Component
+// MARK: - Hoverable Glossy Card Component
 struct HoverableGlossyCard<Content: View>: View {
+    @Environment(\.theme) private var theme
     @State private var isHovered = false
-    let content: Content
-    let excludeInteractiveElements: Bool
-    
+
+    private let content: Content
+    private let excludeInteractiveElements: Bool
+
     init(excludeInteractiveElements: Bool = false, @ViewBuilder content: () -> Content) {
         self.content = content()
         self.excludeInteractiveElements = excludeInteractiveElements
     }
-     
-    var body: some    View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color(red: 0.10, green: 0.12, blue: 0.20).opacity(0.85))
-                    .background(
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color(red: 0.10, green: 0.12, blue: 0.20).opacity(0.4),
-                                        Color(red: 0.06, green: 0.08, blue: 0.14).opacity(0.25)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: theme.metrics.corners.lg, style: .continuous)
+        let cardShadow = theme.metrics.cardShadow
+
+        return content
+            .background(theme.materials.card, in: shape)
+            .background {
+                shape
+                    .fill(theme.palette.cardBackground)
+                    .overlay(
+                        shape
+                            .stroke(
+                                theme.palette.cardBorder.opacity(isHovered ? 0.5 : 0.25),
+                                lineWidth: isHovered ? 1.2 : 1
                             )
                     )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.white.opacity(isHovered ? 0.35 : 0.18), lineWidth: isHovered ? 1.5 : 1)
+                    .shadow(
+                        color: cardShadow.color.opacity(isHovered ? min(cardShadow.opacity + 0.1, 1.0) : cardShadow.opacity),
+                        radius: isHovered ? cardShadow.radius + 2 : cardShadow.radius,
+                        x: cardShadow.x,
+                        y: isHovered ? cardShadow.y + 1 : cardShadow.y
                     )
-                    .shadow(color: Color.black.opacity(isHovered ? 0.45 : 0.28), radius: isHovered ? 24 : 18, x: 0, y: isHovered ? 12 : 8)
-            )
-            .brightness(isHovered && !excludeInteractiveElements ? 0.02 : 0.0)
+            }
+            .scaleEffect(isHovered && !excludeInteractiveElements ? 1.02 : 1.0)
             .onHover { hovering in
                 isHovered = hovering
             }
-            .animation(.easeInOut(duration: 0.15), value: isHovered)
-    }
-}
-
-// MARK: - Enhanced Button with Hover Effects
-struct HoverableButton<Content: View>: View {
-    @State private var isHovered = false
-    let action: () -> Void
-    let isDisabled: Bool
-    let content: Content
-    
-    init(action: @escaping () -> Void, isDisabled: Bool = false, @ViewBuilder content: () -> Content) {
-        self.action = action
-        self.isDisabled = isDisabled
-        self.content = content()
-    }
-    
-    var body: some View {
-        Button(action: action) {
-            content
-                .scaleEffect(isHovered && !isDisabled ? 1.05 : 1.0)
-                .brightness(isHovered && !isDisabled ? 0.1 : 0.0)
-                .shadow(
-                    color: .white.opacity(isHovered && !isDisabled ? 0.3 : 0.1), 
-                    radius: isHovered && !isDisabled ? 8 : 2
-                )
-        }
-        .disabled(isDisabled)
-        .onHover { hovering in
-            if !isDisabled {
-                isHovered = hovering
-            }
-        }
-        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
-    }
-}
-
-// MARK: - Enhanced Button Styles with Hover Effects
-struct EnhancedGlassButtonStyle: ButtonStyle {
-    @State private var isHovered = false
-    
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .fontWeight(.semibold)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(red: 0.12, green: 0.14, blue: 0.24).opacity(0.9))
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color(red: 0.12, green: 0.14, blue: 0.24).opacity(isHovered ? 0.45 : 0.3),
-                                        Color(red: 0.07, green: 0.09, blue: 0.16).opacity(isHovered ? 0.25 : 0.15)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.white.opacity(isHovered ? 0.35 : 0.22), lineWidth: isHovered ? 1.5 : 1)
-                    )
-                    .shadow(color: Color.black.opacity(isHovered ? 0.5 : 0.3), radius: isHovered ? 14 : 10, x: 0, y: isHovered ? 7 : 5)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : (isHovered ? 1.05 : 1.0))
-            .brightness(isHovered ? 0.05 : 0.0)
-            .onHover { hovering in isHovered = hovering }
-            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+            .animation(.easeOut(duration: 0.18), value: isHovered)
     }
 }
 
@@ -124,13 +53,18 @@ extension View {
 }
 
 struct ButtonHoverModifier: ViewModifier {
+    @Environment(\.theme) private var theme
     @State private var isHovered = false
     
     func body(content: Content) -> some View {
         content
             .scaleEffect(isHovered ? 1.05 : 1.0)
-            .brightness(isHovered ? 0.1 : 0.0)
-            .shadow(color: .white.opacity(isHovered ? 0.3 : 0.0), radius: isHovered ? 6 : 0)
+            .shadow(
+                color: theme.palette.accent.opacity(isHovered ? 0.35 : 0.0),
+                radius: isHovered ? 8 : 0,
+                x: 0,
+                y: isHovered ? 3 : 0
+            )
             .onHover { hovering in 
                 isHovered = hovering
             }
