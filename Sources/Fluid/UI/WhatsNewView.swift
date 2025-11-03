@@ -142,66 +142,120 @@ struct WhatsNewView: View {
     private func parseReleaseNotes(_ notes: String) -> [WhatsNewFeature] {
         var features: [WhatsNewFeature] = []
         
+        print("📝 Parsing release notes:")
+        print(notes)
+        print("---")
+        
         // Parse markdown format:
-        // - Look for bullet points (-, *, +)
-        // - Look for headings (##, ###)
-        // - Extract feature descriptions
+        // Expected structure:
+        // ## What's New in vX.X.X
+        // ### Section (e.g., "New", "Improvements")
+        // - Feature item
+        // - Another feature
         
         let lines = notes.components(separatedBy: .newlines)
         var currentTitle: String?
         var currentDescription = ""
+        var currentSection = "" // Track section headers like "New", "Improvements"
         
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             
             // Skip empty lines
             if trimmed.isEmpty {
+                // Empty line might signal end of current feature
+                if let title = currentTitle, !title.isEmpty {
+                    let desc = currentDescription.isEmpty ? "New feature or improvement" : currentDescription
+                    features.append(createFeature(title: title, description: desc))
+                    print("✅ Added feature: \(title)")
+                    currentTitle = nil
+                    currentDescription = ""
+                }
                 continue
             }
             
-            // Check for bullet points or list items
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
+            // Skip main heading (## What's New...)
+            if trimmed.hasPrefix("##") && !trimmed.hasPrefix("###") {
+                // This is the main title, skip it
+                continue
+            }
+            
+            // Section headers (### New, ### Improvements, etc.)
+            if trimmed.hasPrefix("###") {
                 // Save previous feature if exists
-                if let title = currentTitle, !currentDescription.isEmpty {
-                    features.append(createFeature(title: title, description: currentDescription))
+                if let title = currentTitle, !title.isEmpty {
+                    let desc = currentDescription.isEmpty ? "New feature or improvement" : currentDescription
+                    features.append(createFeature(title: title, description: desc))
+                    print("✅ Added feature: \(title)")
+                    currentTitle = nil
+                    currentDescription = ""
                 }
                 
-                // Extract new feature
-                let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                // This is a section header, not a feature
+                currentSection = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                print("📂 Section: \(currentSection)")
+                continue
+            }
+            
+            // Check for bullet points or list items (supporting nested with spaces/tabs)
+            let bulletPrefixes = ["- ", "* ", "+ ", "  - ", "  * ", "  + ", "\t- ", "\t* ", "\t+ "]
+            var isBullet = false
+            var bulletContent = ""
+            
+            for prefix in bulletPrefixes {
+                if trimmed.hasPrefix(prefix) {
+                    isBullet = true
+                    bulletContent = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                    break
+                }
+            }
+            
+            if isBullet {
+                // Save previous feature if exists
+                if let title = currentTitle, !title.isEmpty {
+                    let desc = currentDescription.isEmpty ? "New feature or improvement" : currentDescription
+                    features.append(createFeature(title: title, description: desc))
+                    print("✅ Added feature: \(title)")
+                }
                 
                 // Check if it has a colon (title: description format)
-                if let colonIndex = content.firstIndex(of: ":") {
-                    currentTitle = String(content[..<colonIndex]).trimmingCharacters(in: .whitespaces)
-                    currentDescription = String(content[content.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+                if let colonIndex = bulletContent.firstIndex(of: ":") {
+                    currentTitle = String(bulletContent[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+                    currentDescription = String(bulletContent[bulletContent.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
                 } else {
-                    // Entire content is the title/description
-                    currentTitle = content
+                    // Entire content is the title, use section as context for description
+                    currentTitle = bulletContent
+                    // If we have a section context and no description, use it
+                    if !currentSection.isEmpty {
+                        currentDescription = currentSection
+                    } else {
                     currentDescription = ""
                 }
             }
-            // Check for headings (secondary features)
-            else if trimmed.hasPrefix("###") {
-                if let title = currentTitle, !currentDescription.isEmpty {
-                    features.append(createFeature(title: title, description: currentDescription))
-                }
-                currentTitle = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                currentDescription = ""
             }
-            // Continuation of description
-            else if currentTitle != nil && !trimmed.hasPrefix("#") {
-                if !currentDescription.isEmpty {
+            // Continuation of description (only if we have a current item and not starting a new section)
+            else if let title = currentTitle, !title.isEmpty, !trimmed.hasPrefix("#") {
+                // Add to description if it's a continuation
+                if currentDescription == currentSection {
+                    // Replace section placeholder with actual description
+                    currentDescription = trimmed
+                } else {
+                    if !currentDescription.isEmpty && currentDescription != currentSection {
                     currentDescription += " "
                 }
                 currentDescription += trimmed
             }
+            }
         }
         
-        // Add last feature
-        if let title = currentTitle, !currentDescription.isEmpty {
-            features.append(createFeature(title: title, description: currentDescription))
-        } else if let title = currentTitle {
-            features.append(createFeature(title: title, description: title))
+        // Add last feature if exists
+        if let title = currentTitle, !title.isEmpty {
+            let desc = currentDescription.isEmpty || currentDescription == currentSection ? "New feature or improvement" : currentDescription
+            features.append(createFeature(title: title, description: desc))
+            print("✅ Added feature: \(title)")
         }
+        
+        print("📊 Total features parsed: \(features.count)")
         
         return features
     }

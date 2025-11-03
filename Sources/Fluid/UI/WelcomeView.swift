@@ -12,6 +12,7 @@ import AVFoundation
 struct WelcomeView: View {
     @ObservedObject var asr: ASRService
     @Binding var selectedSidebarItem: SidebarItem?
+    @Binding var playgroundUsed: Bool
     var isTranscriptionFocused: FocusState<Bool>.Binding
     @Environment(\.theme) private var theme
     
@@ -21,71 +22,87 @@ struct WelcomeView: View {
     let openAIBaseURL: String
     let availableModels: [String]
     let selectedModel: String
-    let playgroundUsed: Bool
     
     let stopAndProcessTranscription: () async -> Void
     let startRecording: () -> Void
     let isLocalEndpoint: (String) -> Bool
+    let openAccessibilitySettings: () -> Void
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 14) {
                 // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "book.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(theme.palette.accent)
-                        VStack(alignment: .leading) {
-                            Text("Welcome to FluidVoice")
-                                .font(.system(size: 28, weight: .bold))
-                            Text("Your AI-powered voice transcription assistant")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Follow this quick setup to start using FluidVoice.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
+                HStack(spacing: 12) {
+                    Image(systemName: "book.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(theme.palette.accent)
+                    Text("Welcome to FluidVoice")
+                        .font(.system(size: 22, weight: .bold))
                 }
-                .padding(.bottom, 8)
+                .padding(.bottom, 6)
 
                 // Quick Setup Checklist
                 ThemedCard(style: .prominent) {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 16))
                                 .foregroundStyle(theme.palette.accent)
                             Text("Quick Setup")
-                                .font(.headline)
+                                .font(.system(size: 15, weight: .semibold))
                         }
 
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
                             SetupStepView(
                                 step: 1,
-                                title: "Grant Microphone Permission",
-                                description: "Allow FluidVoice to access your microphone for voice input",
+                                title: asr.micStatus == .authorized ? "Microphone Permission Granted" : "Grant Microphone Permission",
+                                description: asr.micStatus == .authorized 
+                                    ? "FluidVoice has access to your microphone" 
+                                    : "Allow FluidVoice to access your microphone for voice input",
                                 status: asr.micStatus == .authorized ? .completed : .pending,
                                 action: {
-                                    selectedSidebarItem = .recording
-                                }
+                                    if asr.micStatus == .notDetermined {
+                                        asr.requestMicAccess()
+                                    } else if asr.micStatus == .denied {
+                                        asr.openSystemSettingsForMic()
+                                    }
+                                },
+                                actionButtonTitle: asr.micStatus == .notDetermined ? "Grant Access" : "Open Settings",
+                                showActionButton: asr.micStatus != .authorized
                             )
 
                             SetupStepView(
                                 step: 2,
-                                title: "Enable Accessibility",
-                                description: "Grant accessibility permission to type text into other apps",
+                                title: accessibilityEnabled ? "Accessibility Enabled" : "Enable Accessibility",
+                                description: accessibilityEnabled 
+                                    ? "Accessibility permission granted for typing into apps" 
+                                    : "Grant accessibility permission to type text into other apps",
                                 status: accessibilityEnabled ? .completed : .pending,
                                 action: {
-                                    selectedSidebarItem = .recording
-                                }
+                                    openAccessibilitySettings()
+                                },
+                                actionButtonTitle: "Open Settings",
+                                showActionButton: !accessibilityEnabled
                             )
 
                             SetupStepView(
                                 step: 3,
-                                title: "Set Up AI Enhancement (Optional)",
-                                description: "Configure API keys for AI-powered text enhancement",
+                                title: {
+                                    let hasApiKey = providerAPIKeys[currentProvider]?.isEmpty == false
+                                    let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                                    let hasModel = availableModels.contains(selectedModel)
+                                    let isConfigured = (isLocal || hasApiKey) && hasModel
+                                    return isConfigured ? "AI Enhancement Configured" : "Set Up AI Enhancement (Optional)"
+                                }(),
+                                description: {
+                                    let hasApiKey = providerAPIKeys[currentProvider]?.isEmpty == false
+                                    let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                                    let hasModel = availableModels.contains(selectedModel)
+                                    let isConfigured = (isLocal || hasApiKey) && hasModel
+                                    return isConfigured 
+                                        ? "AI-powered text enhancement is ready to use" 
+                                        : "Configure API keys for AI-powered text enhancement"
+                                }(),
                                 status: {
                                     let hasApiKey = providerAPIKeys[currentProvider]?.isEmpty == false
                                     let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -93,46 +110,146 @@ struct WelcomeView: View {
                                     return ((isLocal || hasApiKey) && hasModel) ? .completed : .pending
                                 }(),
                                 action: {
-                                    selectedSidebarItem = .aiProcessing
-                                }
+                                    selectedSidebarItem = .aiSettings
+                                },
+                                actionButtonTitle: "Configure AI"
                             )
 
                             SetupStepView(
                                 step: 4,
-                                title: "Test Your Setup below",
-                                description: "Try the playground below to test your complete setup",
+                                title: playgroundUsed ? "Setup Tested Successfully" : "Test Your Setup",
+                                description: playgroundUsed 
+                                    ? "You've successfully tested voice transcription" 
+                                    : "Try the playground below to test your complete setup",
                                 status: playgroundUsed ? .completed : .pending,
                                 action: {
-                                    // No action needed - playground is right below
+                                    // Scroll to playground or focus on it
+                                    withAnimation {
+                                        isTranscriptionFocused.wrappedValue = true
+                                    }
                                 },
-                                showConfigureButton: false
+                                actionButtonTitle: "Go to Playground",
+                                showActionButton: !playgroundUsed
                             )
+                            .id("playground-step-\(playgroundUsed)")
                         }
                     }
-                    .padding(20)
+                    .padding(14)
                 }
 
-                // Test Playground - Right after setup checklist
+                // How to Use - Before playground
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.green)
+                            Text("How to Use")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 10) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.palette.accent.opacity(0.15))
+                                        .frame(width: 28, height: 28)
+                                    Text("1")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(theme.palette.accent)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Start Recording")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Press your hotkey (default: Right Option/Alt) or click the button")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            HStack(alignment: .top, spacing: 10) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.palette.accent.opacity(0.15))
+                                        .frame(width: 28, height: 28)
+                                    Text("2")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(theme.palette.accent)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Speak Clearly")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Speak naturally - works best in quiet environments")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            HStack(alignment: .top, spacing: 10) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.palette.accent.opacity(0.15))
+                                        .frame(width: 28, height: 28)
+                                    Text("3")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(theme.palette.accent)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Auto-Type Result")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Transcription is automatically typed into your focused app")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                }
+
+                // Test Playground - At the end
                 ThemedCard(hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Image(systemName: "text.bubble")
-                                .font(.title2)
+                                .font(.system(size: 18))
                                 .foregroundStyle(.white)
-                            Text("Test Playground")
-                                .font(.title3)
-                                .fontWeight(.semibold)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Test Playground")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Click record, speak, and see your transcription")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
 
                             Spacer()
+                            
+                            // Status indicator
+                            if asr.isRunning {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(.red)
+                                        .frame(width: 8, height: 8)
+                                    Text("Recording...")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.red)
+                                }
+                            } else if !asr.finalText.isEmpty {
+                                Text("\(asr.finalText.count) characters")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
 
                             if !asr.finalText.isEmpty {
                                 Button(action: {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(asr.finalText, forType: .string)
                                 }) {
-                                    HStack {
+                                    HStack(spacing: 4) {
                                         Image(systemName: "doc.on.doc")
+                                            .font(.system(size: 11))
                                         Text("Copy")
+                                            .font(.system(size: 11))
                                     }
                                 }
                                 .buttonStyle(InlineButtonStyle())
@@ -140,81 +257,39 @@ struct WelcomeView: View {
                             }
                         }
 
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Test your voice transcription here!")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 10) {
 
-                                    Text("• Click 'Start Recording' or use hotkey (Right Option/Alt)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                    Text("• Speak naturally - words appear in real-time")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                    Text("• Click 'Stop Recording' when finished")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                VStack(alignment: .trailing, spacing: 4) {
+                            // Recording Control - Big Premium Button
+                            VStack(spacing: 10) {
+                                Button(action: {
                                     if asr.isRunning {
-                                        HStack {
-                                            Image(systemName: "waveform")
-                                                .foregroundStyle(.red)
-                                            Text("Recording...")
-                                                .font(.caption)
-                                                .foregroundStyle(.red)
-                                        }
-                                    } else if !asr.finalText.isEmpty {
-                                        Text("\(asr.finalText.count) characters")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-
-                            // Recording Controls
-                            HStack(spacing: 16) {
-                                if asr.isRunning {
-                                    Button(action: {
                                         Task {
                                             await stopAndProcessTranscription()
+                                            // Mark playground as used when transcription completes successfully
+                                            await MainActor.run {
+                                                // Only mark as used if we actually got some text
+                                                if !asr.finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                                    playgroundUsed = true
+                                                    SettingsStore.shared.playgroundUsed = true
+                                                }
+                                            }
                                         }
-                                    }) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "stop.fill")
-                                                .foregroundStyle(.red)
-                                            Text("Stop Recording")
-                                                .fontWeight(.medium)
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 8)
-                                        .background(theme.palette.warning.opacity(0.12))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    }
-                                } else {
-                                    Button(action: {
+                                    } else {
                                         startRecording()
-                                    }) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "mic.fill")
-                                                .foregroundStyle(.green)
-                                            Text("Start Recording")
-                                                .fontWeight(.medium)
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 8)
-                                        .background(theme.palette.success.opacity(0.12))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
                                     }
+                                }) {
+                                    HStack {
+                                        Image(systemName: asr.isRunning ? "stop.fill" : "mic.fill")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Text(asr.isRunning ? "Stop Recording" : "Start Recording")
+                                    }
+                                    .frame(maxWidth: .infinity)
                                 }
+                                .buttonStyle(PremiumButtonStyle(isRecording: asr.isRunning))
+                                .buttonHoverEffect()
+                                .scaleEffect(asr.isRunning ? 1.05 : 1.0)
+                                .animation(.spring(response: 0.3), value: asr.isRunning)
+                                .disabled(!asr.isAsrReady && !asr.isRunning)
 
                                 if !asr.isRunning && !asr.finalText.isEmpty {
                                     Button("Clear Results") {
@@ -225,91 +300,76 @@ struct WelcomeView: View {
                                 }
                             }
 
-                            // TRANSCRIPTION TEXT AREA - ACTUAL TEXT FIELD
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("Transcription Playground")
-                                        .font(.headline)
-                                        .fontWeight(.semibold)
-
-                                    Spacer()
-
-                                    if !asr.finalText.isEmpty {
-                                        Text("\(asr.finalText.count) characters")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-
+                            // TRANSCRIPTION TEXT AREA
+                            VStack(alignment: .leading, spacing: 8) {
                                 // REAL TEXT EDITOR - Can receive focus and display transcription
                                 TextEditor(text: $asr.finalText)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 13))
                                     .focused(isTranscriptionFocused)
-                                    .frame(height: 200)
-                                    .padding(16)
+                                    .frame(height: 150)
+                                    .padding(12)
                                     .background(
-                                        RoundedRectangle(cornerRadius: 12)
+                                        RoundedRectangle(cornerRadius: 8)
                                             .fill(
-                                                asr.isRunning ? theme.palette.accent.opacity(0.12) : theme.palette.cardBackground.opacity(0.85)
+                                                asr.isRunning ? theme.palette.accent.opacity(0.08) : Color(nsColor: NSColor.textBackgroundColor)
                                             )
                                             .overlay(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .stroke(
-                                                        asr.isRunning ? theme.palette.accent.opacity(0.4) : theme.palette.cardBorder.opacity(0.35),
-                                                        lineWidth: asr.isRunning ? 2 : 1
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .strokeBorder(
+                                                        asr.isRunning ? theme.palette.accent.opacity(0.5) : Color(nsColor: NSColor.separatorColor),
+                                                        lineWidth: asr.isRunning ? 2 : 1.5
                                                     )
                                             )
                                     )
+                                    .scrollContentBackground(.hidden)
                                     .overlay(
                                         VStack {
                                             if asr.isRunning {
-                                                VStack(spacing: 12) {
+                                                VStack(spacing: 8) {
                                                     // Animated recording indicator overlay
-                                                    HStack(spacing: 8) {
+                                                    HStack(spacing: 6) {
                                                         Image(systemName: "waveform")
-                                                            .font(.system(size: 24))
+                                                            .font(.system(size: 18))
                                                             .foregroundStyle(theme.palette.accent)
                                                             .scaleEffect(1.0)
                                                             .animation(.easeInOut(duration: 0.8).repeatForever(), value: asr.isRunning)
 
                                                         Image(systemName: "waveform")
-                                                            .font(.system(size: 20))
+                                                            .font(.system(size: 16))
                                                             .foregroundStyle(theme.palette.accent.opacity(0.7))
                                                             .scaleEffect(1.0)
                                                             .animation(.easeInOut(duration: 0.6).repeatForever(), value: asr.isRunning)
 
                                                         Image(systemName: "waveform")
-                                                            .font(.system(size: 16))
+                                                            .font(.system(size: 14))
                                                             .foregroundStyle(theme.palette.accent.opacity(0.5))
                                                             .scaleEffect(1.0)
                                                             .animation(.easeInOut(duration: 0.4).repeatForever(), value: asr.isRunning)
                                                     }
 
-                                                    VStack(spacing: 4) {
+                                                    VStack(spacing: 2) {
                                                         Text("Listening... Speak now!")
-                                                            .font(.title3)
-                                                            .fontWeight(.semibold)
+                                                            .font(.system(size: 16, weight: .semibold))
                                                             .foregroundStyle(theme.palette.accent)
 
-                                                        Text("Your words will appear here in real-time")
-                                                            .font(.subheadline)
+                                                        Text("Transcription will appear when you stop recording")
+                                                            .font(.system(size: 12))
                                                             .foregroundStyle(theme.palette.accent.opacity(0.8))
                                                     }
                                                 }
                                             } else if asr.finalText.isEmpty {
-                                                VStack(spacing: 12) {
+                                                VStack(spacing: 8) {
                                                     Image(systemName: "text.bubble")
-                                                        .font(.system(size: 32))
+                                                        .font(.system(size: 24))
                                                         .foregroundStyle(.secondary.opacity(0.6))
 
-                                                    VStack(spacing: 4) {
+                                                    VStack(spacing: 2) {
                                                         Text("Ready to test!")
-                                                            .font(.title3)
-                                                            .fontWeight(.semibold)
+                                                            .font(.system(size: 16, weight: .semibold))
                                                             .foregroundStyle(.primary)
 
                                                         Text("Click 'Start Recording' or press your hotkey")
-                                                            .font(.subheadline)
+                                                            .font(.system(size: 12))
                                                             .foregroundStyle(.secondary)
                                                     }
                                                 }
@@ -320,139 +380,42 @@ struct WelcomeView: View {
 
                                 // Quick Action Buttons
                                 if !asr.finalText.isEmpty {
-                                    HStack(spacing: 12) {
+                                    HStack(spacing: 8) {
                                         Button(action: {
                                             NSPasteboard.general.clearContents()
                                             NSPasteboard.general.setString(asr.finalText, forType: .string)
                                         }) {
-                                            HStack(spacing: 6) {
+                                            HStack(spacing: 4) {
                                                 Image(systemName: "doc.on.doc")
+                                                    .font(.system(size: 11))
                                                 Text("Copy Text")
+                                                    .font(.system(size: 12))
                                             }
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 8)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
                                             .background(theme.palette.accent.opacity(0.12))
                                             .foregroundStyle(theme.palette.accent)
-                                            .cornerRadius(8)
+                                            .cornerRadius(6)
                                         }
 
                                         Button("Clear & Test Again") {
                                             asr.finalText = ""
                                         }
                                         .buttonStyle(.bordered)
-                                        .controlSize(.regular)
+                                        .controlSize(.small)
 
                                         Spacer()
                                     }
-                                    .padding(.top, 8)
+                                    .padding(.top, 6)
                                 }
                             }
                         }
                     }
-                    .padding(20)
+                    .padding(14)
                 }
 
-                // How to Use
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "play.fill")
-                                .foregroundStyle(.green)
-                            Text("How to Use")
-                                .font(.headline)
-                        }
-
-                        VStack(alignment: .leading, spacing: 16) {
-                            InstructionStep(
-                                number: 1,
-                                title: "Start Recording",
-                                description: "Use your hotkey (default: Right Option/Alt) or click the record button in the main window"
-                            )
-
-                            InstructionStep(
-                                number: 2,
-                                title: "Speak Clearly",
-                                description: "Speak your text naturally. The app works best in quiet environments"
-                            )
-
-                            InstructionStep(
-                                number: 3,
-                                title: "AI Enhancement",
-                                description: "Your speech is transcribed, then enhanced by AI for better grammar and clarity"
-                            )
-
-                            InstructionStep(
-                                number: 4,
-                                title: "Auto-Type Result",
-                                description: "The enhanced text is automatically typed into your focused application"
-                            )
-                        }
-                    }
-                    .padding(20)
-                }
-
-                // API Configuration Guide
-                ThemedCard(style: .prominent) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Image(systemName: "key.fill")
-                                .foregroundStyle(.purple)
-                            Text("Get API Keys")
-                                .font(.headline)
-                        }
-
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Choose your AI provider:")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            ProviderGuide(
-                                name: "OpenAI",
-                                url: "https://platform.openai.com/api-keys",
-                                description: "Most popular choice with GPT-4.1 models",
-                                baseURL: "https://api.openai.com/v1",
-                                keyPrefix: "sk-"
-                            )
-
-                            ProviderGuide(
-                                name: "Groq",
-                                url: "https://console.groq.com/keys",
-                                description: "Fast inference with Llama and Mixtral models",
-                                baseURL: "https://api.groq.com/openai/v1",
-                                keyPrefix: "gsk_"
-                            )
-
-                            // Local Models Coming Soon
-                            ThemedCard(hoverEffect: false) {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text("Local Models")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(.secondary)
-
-                                        Spacer()
-
-                                        Text("Coming Soon")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(theme.palette.warning)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 2)
-                                            .background(theme.palette.warning.opacity(0.12))
-                                            .cornerRadius(8)
-                                    }
-
-                                    Text("Run models locally for privacy and offline use")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(12)
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
             }
-            .padding(20)
+            .padding(16)
         }
     }
 }
