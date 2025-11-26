@@ -162,6 +162,9 @@ struct RewriteModeView: View {
                 inputText = newText
             }
         }
+        .onExitCommand {
+            onClose?()
+        }
         .onAppear {
             // Set overlay mode to rewrite when this view appears
             menuBarManager.setOverlayMode(.rewrite)

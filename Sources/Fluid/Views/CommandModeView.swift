@@ -74,13 +74,9 @@ struct CommandModeView: View {
         // React to external changes (e.g. if global settings change while linked)
         .onChange(of: settings.selectedProviderID) { _ in if settings.commandModeLinkedToGlobal { updateAvailableModels() } }
         .onChange(of: settings.commandModeLinkedToGlobal) { _ in updateAvailableModels() }
-        .background(
-            Button("") {
-                onClose?()
-            }
-            .keyboardShortcut(.cancelAction)
-            .opacity(0)
-        )
+        .onExitCommand {
+            onClose?()
+        }
     }
     
     // MARK: - Header

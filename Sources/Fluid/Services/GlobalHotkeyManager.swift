@@ -12,6 +12,7 @@ final class GlobalHotkeyManager: NSObject
     private var stopAndProcessCallback: (() async -> Void)?
     private var commandModeCallback: (() async -> Void)?
     private var rewriteModeCallback: (() async -> Void)?
+    private var cancelCallback: (() -> Bool)?  // Returns true if handled
     private var pressAndHoldMode: Bool = SettingsStore.shared.pressAndHoldMode
     private var isKeyPressed = false
     private var isCommandModeKeyPressed = false
@@ -89,6 +90,11 @@ final class GlobalHotkeyManager: NSObject
     {
         self.rewriteModeShortcut = newShortcut
         DebugLogger.shared.info("Updated rewrite mode hotkey", source: "GlobalHotkeyManager")
+    }
+    
+    func setCancelCallback(_ callback: @escaping () -> Bool)
+    {
+        self.cancelCallback = callback
     }
 
     private func setupGlobalHotkeyWithRetry() {
@@ -206,6 +212,29 @@ final class GlobalHotkeyManager: NSObject
         switch type
         {
         case .keyDown:
+            // Check Escape key first (keyCode 53) - cancels recording and closes mode views
+            if keyCode == 53 && eventModifiers.isEmpty {
+                var handled = false
+                
+                if asrService.isRunning {
+                    DebugLogger.shared.info("Escape pressed - cancelling recording", source: "GlobalHotkeyManager")
+                    Task { @MainActor in
+                        self.asrService.stopWithoutTranscription()
+                    }
+                    handled = true
+                }
+                
+                // Trigger cancel callback to close mode views / reset state
+                if let callback = cancelCallback, callback() {
+                    DebugLogger.shared.info("Escape pressed - cancel callback handled", source: "GlobalHotkeyManager")
+                    handled = true
+                }
+                
+                if handled {
+                    return nil  // Consume event only if we did something
+                }
+            }
+            
             // Check command mode hotkey first
             if matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers)
             {

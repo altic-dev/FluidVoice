@@ -324,10 +324,26 @@ struct ContentView: View {
                     }
 
                     guard isRecordingAnyShortcut else {
-                        if event.keyCode == 53 && asr.isRunning {
-                            DebugLogger.shared.debug("NSEvent monitor: Escape pressed, cancelling ASR recording", source: "ContentView")
-                            asr.stopWithoutTranscription()
-                            return nil
+                        if event.keyCode == 53 {
+                            // Escape pressed - handle cancellation
+                            var handled = false
+                            
+                            if asr.isRunning {
+                                DebugLogger.shared.debug("NSEvent monitor: Escape pressed, cancelling ASR recording", source: "ContentView")
+                                asr.stopWithoutTranscription()
+                                handled = true
+                            }
+                            
+                            // Close mode views if active
+                            if selectedSidebarItem == .commandMode || selectedSidebarItem == .rewriteMode {
+                                DebugLogger.shared.debug("NSEvent monitor: Escape pressed, closing mode view", source: "ContentView")
+                                selectedSidebarItem = .welcome
+                                handled = true
+                            }
+                            
+                            if handled {
+                                return nil  // Suppress beep
+                            }
                         }
                         resetPendingShortcutState()
                         return event
@@ -2929,6 +2945,35 @@ struct ContentView: View {
         hotkeyManagerInitialized = hotkeyManager?.validateEventTapHealth() ?? false
         
         hotkeyManager?.enablePressAndHoldMode(pressAndHoldModeEnabled)
+        
+        // Set cancel callback for Escape key handling (closes mode views, resets recording state)
+        // Returns true if it handled something (so GlobalHotkeyManager knows to consume the event)
+        hotkeyManager?.setCancelCallback {
+            var handled = false
+            
+            // Reset recording mode flags
+            if self.isRecordingForCommand {
+                self.isRecordingForCommand = false
+                self.menuBarManager.setOverlayMode(.dictation)
+                handled = true
+            }
+            if self.isRecordingForRewrite {
+                self.isRecordingForRewrite = false
+                self.menuBarManager.setOverlayMode(.dictation)
+                handled = true
+            }
+            
+            // Close mode views if open
+            if self.selectedSidebarItem == .commandMode || self.selectedSidebarItem == .rewriteMode {
+                DebugLogger.shared.debug("Cancel callback: closing mode view", source: "ContentView")
+                DispatchQueue.main.async {
+                    self.selectedSidebarItem = .welcome
+                }
+                handled = true
+            }
+            
+            return handled
+        }
         
         // Monitor initialization status
         Task {
