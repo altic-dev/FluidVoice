@@ -2,7 +2,7 @@ import Foundation
 
 protocol AIProvider
 {
-    func process(systemPrompt: String, userText: String, model: String, apiKey: String, baseURL: String) async -> String
+    func process(systemPrompt: String, userText: String, model: String, apiKey: String, baseURL: String, stream: Bool) async -> String
 }
 
 final class OpenAICompatibleProvider: AIProvider
@@ -13,9 +13,10 @@ final class OpenAICompatibleProvider: AIProvider
         let messages: [ChatMessage]
         let temperature: Double?
         let reasoning_effort: String?
+        let stream: Bool?
         
         enum CodingKeys: String, CodingKey {
-            case model, messages, temperature, reasoning_effort
+            case model, messages, temperature, reasoning_effort, stream
         }
     }
     struct ChatChoiceMessage: Codable { let role: String; let content: String }
@@ -67,7 +68,7 @@ final class OpenAICompatibleProvider: AIProvider
         return modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/")
     }
 
-    func process(systemPrompt: String, userText: String, model: String, apiKey: String, baseURL: String) async -> String
+    func process(systemPrompt: String, userText: String, model: String, apiKey: String, baseURL: String, stream: Bool = false) async -> String
     {
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "https://api.openai.com/v1" : baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -97,7 +98,8 @@ final class OpenAICompatibleProvider: AIProvider
                 ChatMessage(role: "user", content: userText)
             ],
             temperature: 0.2,
-            reasoning_effort: shouldAddReasoningEffort ? "low" : nil
+            reasoning_effort: shouldAddReasoningEffort ? "low" : nil,
+            stream: stream ? true : nil
         )
 
         guard let jsonData = try? JSONEncoder().encode(body) else { return "Error: Failed to encode request" }

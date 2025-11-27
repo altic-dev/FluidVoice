@@ -177,11 +177,18 @@ final class RewriteModeService: ObservableObject {
             apiMessages.append(["role": msg.role == .user ? "user" : "assistant", "content": msg.content])
         }
         
-        let body: [String: Any] = [
+        // Check streaming setting
+        let enableStreaming = settings.enableAIStreaming
+        
+        var body: [String: Any] = [
             "model": model,
             "messages": apiMessages,
             "temperature": 0.7
         ]
+        
+        if enableStreaming {
+            body["stream"] = true
+        }
         
         let endpoint = baseURL.hasSuffix("/chat/completions") ? baseURL : "\(baseURL)/chat/completions"
         guard let url = URL(string: endpoint) else {
@@ -194,21 +201,78 @@ final class RewriteModeService: ObservableObject {
         request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        if enableStreaming {
+            DebugLogger.shared.info("Using STREAMING mode for Write/Rewrite", source: "RewriteModeService")
+            return try await processStreamingResponse(request: request)
+        } else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                let err = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw NSError(domain: "RewriteMode", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: err])
+            }
+            
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = json["choices"] as? [[String: Any]],
+                  let choice = choices.first,
+                  let message = choice["message"] as? [String: Any],
+                  let content = message["content"] as? String else {
+                throw NSError(domain: "RewriteMode", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+            }
+            
+            return content
+        }
+    }
+    
+    // MARK: - Streaming Response Handler
+    private func processStreamingResponse(request: URLRequest) async throws -> String {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
         
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let err = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "RewriteMode", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: err])
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw NSError(domain: "RewriteMode", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: errText])
         }
         
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let choice = choices.first,
-              let message = choice["message"] as? [String: Any],
-              let content = message["content"] as? String else {
-            throw NSError(domain: "RewriteMode", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        var fullContent = ""
+        var currentLine = ""
+        
+        for try await byte in bytes {
+            let char = Character(UnicodeScalar(byte))
+            
+            if char == "\n" {
+                let line = currentLine.trimmingCharacters(in: .whitespaces)
+                
+                if line.hasPrefix("data:") {
+                    var jsonString = String(line.dropFirst(5))
+                    if jsonString.hasPrefix(" ") {
+                        jsonString = String(jsonString.dropFirst(1))
+                    }
+                    
+                    if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                        currentLine = ""
+                        continue
+                    }
+                    
+                    if let jsonData = jsonString.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                       let choices = json["choices"] as? [[String: Any]],
+                       let firstChoice = choices.first,
+                       let delta = firstChoice["delta"] as? [String: Any],
+                       let content = delta["content"] as? String {
+                        fullContent += content
+                    }
+                }
+                currentLine = ""
+            } else if char != "\r" {
+                currentLine.append(char)
+            }
         }
         
-        return content
+        DebugLogger.shared.debug("Streaming complete. Content length: \(fullContent.count)", source: "RewriteModeService")
+        return fullContent.isEmpty ? "" : fullContent
     }
 }

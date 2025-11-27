@@ -6,10 +6,21 @@ final class CommandModeService: ObservableObject {
     @Published var conversationHistory: [Message] = []
     @Published var isProcessing = false
     @Published var pendingCommand: PendingCommand? = nil
+    @Published var currentStep: AgentStep? = nil
     
     private let terminalService = TerminalService()
     private var currentTurnCount = 0
-    private let maxTurns = 15
+    private let maxTurns = 20
+    
+    // MARK: - Agent Step Tracking
+    
+    enum AgentStep: Equatable {
+        case thinking(String)
+        case checking(String)
+        case executing(String)
+        case verifying(String)
+        case completed(Bool)
+    }
     
     // MARK: - Models
     
@@ -18,6 +29,8 @@ final class CommandModeService: ObservableObject {
         let role: Role
         let content: String
         let toolCall: ToolCall?
+        let stepType: StepType
+        let timestamp: Date
         
         enum Role: Equatable {
             case user
@@ -25,16 +38,29 @@ final class CommandModeService: ObservableObject {
             case tool
         }
         
+        enum StepType: Equatable {
+            case normal
+            case thinking      // AI reasoning
+            case checking      // Pre-flight verification
+            case executing     // Running command
+            case verifying     // Post-action check
+            case success       // Action completed
+            case failure       // Action failed
+        }
+        
         struct ToolCall: Equatable {
             let id: String
             let command: String
             let workingDirectory: String?
+            let purpose: String?  // Why this command is being run
         }
         
-        init(role: Role, content: String, toolCall: ToolCall? = nil) {
+        init(role: Role, content: String, toolCall: ToolCall? = nil, stepType: StepType = .normal) {
             self.role = role
             self.content = content
             self.toolCall = toolCall
+            self.stepType = stepType
+            self.timestamp = Date()
         }
     }
     
@@ -42,6 +68,7 @@ final class CommandModeService: ObservableObject {
         let id: String
         let command: String
         let workingDirectory: String?
+        let purpose: String?
     }
     
     // MARK: - Public Methods
@@ -77,89 +104,207 @@ final class CommandModeService: ObservableObject {
         pendingCommand = nil
         conversationHistory.append(Message(
             role: .assistant,
-            content: "Command cancelled."
+            content: "Command cancelled.",
+            stepType: .failure
         ))
         isProcessing = false
+        currentStep = nil
     }
     
     // MARK: - Agent Loop
     
     private func processNextTurn() async {
         if currentTurnCount >= maxTurns {
-            conversationHistory.append(Message(role: .assistant, content: "I've reached the maximum number of steps. stopping here."))
+            conversationHistory.append(Message(
+                role: .assistant,
+                content: "Reached maximum steps limit. Please review the progress and continue if needed.",
+                stepType: .failure
+            ))
             isProcessing = false
+            currentStep = .completed(false)
             return
         }
         
         currentTurnCount += 1
+        currentStep = .thinking("Analyzing...")
         
         do {
             let response = try await callLLM()
             
-            if let toolCall = response.toolCall {
+            if let tc = response.toolCall {
+                // Determine step type based on command purpose
+                let stepType = determineStepType(for: tc.command, purpose: tc.purpose)
+                currentStep = stepType == .checking ? .checking(tc.command) : .executing(tc.command)
+                
                 // AI wants to run a command
                 conversationHistory.append(Message(
                     role: .assistant,
-                    content: response.content.isEmpty ? "I'll run this command:" : response.content,
+                    content: response.content.isEmpty ? stepDescription(for: stepType) : response.content,
                     toolCall: Message.ToolCall(
-                        id: toolCall.id,
-                        command: toolCall.command,
-                        workingDirectory: toolCall.workingDirectory
-                    )
+                        id: tc.id,
+                        command: tc.command,
+                        workingDirectory: tc.workingDirectory,
+                        purpose: tc.purpose
+                    ),
+                    stepType: stepType
                 ))
                 
-                // Check if we need confirmation
-                if SettingsStore.shared.commandModeConfirmBeforeExecute {
+                // Check if we need confirmation for destructive commands
+                if SettingsStore.shared.commandModeConfirmBeforeExecute && isDestructiveCommand(tc.command) {
                     pendingCommand = PendingCommand(
-                        id: toolCall.id,
-                        command: toolCall.command,
-                        workingDirectory: toolCall.workingDirectory
+                        id: tc.id,
+                        command: tc.command,
+                        workingDirectory: tc.workingDirectory,
+                        purpose: tc.purpose
                     )
                     isProcessing = false
+                    currentStep = nil
                     return
                 }
                 
                 // Auto-execute
-                await executeCommand(toolCall.command, workingDirectory: toolCall.workingDirectory, callId: toolCall.id)
+                await executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose)
                 
             } else {
-                // Just a text response, we are done
-                conversationHistory.append(Message(role: .assistant, content: response.content))
+                // Just a text response - check if it's a final summary
+                let isFinal = response.content.lowercased().contains("complete") ||
+                              response.content.lowercased().contains("done") ||
+                              response.content.lowercased().contains("success") ||
+                              response.content.lowercased().contains("finished")
+                
+                conversationHistory.append(Message(
+                    role: .assistant,
+                    content: response.content,
+                    stepType: isFinal ? .success : .normal
+                ))
                 isProcessing = false
+                currentStep = .completed(isFinal)
             }
             
         } catch {
             conversationHistory.append(Message(
                 role: .assistant,
-                content: "Error: \(error.localizedDescription)"
+                content: "Error: \(error.localizedDescription)",
+                stepType: .failure
             ))
             isProcessing = false
+            currentStep = .completed(false)
         }
     }
     
-    private func executeCommand(_ command: String, workingDirectory: String?, callId: String) async {
+    private func determineStepType(for command: String, purpose: String?) -> Message.StepType {
+        let cmd = command.lowercased()
+        let purposeLower = purpose?.lowercased() ?? ""
+        
+        // Check commands
+        if purposeLower.contains("check") || purposeLower.contains("verify") || purposeLower.contains("exist") {
+            return .checking
+        }
+        if cmd.hasPrefix("ls ") || cmd.hasPrefix("cat ") || cmd.hasPrefix("test ") || cmd.hasPrefix("[ ") ||
+           cmd.contains("--version") || cmd.contains("which ") || cmd.contains("file ") ||
+           cmd.hasPrefix("stat ") || cmd.hasPrefix("head ") || cmd.hasPrefix("tail ") {
+            return .checking
+        }
+        
+        // Verification commands
+        if purposeLower.contains("confirm") || purposeLower.contains("result") {
+            return .verifying
+        }
+        
+        return .executing
+    }
+    
+    private func stepDescription(for stepType: Message.StepType) -> String {
+        switch stepType {
+        case .checking: return "Checking prerequisites..."
+        case .verifying: return "Verifying the result..."
+        case .executing: return "Executing command..."
+        default: return ""
+        }
+    }
+    
+    private func isDestructiveCommand(_ command: String) -> Bool {
+        let destructive = ["rm ", "rm\t", "rmdir", "mv ", "mv\t", "> ", ">> ", 
+                          "chmod ", "chown ", "kill ", "pkill ", "sudo "]
+        return destructive.contains { command.lowercased().hasPrefix($0) || command.contains(" \($0)") }
+    }
+    
+    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
+        currentStep = .executing(command)
+        
         let result = await terminalService.execute(
             command: command,
             workingDirectory: workingDirectory
         )
         
-        let resultJSON = terminalService.resultToJSON(result)
+        // Create enhanced result with context
+        let enhancedResult = EnhancedCommandResult(
+            result: result,
+            purpose: purpose
+        )
+        
+        let resultJSON = enhancedResult.toJSON()
+        
+        // Determine result step type
+        let resultStepType: Message.StepType = result.success ? .success : .failure
         
         // Add tool result to conversation
         conversationHistory.append(Message(
             role: .tool,
-            content: resultJSON
+            content: resultJSON,
+            stepType: resultStepType
         ))
         
         // Continue the loop - let the AI see the result and decide what to do next
         await processNextTurn()
     }
     
+    // MARK: - Enhanced Result
+    
+    private struct EnhancedCommandResult: Codable {
+        let success: Bool
+        let command: String
+        let output: String
+        let error: String?
+        let exitCode: Int32
+        let executionTimeMs: Int
+        let purpose: String?
+        
+        init(result: TerminalService.CommandResult, purpose: String?) {
+            self.success = result.success
+            self.command = result.command
+            self.output = result.output
+            self.error = result.error
+            self.exitCode = result.exitCode
+            self.executionTimeMs = result.executionTimeMs
+            self.purpose = purpose
+        }
+        
+        func toJSON() -> String {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(self),
+               let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return """
+            {"success": \(success), "output": "\(output)", "exitCode": \(exitCode)}
+            """
+        }
+    }
+    
     // MARK: - LLM Integration
     
     private struct LLMResponse {
         let content: String
-        let toolCall: (id: String, command: String, workingDirectory: String?)?
+        let toolCall: ToolCallData?
+        
+        struct ToolCallData {
+            let id: String
+            let command: String
+            let workingDirectory: String?
+            let purpose: String?
+        }
     }
     
     private func callLLM() async throws -> LLMResponse {
@@ -178,20 +323,65 @@ final class CommandModeService: ObservableObject {
             baseURL = "https://api.openai.com/v1"
         }
         
-        // Build conversation
+        // Build conversation with agentic system prompt
         let systemPrompt = """
-        You are an autonomous macOS terminal agent. Your goal is to complete the user's request by executing commands.
+        You are an autonomous, thoughtful macOS terminal agent. Execute user requests reliably and safely.
         
-        IMPORTANT RULES:
-        1. You can execute shell commands using the 'execute_terminal_command' tool.
-        2. If a command fails, ANALYZE the error output and try to FIX it by running a corrected command.
-        3. You can run multiple commands in sequence to accomplish a task (e.g., make a directory, then create a file).
-        4. Always use full paths when possible.
-        5. For destructive operations (rm, overwrite), ask the user for confirmation first (unless they already gave implied permission).
-        6. When the task is fully complete, respond with a final text summary.
-        7. Keep intermediate text responses concise.
+        ## AGENTIC WORKFLOW (Follow this pattern):
         
-        The user is on macOS with zsh shell.
+        ### 1. PRE-FLIGHT CHECKS (Always do this first!)
+        Before ANY action, verify prerequisites:
+        - File operations: Check if file/folder exists first (`ls`, `test -e`, `[ -f file ]`)
+        - Deletions: List contents before removing, confirm target exists
+        - Modifications: Read current state before changing
+        - Installations: Check if already installed (`which`, `--version`)
+        
+        ### 2. EXECUTE WITH CONTEXT
+        When calling execute_terminal_command, ALWAYS include a `purpose` parameter explaining:
+        - "checking" - Verifying something exists/state
+        - "executing" - Performing the main action  
+        - "verifying" - Confirming the result
+        Example purposes: "Checking if image1.png exists", "Creating the backup directory", "Verifying file was deleted"
+        
+        ### 3. POST-ACTION VERIFICATION
+        After modifying anything, verify it worked:
+        - Created file? `ls` to confirm it exists
+        - Deleted file? `ls` to confirm it's gone  
+        - Modified content? `cat` or `head` to verify changes
+        - Installed app? Check version/existence
+        
+        ### 4. HANDLE FAILURES GRACEFULLY
+        - If something doesn't exist: Tell the user clearly
+        - If command fails: Analyze error, try alternative approach
+        - If permission denied: Explain and suggest solutions
+        - Never assume success without verification
+        
+        ## RESPONSE FORMAT:
+        - Keep reasoning brief and clear
+        - State what you're checking/doing before each command
+        - After verification, give a clear success/failure summary
+        - Use natural language, not code comments
+        
+        ## SAFETY RULES:
+        - For destructive ops (rm, mv, overwrite): ALWAYS check target exists first
+        - Show what will be affected before destroying
+        - Prefer `rm -i` or listing contents before bulk deletes
+        - Use full absolute paths when possible
+        
+        ## EXAMPLES OF GOOD BEHAVIOR:
+        
+        User: "Delete image1.png in Downloads"
+        You: First check if it exists
+        → execute_terminal_command(command: "ls -la ~/Downloads/image1.png", purpose: "Checking if image1.png exists")
+        If exists → execute_terminal_command(command: "rm ~/Downloads/image1.png", purpose: "Deleting the file")
+        Then verify → execute_terminal_command(command: "ls ~/Downloads/image1.png 2>&1", purpose: "Verifying file was deleted")
+        Finally: "✓ Successfully deleted image1.png from Downloads."
+        
+        User: "Create a project folder with a readme"
+        You: → Check if folder exists, create it, create readme, verify both
+        
+        The user is on macOS with zsh shell. Be thorough but efficient. 
+        When task is complete, provide a clear summary starting with ✓ or ✗.
         """
         
         var messages: [[String: Any]] = [
@@ -284,11 +474,17 @@ final class CommandModeService: ObservableObject {
             
             let command = args["command"] as? String ?? ""
             let workDir = args["workingDirectory"] as? String
+            let purpose = args["purpose"] as? String
             let callId = toolCall["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))"
             
             return LLMResponse(
                 content: message["content"] as? String ?? "",
-                toolCall: (id: callId, command: command, workingDirectory: workDir?.isEmpty == true ? nil : workDir)
+                toolCall: LLMResponse.ToolCallData(
+                    id: callId,
+                    command: command,
+                    workingDirectory: workDir?.isEmpty == true ? nil : workDir,
+                    purpose: purpose
+                )
             )
         }
         

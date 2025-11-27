@@ -147,15 +147,8 @@ struct CommandModeView: View {
                     }
                     
                     if service.isProcessing {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Processing...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.leading)
-                        .id("processing")
+                        processingIndicator
+                            .id("processing")
                     }
                     
                     Color.clear.frame(height: 1).id("bottom")
@@ -168,7 +161,38 @@ struct CommandModeView: View {
             .onChange(of: service.isProcessing) { _ in
                 scrollToBottom(proxy)
             }
+            .onChange(of: service.currentStep) { _ in
+                scrollToBottom(proxy)
+            }
         }
+    }
+    
+    // MARK: - Processing Indicator (Minimal with Shimmer)
+    
+    private var processingIndicator: some View {
+        CommandShimmerText(text: currentStepLabel)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
+            .cornerRadius(6)
+    }
+    
+    private var currentStepLabel: String {
+        guard let step = service.currentStep else { return "Working..." }
+        switch step {
+        case .thinking: return "Thinking..."
+        case .checking(let cmd): return "Checking \(truncateCommand(cmd, to: 30))"
+        case .executing(let cmd): return "Running \(truncateCommand(cmd, to: 30))"
+        case .verifying: return "Verifying..."
+        case .completed(let success): return success ? "Done" : "Stopped"
+        }
+    }
+    
+    private func truncateCommand(_ cmd: String, to limit: Int) -> String {
+        if cmd.count > limit {
+            return String(cmd.prefix(limit - 3)) + "..."
+        }
+        return cmd
     }
     
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
@@ -182,39 +206,72 @@ struct CommandModeView: View {
     // MARK: - Pending Command
     
     private func pendingCommandView(_ pending: CommandModeService.PendingCommand) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             Divider()
             
             HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: "exclamationmark.shield.fill")
                     .foregroundStyle(.orange)
-                Text("Confirm command execution?")
-                    .fontWeight(.medium)
-            }
-            
-            Text(pending.command)
-                .font(.system(.body, design: .monospaced))
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .cornerRadius(6)
-            
-            HStack(spacing: 12) {
-                Button("Cancel") {
-                    service.cancelPendingCommand()
-                }
-                .buttonStyle(.bordered)
-                
-                Button("Run") {
-                    Task {
-                        await service.confirmAndExecute()
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Confirm Execution")
+                        .fontWeight(.semibold)
+                    if let purpose = pending.purpose {
+                        Text(purpose)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
+                Spacer()
+            }
+            
+            // Command preview
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Image(systemName: "terminal.fill")
+                        .font(.caption)
+                    Text("Command")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .windowBackgroundColor))
+                
+                Divider()
+                
+                Text(pending.command)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(10)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.orange.opacity(0.5), lineWidth: 1)
+            )
+            
+            HStack(spacing: 12) {
+                Button(action: { service.cancelPendingCommand() }) {
+                    Label("Cancel", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.escape, modifiers: [])
+                
+                Button(action: {
+                    Task { await service.confirmAndExecute() }
+                }) {
+                    Label("Run Command", systemImage: "play.fill")
+                }
                 .buttonStyle(.borderedProminent)
+                .tint(.orange)
                 .keyboardShortcut(.return, modifiers: [])
             }
         }
         .padding()
-        .background(Color.orange.opacity(0.1))
+        .background(Color.orange.opacity(0.08))
     }
     
     // MARK: - Input Area
@@ -323,7 +380,38 @@ struct CommandModeView: View {
     }
 }
 
-// MARK: - Message Bubble
+// MARK: - Shimmer Effect (Cursor-style)
+
+struct CommandShimmerText: View {
+    let text: String
+    
+    @State private var shimmerPhase: CGFloat = 0
+    
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        Color.primary.opacity(0.4),
+                        Color.primary.opacity(0.4),
+                        Color.primary.opacity(0.8),
+                        Color.primary.opacity(0.4),
+                        Color.primary.opacity(0.4)
+                    ],
+                    startPoint: UnitPoint(x: shimmerPhase - 0.3, y: 0.5),
+                    endPoint: UnitPoint(x: shimmerPhase + 0.3, y: 0.5)
+                )
+            )
+            .onAppear {
+                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                    shimmerPhase = 1.3
+                }
+            }
+    }
+}
+
+// MARK: - Message Bubble (Minimal Design)
 
 struct MessageBubble: View {
     let message: CommandModeService.Message
@@ -332,90 +420,173 @@ struct MessageBubble: View {
         HStack(alignment: .top) {
             if message.role == .user {
                 Spacer()
-                Text(message.content)
-                    .padding(10)
-                    .background(Color.accentColor.opacity(0.2))
-                    .cornerRadius(12)
-                    .frame(maxWidth: 400, alignment: .trailing)
+                userMessageView
             } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    // Role indicator
-                    HStack(spacing: 4) {
-                        Image(systemName: iconName)
-                            .font(.caption)
-                        Text(roleName)
-                            .font(.caption)
-                            .fontWeight(.bold)
-                    }
-                    .foregroundStyle(.secondary)
-                    
-                    // Content
-                    if message.role == .tool {
-                        // Show tool output in code block style
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            Text(formatToolOutput(message.content))
-                                .font(.system(.caption, design: .monospaced))
-                                .padding(8)
-                                .background(Color(nsColor: .textBackgroundColor))
-                                .cornerRadius(8)
-                        }
-                        .frame(maxWidth: 500)
-                    } else {
-                        Text(message.content)
-                            .padding(10)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                            .cornerRadius(12)
-                            .textSelection(.enabled)
-                    }
-                    
-                    // Show command if present
-                    if let tc = message.toolCall {
-                        HStack(spacing: 4) {
-                            Image(systemName: "terminal.fill")
-                                .font(.caption2)
-                            Text(tc.command)
-                                .font(.system(.caption, design: .monospaced))
-                                .lineLimit(1)
-                        }
-                        .padding(6)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(6)
-                        .foregroundStyle(.blue)
-                    }
-                }
-                .frame(maxWidth: 500, alignment: .leading)
+                agentMessageView
                 Spacer()
             }
         }
     }
     
-    private var iconName: String {
-        switch message.role {
-        case .assistant: return "sparkles"
-        case .tool: return "terminal"
-        default: return "person"
+    // MARK: - User Message
+    
+    private var userMessageView: some View {
+        Text(message.content)
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.accentColor.opacity(0.15))
+            .cornerRadius(10)
+            .frame(maxWidth: 380, alignment: .trailing)
+    }
+    
+    // MARK: - Agent Message
+    
+    private var agentMessageView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Purpose label (minimal, gray)
+            if let tc = message.toolCall, let purpose = tc.purpose {
+                Text(purpose)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            
+            // Main content
+            if message.role == .tool {
+                toolOutputView
+            } else if let tc = message.toolCall {
+                commandCallView(tc)
+            } else if !message.content.isEmpty {
+                textContentView
+            }
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+    }
+    
+    // MARK: - Command Call View (Minimal)
+    
+    private func commandCallView(_ tc: CommandModeService.Message.ToolCall) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Reasoning text (if meaningful)
+            if !message.content.isEmpty && 
+               !message.content.lowercased().starts(with: "checking") && 
+               !message.content.lowercased().starts(with: "executing") &&
+               !message.content.lowercased().starts(with: "i'll") {
+                Text(message.content)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            
+            // Command block - clean and simple
+            Text(tc.command)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(nsColor: .textBackgroundColor))
+                .cornerRadius(6)
         }
     }
     
-    private var roleName: String {
-        switch message.role {
-        case .assistant: return "Assistant"
-        case .tool: return "Output"
-        default: return "You"
+    // MARK: - Tool Output View (Minimal)
+    
+    private var toolOutputView: some View {
+        let parsed = parseToolOutput(message.content)
+        
+        return VStack(alignment: .leading, spacing: 0) {
+            // Minimal header - just status and time
+            HStack(spacing: 6) {
+                Text(parsed.success ? "Success" : "Error")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(parsed.success ? .primary : .secondary)
+                
+                Spacer()
+                
+                if parsed.executionTime > 0 {
+                    Text("\(parsed.executionTime)ms")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            
+            // Output content (if any)
+            if !parsed.output.isEmpty || parsed.error != nil {
+                Divider()
+                    .padding(.horizontal, 10)
+                
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if !parsed.output.isEmpty {
+                            Text(markdownAttributedString(from: parsed.output))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        
+                        if let error = parsed.error, !error.isEmpty {
+                            Text(error)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        .cornerRadius(6)
+    }
+    
+    // MARK: - Text Content View (Minimal)
+    
+    private var textContentView: some View {
+        Text(markdownAttributedString(from: message.content))
+            .font(.system(size: 13))
+            .textSelection(.enabled)
+    }
+    
+    // MARK: - Markdown Rendering
+    
+    private func markdownAttributedString(from text: String) -> AttributedString {
+        do {
+            let attributed = try AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            ))
+            return attributed
+        } catch {
+            return AttributedString(text)
         }
     }
     
-    private func formatToolOutput(_ json: String) -> String {
-        // Try to extract just the output field for cleaner display
-        if let data = json.data(using: .utf8),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let output = parsed["output"] as? String, !output.isEmpty {
-                return output
-            }
-            if let error = parsed["error"] as? String {
-                return "Error: \(error)"
-            }
+    // MARK: - Helpers
+    
+    private struct ParsedOutput {
+        let success: Bool
+        let output: String
+        let error: String?
+        let exitCode: Int
+        let executionTime: Int
+    }
+    
+    private func parseToolOutput(_ json: String) -> ParsedOutput {
+        guard let data = json.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ParsedOutput(success: false, output: json, error: nil, exitCode: -1, executionTime: 0)
         }
-        return json
+        
+        return ParsedOutput(
+            success: parsed["success"] as? Bool ?? false,
+            output: parsed["output"] as? String ?? "",
+            error: parsed["error"] as? String,
+            exitCode: parsed["exitCode"] as? Int ?? 0,
+            executionTime: parsed["executionTimeMs"] as? Int ?? 0
+        )
     }
 }

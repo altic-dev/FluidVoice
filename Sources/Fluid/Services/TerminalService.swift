@@ -24,25 +24,33 @@ final class TerminalService {
             "function": [
                 "name": "execute_terminal_command",
                 "description": """
-                    Execute a terminal/shell command on the user's macOS computer. 
-                    Use this to run any command-line operation like: file operations (ls, cat, mkdir, rm), 
-                    git commands, brew, npm, python scripts, or any other CLI tool.
-                    Returns JSON with: success (bool), output (stdout), error (stderr if any), exitCode.
-                    IMPORTANT: Only suggest safe, non-destructive commands unless explicitly asked.
+                    Execute a terminal/shell command on the user's macOS computer.
+                    Use this for file operations (ls, cat, mkdir, rm), git commands, brew, npm, python, or any CLI tool.
+                    
+                    IMPORTANT: Follow the agentic workflow:
+                    1. ALWAYS check prerequisites first (file exists, command available)
+                    2. Execute the main action
+                    3. Verify the result
+                    
+                    Returns JSON with: success (bool), output (stdout), error (stderr), exitCode, purpose.
                     """,
                 "parameters": [
                     "type": "object",
                     "properties": [
                         "command": [
                             "type": "string",
-                            "description": "The shell command to execute (e.g., 'ls -la', 'git status', 'cat file.txt')"
+                            "description": "The shell command to execute (e.g., 'ls -la', 'git status', 'rm file.txt')"
                         ],
                         "workingDirectory": [
                             "type": "string",
-                            "description": "Optional working directory path. Defaults to user's home directory if not specified."
+                            "description": "Optional working directory path. Defaults to user's home directory."
+                        ],
+                        "purpose": [
+                            "type": "string",
+                            "description": "Brief description of why this command is being run. Must be one of: 'checking' (verifying prerequisites), 'executing' (main action), 'verifying' (confirming result). Example: 'Checking if config.json exists'"
                         ]
                     ],
-                    "required": ["command"]
+                    "required": ["command", "purpose"]
                 ]
             ]
         ]
@@ -144,5 +152,6 @@ final class TerminalService {
         """
     }
 }
+
 
 

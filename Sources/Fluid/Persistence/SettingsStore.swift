@@ -31,6 +31,7 @@ final class SettingsStore: ObservableObject
         static let showInDock = "ShowInDock"
         static let pressAndHoldMode = "PressAndHoldMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let lastUpdateCheckDate = "LastUpdateCheckDate"
@@ -194,6 +195,18 @@ final class SettingsStore: ObservableObject
             return value as? Bool ?? true // Default to true (enabled)
         }
         set { defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
+    }
+
+    var enableAIStreaming: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.enableAIStreaming)
+            return value as? Bool ?? false // Default to false (disabled)
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.enableAIStreaming)
+        }
     }
 
     var copyTranscriptionToClipboard: Bool

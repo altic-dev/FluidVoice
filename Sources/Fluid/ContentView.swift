@@ -30,6 +30,11 @@ enum SidebarItem: Hashable {
 // MARK: - Saved Provider Model
 // Removed deprecated inline service and model
 
+// MARK: - Streaming Response Structures
+private struct StreamingDelta: Codable { let role: String?; let content: String? }
+private struct StreamingChoice: Codable { let index: Int?; let delta: StreamingDelta; let finish_reason: String? }
+private struct StreamingChunk: Codable { let choices: [StreamingChoice] }
+
 struct ContentView: View {
     @StateObject private var audioObserver = AudioHardwareObserver()
     @StateObject private var asr = ASRService()
@@ -951,6 +956,34 @@ struct ContentView: View {
                             }
                     }
                     .padding(.horizontal, 4)
+                    
+                    // Streaming Toggle (only for OpenAI-compatible APIs, not Apple Intelligence)
+                    if enableAIProcessing && selectedProviderID != "apple-intelligence" {
+                        Divider()
+                            .padding(.vertical, 3)
+                        
+                        HStack(alignment: .top, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Enable Streaming")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(theme.palette.primaryText)
+                                
+                                Text("Stream responses from OpenAI-compatible APIs for faster initial output")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(theme.palette.secondaryText)
+                            }
+                            
+                            Spacer()
+                            
+                            Toggle("", isOn: Binding(
+                                get: { SettingsStore.shared.enableAIStreaming },
+                                set: { SettingsStore.shared.enableAIStreaming = $0 }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                        }
+                        .padding(.horizontal, 4)
+                    }
                     
                     // API Key Warning (not for Apple Intelligence - it doesn't need a key)
                     if enableAIProcessing && 
@@ -2285,10 +2318,12 @@ struct ContentView: View {
             let messages: [ChatMessage]
             let temperature: Double?
             let reasoning_effort: String?
+            let stream: Bool?
         }
         struct ChatChoiceMessage: Codable { let role: String; let content: String }
         struct ChatChoice: Codable { let index: Int?; let message: ChatChoiceMessage }
         struct ChatResponse: Codable { let choices: [ChatChoice] }
+        
 
         // Get app context captured at start of recording if available
         let appInfo = recordingAppInfo ?? getCurrentAppInfo()
@@ -2299,6 +2334,9 @@ struct ContentView: View {
         let modelLower = selectedModel.lowercased()
         let shouldAddReasoningEffort = modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/")
         
+        // Get streaming setting
+        let enableStreaming = SettingsStore.shared.enableAIStreaming
+        
         let body = ChatRequest(
             model: selectedModel,
             messages: [
@@ -2306,11 +2344,17 @@ struct ContentView: View {
                 ChatMessage(role: "user", content: inputText)
             ],
             temperature: 0.2,
-            reasoning_effort: shouldAddReasoningEffort ? "low" : nil
+            reasoning_effort: shouldAddReasoningEffort ? "low" : nil,
+            stream: enableStreaming ? true : nil
         )
 
         guard let jsonData = try? JSONEncoder().encode(body) else {
             return "Error: Failed to encode request"
+        }
+        
+        // Debug: Log request body
+        if let bodyStr = String(data: jsonData, encoding: .utf8) {
+            DebugLogger.shared.debug("AI Request body: \(bodyStr)", source: "ContentView")
         }
 
         var request = URLRequest(url: url)
@@ -2325,34 +2369,100 @@ struct ContentView: View {
         request.httpBody = jsonData
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            // Debug: Print raw response
-            print("=== OLLAMA RESPONSE DEBUG (ContentView) ===")
-            print("Response URL: \(request.url?.absoluteString ?? "unknown")")
-            if let http = response as? HTTPURLResponse {
-                print("HTTP Status: \(http.statusCode)")
+            if enableStreaming {
+                // Streaming mode - parse SSE response
+                DebugLogger.shared.info("Using STREAMING mode for AI request", source: "ContentView")
+                return try await processStreamingResponse(request: request)
+            } else {
+                // Non-streaming mode - single JSON response
+                DebugLogger.shared.info("Using NON-STREAMING mode for AI request", source: "ContentView")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                    let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
+                    return "Error: HTTP \(http.statusCode): \(errText)"
+                }
+                let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
+                return decoded.choices.first?.message.content ?? "<no content>"
             }
-            if let responseText = String(data: data, encoding: .utf8) {
-                print("Raw Response: \(responseText)")
-            }
-            print("==========================================")
-            
-            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
-                return "Error: HTTP \(http.statusCode): \(errText)"
-            }
-            let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
-            return decoded.choices.first?.message.content ?? "<no content>"
         } catch {
-            print("=== OLLAMA DECODE ERROR (ContentView) ===")
-            print("Error: \(error)")
-            if let decodingError = error as? DecodingError {
-                print("Decoding Error Details: \(decodingError)")
-            }
-            print("========================================")
+            DebugLogger.shared.error("AI API error: \(error.localizedDescription)", source: "ContentView")
             return "Error: \(error.localizedDescription)"
         }
+    }
+    
+    // MARK: - Streaming Response Handler
+    private func processStreamingResponse(request: URLRequest) async throws -> String {
+        DebugLogger.shared.debug("Starting streaming request to: \(request.url?.absoluteString ?? "unknown")", source: "Streaming")
+        
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        
+        if let http = response as? HTTPURLResponse {
+            DebugLogger.shared.debug("Streaming response status: \(http.statusCode)", source: "Streaming")
+            if http.statusCode >= 400 {
+                var errorData = Data()
+                for try await byte in bytes {
+                    errorData.append(byte)
+                }
+                let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                DebugLogger.shared.error("Streaming error: \(errText)", source: "Streaming")
+                return "Error: HTTP \(http.statusCode): \(errText)"
+            }
+        }
+        
+        var fullContent = ""
+        var currentLine = ""
+        
+        // Parse SSE line by line
+        for try await byte in bytes {
+            let char = Character(UnicodeScalar(byte))
+            
+            if char == "\n" {
+                // Process the completed line
+                let line = currentLine.trimmingCharacters(in: .whitespaces)
+                
+                if line.hasPrefix("data:") {
+                    // Handle both "data: " and "data:" formats
+                    var jsonString = String(line.dropFirst(5))
+                    if jsonString.hasPrefix(" ") {
+                        jsonString = String(jsonString.dropFirst(1))
+                    }
+                    
+                    // Skip [DONE] marker
+                    if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                        DebugLogger.shared.debug("Received [DONE] marker", source: "Streaming")
+                        currentLine = ""
+                        continue
+                    }
+                    
+                    // Parse the JSON chunk
+                    if let jsonData = jsonString.data(using: .utf8) {
+                        do {
+                            let chunk = try JSONDecoder().decode(StreamingChunk.self, from: jsonData)
+                            if let delta = chunk.choices.first?.delta,
+                               let content = delta.content {
+                                fullContent += content
+                            }
+                        } catch {
+                            // Try alternative parsing for different response formats
+                            if let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                               let choices = json["choices"] as? [[String: Any]],
+                               let firstChoice = choices.first,
+                               let delta = firstChoice["delta"] as? [String: Any],
+                               let content = delta["content"] as? String {
+                                fullContent += content
+                            }
+                        }
+                    }
+                }
+                currentLine = ""
+            } else if char != "\r" {
+                currentLine.append(char)
+            }
+        }
+        
+        DebugLogger.shared.debug("Streaming complete. Content length: \(fullContent.count)", source: "Streaming")
+        return fullContent.isEmpty ? "<no content>" : fullContent
     }
     
     // MARK: - Stop and Process Transcription
