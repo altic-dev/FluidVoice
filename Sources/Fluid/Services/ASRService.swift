@@ -6,10 +6,10 @@ import FluidAudio
 import CoreAudio
 import AppKit
 
-private actor TranscriptionExecutor
-{
-    func run<T>(_ operation: @escaping () async throws -> T) async rethrows -> T
-    {
+/// Serializes all CoreML transcription operations to prevent concurrent access issues.
+/// The actor ensures only one transcription runs at a time, preventing CoreML race conditions.
+private actor TranscriptionExecutor {
+    func run<T>(_ operation: @escaping () async throws -> T) async rethrows -> T {
         try await operation()
     }
 }
@@ -117,9 +117,10 @@ final class ASRService: ObservableObject
         // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
         if modelsExistOnDisk {
             DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
-            Task {
+            Task { [weak self] in
+                guard let self = self else { return }
                 do {
-                    try await ensureAsrReady()
+                    try await self.ensureAsrReady()
                     DebugLogger.shared.info("Models auto-loaded successfully on startup", source: "ASRService")
                 } catch {
                     DebugLogger.shared.error("Failed to auto-load models on startup: \(error)", source: "ASRService")

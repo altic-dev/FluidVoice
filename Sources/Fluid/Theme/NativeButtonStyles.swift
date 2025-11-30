@@ -262,7 +262,7 @@ struct InlineButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Glass Toggle Style
+// MARK: - Glass Toggle Style (now uses native switch for consistency)
 struct GlassToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         ToggleBody(configuration: configuration)
@@ -271,7 +271,6 @@ struct GlassToggleStyle: ToggleStyle {
     private struct ToggleBody: View {
         @Environment(\.theme) private var theme
         let configuration: ToggleStyle.Configuration
-        @State private var isHovered = false
 
         var body: some View {
             HStack {
@@ -280,39 +279,35 @@ struct GlassToggleStyle: ToggleStyle {
 
                 Spacer()
 
-                ZStack {
-                    Capsule()
-                        .fill(configuration.isOn ? theme.palette.accent.opacity(0.6) : theme.palette.cardBackground)
-                        .overlay(
-                            Capsule()
-                                .stroke(theme.palette.cardBorder.opacity(isHovered ? 0.4 : 0.25), lineWidth: 1)
-                        )
-                        .frame(width: 46, height: 26)
-                        .background(theme.materials.card, in: Capsule())
-                        .shadow(
-                            color: theme.palette.cardBorder.opacity(isHovered ? 0.35 : 0.18),
-                            radius: isHovered ? 8 : 4,
-                            x: 0,
-                            y: isHovered ? 3 : 1
-                        )
-
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 22, height: 22)
-                        .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 1)
-                        .overlay(
-                            Circle()
-                                .stroke(theme.palette.cardBorder.opacity(0.3), lineWidth: 0.5)
-                        )
-                        .offset(x: configuration.isOn ? 9 : -9)
-                        .animation(.spring(response: 0.28, dampingFraction: 0.75), value: configuration.isOn)
-                }
-                .onTapGesture {
-                    configuration.isOn.toggle()
-                }
-                .onHover { isHovered = $0 }
+                Toggle("", isOn: configuration.$isOn)
+                    .toggleStyle(.switch)
+                    .tint(theme.palette.accent)
+                    .labelsHidden()
             }
         }
+    }
+}
+
+// MARK: - Native Form Row Style
+struct FormRowStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.ultraThinMaterial.opacity(0.5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+    }
+}
+
+extension View {
+    func formRowStyle() -> some View {
+        modifier(FormRowStyle())
     }
 }
 

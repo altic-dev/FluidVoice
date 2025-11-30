@@ -116,10 +116,10 @@ final class GlobalHotkeyManager: NSObject
             
             if attempt < maxRetryAttempts {
                 DebugLogger.shared.warning("Attempt \(attempt) failed, retrying in \(retryDelay) seconds...", source: "GlobalHotkeyManager")
-                Task {
+                Task { [weak self] in
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
-                    await MainActor.run {
-                        self.setupGlobalHotkeyWithRetry()
+                    await MainActor.run { [weak self] in
+                        self?.setupGlobalHotkeyWithRetry()
                     }
                 }
                 return

@@ -41,88 +41,50 @@ struct SettingsView: View {
     
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 // App Settings Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "power")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("App Settings")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        // Section header
+                        Label("App Settings", systemImage: "power")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
 
-                        VStack(spacing: 14) {
+                        VStack(spacing: 0) {
                             // Launch at startup
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top, spacing: 16) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Launch at startup")
-                                            .font(.headline)
-                                        Text("Automatically start FluidVoice when you log in")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Toggle("", isOn: Binding(
-                                        get: { SettingsStore.shared.launchAtStartup },
-                                        set: { SettingsStore.shared.launchAtStartup = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .tint(.green)
-                                    .labelsHidden()
-                                }
-                                
-                                Text("Note: Requires app to be signed for this to work.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary.opacity(0.7))
-                                    .padding(.leading, 0)
-                            }
+                            settingsToggleRow(
+                                title: "Launch at startup",
+                                description: "Automatically start FluidVoice when you log in",
+                                footnote: "Note: Requires app to be signed for this to work.",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.launchAtStartup },
+                                    set: { SettingsStore.shared.launchAtStartup = $0 }
+                                )
+                            )
 
-                            Divider()
+                            Divider().padding(.vertical, 10)
 
                             // Show in Dock
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top, spacing: 16) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Show in Dock")
-                                            .font(.headline)
-                                        Text("Display FluidVoice icon in the Dock")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Toggle("", isOn: Binding(
-                                        get: { SettingsStore.shared.showInDock },
-                                        set: { SettingsStore.shared.showInDock = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .tint(.green)
-                                    .labelsHidden()
-                                }
-                                
-                                Text("Note: May require app restart to take effect.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary.opacity(0.7))
-                                    .padding(.leading, 0)
-                            }
+                            settingsToggleRow(
+                                title: "Show in Dock",
+                                description: "Display FluidVoice icon in the Dock",
+                                footnote: "Note: May require app restart to take effect.",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.showInDock },
+                                    set: { SettingsStore.shared.showInDock = $0 }
+                                )
+                            )
 
-                            Divider()
+                            Divider().padding(.vertical, 10)
 
                             // Automatic Updates
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top, spacing: 16) {
-                                    VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .center) {
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text("Automatic Updates")
-                                            .font(.headline)
+                                            .font(.body)
                                         Text("Check for updates automatically once per day")
-                                            .font(.caption)
+                                            .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                     }
                                     
@@ -133,22 +95,20 @@ struct SettingsView: View {
                                         set: { SettingsStore.shared.autoUpdateCheckEnabled = $0 }
                                     ))
                                     .toggleStyle(.switch)
-                                    .tint(.green)
+                                    .tint(theme.palette.accent)
                                     .labelsHidden()
                                 }
                                 
                                 if let lastCheck = SettingsStore.shared.lastUpdateCheckDate {
                                     Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary.opacity(0.7))
-                                        .padding(.leading, 0)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
                             
-                            // Update Buttons - Left/Right aligned
-                            HStack(spacing: 12) {
+                            // Update Buttons
+                            HStack(spacing: 10) {
                                 Button("Check for Updates") {
-                                    // Direct update check - same as menu bar
                                     Task { @MainActor in
                                         do {
                                             try await SimpleUpdater.shared.checkAndUpdate(owner: "altic-dev", repo: "Fluid-oss")
@@ -172,250 +132,150 @@ struct SettingsView: View {
                                         }
                                     }
                                 }
-                                .buttonStyle(PremiumButtonStyle(height: 40))
-                                .buttonHoverEffect()
+                                .buttonStyle(.borderedProminent)
+                                .tint(theme.palette.accent)
+                                .controlSize(.regular)
                                 
                                 Button("Release Notes") {
                                     if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
                                         NSWorkspace.shared.open(url)
                                     }
                                 }
-                                .buttonStyle(PremiumButtonStyle(height: 40))
-                                .buttonHoverEffect()
+                                .buttonStyle(.bordered)
+                                .controlSize(.regular)
                             }
-                            .padding(.top, 4)
+                            .padding(.top, 12)
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
                 
                 // Microphone Permission Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "mic.fill")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Microphone Permission")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Microphone Permission", systemImage: "mic.fill")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                // Status indicator
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 10) {
                                 Circle()
                                     .fill(asr.micStatus == .authorized ? theme.palette.success : theme.palette.warning)
-                                    .frame(width: 10, height: 10)
+                                    .frame(width: 8, height: 8)
                                 
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(asr.micStatus == .authorized ? "Microphone access granted" : 
                                          asr.micStatus == .denied ? "Microphone access denied" :
                                          "Microphone access not determined")
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(asr.micStatus == .authorized ? theme.palette.primaryText : theme.palette.warning)
+                                        .font(.body)
+                                        .foregroundStyle(asr.micStatus == .authorized ? .primary : theme.palette.warning)
                                     
                                     if asr.micStatus != .authorized {
                                         Text("Microphone access is required for voice recording")
-                                            .font(.caption)
+                                            .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
                                 
-                                // Action button
-                                Group {
-                                    if asr.micStatus == .notDetermined {
-                                        Button {
-                                            asr.requestMicAccess()
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "mic.fill")
-                                                Text("Grant Access")
-                                                    .fontWeight(.medium)
-                                            }
-                                        }
-                                        .buttonStyle(GlassButtonStyle())
-                                        .buttonHoverEffect()
-                                    } else if asr.micStatus == .denied {
-                                        Button {
-                                            asr.openSystemSettingsForMic()
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "gear")
-                                                Text("Open Settings")
-                                                    .fontWeight(.medium)
-                                            }
-                                        }
-                                        .buttonStyle(GlassButtonStyle())
-                                        .buttonHoverEffect()
+                                if asr.micStatus == .notDetermined {
+                                    Button {
+                                        asr.requestMicAccess()
+                                    } label: {
+                                        Label("Grant Access", systemImage: "mic.fill")
                                     }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(theme.palette.accent)
+                                    .controlSize(.regular)
+                                } else if asr.micStatus == .denied {
+                                    Button {
+                                        asr.openSystemSettingsForMic()
+                                    } label: {
+                                        Label("Open Settings", systemImage: "gear")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.regular)
                                 }
                             }
                             
-                            // Step-by-step instructions when microphone is not authorized
                             if asr.micStatus != .authorized {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "info.circle.fill")
-                                            .foregroundStyle(theme.palette.accent)
-                                            .font(.caption)
-                                        Text("How to enable microphone access:")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        if asr.micStatus == .notDetermined {
-                                            HStack(spacing: 8) {
-                                                Text("1.")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(theme.palette.accent)
-                                                    .fontWeight(.semibold)
-                                                    .frame(width: 16)
-                                                Text("Click **Grant Access** above")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.primary)
-                                            }
-                                            HStack(spacing: 8) {
-                                                Text("2.")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(theme.palette.accent)
-                                                    .fontWeight(.semibold)
-                                                    .frame(width: 16)
-                                                Text("Choose **Allow** in the system dialog")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.primary)
-                                            }
-                                        } else if asr.micStatus == .denied {
-                                            HStack(spacing: 8) {
-                                                Text("1.")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(theme.palette.accent)
-                                                    .fontWeight(.semibold)
-                                                    .frame(width: 16)
-                                                Text("Click **Open Settings** above")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.primary)
-                                            }
-                                            HStack(spacing: 8) {
-                                                Text("2.")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(theme.palette.accent)
-                                                    .fontWeight(.semibold)
-                                                    .frame(width: 16)
-                                                Text("Find **FluidVoice** in the microphone list")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.primary)
-                                            }
-                                            HStack(spacing: 8) {
-                                                Text("3.")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(theme.palette.accent)
-                                                    .fontWeight(.semibold)
-                                                    .frame(width: 16)
-                                                Text("Toggle **FluidVoice ON** to allow access")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.primary)
-                                            }
-                                        }
-                                    }
-                                    .padding(.leading, 4)
-                                }
-                                .padding(12)
-                                .background(theme.palette.accent.opacity(0.12))
-                                .cornerRadius(8)
+                                instructionsBox(
+                                    title: "How to enable microphone access:",
+                                    steps: asr.micStatus == .notDetermined 
+                                        ? ["Click **Grant Access** above", "Choose **Allow** in the system dialog"]
+                                        : ["Click **Open Settings** above", "Find **FluidVoice** in the microphone list", "Toggle **FluidVoice ON** to allow access"]
+                                )
                             }
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
                 
                 // Global Hotkey Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "keyboard")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Global Hotkey")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Global Hotkey", systemImage: "keyboard")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         
                         if accessibilityEnabled {
-                            // Hotkey is enabled
                             VStack(alignment: .leading, spacing: 12) {
                                 // Status indicator
-                                HStack(spacing: 10) {
+                                HStack(spacing: 8) {
                                     if isRecordingShortcut || isRecordingCommandModeShortcut || isRecordingRewriteShortcut {
                                         Image(systemName: "hand.point.up.left.fill")
                                             .foregroundStyle(.orange)
-                                            .font(.system(size: 16, weight: .medium))
                                         Text("Press your new hotkey combination now...")
-                                            .font(.system(.subheadline, weight: .medium))
+                                            .font(.subheadline)
                                             .foregroundStyle(.orange)
                                     } else if hotkeyManagerInitialized {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(.green)
-                                            .font(.system(size: 16))
                                         Text("Global Shortcuts Active")
-                                            .font(.system(.subheadline, weight: .semibold))
-                                            .foregroundStyle(.white)
+                                            .font(.subheadline.weight(.medium))
                                         
                                         Spacer()
                                         
-                                        // Restart button for accessibility changes
                                         if !hotkeyManagerInitialized && accessibilityEnabled {
                                             Button {
                                                 DebugLogger.shared.debug("User requested app restart for accessibility changes", source: "SettingsView")
                                                 restartApp()
                                             } label: {
-                                                HStack(spacing: 6) {
-                                                    Image(systemName: "arrow.clockwise.circle")
-                                                        .font(.system(size: 12, weight: .semibold))
-                                                    Text("Restart")
-                                                        .font(.system(size: 12, weight: .semibold))
-                                                }
+                                                Label("Restart", systemImage: "arrow.clockwise.circle")
                                             }
-                                            .buttonStyle(InlineButtonStyle())
-                                            .buttonHoverEffect()
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
                                         }
                                     } else {
                                         ProgressView()
-                                            .scaleEffect(0.8)
-                                            .frame(width: 16, height: 16)
-                                            .foregroundStyle(.orange)
+                                            .controlSize(.small)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text("Hotkey Initializing...")
-                                                .font(.system(.caption, weight: .semibold))
+                                                .font(.subheadline.weight(.medium))
                                                 .foregroundStyle(.orange)
                                             Text("Please wait while the global hotkey system starts up")
-                                                .font(.system(.caption))
+                                                .font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
                                     }
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 8)
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(.ultraThinMaterial.opacity(0.5))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                                 .stroke(.white.opacity(0.1), lineWidth: 1)
                                         )
                                 )
                                 
                                 // MARK: - Shortcuts Section
-                                VStack(alignment: .leading, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 8) {
                                     Text("Keyboard Shortcuts")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
+                                        .font(.subheadline.weight(.medium))
                                         .foregroundStyle(.secondary)
                                     
-                                    // Transcribe Mode Shortcut
                                     shortcutRow(
                                         icon: "mic.fill",
                                         iconColor: .secondary,
@@ -430,9 +290,7 @@ struct SettingsView: View {
                                     )
                                     
                                     Divider()
-                                        .padding(.vertical, 2)
                                     
-                                    // Command Mode Shortcut
                                     shortcutRow(
                                         icon: "terminal.fill",
                                         iconColor: .secondary,
@@ -447,9 +305,7 @@ struct SettingsView: View {
                                     )
                                     
                                     Divider()
-                                        .padding(.vertical, 2)
                                     
-                                    // Write Mode Shortcut
                                     shortcutRow(
                                         icon: "pencil.and.outline",
                                         iconColor: .secondary,
@@ -463,105 +319,78 @@ struct SettingsView: View {
                                         }
                                     )
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .padding(12)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 8)
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(.ultraThinMaterial.opacity(0.5))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                                 .stroke(.white.opacity(0.08), lineWidth: 1)
                                         )
                                 )
                                 
                                 // MARK: - Options Section
-                                
-                                // Press and hold toggle
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Toggle("Press and Hold Mode", isOn: $pressAndHoldModeEnabled)
-                                        .toggleStyle(GlassToggleStyle())
-                                    Text("When enabled, the shortcut only records while you hold it down, giving you quick push-to-talk style control.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                VStack(spacing: 0) {
+                                    optionToggleRow(
+                                        title: "Press and Hold Mode",
+                                        description: "The shortcut only records while you hold it down, giving you quick push-to-talk style control.",
+                                        isOn: $pressAndHoldModeEnabled
+                                    )
+                                    .onChange(of: pressAndHoldModeEnabled) { newValue in
+                                        SettingsStore.shared.pressAndHoldMode = newValue
+                                        hotkeyManager?.enablePressAndHoldMode(newValue)
+                                    }
+                                    
+                                    Divider().padding(.vertical, 8)
+                                    
+                                    optionToggleRow(
+                                        title: "Show Live Preview",
+                                        description: "Display transcription text in real-time in the overlay as you speak.",
+                                        isOn: $enableStreamingPreview
+                                    )
+                                    .onChange(of: enableStreamingPreview) { newValue in
+                                        SettingsStore.shared.enableStreamingPreview = newValue
+                                    }
+                                    
+                                    Divider().padding(.vertical, 8)
+                                    
+                                    optionToggleRow(
+                                        title: "Copy to Clipboard",
+                                        description: "Automatically copy transcribed text to clipboard as a backup.",
+                                        isOn: $copyToClipboard
+                                    )
+                                    .onChange(of: copyToClipboard) { newValue in
+                                        SettingsStore.shared.copyTranscriptionToClipboard = newValue
+                                    }
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .padding(12)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 8)
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(.ultraThinMaterial.opacity(0.5))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                                 .stroke(.white.opacity(0.08), lineWidth: 1)
                                         )
                                 )
-                                .onChange(of: pressAndHoldModeEnabled) { newValue in
-                                    SettingsStore.shared.pressAndHoldMode = newValue
-                                    hotkeyManager?.enablePressAndHoldMode(newValue)
-                                }
-                                
-                                // Streaming preview toggle
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Toggle("Show Live Preview", isOn: $enableStreamingPreview)
-                                        .toggleStyle(GlassToggleStyle())
-                                    Text("Display transcription text in real-time in the overlay as you speak. When disabled, only the animation is shown.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(.ultraThinMaterial.opacity(0.5))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(.white.opacity(0.08), lineWidth: 1)
-                                        )
-                                )
-                                .onChange(of: enableStreamingPreview) { newValue in
-                                    SettingsStore.shared.enableStreamingPreview = newValue
-                                }
-                                
-                                // Copy to clipboard toggle
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Toggle("Copy to Clipboard", isOn: $copyToClipboard)
-                                        .toggleStyle(GlassToggleStyle())
-                                    Text("Automatically copy transcribed text to clipboard as a backup, useful when no text field is selected.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(.ultraThinMaterial.opacity(0.5))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(.white.opacity(0.08), lineWidth: 1)
-                                        )
-                                )
-                                .onChange(of: copyToClipboard) { newValue in
-                                    SettingsStore.shared.copyTranscriptionToClipboard = newValue
-                                }
                             }
                         } else {
                             // Hotkey disabled - accessibility not enabled
                             VStack(alignment: .leading, spacing: 12) {
-                                HStack(spacing: 12) {
-                                    // Status indicator
+                                HStack(spacing: 10) {
                                     Circle()
                                         .fill(theme.palette.warning)
-                                        .frame(width: 10, height: 10)
+                                        .frame(width: 8, height: 8)
                                     
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .foregroundStyle(theme.palette.warning)
                                             Text("Accessibility permissions required")
-                                                .fontWeight(.medium)
+                                                .font(.body)
                                                 .foregroundStyle(theme.palette.warning)
                                         }
                                         Text("Required for global hotkey functionality")
-                                            .font(.caption)
+                                            .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                     }
                                     Spacer()
@@ -569,113 +398,60 @@ struct SettingsView: View {
                                     Button("Open Accessibility Settings") {
                                         openAccessibilitySettings()
                                     }
-                                    .buttonStyle(GlassButtonStyle())
-                                    .buttonHoverEffect()
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(theme.palette.accent)
+                                    .controlSize(.regular)
                                 }
                                 
-                                // Prominent step-by-step instructions
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "info.circle.fill")
-                                            .foregroundStyle(theme.palette.accent)
-                                            .font(.caption)
-                                        Text("Follow these steps to enable Accessibility:")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                            .foregroundStyle(.secondary)
+                                instructionsBox(
+                                    title: "Follow these steps to enable Accessibility:",
+                                    steps: [
+                                        "Click **Open Accessibility Settings** above",
+                                        "In the Accessibility window, click the **+ button**",
+                                        "Navigate to Applications and select **FluidVoice**",
+                                        "Click **Open**, then toggle **FluidVoice ON** in the list"
+                                    ],
+                                    warningStyle: true
+                                )
+                                
+                                HStack(spacing: 10) {
+                                    Button("Reveal in Finder") {
+                                        revealAppInFinder()
                                     }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                                     
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack(spacing: 8) {
-                                            Text("1.")
-                                                .font(.caption2)
-                                                .foregroundStyle(theme.palette.accent)
-                                                .fontWeight(.semibold)
-                                                .frame(width: 16)
-                                            Text("Click **Open Accessibility Settings** above")
-                                                .font(.caption)
-                                                .foregroundStyle(.primary)
-                                        }
-                                        HStack(spacing: 8) {
-                                            Text("2.")
-                                                .font(.caption2)
-                                                .foregroundStyle(theme.palette.accent)
-                                                .fontWeight(.semibold)
-                                                .frame(width: 16)
-                                            Text("In the Accessibility window, click the **+ button**")
-                                                .font(.caption)
-                                                .foregroundStyle(.primary)
-                                        }
-                                        HStack(spacing: 8) {
-                                            Text("3.")
-                                                .font(.caption2)
-                                                .foregroundStyle(theme.palette.accent)
-                                                .fontWeight(.semibold)
-                                                .frame(width: 16)
-                                            Text("Navigate to Applications and select **FluidVoice**")
-                                                .font(.caption)
-                                                .foregroundStyle(.primary)
-                                        }
-                                        HStack(spacing: 8) {
-                                            Text("4.")
-                                                .font(.caption2)
-                                                .foregroundStyle(theme.palette.accent)
-                                                .fontWeight(.semibold)
-                                                .frame(width: 16)
-                                            Text("Click **Open**, then toggle **FluidVoice ON** in the list")
-                                                .font(.caption)
-                                                .foregroundStyle(.primary)
-                                        }
+                                    Button("Open Applications") {
+                                        openApplicationsFolder()
                                     }
-                                    .padding(.leading, 4)
-                                    
-                                    // Helper buttons
-                                    HStack(spacing: 12) {
-                                        Button("Reveal FluidVoice in Finder") {
-                                            revealAppInFinder()
-                                        }
-                                        .buttonStyle(InlineButtonStyle())
-                                        .buttonHoverEffect()
-                                        
-                                        Button("Open Applications Folder") {
-                                            openApplicationsFolder()
-                                        }
-                                        .buttonStyle(InlineButtonStyle())
-                                        .buttonHoverEffect()
-                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                                 }
-                                .padding(12)
-                                .background(theme.palette.warning.opacity(0.12))
-                                .cornerRadius(8)
                             }
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
                 
                 // Audio Devices Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "speaker.wave.2.fill")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Audio Devices")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Audio Devices", systemImage: "speaker.wave.2.fill")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 Text("Input Device")
-                                    .fontWeight(.medium)
+                                    .font(.body)
                                 Spacer()
                                 Picker("Input Device", selection: $selectedInputUID) {
                                     ForEach(inputDevices, id: \.uid) { dev in
                                         Text(dev.name).tag(dev.uid)
                                     }
                                 }
-                                .frame(width: 280)
+                                .pickerStyle(.menu)
+                                .frame(width: 240)
                                 .onChange(of: selectedInputUID) { newUID in
                                     SettingsStore.shared.preferredInputDeviceUID = newUID
                                     _ = AudioDevice.setDefaultInputDevice(uid: newUID)
@@ -688,63 +464,60 @@ struct SettingsView: View {
 
                             HStack {
                                 Text("Output Device")
-                                    .fontWeight(.medium)
+                                    .font(.body)
                                 Spacer()
                                 Picker("Output Device", selection: $selectedOutputUID) {
                                     ForEach(outputDevices, id: \.uid) { dev in
                                         Text(dev.name).tag(dev.uid)
                                     }
                                 }
-                                .frame(width: 280)
+                                .pickerStyle(.menu)
+                                .frame(width: 240)
                                 .onChange(of: selectedOutputUID) { newUID in
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
                                     _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
                                 }
                             }
 
-                            HStack(spacing: 12) {
+                            HStack(spacing: 10) {
                                 Button {
                                     refreshDevices()
                                 } label: {
                                     Label("Refresh", systemImage: "arrow.clockwise")
                                 }
-                                .buttonStyle(GlassButtonStyle())
-                                .buttonHoverEffect()
+                                .buttonStyle(.bordered)
+                                .controlSize(.regular)
 
                                 Spacer()
                                 
                                 if let defIn = AudioDevice.getDefaultInputDevice()?.name, 
                                    let defOut = AudioDevice.getDefaultOutputDevice()?.name {
-                                    Text("Default In: \(defIn) · Default Out: \(defOut)")
+                                    Text("Default: \(defIn) / \(defOut)")
                                         .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
                                 }
                             }
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
                 
                 // Visualization Sensitivity Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "waveform")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Visualization")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Visualization", systemImage: "waveform")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Visualization Sensitivity")
-                                        .font(.system(size: 16, weight: .semibold))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Sensitivity")
+                                        .font(.body)
                                     Text("Control how sensitive the audio visualizer is to sound input")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.secondary)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
                                 }
                                 
                                 Spacer()
@@ -753,48 +526,42 @@ struct SettingsView: View {
                                     visualizerNoiseThreshold = 0.4
                                     SettingsStore.shared.visualizerNoiseThreshold = visualizerNoiseThreshold
                                 }
-                                .font(.system(size: 12))
-                                .buttonStyle(GlassButtonStyle())
-                                .buttonHoverEffect()
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                             
-                            HStack(spacing: 12) {
-                                Text("More Sensitive")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 90)
+                            HStack(spacing: 10) {
+                                Text("More")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, alignment: .trailing)
                                 
                                 Slider(value: $visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
                                     .controlSize(.regular)
                                 
-                                Text("Less Sensitive")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 90)
+                                Text("Less")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, alignment: .leading)
                                 
                                 Text(String(format: "%.2f", visualizerNoiseThreshold))
-                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.primary)
-                                    .frame(width: 40)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 36)
                             }
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
                 
                 // Debug Settings Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "ladybug.fill")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Debug Settings")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Debug Settings", systemImage: "ladybug.fill")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
 
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Button {
                                 let url = FileLogger.shared.currentLogFileURL()
                                 if FileManager.default.fileExists(atPath: url.path) {
@@ -804,21 +571,19 @@ struct SettingsView: View {
                                 }
                             } label: {
                                 Label("Reveal Log File", systemImage: "doc.richtext")
-                                    .labelStyle(.titleAndIcon)
                             }
-                            .buttonStyle(GlassButtonStyle())
-                            .buttonHoverEffect()
+                            .buttonStyle(.bordered)
+                            .controlSize(.regular)
 
-                            Text("Click to reveal the debug log file. This file contains detailed information about app operations and can help with troubleshooting issues.")
+                            Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .padding(.leading, 4)
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                 }
             }
-            .padding(14)
+            .padding(16)
         }
         .onAppear {
             refreshDevices()
@@ -828,7 +593,103 @@ struct SettingsView: View {
         }
     }
     
-    // MARK: - Shortcut Row Helper
+    // MARK: - Helper Views
+    
+    @ViewBuilder
+    private func settingsToggleRow(
+        title: String,
+        description: String,
+        footnote: String? = nil,
+        isOn: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body)
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                
+                Spacer()
+                
+                Toggle("", isOn: isOn)
+                    .toggleStyle(.switch)
+                    .tint(theme.palette.accent)
+                    .labelsHidden()
+            }
+            
+            if let footnote = footnote {
+                Text(footnote)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func optionToggleRow(
+        title: String,
+        description: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body)
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            Toggle("", isOn: isOn)
+                .toggleStyle(.switch)
+                .tint(theme.palette.accent)
+                .labelsHidden()
+        }
+    }
+    
+    @ViewBuilder
+    private func instructionsBox(
+        title: String,
+        steps: [String],
+        warningStyle: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(warningStyle ? theme.palette.warning : theme.palette.accent)
+                    .font(.caption)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(index + 1).")
+                            .font(.caption)
+                            .foregroundStyle(warningStyle ? theme.palette.warning : theme.palette.accent)
+                            .fontWeight(.semibold)
+                            .frame(width: 16, alignment: .trailing)
+                        Text(.init(step))
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill((warningStyle ? theme.palette.warning : theme.palette.accent).opacity(0.12))
+        )
+    }
+    
     @ViewBuilder
     private func shortcutRow(
         icon: String,
@@ -839,60 +700,52 @@ struct SettingsView: View {
         isRecording: Bool,
         onChangePressed: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 12) {
-            // Icon
+        HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(iconColor)
-                .frame(width: 24)
+                .frame(width: 20)
             
-            // Title and description
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(.body)
                 Text(description)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             
             Spacer()
             
-            // Shortcut display
             if isRecording {
                 Text("Press shortcut...")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.orange)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(.orange.opacity(0.2))
                     )
             } else {
                 Text(shortcut.displayString)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .font(.caption.monospaced().weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(.quaternary.opacity(0.5))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(.primary.opacity(0.2), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(.primary.opacity(0.15), lineWidth: 1)
                             )
                     )
             }
             
-            // Change button
-            Button {
+            Button("Change") {
                 onChangePressed()
-            } label: {
-                Text("Change")
-                    .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
             .disabled(isRecording)
         }
     }

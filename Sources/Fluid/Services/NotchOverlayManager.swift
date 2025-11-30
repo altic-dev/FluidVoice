@@ -182,10 +182,10 @@ final class NotchOverlayManager {
         self.notch = newNotch
         
         // Show in expanded state
-        Task {
+        Task { [weak self] in
             await newNotch.expand()
             // Only update state if we're still the active generation
-            guard self.generation == currentGeneration else { return }
+            guard let self = self, self.generation == currentGeneration else { return }
             self.state = .visible
         }
     }
@@ -205,16 +205,16 @@ final class NotchOverlayManager {
         // Handle visible or showing states (can hide while still expanding)
         guard state == .visible || state == .showing, let currentNotch = notch else {
             // Force cleanup if stuck or in inconsistent state
-            Task { await performCleanup() }
+            Task { [weak self] in await self?.performCleanup() }
             return
         }
         
         state = .hiding
         
-        Task {
+        Task { [weak self] in
             await currentNotch.hide()
             // Only clear if we're still the active operation
-            guard self.generation == currentGeneration else { return }
+            guard let self = self, self.generation == currentGeneration else { return }
             self.notch = nil
             self.state = .idle
         }
@@ -272,9 +272,9 @@ final class NotchOverlayManager {
         }
         
         // Wait a bit for cleanup
-        Task {
+        Task { [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            await showExpandedCommandOutputInternal()
+            await self?.showExpandedCommandOutputInternal()
         }
     }
     
@@ -363,10 +363,10 @@ final class NotchOverlayManager {
         let notchToHide = currentNotch
         self.commandOutputNotch = nil
         
-        Task {
+        Task { [weak self] in
             // Try to hide gracefully, but we've already removed our reference
             await notchToHide.hide()
-            guard self.commandOutputGeneration == currentGeneration else { return }
+            guard let self = self, self.commandOutputGeneration == currentGeneration else { return }
             self.commandOutputState = .idle
         }
     }

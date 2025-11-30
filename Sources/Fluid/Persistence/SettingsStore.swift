@@ -49,6 +49,9 @@ final class SettingsStore: ObservableObject
         static let rewriteModeSelectedModel = "RewriteModeSelectedModel"
         static let rewriteModeSelectedProviderID = "RewriteModeSelectedProviderID"
         static let rewriteModeLinkedToGlobal = "RewriteModeLinkedToGlobal"
+        
+        // Stats Keys
+        static let userTypingWPM = "UserTypingWPM"
     }
 
     struct SavedProvider: Codable, Identifiable, Hashable
@@ -436,6 +439,21 @@ final class SettingsStore: ObservableObject
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.rewriteModeLinkedToGlobal)
+        }
+    }
+    
+    // MARK: - Stats Settings
+    
+    /// User's typing speed in words per minute (for time saved calculation)
+    var userTypingWPM: Int
+    {
+        get {
+            let value = defaults.integer(forKey: Keys.userTypingWPM)
+            return value > 0 ? value : 40  // Default to 40 WPM
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(max(1, min(200, newValue)), forKey: Keys.userTypingWPM)  // Clamp 1-200
         }
     }
 

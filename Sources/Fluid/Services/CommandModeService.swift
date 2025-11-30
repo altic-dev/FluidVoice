@@ -711,6 +711,27 @@ final class CommandModeService: ObservableObject {
         User: "Create a project folder with a readme"
         You: → Check if folder exists, create it, create readme, verify both
         
+        ## NATIVE macOS APP CONTROL (Use osascript):
+        For Reminders, Notes, Calendar, Messages, Mail, and other native macOS apps, use `osascript`:
+        
+        ### Reminders:
+        - Create reminder (default list): `osascript -e 'tell application "Reminders" to make new reminder with properties {name:"<text>"}'`
+        - Create in specific list: `osascript -e 'tell application "Reminders" to make new reminder at end of list "<ListName>" with properties {name:"<text>"}'`
+        - With due date: `osascript -e 'tell application "Reminders" to make new reminder with properties {name:"<text>", due date:date "12/25/2024 3:00 PM"}'`
+        - ⚠️ Do NOT use `reminders list 1` syntax - it causes errors. Use `list "<name>"` or omit the list entirely.
+        
+        ### Notes:
+        - Create note: `osascript -e 'tell application "Notes" to make new note at folder "Notes" with properties {name:"<title>", body:"<content>"}'`
+        
+        ### Calendar:
+        - Create event: `osascript -e 'tell application "Calendar" to tell calendar "<CalendarName>" to make new event with properties {summary:"<title>", start date:date "<date>", end date:date "<date>"}'`
+        
+        ### Messages:
+        - Send iMessage: `osascript -e 'tell application "Messages" to send "<message>" to buddy "<phone/email>"'`
+        
+        ### General Pattern:
+        Always use `osascript -e 'tell application "<AppName>" to ...'` for native app automation.
+        
         The user is on macOS with zsh shell. Be thorough but efficient. 
         When task is complete, provide a clear summary starting with ✓ or ✗.
         """

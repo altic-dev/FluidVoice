@@ -20,6 +20,7 @@ enum SidebarItem: Hashable {
     case preferences
     case meetingTools
     case stats
+    case history
     case feedback
     case commandMode
     case rewriteMode
@@ -612,6 +613,11 @@ struct ContentView: View {
                     .font(.system(size: 15, weight: .medium))
             }
             
+            NavigationLink(value: SidebarItem.history) {
+                Label("History", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 15, weight: .medium))
+            }
+            
             NavigationLink(value: SidebarItem.preferences) {
                 Label("Preferences", systemImage: "gearshape.fill")
                     .font(.system(size: 15, weight: .medium))
@@ -662,6 +668,8 @@ struct ContentView: View {
                     commandModeView
                 case .rewriteMode:
                     rewriteModeView
+                case .history:
+                    TranscriptionHistoryView()
                 }
             }
             .transition(.opacity)
@@ -1884,38 +1892,9 @@ struct ContentView: View {
         MeetingTranscriptionView(asrService: asr)
     }
 
-    // MARK: - Stats View (Coming Soon)
+    // MARK: - Stats View
     private var statsView: some View {
-        VStack(spacing: 14) {
-            Spacer()
-            
-            Image(systemName: "chart.bar.fill")
-                .font(.system(size: 60))
-                .foregroundStyle(theme.palette.accent)
-            
-            Text("Stats")
-                .font(.system(size: 28, weight: .bold))
-            
-            Text("Track your usage, words transcribed, and time saved")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Text("Coming Soon")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme.palette.accent)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(theme.palette.accent.opacity(0.15))
-                )
-            
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        StatsView()
     }
 
     // MARK: - Feedback View
@@ -2599,6 +2578,15 @@ struct ContentView: View {
         }
 
         DebugLogger.shared.info("Transcription finalized (chars: \(finalText.count))", source: "ContentView")
+        
+        // Save to transcription history (transcription mode only)
+        let appInfo = recordingAppInfo ?? getCurrentAppInfo()
+        TranscriptionHistoryStore.shared.addEntry(
+            rawText: transcribedText,
+            processedText: finalText,
+            appName: appInfo.name,
+            windowTitle: appInfo.windowTitle
+        )
 
         // Copy to clipboard if enabled (happens before typing as a backup)
         if SettingsStore.shared.copyTranscriptionToClipboard {

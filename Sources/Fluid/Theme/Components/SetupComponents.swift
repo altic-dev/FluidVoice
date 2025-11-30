@@ -30,92 +30,78 @@ struct SetupStepView: View {
                 action()
             }
         }) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
                 // Status indicator
                 ZStack {
                     Circle()
-                        .fill(statusColor.opacity(0.15))
-                        .frame(width: 32, height: 32)
+                        .fill(statusColor.opacity(0.12))
+                        .frame(width: 28, height: 28)
                         .overlay(
                             Circle()
-                                .stroke(statusColor.opacity(0.3), lineWidth: 1.5)
+                                .stroke(statusColor.opacity(0.25), lineWidth: 1)
                         )
 
                     if status == .completed {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(statusColor)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.body.weight(.semibold))
                     } else if status == .inProgress {
                         ProgressView()
-                            .scaleEffect(0.7)
+                            .controlSize(.small)
                             .tint(statusColor)
                     } else {
                         Text("\(step)")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(statusColor)
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(title)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
 
-                            Text(description)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
 
-                        Spacer()
+                Spacer()
 
-                        // Action button or status badge
-                        if status == .completed {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .bold))
-                                Text("Done")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule()
-                                    .fill(Color.green)
-                            )
-                        } else if showActionButton {
-                            HStack(spacing: 4) {
-                                Text(actionButtonTitle)
-                                    .font(.system(size: 11, weight: .semibold))
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 9, weight: .bold))
-                            }
-                            .foregroundStyle(theme.palette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule()
-                                    .fill(theme.palette.accent.opacity(0.15))
-                            )
-                        }
+                // Action button or status badge
+                if status == .completed {
+                    Label("Done", systemImage: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.green, in: Capsule())
+                } else if showActionButton {
+                    HStack(spacing: 3) {
+                        Text(actionButtonTitle)
+                            .font(.caption.weight(.medium))
+                        Image(systemName: "arrow.right")
+                            .font(.caption2.weight(.bold))
                     }
+                    .foregroundStyle(theme.palette.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(theme.palette.accent.opacity(0.12), in: Capsule())
                 }
             }
-            .padding(12)
+            .padding(10)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(status == .completed 
-                        ? Color.green.opacity(0.08) 
-                        : theme.palette.cardBackground.opacity(0.6))
+                        ? Color.green.opacity(0.06) 
+                        : theme.palette.cardBackground.opacity(0.5))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(
                                 status == .completed 
-                                    ? Color.green.opacity(0.3)
-                                    : theme.palette.cardBorder.opacity(0.3),
+                                    ? Color.green.opacity(0.25)
+                                    : theme.palette.cardBorder.opacity(0.2),
                                 lineWidth: 1
                             )
                     )
@@ -123,7 +109,7 @@ struct SetupStepView: View {
         }
         .buttonStyle(.plain)
         .disabled(status == .completed || !showActionButton)
-        .opacity(status == .completed ? 0.85 : 1.0)
+        .opacity(status == .completed ? 0.9 : 1.0)
     }
 
     private var statusColor: Color {
@@ -144,34 +130,34 @@ struct InstructionStep: View {
     let description: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             ZStack {
                 Circle()
-                    .fill(theme.palette.accent.opacity(0.2))
-                    .frame(width: 24, height: 24)
+                    .fill(theme.palette.accent.opacity(0.15))
+                    .frame(width: 22, height: 22)
 
                 Text("\(number)")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(theme.palette.accent)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.subheadline.weight(.medium))
 
                 Text(description)
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
         }
-        .padding(.vertical, 2)
     }
 }
 
 // MARK: - Provider Guide
 
 struct ProviderGuide: View {
+    @Environment(\.theme) private var theme
     let name: String
     let url: String
     let description: String?
@@ -188,10 +174,10 @@ struct ProviderGuide: View {
 
     var body: some View {
         ThemedCard(hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text(name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
 
                     Spacer()
 
@@ -201,41 +187,37 @@ struct ProviderGuide: View {
                                 NSWorkspace.shared.open(url)
                             }
                         }
-                        .font(.system(size: 11))
                         .buttonStyle(.bordered)
-                        .controlSize(.mini)
+                        .controlSize(.small)
                     }
                 }
 
                 if let description = description, !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Base URL:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                         Text(baseURL)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .font(.caption.weight(.medium))
                             .textSelection(.enabled)
                     }
 
                     HStack {
                         Text("Key Format:")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                         Text(keyPrefix == "not-needed" ? "Not required" : "Starts with: \(keyPrefix)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .font(.caption.weight(.medium))
                     }
                 }
-                .padding(.top, 3)
             }
-            .padding(10)
+            .padding(12)
         }
     }
 }
