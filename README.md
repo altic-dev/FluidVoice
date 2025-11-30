@@ -13,13 +13,13 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
 ## Demo
 
-### Command Mode
+### Command Mode - Take any action on your mac using FluidVoice  
 
-<video src="assets/FluidVoice_1.5_cmd_mode.mp4" controls width="700"></video>
+https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 
-### Write Mode
+### Write Mode - Write/Rewrite text in ANY text box in ANY App on your mac  
 
-<video src="assets/writemode_FluidVoice_1.5.mp4" controls width="700"></video>
+https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 ## Screenshots
 
@@ -30,6 +30,13 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 ### FluidVoice History
 
 ![FluidVoice History](assets/history__ss.png)
+
+## New Features (v1.5)   
+- **Overlay with Notch support**
+- **Command Mode**  
+- **Write Mode**    
+- **New History stats**  
+- **Stats to monitor usage**  
 
 ## Features
 - **Live Preview Mode**: Real-time transcription preview in overlay
