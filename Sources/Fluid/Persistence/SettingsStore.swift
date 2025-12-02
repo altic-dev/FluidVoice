@@ -52,6 +52,10 @@ final class SettingsStore: ObservableObject
         
         // Stats Keys
         static let userTypingWPM = "UserTypingWPM"
+
+        // Filler Words
+        static let fillerWords = "FillerWords"
+        static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
     }
 
     struct SavedProvider: Codable, Identifiable, Hashable
@@ -518,5 +522,30 @@ final class SettingsStore: ObservableObject
         UserDefaults.standard.set(visible, forKey: "IntendedDockVisibility")
         DebugLogger.shared.info("✓ Dock visibility preference saved: \(visible)", source: "SettingsStore")
         #endif
+    }
+
+    // MARK: - Filler Words
+
+    static let defaultFillerWords = ["um", "uh", "er", "ah", "eh", "umm", "uhh", "err", "ahh", "ehh", "hmm", "hm", "mm", "mmm", "erm", "urm", "ugh"]
+
+    var fillerWords: [String] {
+        get {
+            if let stored = defaults.array(forKey: Keys.fillerWords) as? [String] {
+                return stored
+            }
+            return Self.defaultFillerWords
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.fillerWords)
+        }
+    }
+
+    var removeFillerWordsEnabled: Bool {
+        get { defaults.object(forKey: Keys.removeFillerWordsEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.removeFillerWordsEnabled)
+        }
     }
 }
