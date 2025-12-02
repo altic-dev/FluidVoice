@@ -107,6 +107,9 @@ final class ASRService: ObservableObject
     private let historySize = 2 // Reduced for faster response
     private let silenceThreshold: CGFloat = 0.04 // Reasonable default
     private let noiseGateThreshold: CGFloat = 0.06
+
+    /// Stores the system volume before recording starts, to restore when recording stops
+    private var previousSystemVolume: Float?
     init()
     {
         self.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -183,6 +186,11 @@ final class ASRService: ObservableObject
         guard micStatus == .authorized else { return }
         guard isRunning == false else { return }
 
+        // Save current volume and set to 2% to avoid recording system audio through speakers
+        previousSystemVolume = AudioDevice.getOutputVolume()
+        AudioDevice.setOutputVolume(0.02)  // 2% volume
+        DebugLogger.shared.debug("Set system volume to 2% (was \(previousSystemVolume ?? -1))", source: "ASRService")
+
         finalText.removeAll()
         recordedPCM.removeAll()
         partialTranscription.removeAll()
@@ -238,9 +246,16 @@ final class ASRService: ObservableObject
     func stop() async -> String
     {
         guard isRunning else { return "" }
-        
+
         DebugLogger.shared.debug("stop(): cancelling streaming and preparing final transcription", source: "ASRService")
-        
+
+        // Restore previous system volume
+        if let prevVolume = previousSystemVolume {
+            AudioDevice.setOutputVolume(prevVolume)
+            DebugLogger.shared.debug("Restored system volume to \(prevVolume)", source: "ASRService")
+            previousSystemVolume = nil
+        }
+
         stopStreamingTimer()
         removeEngineTap()
         engine.stop()
