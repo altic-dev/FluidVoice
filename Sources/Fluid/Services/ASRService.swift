@@ -186,10 +186,10 @@ final class ASRService: ObservableObject
         guard micStatus == .authorized else { return }
         guard isRunning == false else { return }
 
-        // Save current volume and set to 2% to avoid recording system audio through speakers
+        // Save current volume and mute to avoid recording system audio through speakers
         previousSystemVolume = AudioDevice.getOutputVolume()
-        AudioDevice.setOutputVolume(0.02)  // 2% volume
-        DebugLogger.shared.debug("Set system volume to 2% (was \(previousSystemVolume ?? -1))", source: "ASRService")
+        AudioDevice.setOutputVolume(0)  // Mute
+        DebugLogger.shared.debug("Muted system volume (was \(previousSystemVolume ?? -1))", source: "ASRService")
 
         finalText.removeAll()
         recordedPCM.removeAll()
