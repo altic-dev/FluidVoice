@@ -993,11 +993,40 @@ struct ContentView: View {
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                            Divider()
+                                .padding(.vertical, 4)
+
+                            // Filler Words Section
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .center) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Remove Filler Words")
+                                            .font(.body)
+                                        Text("Automatically remove filler sounds like 'um', 'uh', 'er' from transcriptions")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Toggle("", isOn: Binding(
+                                        get: { SettingsStore.shared.removeFillerWordsEnabled },
+                                        set: { SettingsStore.shared.removeFillerWordsEnabled = $0 }
+                                    ))
+                                    .toggleStyle(.switch)
+                                    .labelsHidden()
+                                }
+
+                                if SettingsStore.shared.removeFillerWordsEnabled {
+                                    FillerWordsEditor()
+                                }
+                            }
                         }
                     }
                     .padding(14)
                 }
-                
+
                 aiConfigurationCard
             }
             .padding(14)
