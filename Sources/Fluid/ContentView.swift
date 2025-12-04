@@ -52,6 +52,8 @@ struct ContentView: View {
     @State private var hotkeyShortcut: HotkeyShortcut = SettingsStore.shared.hotkeyShortcut
     @State private var commandModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.commandModeHotkeyShortcut
     @State private var rewriteModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.rewriteModeHotkeyShortcut
+    @State private var isCommandModeShortcutEnabled: Bool = SettingsStore.shared.commandModeShortcutEnabled
+    @State private var isRewriteModeShortcutEnabled: Bool = SettingsStore.shared.rewriteModeShortcutEnabled
     @State private var isRecordingForRewrite: Bool = false  // Track if current recording is for rewrite mode
     @State private var isRecordingForCommand: Bool = false  // Track if current recording is for command mode
     @State private var isRecordingShortcut = false
@@ -460,6 +462,39 @@ struct ContentView: View {
         .onChange(of: selectedProviderID) { newValue in
             SettingsStore.shared.selectedProviderID = newValue
         }
+        .onChange(of: isCommandModeShortcutEnabled) { newValue in
+            SettingsStore.shared.commandModeShortcutEnabled = newValue
+            hotkeyManager?.updateCommandModeShortcutEnabled(newValue)
+            
+            if !newValue {
+                isRecordingCommandModeShortcut = false
+                
+                if isRecordingForCommand {
+                    if asr.isRunning {
+                        asr.stopWithoutTranscription()
+                    }
+                    isRecordingForCommand = false
+                    menuBarManager.setOverlayMode(.dictation)
+                }
+            }
+        }
+        .onChange(of: isRewriteModeShortcutEnabled) { newValue in
+            SettingsStore.shared.rewriteModeShortcutEnabled = newValue
+            hotkeyManager?.updateRewriteModeShortcutEnabled(newValue)
+            
+            if !newValue {
+                isRecordingRewriteShortcut = false
+                
+                if isRecordingForRewrite {
+                    if asr.isRunning {
+                        asr.stopWithoutTranscription()
+                    }
+                    isRecordingForRewrite = false
+                    rewriteModeService.clearState()
+                    menuBarManager.setOverlayMode(.dictation)
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             let trusted = AXIsProcessTrusted()
             if trusted != accessibilityEnabled {
@@ -817,6 +852,8 @@ struct ContentView: View {
             isRecordingCommandModeShortcut: $isRecordingCommandModeShortcut,
             rewriteShortcut: $rewriteModeHotkeyShortcut,
             isRecordingRewriteShortcut: $isRecordingRewriteShortcut,
+            commandModeShortcutEnabled: $isCommandModeShortcutEnabled,
+            rewriteShortcutEnabled: $isRewriteModeShortcutEnabled,
             hotkeyManagerInitialized: $hotkeyManagerInitialized,
             pressAndHoldModeEnabled: $pressAndHoldModeEnabled,
             enableStreamingPreview: $enableStreamingPreview,
@@ -3155,6 +3192,8 @@ struct ContentView: View {
             shortcut: hotkeyShortcut,
             commandModeShortcut: commandModeHotkeyShortcut,
             rewriteModeShortcut: rewriteModeHotkeyShortcut,
+            commandModeShortcutEnabled: isCommandModeShortcutEnabled,
+            rewriteModeShortcutEnabled: isRewriteModeShortcutEnabled,
             startRecordingCallback: {
                 self.startRecording()
             },
