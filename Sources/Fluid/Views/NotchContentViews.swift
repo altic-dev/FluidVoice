@@ -97,7 +97,10 @@ class NotchContentState: ObservableObject {
     // MARK: - Recording State for Expanded View
     @Published var isRecordingInExpandedMode: Bool = false
     @Published var expandedModeAudioLevel: CGFloat = 0  // Audio level for waveform in expanded mode
-    
+
+    // MARK: - Bottom Overlay Audio Level
+    @Published var bottomOverlayAudioLevel: CGFloat = 0  // Audio level for bottom overlay waveform
+
     /// Set recording state (for waveform visibility in expanded view)
     func setRecordingInExpandedMode(_ recording: Bool) {
         isRecordingInExpandedMode = recording
