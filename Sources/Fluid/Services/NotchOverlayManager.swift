@@ -183,6 +183,7 @@ final class NotchOverlayManager {
     }
     
     private func showInternal(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        closeStrayNotchPanels()
         guard state == .idle else { return }
         
         // Store for potential re-show during processing
@@ -319,6 +320,7 @@ final class NotchOverlayManager {
     }
     
     private func showExpandedCommandOutputInternal() async {
+        closeStrayNotchPanels()
         guard commandOutputState == .idle else { return }
         
         commandOutputGeneration &+= 1
@@ -487,11 +489,23 @@ final class NotchOverlayManager {
         }
         
         await performCleanup()
+        closeStrayNotchPanels()
         state = .idle
         commandOutputState = .idle
         
         // Intentionally do not auto-restore the overlay; users can re-trigger via hotkey.
         DebugLogger.shared.debug("NotchOverlayManager: cleaned up after \(reason) (no auto-restore)", source: "NotchOverlayManager")
+    }
+    
+    private func closeStrayNotchPanels() {
+        guard let panelClass = NSClassFromString("DynamicNotchKit.DynamicNotchPanel") else { return }
+        for window in NSApp.windows {
+            if window.isVisible && window.classForCoder == panelClass {
+                window.orderOut(nil)
+            } else if window.isVisible && window.level == .screenSaver && window.frame.size.width > 100 && window.frame.size.height > 10 {
+                window.orderOut(nil)
+            }
+        }
     }
 }
 
