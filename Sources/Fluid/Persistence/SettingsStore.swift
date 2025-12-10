@@ -48,12 +48,14 @@ final class SettingsStore: ObservableObject
         static let commandModeHotkeyShortcut = "CommandModeHotkeyShortcut"
         static let commandModeConfirmBeforeExecute = "CommandModeConfirmBeforeExecute"
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
+        static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
         
         // Rewrite Mode Keys
         static let rewriteModeHotkeyShortcut = "RewriteModeHotkeyShortcut"
         static let rewriteModeSelectedModel = "RewriteModeSelectedModel"
         static let rewriteModeSelectedProviderID = "RewriteModeSelectedProviderID"
         static let rewriteModeLinkedToGlobal = "RewriteModeLinkedToGlobal"
+        static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
         
         // Stats Keys
         static let userTypingWPM = "UserTypingWPM"
@@ -364,6 +366,18 @@ final class SettingsStore: ObservableObject
         }
     }
     
+    var commandModeShortcutEnabled: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.commandModeShortcutEnabled)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.commandModeShortcutEnabled)
+        }
+    }
+    
     var commandModeHotkeyShortcut: HotkeyShortcut
     {
         get
@@ -451,6 +465,18 @@ final class SettingsStore: ObservableObject
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.rewriteModeLinkedToGlobal)
+        }
+    }
+    
+    var rewriteModeShortcutEnabled: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.rewriteModeShortcutEnabled)
         }
     }
     
