@@ -30,6 +30,12 @@ struct SettingsView: View {
     @Binding var enableStreamingPreview: Bool
     @Binding var copyToClipboard: Bool
     
+    // CRITICAL FIX: Cache default device names to avoid CoreAudio calls during view body evaluation.
+    // Querying AudioDevice.getDefaultInputDevice() in the view body triggers HALSystem::InitializeShell()
+    // which races with SwiftUI's AttributeGraph metadata processing and causes EXC_BAD_ACCESS crashes.
+    @State private var cachedDefaultInputName: String = ""
+    @State private var cachedDefaultOutputName: String = ""
+    
     let hotkeyManager: GlobalHotkeyManager?
     let menuBarManager: MenuBarManager
     let startRecording: () -> Void
@@ -482,6 +488,9 @@ struct SettingsView: View {
                             HStack(spacing: 10) {
                                 Button {
                                     refreshDevices()
+                                    // Update cached default device names on refresh
+                                    cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+                                    cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
                                 } label: {
                                     Label("Refresh", systemImage: "arrow.clockwise")
                                 }
@@ -490,9 +499,10 @@ struct SettingsView: View {
 
                                 Spacer()
                                 
-                                if let defIn = AudioDevice.getDefaultInputDevice()?.name, 
-                                   let defOut = AudioDevice.getDefaultOutputDevice()?.name {
-                                    Text("Default: \(defIn) / \(defOut)")
+                                // CRITICAL FIX: Use cached values instead of querying CoreAudio in view body.
+                                // Querying AudioDevice here triggers HALSystem::InitializeShell() race condition.
+                                if !cachedDefaultInputName.isEmpty && !cachedDefaultOutputName.isEmpty {
+                                    Text("Default: \(cachedDefaultInputName) / \(cachedDefaultOutputName)")
                                         .font(.caption)
                                         .foregroundStyle(.tertiary)
                                         .lineLimit(1)
@@ -587,6 +597,10 @@ struct SettingsView: View {
         }
         .onAppear {
             refreshDevices()
+            // CRITICAL FIX: Populate cached default device names after onAppear, not during view body evaluation.
+            // This avoids the CoreAudio/SwiftUI AttributeGraph race condition that causes EXC_BAD_ACCESS.
+            cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+            cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
         }
         .onChange(of: visualizerNoiseThreshold) { newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue

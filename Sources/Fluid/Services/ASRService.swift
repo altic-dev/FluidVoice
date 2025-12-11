@@ -78,7 +78,11 @@ final class ASRService: ObservableObject
     }
 
 
-    private let engine = AVAudioEngine()
+    // CRITICAL FIX: Use lazy initialization to prevent AVAudioEngine() from being called during
+    // @StateObject init. AVAudioEngine's constructor triggers CoreAudio's HALSystem::InitializeShell()
+    // which races with SwiftUI's AttributeGraph metadata processing and causes EXC_BAD_ACCESS crashes.
+    // By making this lazy, the engine is only created when first accessed (after app launch is complete).
+    private lazy var engine: AVAudioEngine = AVAudioEngine()
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
 
@@ -109,10 +113,25 @@ final class ASRService: ObservableObject
     private let noiseGateThreshold: CGFloat = 0.06
     init()
     {
+        // CRITICAL FIX: Do NOT call any audio-related APIs here!
+        // This includes AVCaptureDevice.authorizationStatus, which can trigger AVFCapture/CoreAudio
+        // initialization. All audio API calls are deferred to initialize() which runs after
+        // SwiftUI's view graph is stable.
+        //
+        // Default values are set in the property declarations:
+        // - micStatus = .notDetermined
+        // - micPermissionGranted = false
+        checkIfModelsExist()
+    }
+    
+    /// Call this AFTER the app has finished launching to complete ASR initialization.
+    /// This must be called from onAppear or later, never during init.
+    func initialize() {
+        // Check microphone permission (deferred from init to avoid AVFCapture race condition)
         self.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         self.micPermissionGranted = (self.micStatus == .authorized)
+        
         registerDefaultDeviceChangeListener()
-        checkIfModelsExist()
         
         // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
         if modelsExistOnDisk {

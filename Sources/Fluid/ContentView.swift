@@ -187,6 +187,47 @@ struct ContentView: View {
             // Configure menu bar manager with ASR service
             menuBarManager.configure(asrService: asr)
             
+            // CRITICAL FIX: Defer all audio subsystem initialization by 1.5 seconds.
+            // There is a known race condition between CoreAudio's HALSystem initialization (triggered by 
+            // AudioObjectAddPropertyListenerBlock) and SwiftUI's AttributeGraph metadata processing during app launch.
+            // This race causes an EXC_BAD_ACCESS (SIGSEGV) at 0x0.
+            // By waiting for the main runloop to settle and SwiftUI to finish its initial layout passes,
+            // we ensure the audio system initializes safely.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                DebugLogger.shared.info("🔊 Starting delayed audio initialization...", source: "ContentView")
+                
+                audioObserver.startObserving()
+                asr.initialize()
+                
+                // Load available devices
+                refreshDevices()
+                
+                // Set default selection if empty
+                if selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid { selectedInputUID = defIn }
+                if selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid { selectedOutputUID = defOut }
+                
+                // Apply saved preferences if present and available
+                if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
+                   prefIn.isEmpty == false,
+                   inputDevices.first(where: { $0.uid == prefIn }) != nil,
+                   prefIn != AudioDevice.getDefaultInputDevice()?.uid
+                {
+                    _ = AudioDevice.setDefaultInputDevice(uid: prefIn)
+                    selectedInputUID = prefIn
+                }
+                
+                if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
+                   prefOut.isEmpty == false,
+                   outputDevices.first(where: { $0.uid == prefOut }) != nil,
+                   prefOut != AudioDevice.getDefaultOutputDevice()?.uid
+                {
+                    _ = AudioDevice.setDefaultOutputDevice(uid: prefOut)
+                    selectedOutputUID = prefOut
+                }
+                
+                DebugLogger.shared.info("✅ Audio subsystems initialized", source: "ContentView")
+            }
+            
             // Set up notch click callback for expanding command conversation
             NotchOverlayManager.shared.onNotchClicked = { [weak commandModeService] in
                 // When notch is clicked in command mode, show expanded conversation
@@ -221,27 +262,8 @@ struct ContentView: View {
             
             // Note: Overlay is now managed by MenuBarManager (persists even when window closed)
             
-            // Load devices and defaults
-            refreshDevices()
-            if selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid { selectedInputUID = defIn }
-            if selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid { selectedOutputUID = defOut }
-            // Apply saved preferences if present and available
-            if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
-               prefIn.isEmpty == false,
-               inputDevices.first(where: { $0.uid == prefIn }) != nil,
-               prefIn != AudioDevice.getDefaultInputDevice()?.uid
-            {
-                _ = AudioDevice.setDefaultInputDevice(uid: prefIn)
-                selectedInputUID = prefIn
-            }
-            if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
-               prefOut.isEmpty == false,
-               outputDevices.first(where: { $0.uid == prefOut }) != nil,
-               prefOut != AudioDevice.getDefaultOutputDevice()?.uid
-            {
-                _ = AudioDevice.setDefaultOutputDevice(uid: prefOut)
-                selectedOutputUID = prefOut
-            }
+            // Devices loaded in delayed audio initialization block
+            // Device defaults and preferences handled in delayed block
             
             // Preload ASR model on app startup (with small delay to let app initialize)
             Task {

@@ -173,6 +173,15 @@ final class AudioHardwareObserver: ObservableObject {
     private var installed: Bool = false
 
     init() {
+        // IMPORTANT: Do NOT call register() here!
+        // Calling AudioObjectAddPropertyListenerBlock during @StateObject init causes a race condition
+        // with SwiftUI's AttributeGraph metadata processing, leading to EXC_BAD_ACCESS crashes.
+        // Registration is deferred until startObserving() is called after app finishes launching.
+    }
+    
+    /// Call this AFTER the app has finished launching to start observing audio hardware changes.
+    /// This must be called from onAppear or later, never during init.
+    func startObserving() {
         register()
     }
 
