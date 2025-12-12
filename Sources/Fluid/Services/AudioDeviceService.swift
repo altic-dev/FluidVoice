@@ -84,6 +84,39 @@ enum AudioDevice {
         return setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultOutputDevice)
     }
 
+    /// Gets the current system output volume (0.0 to 1.0)
+    static func getOutputVolume() -> Float? {
+        guard let device = getDefaultOutputDevice() else { return nil }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var volume: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectGetPropertyData(device.id, &address, 0, nil, &size, &volume)
+        return status == noErr ? volume : nil
+    }
+
+    /// Sets the system output volume (0.0 to 1.0)
+    @discardableResult
+    static func setOutputVolume(_ volume: Float) -> Bool {
+        guard let device = getDefaultOutputDevice() else { return false }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var mutableVolume = min(max(volume, 0.0), 1.0) // Clamp to 0-1
+        let size = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectSetPropertyData(device.id, &address, 0, nil, size, &mutableVolume)
+        return status == noErr
+    }
+
     private static func getDefaultDeviceId(selector: AudioObjectPropertySelector) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
