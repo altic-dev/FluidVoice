@@ -8,9 +8,19 @@ import AppKit
 
 /// Serializes all CoreML transcription operations to prevent concurrent access issues.
 /// The actor ensures only one transcription runs at a time, preventing CoreML race conditions.
+/// Serializes all CoreML transcription operations to prevent concurrent access issues.
+/// This implementation enforces strict serialization (non-reentrant) using a task chain.
 private actor TranscriptionExecutor {
-    func run<T>(_ operation: @escaping () async throws -> T) async rethrows -> T {
-        try await operation()
+    private var lastTask: Task<Void, Never>?
+
+    func run<T>(_ operation: @escaping () async throws -> T) async throws -> T {
+        let previous = lastTask
+        let task = Task<T, Error> {
+            _ = await previous?.result
+            return try await operation()
+        }
+        lastTask = Task { _ = try? await task.value }
+        return try await task.value
     }
 }
 
@@ -90,7 +100,9 @@ final class ASRService: ObservableObject
     var asrManager: AsrManager?
 
     private var isRecordingWholeSession: Bool = false
-    private var recordedPCM: [Float] = []
+    // Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
+    // during long sessions where reallocation occurs frequently.
+    private let audioBuffer = ThreadSafeAudioBuffer()
 
     // Streaming transcription state (no VAD)
     private var streamingTask: Task<Void, Never>?
@@ -203,7 +215,7 @@ final class ASRService: ObservableObject
         guard isRunning == false else { return }
 
         finalText.removeAll()
-        recordedPCM.removeAll()
+        audioBuffer.clear(keepingCapacity: true) // specific optimization for restart
         partialTranscription.removeAll()
         previousFullTranscription.removeAll()
         lastProcessedSampleCount = 0
@@ -270,8 +282,8 @@ final class ASRService: ObservableObject
         previousFullTranscription.removeAll()
 
         // Thread-safe copy of recorded audio
-        let pcm = recordedPCM
-        recordedPCM.removeAll()
+        let pcm = audioBuffer.getAll()
+        audioBuffer.clear()
         isRecordingWholeSession = false
 
         do
@@ -317,7 +329,7 @@ final class ASRService: ObservableObject
         removeEngineTap()
         engine.stop()
         isRunning = false
-        recordedPCM.removeAll()
+        audioBuffer.clear()
         isRecordingWholeSession = false
         partialTranscription.removeAll()
         previousFullTranscription.removeAll()
@@ -421,7 +433,8 @@ final class ASRService: ObservableObject
         let mono16k = self.toMono16k(floatBuffer: buffer)
         if mono16k.isEmpty == false
         {
-            recordedPCM.append(contentsOf: mono16k)
+            // Thread-safe append
+            audioBuffer.append(mono16k)
 
             // Publish audio level for visualization
             let audioLevel = self.calculateAudioLevel(mono16k)
@@ -788,12 +801,13 @@ final class ASRService: ObservableObject
         
         guard isAsrReady, let manager = asrManager else { return }
         
-        let currentSampleCount = recordedPCM.count
+        // Thread-safe count check
+        let currentSampleCount = audioBuffer.count
         let minSamples = 8000  // 0.5 second minimum for faster initial feedback
         guard currentSampleCount >= minSamples else { return }
         
-        // Copy the audio data to prevent mutation during processing
-        let chunk = Array(recordedPCM[0..<currentSampleCount])
+        // Thread-safe copy of the data
+        let chunk = audioBuffer.getPrefix(currentSampleCount)
         
         isProcessingChunk = true
         defer { isProcessingChunk = false }
