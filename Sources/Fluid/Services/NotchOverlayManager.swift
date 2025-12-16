@@ -67,8 +67,14 @@ final class NotchOverlayManager {
     private var globalEscapeMonitor: Any?
     private var localEscapeMonitor: Any?
     
+    // Screen change observers
+    private var screenChangeObserver: Any?
+    private var screenWakeObserver: Any?
+    private var screenChangeHandlingTask: Task<Void, Never>?
+    
     private init() {
         setupEscapeKeyMonitors()
+        setupScreenChangeObservers()
     }
     
     deinit {
@@ -78,6 +84,13 @@ final class NotchOverlayManager {
         if let monitor = localEscapeMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        if let observer = screenChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        screenChangeHandlingTask?.cancel()
     }
     
     /// Setup escape key monitors - both global (other apps) and local (our app)
@@ -108,6 +121,25 @@ final class NotchOverlayManager {
         
         // Local monitor - catches escape when OUR app/notch has focus
         localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: escapeHandler)
+    }
+    
+    /// Observe screen configuration changes so we can clean up rogue notch windows
+    private func setupScreenChangeObservers() {
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleScreenConfigurationHandling(reason: "ScreenParametersChanged")
+        }
+        
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleScreenConfigurationHandling(reason: "ScreensDidWake")
+        }
     }
     
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
@@ -151,6 +183,7 @@ final class NotchOverlayManager {
     }
     
     private func showInternal(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        closeStrayNotchPanels()
         guard state == .idle else { return }
         
         // Store for potential re-show during processing
@@ -168,9 +201,17 @@ final class NotchOverlayManager {
         NotchContentState.shared.updateTranscription("")
         
         // Create notch with SwiftUI views
+        guard let (targetScreen, style) = resolveScreenAndStyle(
+            topCornerRadius: 12,
+            bottomCornerRadius: 18,
+            floatingCornerRadius: 18
+        ) else {
+            return
+        }
+        
         let newNotch = DynamicNotch(
             hoverBehavior: [.keepVisible, .hapticFeedback],
-            style: .notch(topCornerRadius: 12, bottomCornerRadius: 18)
+            style: style
         ) {
             NotchExpandedView(audioPublisher: audioLevelPublisher)
         } compactLeading: {
@@ -183,7 +224,7 @@ final class NotchOverlayManager {
         
         // Show in expanded state
         Task { [weak self] in
-            await newNotch.expand()
+            await newNotch.expand(on: targetScreen)
             // Only update state if we're still the active generation
             guard let self = self, self.generation == currentGeneration else { return }
             self.state = .visible
@@ -279,6 +320,7 @@ final class NotchOverlayManager {
     }
     
     private func showExpandedCommandOutputInternal() async {
+        closeStrayNotchPanels()
         guard commandOutputState == .idle else { return }
         
         commandOutputGeneration &+= 1
@@ -293,9 +335,19 @@ final class NotchOverlayManager {
         
         let publisher = lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
         
+        guard let (targetScreen, style) = resolveScreenAndStyle(
+            topCornerRadius: 12,
+            bottomCornerRadius: 16,
+            floatingCornerRadius: 18
+        ) else {
+            isCommandOutputExpanded = false
+            commandOutputState = .idle
+            return
+        }
+        
         let newNotch = DynamicNotch(
             hoverBehavior: [],  // No keepVisible - allows closing with X/Escape even when cursor is on notch
-            style: .notch(topCornerRadius: 12, bottomCornerRadius: 16)
+            style: style
         ) {
             NotchCommandOutputExpandedView(
                 audioPublisher: publisher,
@@ -336,7 +388,7 @@ final class NotchOverlayManager {
         
         self.commandOutputNotch = newNotch
         
-        await newNotch.expand()
+        await newNotch.expand(on: targetScreen)
         
         guard self.commandOutputGeneration == currentGeneration else { return }
         self.commandOutputState = .visible
@@ -390,6 +442,70 @@ final class NotchOverlayManager {
     func updateAudioPublisher(_ publisher: AnyPublisher<CGFloat, Never>) {
         lastAudioPublisher = publisher
         currentAudioPublisher = publisher
+    }
+    
+    // MARK: - Screen Helpers
+    
+    private func resolveScreenAndStyle(topCornerRadius: CGFloat,
+                                       bottomCornerRadius: CGFloat,
+                                       floatingCornerRadius: CGFloat) -> (screen: NSScreen, style: DynamicNotchStyle)? {
+        guard let screen = activeScreen() else { return nil }
+        
+        if screenHasNotch(screen) {
+            return (screen, .notch(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius))
+        } else {
+            return (screen, .floating(cornerRadius: floatingCornerRadius))
+        }
+    }
+    
+    private func activeScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        let screens = NSScreen.screens
+        if let hoveredScreen = screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
+            return hoveredScreen
+        }
+        return NSScreen.main ?? screens.first
+    }
+    
+    private func screenHasNotch(_ screen: NSScreen) -> Bool {
+        screen.auxiliaryTopLeftArea?.width != nil && screen.auxiliaryTopRightArea?.width != nil
+    }
+    
+    // MARK: - Screen Change Handling
+    
+    private func scheduleScreenConfigurationHandling(reason: String) {
+        screenChangeHandlingTask?.cancel()
+        screenChangeHandlingTask = Task { [weak self] in
+            await self?.handleScreenConfigurationChange(reason: reason)
+        }
+    }
+    
+    private func handleScreenConfigurationChange(reason: String) async {
+        pendingRetryTask?.cancel()
+        pendingRetryTask = nil
+        
+        if isCommandOutputExpanded {
+            hideExpandedCommandOutput()
+        }
+        
+        await performCleanup()
+        closeStrayNotchPanels()
+        state = .idle
+        commandOutputState = .idle
+        
+        // Intentionally do not auto-restore the overlay; users can re-trigger via hotkey.
+        DebugLogger.shared.debug("NotchOverlayManager: cleaned up after \(reason) (no auto-restore)", source: "NotchOverlayManager")
+    }
+    
+    private func closeStrayNotchPanels() {
+        guard let panelClass = NSClassFromString("DynamicNotchKit.DynamicNotchPanel") else { return }
+        for window in NSApp.windows {
+            if window.isVisible && window.classForCoder == panelClass {
+                window.orderOut(nil)
+            } else if window.isVisible && window.level == .screenSaver && window.frame.size.width > 100 && window.frame.size.height > 10 {
+                window.orderOut(nil)
+            }
+        }
     }
 }
 
