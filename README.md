@@ -66,7 +66,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon Mac (M1, M2, M3, M4)
-- Intel Macs are not currently supported. If you need Intel support, please create an issue to help gauge demand.
+- Intel Macs are supported from 1.5.1 builds using Whisper models!
 - Microphone access
 - Accessibility permissions for typing
 
