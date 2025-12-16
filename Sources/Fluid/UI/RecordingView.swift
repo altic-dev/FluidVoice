@@ -9,7 +9,8 @@ import SwiftUI
 import AVFoundation
 
 struct RecordingView: View {
-    @ObservedObject var asr: ASRService
+    @EnvironmentObject var appServices: AppServices
+    private var asr: ASRService { appServices.asr }
     @Environment(\.theme) private var theme
     @Binding var appear: Bool
     

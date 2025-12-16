@@ -52,7 +52,7 @@ struct PulseAudioVisualizationView: View {
                 .frame(width: 12, height: 12)
         }
         .frame(width: 100, height: 100)
-        .onChange(of: data.audioLevel) { newLevel in
+        .onChange(of: data.audioLevel) { _, newLevel in
             // Only trigger animation update for significant changes to prevent cycles
             if abs(newLevel - (data.audioLevel)) > 0.1 {
                 animationId = UUID()
@@ -86,7 +86,7 @@ struct WaveAudioVisualizationView: View {
             }
         }
         .frame(width: 60, height: 40)
-        .onChange(of: data.audioLevel) { newLevel in
+        .onChange(of: data.audioLevel) { _, newLevel in
             // Only trigger animation update for significant changes to prevent cycles
             if abs(newLevel - (data.audioLevel)) > 0.1 {
                 animationId = UUID()

@@ -186,7 +186,7 @@ final class CommandModeService: ObservableObject {
     
     /// Save current conversation to store
     func saveCurrentChat() {
-        guard let chatID = currentChatID else { return }
+        guard currentChatID != nil else { return }
         
         let messages = conversationHistory.map { messageToChatMessage($0) }
         chatStore.updateCurrentChat(messages: messages)
@@ -784,15 +784,20 @@ final class CommandModeService: ObservableObject {
         let enableStreaming = SettingsStore.shared.enableAIStreaming
         
         // Build request
+        // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = model.hasPrefix("o1") || model.hasPrefix("o3") || model.hasPrefix("gpt-5")
         
         var body: [String: Any] = [
             "model": model,
             "messages": messages,
             "tools": [TerminalService.toolDefinition],
-            "tool_choice": "auto",
-            "temperature": isReasoningModel ? 1.0 : 0.1
+            "tool_choice": "auto"
         ]
+        
+        // Only add temperature for non-reasoning models
+        if !isReasoningModel {
+            body["temperature"] = 0.1
+        }
         
         if enableStreaming {
             body["stream"] = true

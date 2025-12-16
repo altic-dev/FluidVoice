@@ -2,7 +2,8 @@ import SwiftUI
 
 struct RewriteModeView: View {
     @ObservedObject var service: RewriteModeService
-    @ObservedObject var asr: ASRService
+    @EnvironmentObject var appServices: AppServices
+    private var asr: ASRService { appServices.asr }
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     var onClose: (() -> Void)?
@@ -163,7 +164,7 @@ struct RewriteModeView: View {
                     }
                 }
                 .frame(width: 110)
-                .onChange(of: settings.rewriteModeSelectedProviderID) { newValue in
+                .onChange(of: settings.rewriteModeSelectedProviderID) { _, newValue in
                     // Prevent selecting disabled Apple Intelligence
                     if newValue == "apple-intelligence-disabled" {
                         settings.rewriteModeSelectedProviderID = "openai"
@@ -215,7 +216,7 @@ struct RewriteModeView: View {
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .onChange(of: asr.finalText) { newText in
+        .onChange(of: asr.finalText) { _, newText in
             if !newText.isEmpty {
                 inputText = newText
             }
@@ -302,10 +303,10 @@ struct RewriteModeView: View {
     
     private func defaultModels(for provider: String) -> [String] {
         switch provider {
-        case "openai": return ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]
+        case "openai": return ["gpt-4.1"]
         case "groq": return ["llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]
         case "apple-intelligence": return ["System Model"]
-        default: return ["gpt-4o"]
+        default: return ["gpt-4.1"]
         }
     }
     

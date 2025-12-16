@@ -67,6 +67,10 @@ final class SettingsStore: ObservableObject
         
         // Transcription Provider (ASR)
         static let selectedTranscriptionProvider = "SelectedTranscriptionProvider"
+        static let whisperModelSize = "WhisperModelSize"
+        
+        // Unified Speech Model (replaces above two)
+        static let selectedSpeechModel = "SelectedSpeechModel"
     }
     
     // MARK: - Model Reasoning Configuration
@@ -763,6 +767,113 @@ final class SettingsStore: ObservableObject
         }
     }
     
+    // MARK: - Speech Model (Unified ASR Model Selection)
+    
+    /// Unified speech recognition model selection.
+    /// Replaces the old TranscriptionProviderOption + WhisperModelSize dual-setting.
+    enum SpeechModel: String, CaseIterable, Identifiable, Codable {
+        // MARK: - FluidAudio Models (Apple Silicon Only)
+        case parakeetTDT = "parakeet-tdt"
+        
+        // MARK: - Whisper Models (Universal)
+        case whisperTiny = "whisper-tiny"
+        case whisperBase = "whisper-base"
+        case whisperSmall = "whisper-small"
+        case whisperMedium = "whisper-medium"
+        case whisperLargeTurbo = "whisper-large-turbo"
+        case whisperLarge = "whisper-large"
+        
+        var id: String { rawValue }
+        
+        // MARK: - Display Properties
+        
+        var displayName: String {
+            switch self {
+            case .parakeetTDT: return "Parakeet TDT"
+            case .whisperTiny: return "Whisper Tiny"
+            case .whisperBase: return "Whisper Base"
+            case .whisperSmall: return "Whisper Small"
+            case .whisperMedium: return "Whisper Medium"
+            case .whisperLargeTurbo: return "Whisper Large Turbo"
+            case .whisperLarge: return "Whisper Large"
+            }
+        }
+        
+        var languageSupport: String {
+            switch self {
+            case .parakeetTDT: return "25 Languages"
+            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+                return "99 Languages"
+            }
+        }
+        
+        var downloadSize: String {
+            switch self {
+            case .parakeetTDT: return "~500 MB"
+            case .whisperTiny: return "~75 MB"
+            case .whisperBase: return "~142 MB"
+            case .whisperSmall: return "~466 MB"
+            case .whisperMedium: return "~1.5 GB"
+            case .whisperLargeTurbo: return "~1.6 GB"
+            case .whisperLarge: return "~2.9 GB"
+            }
+        }
+        
+        var requiresAppleSilicon: Bool {
+            switch self {
+            case .parakeetTDT: return true
+            default: return false
+            }
+        }
+        
+        var isWhisperModel: Bool {
+            switch self {
+            case .parakeetTDT: return false
+            default: return true
+            }
+        }
+        
+        /// The ggml filename for Whisper models
+        var whisperModelFile: String? {
+            switch self {
+            case .whisperTiny: return "ggml-tiny.bin"
+            case .whisperBase: return "ggml-base.bin"
+            case .whisperSmall: return "ggml-small.bin"
+            case .whisperMedium: return "ggml-medium.bin"
+            case .whisperLargeTurbo: return "ggml-large-v3-turbo.bin"
+            case .whisperLarge: return "ggml-large-v3.bin"
+            default: return nil
+            }
+        }
+        
+        /// The short model name for whisper.cpp internal usage
+        var whisperModelName: String? {
+            switch self {
+            case .whisperTiny: return "tiny"
+            case .whisperBase: return "base"
+            case .whisperSmall: return "small"
+            case .whisperMedium: return "medium"
+            case .whisperLargeTurbo: return "large-v3-turbo"
+            case .whisperLarge: return "large-v3"
+            default: return nil
+            }
+        }
+        
+        // MARK: - Architecture Filtering
+        
+        /// Returns models available for the current Mac's architecture
+        static var availableModels: [SpeechModel] {
+            allCases.filter { model in
+                !model.requiresAppleSilicon || CPUArchitecture.isAppleSilicon
+            }
+        }
+        
+        /// Default model for the current architecture
+        static var defaultModel: SpeechModel {
+            CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
+        }
+    }
+    
     // MARK: - Transcription Provider (ASR)
     
     /// Available transcription providers
@@ -785,7 +896,38 @@ final class SettingsStore: ObservableObject
             switch self {
             case .auto: return "Uses FluidAudio on Apple Silicon, Whisper on Intel"
             case .fluidAudio: return "Fast CoreML-based transcription optimized for M-series chips"
-            case .whisper: return "whisper.cpp - works on any Mac, useful for testing"
+            case .whisper: return "whisper.cpp - CPU-based, works on any Mac"
+            }
+        }
+    }
+    
+    /// Available Whisper model sizes
+    enum WhisperModelSize: String, CaseIterable, Identifiable {
+        case tiny = "ggml-tiny.bin"
+        case base = "ggml-base.bin"
+        case small = "ggml-small.bin"
+        case medium = "ggml-medium.bin"
+        case large = "ggml-large-v3.bin"
+        
+        var id: String { rawValue }
+        
+        var displayName: String {
+            switch self {
+            case .tiny: return "Tiny (~75 MB)"
+            case .base: return "Base (~142 MB)"
+            case .small: return "Small (~466 MB)"
+            case .medium: return "Medium (~1.5 GB)"
+            case .large: return "Large (~2.9 GB)"
+            }
+        }
+        
+        var description: String {
+            switch self {
+            case .tiny: return "Fastest, lower accuracy"
+            case .base: return "Good balance of speed and accuracy"
+            case .small: return "Better accuracy, slower"
+            case .medium: return "High accuracy, requires more memory"
+            case .large: return "Best accuracy, large download"
             }
         }
     }
@@ -803,5 +945,76 @@ final class SettingsStore: ObservableObject
             objectWillChange.send()
             defaults.set(newValue.rawValue, forKey: Keys.selectedTranscriptionProvider)
         }
+    }
+    
+    /// Selected Whisper model size - defaults to "base"
+    var whisperModelSize: WhisperModelSize {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.whisperModelSize),
+                  let size = WhisperModelSize(rawValue: rawValue) else {
+                return .base
+            }
+            return size
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.whisperModelSize)
+        }
+    }
+    
+    // MARK: - Unified Speech Model Selection
+    
+    /// The selected speech recognition model.
+    /// This unified setting replaces the old TranscriptionProviderOption + WhisperModelSize combination.
+    var selectedSpeechModel: SpeechModel {
+        get {
+            // Check if already using new system
+            if let rawValue = defaults.string(forKey: Keys.selectedSpeechModel),
+               let model = SpeechModel(rawValue: rawValue) {
+                // Validate model is available on this architecture
+                if model.requiresAppleSilicon && !CPUArchitecture.isAppleSilicon {
+                    return .whisperBase
+                }
+                return model
+            }
+            
+            // Migration: Convert old settings to new SpeechModel
+            return migrateToSpeechModel()
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.selectedSpeechModel)
+        }
+    }
+    
+    /// Migrates old TranscriptionProviderOption + WhisperModelSize settings to new SpeechModel
+    private func migrateToSpeechModel() -> SpeechModel {
+        let oldProvider = defaults.string(forKey: Keys.selectedTranscriptionProvider) ?? "auto"
+        let oldWhisperSize = defaults.string(forKey: Keys.whisperModelSize) ?? "ggml-base.bin"
+        
+        let newModel: SpeechModel
+        
+        switch oldProvider {
+        case "whisper":
+            // Map old whisper size to new model
+            switch oldWhisperSize {
+            case "ggml-tiny.bin": newModel = .whisperTiny
+            case "ggml-base.bin": newModel = .whisperBase
+            case "ggml-small.bin": newModel = .whisperSmall
+            case "ggml-medium.bin": newModel = .whisperMedium
+            case "ggml-large-v3.bin": newModel = .whisperLarge
+            default: newModel = .whisperBase
+            }
+        case "fluidAudio":
+            newModel = CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
+        default: // "auto"
+            newModel = SpeechModel.defaultModel
+        }
+        
+        // Persist the migrated value
+        defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
+        DebugLogger.shared.info("Migrated speech model settings: \(oldProvider)/\(oldWhisperSize) -> \(newModel.rawValue)", source: "SettingsStore")
+        
+        return newModel
     }
 }

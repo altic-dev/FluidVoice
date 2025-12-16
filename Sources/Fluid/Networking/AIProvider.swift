@@ -90,6 +90,10 @@ final class OpenAICompatibleProvider: AIProvider
         
         // Check if model is gpt-oss and add reasoning_effort parameter
         let shouldAddReasoningEffort = isGptOssModel(model)
+        
+        // Check if this is a reasoning model that doesn't support temperature parameter
+        let modelLower = model.lowercased()
+        let isReasoningModel = modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("gpt-5")
 
         let body = ChatRequest(
             model: model,
@@ -97,7 +101,7 @@ final class OpenAICompatibleProvider: AIProvider
                 ChatMessage(role: "system", content: systemPrompt),
                 ChatMessage(role: "user", content: userText)
             ],
-            temperature: 0.2,
+            temperature: isReasoningModel ? nil : 0.2,  // Don't send temperature for reasoning models
             reasoning_effort: shouldAddReasoningEffort ? "low" : nil,
             stream: stream ? true : nil
         )

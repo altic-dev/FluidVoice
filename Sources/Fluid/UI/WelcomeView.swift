@@ -10,7 +10,8 @@ import AppKit
 import AVFoundation
 
 struct WelcomeView: View {
-    @ObservedObject var asr: ASRService
+    @EnvironmentObject var appServices: AppServices
+    private var asr: ASRService { appServices.asr }
     @ObservedObject private var settings = SettingsStore.shared
     @Binding var selectedSidebarItem: SidebarItem?
     @Binding var playgroundUsed: Bool
@@ -60,16 +61,19 @@ struct WelcomeView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             SetupStepView(
                                 step: 1,
-                                title: asr.isAsrReady ? "Voice Model Ready" : "Download Voice Model",
+                                // Consider model step complete if ready OR downloaded (even if not loaded)
+                                title: (asr.isAsrReady || asr.modelsExistOnDisk) ? "Voice Model Ready" : "Download Voice Model",
                                 description: asr.isAsrReady
                                     ? "Speech recognition model is loaded and ready"
-                                    : "Download the AI model for offline voice transcription (~500MB)",
-                                status: asr.isAsrReady ? .completed : .pending,
+                                    : (asr.modelsExistOnDisk 
+                                        ? "Model downloaded, will load when needed"
+                                        : "Download the AI model for offline voice transcription (~500MB)"),
+                                status: (asr.isAsrReady || asr.modelsExistOnDisk) ? .completed : .pending,
                                 action: {
                                     selectedSidebarItem = .aiSettings
                                 },
                                 actionButtonTitle: "Go to AI Settings",
-                                showActionButton: !asr.isAsrReady
+                                showActionButton: !(asr.isAsrReady || asr.modelsExistOnDisk)
                             )
                             
                             SetupStepView(
@@ -382,7 +386,10 @@ struct WelcomeView: View {
 
                             // Text Area
                             VStack(alignment: .leading, spacing: 8) {
-                                TextEditor(text: $asr.finalText)
+                                TextEditor(text: Binding(
+                                    get: { asr.finalText },
+                                    set: { asr.finalText = $0 }
+                                ))
                                     .font(.body)
                                     .focused(isTranscriptionFocused)
                                     .frame(height: 140)
@@ -456,6 +463,17 @@ struct WelcomeView: View {
 
             }
             .padding(16)
+        }
+        .onAppear {
+            // CRITICAL FIX: Refresh microphone and model status immediately on appear
+            // This prevents the Quick Setup from showing stale status before ASRService.initialize() runs
+            Task { @MainActor in
+                // Check microphone status without triggering the full initialize() delay
+                asr.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+                
+                // Check if models exist on disk
+                asr.checkIfModelsExist()
+            }
         }
     }
     

@@ -347,12 +347,12 @@ struct NotchWaveformView: View {
                     .shadow(color: color.opacity(currentGlowIntensity * 0.5), radius: currentOuterGlowRadius, x: 0, y: 0)
             }
         }
-        .onChange(of: data.audioLevel) { level in
+        .onChange(of: data.audioLevel) { _, level in
             if !contentState.isProcessing {
                 updateBars(level: level)
             }
         }
-        .onChange(of: contentState.isProcessing) { processing in
+        .onChange(of: contentState.isProcessing) { _, processing in
             if processing {
                 setStaticProcessingBars()
                 startGlowAnimation()
@@ -752,13 +752,13 @@ struct NotchCommandOutputExpandedView: View {
                 // Always scroll to bottom when view appears
                 scrollToBottom(proxy, animated: false)
             }
-            .onChange(of: contentState.commandConversationHistory.count) { _ in
+            .onChange(of: contentState.commandConversationHistory.count) { _, _ in
                 scrollToBottom(proxy, animated: true)
             }
-            .onChange(of: contentState.commandStreamingText) { _ in
+            .onChange(of: contentState.commandStreamingText) { _, _ in
                 scrollToBottom(proxy, animated: true)
             }
-            .onChange(of: contentState.isCommandProcessing) { _ in
+            .onChange(of: contentState.isCommandProcessing) { _, _ in
                 // Scroll when processing state changes
                 scrollToBottom(proxy, animated: true)
             }
@@ -922,7 +922,7 @@ struct ExpandedModeWaveformView: View {
                     .shadow(color: color.opacity(0.4), radius: 2, x: 0, y: 0)
             }
         }
-        .onChange(of: contentState.expandedModeAudioLevel) { level in
+        .onChange(of: contentState.expandedModeAudioLevel) { _, level in
             updateBars(level: level)
         }
         .onAppear {

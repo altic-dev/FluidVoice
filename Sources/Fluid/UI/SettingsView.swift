@@ -10,7 +10,8 @@ import AVFoundation
 import PromiseKit
 
 struct SettingsView: View {
-    @ObservedObject var asr: ASRService
+    @EnvironmentObject var appServices: AppServices
+    private var asr: ASRService { appServices.asr }
     @Environment(\.theme) private var theme
     @Binding var appear: Bool
     @Binding var visualizerNoiseThreshold: Double
@@ -241,17 +242,6 @@ struct SettingsView: View {
                                             .font(.subheadline.weight(.medium))
                                         
                                         Spacer()
-                                        
-                                        if !hotkeyManagerInitialized && accessibilityEnabled {
-                                            Button {
-                                                DebugLogger.shared.debug("User requested app restart for accessibility changes", source: "SettingsView")
-                                                restartApp()
-                                            } label: {
-                                                Label("Restart", systemImage: "arrow.clockwise.circle")
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.small)
-                                        }
                                     } else {
                                         ProgressView()
                                             .controlSize(.small)
@@ -342,7 +332,7 @@ struct SettingsView: View {
                                         description: "The shortcut only records while you hold it down, giving you quick push-to-talk style control.",
                                         isOn: $pressAndHoldModeEnabled
                                     )
-                                    .onChange(of: pressAndHoldModeEnabled) { newValue in
+                                    .onChange(of: pressAndHoldModeEnabled) { _, newValue in
                                         SettingsStore.shared.pressAndHoldMode = newValue
                                         hotkeyManager?.enablePressAndHoldMode(newValue)
                                     }
@@ -354,7 +344,7 @@ struct SettingsView: View {
                                         description: "Display transcription text in real-time in the overlay as you speak.",
                                         isOn: $enableStreamingPreview
                                     )
-                                    .onChange(of: enableStreamingPreview) { newValue in
+                                    .onChange(of: enableStreamingPreview) { _, newValue in
                                         SettingsStore.shared.enableStreamingPreview = newValue
                                     }
                                     
@@ -365,7 +355,7 @@ struct SettingsView: View {
                                         description: "Automatically copy transcribed text to clipboard as a backup.",
                                         isOn: $copyToClipboard
                                     )
-                                    .onChange(of: copyToClipboard) { newValue in
+                                    .onChange(of: copyToClipboard) { _, newValue in
                                         SettingsStore.shared.copyTranscriptionToClipboard = newValue
                                     }
                                 }
@@ -458,7 +448,7 @@ struct SettingsView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
-                                .onChange(of: selectedInputUID) { newUID in
+                                .onChange(of: selectedInputUID) { _, newUID in
                                     SettingsStore.shared.preferredInputDeviceUID = newUID
                                     _ = AudioDevice.setDefaultInputDevice(uid: newUID)
                                     if asr.isRunning {
@@ -479,7 +469,7 @@ struct SettingsView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
-                                .onChange(of: selectedOutputUID) { newUID in
+                                .onChange(of: selectedOutputUID) { _, newUID in
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
                                     _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
                                 }
@@ -563,89 +553,6 @@ struct SettingsView: View {
                     }
                     .padding(16)
                 }
-                
-                // Transcription Engine Card
-                ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Label("Transcription Engine", systemImage: "waveform.badge.mic")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            // Current provider info
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(theme.palette.success)
-                                    .frame(width: 8, height: 8)
-                                Text("Active: \(asr.activeProviderName)")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                
-                                Spacer()
-                                
-                                // Only show architecture badge when NOT in Auto mode
-                                if SettingsStore.shared.selectedTranscriptionProvider != .auto {
-                                    Text(CPUArchitecture.isAppleSilicon ? "Apple Silicon" : "Intel")
-                                        .font(.caption)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                                .fill(.quaternary)
-                                        )
-                                }
-                            }
-                            
-                            // Provider picker
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Engine")
-                                        .font(.body)
-                                    Text(SettingsStore.shared.selectedTranscriptionProvider.description)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                
-                                Spacer()
-                                
-                                Picker("", selection: Binding(
-                                    get: { SettingsStore.shared.selectedTranscriptionProvider },
-                                    set: { newValue in
-                                        SettingsStore.shared.selectedTranscriptionProvider = newValue
-                                        // Reset ASR to use new provider
-                                        asr.resetTranscriptionProvider()
-                                    }
-                                )) {
-                                    ForEach(SettingsStore.TranscriptionProviderOption.allCases) { option in
-                                        Text(option.displayName).tag(option)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 240)
-                            }
-                            
-                            // Note for developers
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "info.circle.fill")
-                                    .foregroundStyle(theme.palette.accent)
-                                    .font(.caption)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("For Development/Testing")
-                                        .font(.caption.weight(.medium))
-                                    Text("Use \"Whisper\" to test Intel Mac experience on Apple Silicon. FluidAudio provides best performance on M-series chips.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(theme.palette.accent.opacity(0.1))
-                            )
-                        }
-                    }
-                    .padding(16)
-                }
 
                 // Debug Settings Card
                 ThemedCard(style: .standard) {
@@ -679,13 +586,19 @@ struct SettingsView: View {
             .padding(16)
         }
         .onAppear {
-            refreshDevices()
-            // CRITICAL FIX: Populate cached default device names after onAppear, not during view body evaluation.
-            // This avoids the CoreAudio/SwiftUI AttributeGraph race condition that causes EXC_BAD_ACCESS.
-            cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
-            cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+            Task { @MainActor in
+                // Ensure the shared audio startup gate is scheduled. Safe to call repeatedly.
+                await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
+                await AudioStartupGate.shared.waitUntilOpen()
+
+                refreshDevices()
+                // CRITICAL FIX: Populate cached default device names after onAppear, not during view body evaluation.
+                // This avoids the CoreAudio/SwiftUI AttributeGraph race condition that causes EXC_BAD_ACCESS.
+                cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+                cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+            }
         }
-        .onChange(of: visualizerNoiseThreshold) { newValue in
+        .onChange(of: visualizerNoiseThreshold) { _, newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
         }
     }

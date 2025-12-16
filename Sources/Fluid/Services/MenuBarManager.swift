@@ -89,7 +89,11 @@ final class MenuBarManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newText in
                 guard self != nil else { return }
-                NotchOverlayManager.shared.updateTranscriptionText(newText)
+                // CRITICAL FIX: Check if streaming preview is enabled before updating notch
+                // The "Show Live Preview" toggle in Preferences should control this behavior
+                if SettingsStore.shared.enableStreamingPreview {
+                    NotchOverlayManager.shared.updateTranscriptionText(newText)
+                }
             }
             .store(in: &cancellables)
         

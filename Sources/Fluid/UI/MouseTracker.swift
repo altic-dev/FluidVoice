@@ -75,7 +75,7 @@ struct MouseTrackingModifier: ViewModifier {
                             let globalFrame = geometry.frame(in: .global)
                             tracker.updateWindowFrame(globalFrame)
                         }
-                        .onChange(of: geometry.frame(in: .global)) { newFrame in
+                        .onChange(of: geometry.frame(in: .global)) { _, newFrame in
                             // Skip updates when view is scrolled off-screen (prevents invalid geometry)
                             guard newFrame.minY < NSScreen.main?.frame.height ?? 1000 else { return }
                             guard newFrame.maxY > 0 else { return }

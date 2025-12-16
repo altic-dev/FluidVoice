@@ -37,6 +37,13 @@ private struct StreamingDelta: Codable { let role: String?; let content: String?
 private struct StreamingChoice: Codable { let index: Int?; let delta: StreamingDelta; let finish_reason: String? }
 private struct StreamingChunk: Codable { let choices: [StreamingChoice] }
 
+// MARK: - AI Processing Response Structures
+// NOTE: Keep Codable types out of View methods to avoid SwiftUI/metadata blowups at launch.
+private struct AIProcessingMessage: Codable { let role: String; let content: String }
+private struct AIProcessingChoiceMessage: Codable { let role: String; let content: String }
+private struct AIProcessingChoice: Codable { let index: Int?; let message: AIProcessingChoiceMessage }
+private struct AIProcessingResponse: Codable { let choices: [AIProcessingChoice] }
+
 struct ContentView: View {
     @StateObject private var audioObserver = AudioHardwareObserver()
     @StateObject private var asr = ASRService()
@@ -84,9 +91,6 @@ struct ContentView: View {
     @State private var isCallingAI: Bool = false
     @State private var openAIBaseURL: String = "https://api.openai.com/v1"
     
-    // MARK: - AI Enhancement checkbox state
-    @State private var enableAIProcessing: Bool = false
-    
     @State private var enableDebugLogs: Bool = SettingsStore.shared.enableDebugLogs
     @State private var pressAndHoldModeEnabled: Bool = SettingsStore.shared.pressAndHoldMode
     @State private var enableStreamingPreview: Bool = SettingsStore.shared.enableStreamingPreview
@@ -120,55 +124,28 @@ struct ContentView: View {
     @State private var providerAPIKeys: [String: String] = [:] // [providerKey: apiKey]
     @State private var currentProvider: String = "openai" // canonical key: "openai" | "groq" | "custom:<id>"
 
-    // API Connection Testing States
-    @State private var isTestingConnection: Bool = false
-    @State private var connectionStatus: ConnectionStatus = .unknown
-    @State private var connectionErrorMessage: String = ""
-    @State private var showHelp: Bool = false
-
-    enum ConnectionStatus {
-        case unknown, testing, success, failed
-    }
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
-    @State private var showingSaveProvider: Bool = false
-    @State private var newProviderName: String = ""
-    @State private var newProviderModels: String = ""
-    @State private var newProviderApiKey: String = ""
-    @State private var showAPIKeyEditor: Bool = false
-    @State private var newProviderBaseURL: String = ""
-    @State private var keyJustSaved: Bool = false
-    @State private var showAPIKeysGuide: Bool = false
-    @State private var showKeychainPermissionAlert: Bool = false
-    @State private var keychainPermissionMessage: String = ""
-    
-    // Edit Provider State
-    @State private var showingEditProvider: Bool = false
-    @State private var editProviderName: String = ""
-    @State private var editProviderBaseURL: String = ""
-    
-    // Feedback State
-    @State private var feedbackText: String = ""
-    @State private var feedbackEmail: String = ""
-    @State private var includeDebugLogs: Bool = false
-    @State private var isSendingFeedback: Bool = false
-    @State private var showFeedbackConfirmation: Bool = false
+
+
 
     var body: some View {
-        NavigationSplitView {
-            sidebarView
-                .environmentObject(mouseTracker)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-        } detail: {
-            detailView
-                .environmentObject(mouseTracker)
-        }
-        .withMouseTracking(mouseTracker)
-        .environmentObject(mouseTracker)
-        .onChange(of: menuBarManager.requestedNavigationDestination) { _, destination in
+        let splitView: AnyView = AnyView(
+            NavigationSplitView {
+                sidebarView
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+            } detail: {
+                detailView
+            }
+        )
+
+        let tracked = splitView.withMouseTracking(mouseTracker)
+        let env = tracked.environmentObject(mouseTracker)
+        let nav = env.onChange(of: menuBarManager.requestedNavigationDestination) { _, destination in
             handleMenuBarNavigation(destination)
         }
-        .onAppear {
+
+        return nav.onAppear {
             appear = true
             accessibilityEnabled = checkAccessibilityPermissions()
             
@@ -212,22 +189,19 @@ struct ContentView: View {
                 if selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid { selectedInputUID = defIn }
                 if selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid { selectedOutputUID = defOut }
                 
-                // Apply saved preferences if present and available
+                // Load saved preferences for UI display (but don't force system defaults)
+                // FluidVoice should NOT control system-wide audio routing
                 if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
                    prefIn.isEmpty == false,
-                   inputDevices.first(where: { $0.uid == prefIn }) != nil,
-                   prefIn != AudioDevice.getDefaultInputDevice()?.uid
+                   inputDevices.first(where: { $0.uid == prefIn }) != nil
                 {
-                    _ = AudioDevice.setDefaultInputDevice(uid: prefIn)
                     selectedInputUID = prefIn
                 }
                 
                 if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
                    prefOut.isEmpty == false,
-                   outputDevices.first(where: { $0.uid == prefOut }) != nil,
-                   prefOut != AudioDevice.getDefaultOutputDevice()?.uid
+                   outputDevices.first(where: { $0.uid == prefOut }) != nil
                 {
-                    _ = AudioDevice.setDefaultOutputDevice(uid: prefOut)
                     selectedOutputUID = prefOut
                 }
                 
@@ -235,7 +209,7 @@ struct ContentView: View {
             }
             
             // Set up notch click callback for expanding command conversation
-            NotchOverlayManager.shared.onNotchClicked = { [weak commandModeService] in
+            NotchOverlayManager.shared.onNotchClicked = {
                 // When notch is clicked in command mode, show expanded conversation
                 if !NotchContentState.shared.commandConversationHistory.isEmpty {
                     NotchOverlayManager.shared.showExpandedCommandOutput()
@@ -283,7 +257,6 @@ struct ContentView: View {
             // Establish provider context first
             updateCurrentProvider()
 
-            enableAIProcessing = SettingsStore.shared.enableAIProcessing
             enableDebugLogs = SettingsStore.shared.enableDebugLogs
             availableModelsByProvider = SettingsStore.shared.availableModelsByProvider
             selectedModelByProvider = SettingsStore.shared.selectedModelByProvider
@@ -482,24 +455,19 @@ struct ContentView: View {
                 return event
             }
         }
-        .onChange(of: accessibilityEnabled) { enabled in
+        .onChange(of: accessibilityEnabled) { _, enabled in
             if enabled && hotkeyManager != nil && !hotkeyManagerInitialized {
                 DebugLogger.shared.debug("Accessibility enabled, reinitializing hotkey manager", source: "ContentView")
                 hotkeyManager?.reinitialize()
             }
         }
-        .onChange(of: enableAIProcessing) { newValue in
-            SettingsStore.shared.enableAIProcessing = newValue
-            // Sync to menu bar immediately
-            menuBarManager.aiProcessingEnabled = newValue
-        }
-        .onChange(of: selectedModel) { newValue in
+        .onChange(of: selectedModel) { _, newValue in
             if newValue != "__ADD_MODEL__" {
                 selectedModelByProvider[currentProvider] = newValue
                 SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
             }
         }
-        .onChange(of: selectedProviderID) { newValue in
+        .onChange(of: selectedProviderID) { _, newValue in
             SettingsStore.shared.selectedProviderID = newValue
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -510,50 +478,24 @@ struct ContentView: View {
         }
         .overlay(alignment: .center) {
         }
-        .alert("Keychain Access Required", isPresented: $showKeychainPermissionAlert) {
-            Button("Open Keychain Access") {
-                openKeychainAccessApp()
-            }
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(keychainPermissionMessage.isEmpty
-                 ? "FluidVoice stores provider API keys securely in your macOS Keychain. Please grant access by choosing \"Always Allow\" when prompted."
-                 : keychainPermissionMessage)
-        }
+
         .alert(asr.errorTitle, isPresented: $asr.showError) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(asr.errorMessage)
         }
-        .onReceive(audioObserver.changePublisher) { _ in
-            // Hardware change detected → refresh lists and apply preferences if available
+        .onChange(of: audioObserver.changeTick) { _, _ in
+            // Hardware change detected → refresh device lists only
+            // NOTE: We do NOT force system defaults here anymore.
+            // FluidVoice should not hijack system-wide audio routing.
+            // The saved preferences are only used when FluidVoice actively records.
             refreshDevices()
 
-            // Input: prefer saved device if present, else mirror system default
-            if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
-               prefIn.isEmpty == false,
-               inputDevices.first(where: { $0.uid == prefIn }) != nil,
-               prefIn != AudioDevice.getDefaultInputDevice()?.uid
-            {
-                _ = AudioDevice.setDefaultInputDevice(uid: prefIn)
-                selectedInputUID = prefIn
-            }
-            else if let sysIn = AudioDevice.getDefaultInputDevice()?.uid
-            {
+            // Just sync the UI to show current system defaults (don't force them)
+            if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
                 selectedInputUID = sysIn
             }
-
-            // Output: prefer saved device if present, else mirror system default
-            if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
-               prefOut.isEmpty == false,
-               outputDevices.first(where: { $0.uid == prefOut }) != nil,
-               prefOut != AudioDevice.getDefaultOutputDevice()?.uid
-            {
-                _ = AudioDevice.setDefaultOutputDevice(uid: prefOut)
-                selectedOutputUID = prefOut
-            }
-            else if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid
-            {
+            if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
                 selectedOutputUID = sysOut
             }
         }
@@ -565,7 +507,7 @@ struct ContentView: View {
             accessibilityPollingTask?.cancel()
             accessibilityPollingTask = nil
         }
-        .onChange(of: hotkeyShortcut) { newValue in
+        .onChange(of: hotkeyShortcut) { _, newValue in
             DebugLogger.shared.debug("Hotkey shortcut changed to \(newValue.displayString)", source: "ContentView")
             hotkeyManager?.updateShortcut(newValue)
 
@@ -575,7 +517,7 @@ struct ContentView: View {
                 DebugLogger.shared.debug("Hotkey manager initialized: \(self.hotkeyManagerInitialized)", source: "ContentView")
             }
         }
-        .onChange(of: selectedSidebarItem) { newValue in
+        .onChange(of: selectedSidebarItem) { _, newValue in
             handleModeTransition(from: previousSidebarItem, to: newValue)
             previousSidebarItem = newValue
         }
@@ -717,37 +659,39 @@ struct ContentView: View {
                 .fill(theme.materials.window)
                 .ignoresSafeArea()
 
-            Group {
-                switch selectedSidebarItem ?? .welcome {
-                case .welcome:
-                    welcomeView
-                case .aiSettings:
-                    aiSettingsView
-                case .preferences:
-                    preferencesView
-                case .meetingTools:
-                    meetingToolsView
-                case .stats:
-                    statsView
-                case .feedback:
-                    feedbackView
-                case .commandMode:
-                    commandModeView
-                case .rewriteMode:
-                    rewriteModeView
-                case .history:
-                    TranscriptionHistoryView()
-                }
-            }
-            .transition(.opacity)
+            detailContent
+                .transition(.opacity)
         }
         .toolbar(.hidden, for: .automatic)
+    }
+
+    private var detailContent: AnyView {
+        switch selectedSidebarItem ?? .welcome {
+        case .welcome:
+            return AnyView(welcomeView)
+        case .aiSettings:
+            return AnyView(AISettingsView())
+        case .preferences:
+            return AnyView(preferencesView)
+        case .meetingTools:
+            return AnyView(meetingToolsView)
+        case .stats:
+            return AnyView(statsView)
+        case .feedback:
+            return AnyView(FeedbackView())
+        case .commandMode:
+            return AnyView(commandModeView)
+        case .rewriteMode:
+            return AnyView(rewriteModeView)
+        case .history:
+            return AnyView(TranscriptionHistoryView())
+        }
     }
 
     // MARK: - Welcome Guide
     private var welcomeView: some View {
         WelcomeView(
-            asr: asr,
+
             selectedSidebarItem: $selectedSidebarItem,
             playgroundUsed: $playgroundUsed,
             isTranscriptionFocused: $isTranscriptionFocused,
@@ -871,7 +815,7 @@ struct ContentView: View {
     // MARK: - Preferences View
     private var preferencesView: some View {
         SettingsView(
-            asr: asr,
+
             appear: $appear,
             visualizerNoiseThreshold: $visualizerNoiseThreshold,
             selectedInputUID: $selectedInputUID,
@@ -902,7 +846,7 @@ struct ContentView: View {
 
     private var recordingView: some View {
         RecordingView(
-            asr: asr,
+
             appear: $appear,
             stopAndProcessTranscription: { await stopAndProcessTranscription() },
             startRecording: startRecording
@@ -910,1319 +854,15 @@ struct ContentView: View {
     }
     
     private var commandModeView: some View {
-        CommandModeView(service: commandModeService, asr: asr, onClose: {
+        CommandModeView(service: commandModeService, onClose: {
             self.selectedSidebarItem = .welcome
         })
     }
     
     private var rewriteModeView: some View {
-        RewriteModeView(service: rewriteModeService, asr: asr, onClose: {
+        RewriteModeView(service: rewriteModeService, onClose: {
             self.selectedSidebarItem = .welcome
         })
-    }
-
-    // MARK: - AI Settings Tab
-    private var aiSettingsView: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Voice to Text Model Card
-                ThemedCard(hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Image(systemName: "brain.head.profile")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                            Text("Voice to Text Model")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                Text("Model")
-                                    .fontWeight(.medium)
-                                Spacer()
-                                Menu(asr.selectedModel.displayName) {
-                                    ForEach(ASRService.ModelOption.allCases) { option in
-                                        Button(option.displayName) { asr.selectedModel = option }
-                                    }
-                                }
-                                .disabled(asr.isRunning)
-                            }
-
-                            // Model status indicator with action buttons
-                            HStack(spacing: 12) {
-                                if asr.isDownloadingModel || asr.isLoadingModel {
-                                    HStack(spacing: 8) {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                        Text(asr.isLoadingModel ? "Loading model…" : "Downloading…")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } else if asr.isAsrReady {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .font(.caption)
-                                    
-                                    Button(action: {
-                                        Task { await deleteModels() }
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "trash")
-                                            Text("Delete")
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Delete downloaded models (~500MB)")
-                                } else if asr.modelsExistOnDisk {
-                                    Image(systemName: "doc.fill")
-                                        .foregroundStyle(theme.palette.accent)
-                                        .font(.caption)
-                                    
-                                    Button(action: {
-                                        Task { await deleteModels() }
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "trash")
-                                            Text("Delete")
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Delete downloaded models (~500MB)")
-                                } else {
-                                    Image(systemName: "arrow.down.circle")
-                                        .foregroundStyle(.orange)
-                                        .font(.caption)
-                                    
-                                    Button(action: {
-                                        Task { await downloadModels() }
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "arrow.down.circle.fill")
-                                            Text("Download")
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(theme.palette.accent)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Download ASR models (~500MB)")
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(.ultraThinMaterial.opacity(0.3))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(.white.opacity(0.1), lineWidth: 1)
-                                    )
-                            )
-                            
-                            // Loading/Download status message
-                            if asr.isLoadingModel {
-                                Text("Loading model into memory (30-60 sec)...")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.leading, 4)
-                            } else if asr.isDownloadingModel {
-                                Text("Downloading model (~500MB)...")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.leading, 4)
-                            }
-
-                            // Helpful link: Supported languages
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Image(systemName: "link")
-                                    .foregroundStyle(.secondary)
-                                Link(
-                                    "Supported languages",
-                                    destination: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!
-                                )
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                            Divider()
-                                .padding(.vertical, 4)
-
-                            // Filler Words Section
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Remove Filler Words")
-                                            .font(.body)
-                                        Text("Automatically remove filler sounds like 'um', 'uh', 'er' from transcriptions")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    Toggle("", isOn: Binding(
-                                        get: { SettingsStore.shared.removeFillerWordsEnabled },
-                                        set: { SettingsStore.shared.removeFillerWordsEnabled = $0 }
-                                    ))
-                                    .toggleStyle(.switch)
-                                    .labelsHidden()
-                                }
-
-                                if SettingsStore.shared.removeFillerWordsEnabled {
-                                    FillerWordsEditor()
-                                }
-                            }
-                        }
-                    }
-                    .padding(14)
-                }
-
-                aiConfigurationCard
-            }
-            .padding(14)
-        }
-        .onAppear {
-            // Ensure the toggle reflects persisted value when navigating between tabs
-            enableAIProcessing = SettingsStore.shared.enableAIProcessing
-        }
-    }
-    
-    private var aiConfigurationCard: some View {
-        VStack(spacing: 14) {
-            // API Configuration Section
-            ThemedCard(style: .prominent, hoverEffect: false) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: "key.fill")
-                            .font(.title3)
-                            .foregroundStyle(theme.palette.accent)
-                        Text("API Configuration")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        
-                        Spacer()
-                        
-                        Button(action: { showHelp.toggle() }) {
-                            Image(systemName: showHelp ? "questionmark.circle.fill" : "questionmark.circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(theme.palette.accent.opacity(0.8))
-                        }
-                        .buttonStyle(.plain)
-                        .buttonHoverEffect()
-                    }
-                    
-                    Divider()
-                        .padding(.vertical, 3)
-                    
-                    // AI Enhancement Toggle - Aligned with Grid below
-                    HStack(alignment: .top, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Enable AI Enhancement")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(theme.palette.primaryText)
-                            
-                            Text("Automatically enhance transcriptions with AI")
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.palette.secondaryText)
-                        }
-                        
-                        Spacer()
-                        
-                        Toggle("", isOn: $enableAIProcessing)
-                            .toggleStyle(.switch)
-                            .labelsHidden()
-                            .onChange(of: enableAIProcessing) { newValue in
-                                SettingsStore.shared.enableAIProcessing = newValue
-                            }
-                    }
-                    .padding(.horizontal, 4)
-                    
-                    // Streaming Toggle (only for OpenAI-compatible APIs, not Apple Intelligence)
-                    if enableAIProcessing && selectedProviderID != "apple-intelligence" {
-                        Divider()
-                            .padding(.vertical, 3)
-                        
-                        HStack(alignment: .top, spacing: 16) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Enable Streaming")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(theme.palette.primaryText)
-                                
-                                Text("Currently only Command Mode shows real-time streaming")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(theme.palette.secondaryText)
-                            }
-                            
-                            Spacer()
-                            
-                            Toggle("", isOn: Binding(
-                                get: { SettingsStore.shared.enableAIStreaming },
-                                set: { SettingsStore.shared.enableAIStreaming = $0 }
-                            ))
-                            .toggleStyle(.switch)
-                            .labelsHidden()
-                        }
-                        .padding(.horizontal, 4)
-                    }
-                    
-                    // API Key Warning (not for Apple Intelligence - it doesn't need a key)
-                    if enableAIProcessing && 
-                       selectedProviderID != "apple-intelligence" &&
-                       !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
-                       (providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-                        HStack(spacing: 10) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .font(.system(size: 16))
-                            
-                            Text("API key required for AI enhancement to work")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.orange)
-                            
-                            Spacer()
-                        }
-                        .padding(12)
-                        .background(.orange.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(.orange.opacity(0.3), lineWidth: 1)
-                        )
-                        .padding(.horizontal, 4)
-                    }
-
-                    // Help Section
-                    if showHelp {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Image(systemName: "lightbulb.fill")
-                                    .foregroundStyle(.yellow)
-                                Text("Quick Start Guide")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("1.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("Enable AI enhancement if needed")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("2.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("Add/choose any provider of your choice along with its API key")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("3.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("Add/choose any good model of your liking")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("4.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("If it's OpenAI compatible endpoint, then update the base URL")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("5.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("Once everything is set, click verify to check if the connection works")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("6.")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .frame(width: 16, alignment: .trailing)
-                                    Text("Try something like \"Bullet point 1 - Apple, 2 - Orange, 3 - Banana\" and see AI write it perfectly")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .padding(14)
-                        .background(theme.palette.accent.opacity(0.08))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(theme.palette.accent.opacity(0.2), lineWidth: 1)
-                        )
-                        .padding(.horizontal, 4)
-                        .transition(.opacity)
-                    }
-                    
-                    Divider()
-                        .padding(.vertical, 3)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        // Compatibility note (different for Apple Intelligence)
-                        if selectedProviderID == "apple-intelligence" {
-                            HStack(spacing: 6) {
-                                Image(systemName: "apple.logo")
-                                    .font(.caption2)
-                                    .foregroundStyle(theme.palette.accent)
-                                Text("Powered by on-device Apple Intelligence")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 4)
-                        } else {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.seal.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(theme.palette.accent)
-                                Text("Supports any OpenAI compatible API endpoints")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 4)
-                        }
-                        
-                        Divider()
-                        
-                        // Provider Row
-                        HStack(spacing: 12) {
-                            HStack {
-                                Text("Provider:")
-                                    .fontWeight(.medium)
-                            }
-                            .frame(width: 90, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                LinearGradient(
-                                    colors: [theme.palette.accent.opacity(0.15), theme.palette.accent.opacity(0.05)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .cornerRadius(6)
-                            
-                            Picker("", selection: $selectedProviderID) {
-                                Text("OpenAI").tag("openai")
-                                Text("Groq").tag("groq")
-                                
-                                // Apple Intelligence - show but disable if unavailable
-                                if AppleIntelligenceService.isAvailable {
-                                    Text("Apple Intelligence").tag("apple-intelligence")
-                                } else {
-                                    Text("Apple Intelligence (Unavailable)")
-                                        .foregroundColor(.secondary)
-                                        .tag("apple-intelligence-disabled")
-                                }
-
-                                if !savedProviders.isEmpty {
-                                    Divider()
-                                    ForEach(savedProviders) { provider in
-                                        Text(provider.name).tag(provider.id)
-                                    }
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .frame(width: 200)
-                            .onChange(of: selectedProviderID) { newValue in
-                                // Prevent selecting disabled Apple Intelligence
-                                if newValue == "apple-intelligence-disabled" {
-                                    selectedProviderID = "openai"
-                                    return
-                                }
-                                
-                                switch newValue {
-                                case "openai":
-                                    openAIBaseURL = "https://api.openai.com/v1"
-                                    updateCurrentProvider()
-                                    let key = "openai"
-                                    if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
-                                    else { availableModels = defaultModels(for: key) }
-                                    if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                                    else { selectedModel = availableModels.first ?? selectedModel }
-                                case "groq":
-                                    openAIBaseURL = "https://api.groq.com/openai/v1"
-                                    updateCurrentProvider()
-                                    let key = "groq"
-                                    if let stored = availableModelsByProvider[key], !stored.isEmpty { availableModels = stored }
-                                    else { availableModels = defaultModels(for: key) }
-                                    if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                                    else { selectedModel = availableModels.first ?? selectedModel }
-                                case "apple-intelligence":
-                                    // Apple Intelligence - no base URL or models needed
-                                    openAIBaseURL = ""
-                                    updateCurrentProvider()
-                                    availableModels = ["System Model"]
-                                    selectedModel = "System Model"
-                                default:
-                                    if let provider = savedProviders.first(where: { $0.id == newValue }) {
-                                        openAIBaseURL = provider.baseURL
-                                        updateCurrentProvider()
-                                        let key = providerKey(for: newValue)
-                                        availableModels = provider.models.isEmpty ? (availableModelsByProvider[key] ?? defaultModels(for: key)) : provider.models
-                                        if let sel = selectedModelByProvider[key], availableModels.contains(sel) { selectedModel = sel }
-                                        else { selectedModel = availableModels.first ?? selectedModel }
-                                    }
-                                }
-                            }
-                            
-                            // Edit button for custom providers
-                            Button(action: {
-                                if let provider = savedProviders.first(where: { $0.id == selectedProviderID }) {
-                                    editProviderName = provider.name
-                                    editProviderBaseURL = provider.baseURL
-                                    showingEditProvider = true
-                                }
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "pencil")
-                                    Text("Edit")
-                                }
-                                .font(.caption)
-                            }
-                            .buttonStyle(CompactButtonStyle())
-                            .buttonHoverEffect()
-                            .disabled(selectedProviderID == "openai" || selectedProviderID == "groq" || selectedProviderID == "apple-intelligence")
-                            
-                            // Delete button for custom providers
-                            Button(action: {
-                                // Only delete if it's a custom provider
-                                if !selectedProviderID.isEmpty && selectedProviderID != "openai" && selectedProviderID != "groq" {
-                                    savedProviders.removeAll { $0.id == selectedProviderID }
-                                    saveSavedProviders()
-                                    let key = providerKey(for: selectedProviderID)
-                                    availableModelsByProvider.removeValue(forKey: key)
-                                    selectedModelByProvider.removeValue(forKey: key)
-                                    providerAPIKeys.removeValue(forKey: key)
-                                    saveProviderAPIKeys()
-                                    SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                                    SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                                    selectedProviderID = "openai"
-                                    openAIBaseURL = "https://api.openai.com/v1"
-                                    updateCurrentProvider()
-                                    availableModels = defaultModels(for: "openai")
-                                    selectedModel = availableModels.first ?? selectedModel
-                                }
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "trash")
-                                    Text("Delete")
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                            }
-                            .buttonStyle(CompactButtonStyle())
-                            .buttonHoverEffect()
-                            .disabled(selectedProviderID == "openai" || selectedProviderID == "groq" || selectedProviderID == "apple-intelligence")
-                            
-                            Button("+ Add Provider") {
-                                showingSaveProvider = true
-                                newProviderName = ""
-                                newProviderBaseURL = ""
-                                newProviderApiKey = ""
-                                newProviderModels = ""
-                            }
-                            .buttonStyle(CompactButtonStyle())
-                            .buttonHoverEffect()
-                        }
-                        
-                        // Edit Provider Modal (Inline)
-                        if showingEditProvider {
-                            VStack(spacing: 12) {
-                                HStack {
-                                    Text("Edit Provider")
-                                        .font(.headline)
-                                        .fontWeight(.semibold)
-                                    Spacer()
-                                }
-                                
-                                HStack(spacing: 8) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Name")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        TextField("Provider name", text: $editProviderName)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: 200)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Base URL")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        TextField("e.g., http://localhost:11434/v1", text: $editProviderBaseURL)
-                                            .textFieldStyle(.roundedBorder)
-                                            .font(.system(.body, design: .monospaced))
-                                    }
-                                }
-
-                                HStack(spacing: 8) {
-                                    Button("Save") {
-                                        let name = editProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        let base = editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        
-                                        guard !name.isEmpty, !base.isEmpty else { return }
-                                        
-                                        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-                                            let oldProvider = savedProviders[providerIndex]
-                                            let updatedProvider = SettingsStore.SavedProvider(
-                                                id: oldProvider.id,
-                                                name: name,
-                                                baseURL: base,
-                                                models: oldProvider.models
-                                            )
-                                            savedProviders[providerIndex] = updatedProvider
-                                            saveSavedProviders()
-                                            
-                                            openAIBaseURL = base
-                                            updateCurrentProvider()
-                                        }
-                                        
-                                        showingEditProvider = false
-                                        editProviderName = ""; editProviderBaseURL = ""
-                                    }
-                                    .buttonStyle(GlassButtonStyle())
-                                    .disabled(editProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                                    Button("Cancel") {
-                                        showingEditProvider = false
-                                        editProviderName = ""; editProviderBaseURL = ""
-                                    }
-                                    .buttonStyle(GlassButtonStyle())
-                                }
-                            }
-                            .padding(12)
-                            .background(theme.palette.cardBackground.opacity(0.5))
-                            .cornerRadius(12)
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.palette.accent.opacity(0.3), lineWidth: 1))
-                            .padding(.vertical, 8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                        }
-
-                        // Apple Intelligence Badge (when selected)
-                        if selectedProviderID == "apple-intelligence" {
-                            HStack(spacing: 8) {
-                                Image(systemName: "apple.logo")
-                                    .font(.system(size: 14))
-                                Text("On-Device")
-                                    .fontWeight(.medium)
-                                Text("•")
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "lock.shield.fill")
-                                    .font(.system(size: 12))
-                                Text("Private")
-                                    .fontWeight(.medium)
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(.green.opacity(0.15))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(.green.opacity(0.3), lineWidth: 1)
-                                    )
-                            )
-                            
-                            Divider()
-                        }
-                        
-
-                        
-                        // API Key Management (not for Apple Intelligence)
-                        if selectedProviderID != "apple-intelligence" {
-                            Divider()
-                            
-                            Button(action: {
-                                handleAPIKeyButtonTapped()
-                            }) {
-                                Label("Add or Modify API Key", systemImage: "key.fill")
-                                    .labelStyle(.titleAndIcon)
-                                    .font(.caption)
-                            }
-                            .buttonStyle(GlassButtonStyle())
-                            .buttonHoverEffect()
-                        }
-                        
-                        Divider()
-                        
-                        // Model Row (simplified for Apple Intelligence)
-                        if selectedProviderID == "apple-intelligence" {
-                            HStack(spacing: 12) {
-                                HStack {
-                                    Text("Model:")
-                                        .fontWeight(.medium)
-                                }
-                                .frame(width: 90, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    LinearGradient(
-                                        colors: [theme.palette.accent.opacity(0.15), theme.palette.accent.opacity(0.05)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(6)
-                                
-                                Text("System Language Model")
-                                    .foregroundStyle(.secondary)
-                                    .font(.system(.body))
-                                
-                                Spacer()
-                            }
-                        } else {
-                            // Standard Model Row for other providers
-                            HStack(spacing: 12) {
-                                HStack {
-                                    Text("Model:")
-                                        .fontWeight(.medium)
-                                }
-                                .frame(width: 90, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    LinearGradient(
-                                        colors: [theme.palette.accent.opacity(0.15), theme.palette.accent.opacity(0.05)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(6)
-                                
-                                Picker("", selection: $selectedModel) {
-                                    ForEach(availableModels, id: \.self) { model in
-                                        Text(model).tag(model)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .labelsHidden()
-                                .frame(width: 200)
-                                .onChange(of: selectedModel) { newValue in
-                                    let key = providerKey(for: selectedProviderID)
-                                    selectedModelByProvider[key] = newValue
-                                    SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                                }
-                                
-                                // Always show delete button
-                                Button(action: {
-                                    let key = providerKey(for: selectedProviderID)
-                                    // Allow deletion for any model except for OpenAI/Groq providers
-                                    if selectedProviderID != "openai" && selectedProviderID != "groq" {
-                                    var list = availableModelsByProvider[key] ?? availableModels
-                                    list.removeAll { $0 == selectedModel }
-                                    
-                                    // If no models left, add back the default
-                                    if list.isEmpty {
-                                        list = defaultModels(for: key)
-                                    }
-                                    
-                                    availableModelsByProvider[key] = list
-                                    SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                                    
-                                    if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-                                        let updatedProvider = SettingsStore.SavedProvider(
-                                            id: savedProviders[providerIndex].id,
-                                            name: savedProviders[providerIndex].name,
-                                            baseURL: savedProviders[providerIndex].baseURL,
-                                            models: list
-                                        )
-                                        savedProviders[providerIndex] = updatedProvider
-                                        saveSavedProviders()
-                                    }
-                                    
-                                    availableModels = list
-                                    selectedModel = list.first ?? ""
-                                    selectedModelByProvider[key] = selectedModel
-                                    SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-                                }
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "trash")
-                                    Text("Delete")
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                            }
-                            .buttonStyle(CompactButtonStyle())
-                            .buttonHoverEffect()
-                            .disabled(selectedProviderID == "openai" || selectedProviderID == "groq")
-                            
-                            // Add Model button (when not in add mode)
-                            if !showingAddModel {
-                                Button("+ Add Model") {
-                                    showingAddModel = true
-                                    newModelName = ""
-                                }
-                                .buttonStyle(CompactButtonStyle())
-                                .buttonHoverEffect()
-                            }
-                            
-                            // Reasoning Config button
-                            Button(action: {
-                                // Load current config for this model
-                                let providerKey = self.providerKey(for: selectedProviderID)
-                                if let config = SettingsStore.shared.getReasoningConfig(forModel: selectedModel, provider: providerKey) {
-                                    editingReasoningParamName = config.parameterName
-                                    editingReasoningParamValue = config.parameterValue
-                                    editingReasoningEnabled = config.isEnabled
-                                } else {
-                                    // Check if model has auto-detected defaults
-                                    let modelLower = selectedModel.lowercased()
-                                    if modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") ||
-                                       modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") ||
-                                       modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/") {
-                                        editingReasoningParamName = "reasoning_effort"
-                                        editingReasoningParamValue = "low"
-                                        editingReasoningEnabled = true
-                                    } else if modelLower.contains("deepseek") && modelLower.contains("reasoner") {
-                                        editingReasoningParamName = "enable_thinking"
-                                        editingReasoningParamValue = "true"
-                                        editingReasoningEnabled = true
-                                    } else {
-                                        editingReasoningParamName = "reasoning_effort"
-                                        editingReasoningParamValue = "low"
-                                        editingReasoningEnabled = false
-                                    }
-                                }
-                                showingReasoningConfig = true
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: hasReasoningConfigForCurrentModel() ? "brain.fill" : "brain")
-                                    Text("Reasoning")
-                                }
-                                .font(.caption)
-                                .foregroundStyle(hasReasoningConfigForCurrentModel() ? theme.palette.accent : .secondary)
-                            }
-                            .buttonStyle(CompactButtonStyle())
-                            .buttonHoverEffect()
-                            .help("Configure reasoning/thinking parameters for this model")
-                        }
-                        
-                        // Add model input (appears below on new line when in add mode)
-                        if showingAddModel {
-                            HStack(spacing: 8) {
-                                TextField("Enter model name", text: $newModelName)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onSubmit {
-                                        // Submit on Enter key
-                                        if !newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-                                            addNewModel()
-                                        }
-                                    }
-                                
-                                Button("Add") {
-                                    addNewModel()
-                                }
-                                .buttonStyle(CompactButtonStyle())
-                                .buttonHoverEffect()
-                                .disabled(newModelName.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty)
-
-                                Button("Cancel") {
-                                    showingAddModel = false
-                                    newModelName = ""
-                                }
-                                .buttonStyle(CompactButtonStyle())
-                                .buttonHoverEffect()
-                            }
-                            .padding(.leading, 122) // Align with model picker
-                        }
-                        
-                        // Reasoning Config Editor (appears below when editing)
-                        if showingReasoningConfig {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Image(systemName: "brain.head.profile")
-                                        .foregroundStyle(theme.palette.accent)
-                                    Text("Reasoning Config for \(selectedModel)")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                    Spacer()
-                                    
-                                    // Auto-detect indicator
-                                    if !SettingsStore.shared.hasCustomReasoningConfig(forModel: selectedModel, provider: providerKey(for: selectedProviderID)) && editingReasoningEnabled {
-                                        Text("Auto-detected")
-                                            .font(.caption2)
-                                            .foregroundStyle(.green)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(.green.opacity(0.15))
-                                            .cornerRadius(4)
-                                    }
-                                }
-                                
-                                Toggle("Enable reasoning parameter", isOn: $editingReasoningEnabled)
-                                    .toggleStyle(.switch)
-                                    .font(.caption)
-                                
-                                if editingReasoningEnabled {
-                                    HStack(spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Parameter Name")
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                            Picker("", selection: $editingReasoningParamName) {
-                                                Text("reasoning_effort").tag("reasoning_effort")
-                                                Text("enable_thinking").tag("enable_thinking")
-                                                Text("thinking").tag("thinking")
-                                                Text("Custom...").tag("__custom__")
-                                            }
-                                            .pickerStyle(.menu)
-                                            .labelsHidden()
-                                            .frame(width: 150)
-                                        }
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Value")
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                            
-                                            if editingReasoningParamName == "reasoning_effort" {
-                                                Picker("", selection: $editingReasoningParamValue) {
-                                                    Text("minimal").tag("minimal")
-                                                    Text("low").tag("low")
-                                                    Text("medium").tag("medium")
-                                                    Text("high").tag("high")
-                                                }
-                                                .pickerStyle(.menu)
-                                                .labelsHidden()
-                                                .frame(width: 100)
-                                            } else if editingReasoningParamName == "enable_thinking" {
-                                                Picker("", selection: $editingReasoningParamValue) {
-                                                    Text("true").tag("true")
-                                                    Text("false").tag("false")
-                                                }
-                                                .pickerStyle(.menu)
-                                                .labelsHidden()
-                                                .frame(width: 100)
-                                            } else {
-                                                TextField("Value", text: $editingReasoningParamValue)
-                                                    .textFieldStyle(.roundedBorder)
-                                                    .frame(width: 100)
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Help text
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "info.circle")
-                                            .font(.caption2)
-                                        Text("gpt-5.x, o1, gpt-oss models use reasoning_effort. DeepSeek uses enable_thinking.")
-                                            .font(.caption2)
-                                    }
-                                    .foregroundStyle(.secondary)
-                                }
-                                
-                                HStack(spacing: 8) {
-                                    Button("Save") {
-                                        let providerKey = self.providerKey(for: selectedProviderID)
-                                        if editingReasoningEnabled {
-                                            let config = SettingsStore.ModelReasoningConfig(
-                                                parameterName: editingReasoningParamName,
-                                                parameterValue: editingReasoningParamValue,
-                                                isEnabled: true
-                                            )
-                                            SettingsStore.shared.setReasoningConfig(config, forModel: selectedModel, provider: providerKey)
-                                        } else {
-                                            // Save as disabled config to override auto-detection
-                                            let config = SettingsStore.ModelReasoningConfig(
-                                                parameterName: "",
-                                                parameterValue: "",
-                                                isEnabled: false
-                                            )
-                                            SettingsStore.shared.setReasoningConfig(config, forModel: selectedModel, provider: providerKey)
-                                        }
-                                        showingReasoningConfig = false
-                                    }
-                                    .buttonStyle(GlassButtonStyle())
-                                    .buttonHoverEffect()
-                                    
-                                    Button("Cancel") {
-                                        showingReasoningConfig = false
-                                    }
-                                    .buttonStyle(CompactButtonStyle())
-                                    .buttonHoverEffect()
-                                    
-                                    Spacer()
-                                    
-                                    // Reset to auto-detect
-                                    if SettingsStore.shared.hasCustomReasoningConfig(forModel: selectedModel, provider: providerKey(for: selectedProviderID)) {
-                                        Button("Reset to Auto") {
-                                            let providerKey = self.providerKey(for: selectedProviderID)
-                                            SettingsStore.shared.setReasoningConfig(nil, forModel: selectedModel, provider: providerKey)
-                                            showingReasoningConfig = false
-                                        }
-                                        .buttonStyle(CompactButtonStyle())
-                                        .buttonHoverEffect()
-                                        .foregroundStyle(.orange)
-                                    }
-                                }
-                            }
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(theme.palette.accent.opacity(0.08))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(theme.palette.accent.opacity(0.2), lineWidth: 1)
-                                    )
-                            )
-                            .padding(.leading, 122) // Align with model picker
-                            .transition(.opacity)
-                        }
-                        } // End of else block for non-Apple Intelligence model row
-
-                        
-                        Divider()
-                        
-                        // Connection Test (not applicable for Apple Intelligence)
-                        if selectedProviderID != "apple-intelligence" {
-                        HStack(spacing: 12) {
-                            Button(action: {
-                                DebugLogger.shared.info("=== TEST CONNECTION BUTTON PRESSED ===", source: "ContentView")
-                                Task { await testAPIConnection() }
-                            }) {
-                                Text(isTestingConnection ? "Verifying..." : "Verify Connection")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                            }
-                            .buttonStyle(GlassButtonStyle())
-                            .buttonHoverEffect()
-                            .disabled(isTestingConnection ||
-                                     (!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) &&
-                                      (providerAPIKeys[currentProvider] ?? "").isEmpty))
-                            
-                            Image(systemName: "questionmark.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .help("Sends a test prompt to verify the API connection works correctly")
-                        }
-                        
-                        // API Key Editor Sheet
-                        Color.clear.frame(height: 0)
-                            .sheet(isPresented: $showAPIKeyEditor) {
-                            VStack(spacing: 14) {
-                            Text("Enter \(providerDisplayName(for: selectedProviderID)) API Key")
-                                    .font(.headline)
-
-                                SecureField("API Key (optional for local endpoints)", text: $newProviderApiKey)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 300)
-
-                                HStack(spacing: 12) {
-                                    Button("Cancel") {
-                                        showAPIKeyEditor = false
-                                    }
-                                    .buttonStyle(.bordered)
-
-                                    Button("OK") {
-                                        let trimmedKey = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        providerAPIKeys[currentProvider] = trimmedKey
-                                        saveProviderAPIKeys()
-                                        if connectionStatus != .unknown {
-                                            connectionStatus = .unknown
-                                            connectionErrorMessage = ""
-                                        }
-                                        showAPIKeyEditor = false
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    // Allow empty API key for local endpoints
-                                    .disabled(!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
-                                             newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                }
-                            }
-                            .padding()
-                            .frame(minWidth: 350, minHeight: 150)
-                        }
-
-                        // Connection Status Display (only shown when there's something to show)
-                        if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
-                           !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) ||
-                           connectionStatus == .success ||
-                           connectionStatus == .failed ||
-                           connectionStatus == .testing {
-                            HStack(spacing: 8) {
-                                // Only show API key warning for non-local endpoints
-                                if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
-                                   !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundStyle(.orange)
-                                        .font(.caption)
-                                    Text("API key required")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
-                                } else if connectionStatus == .success {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .font(.caption)
-                                    Text("Connection verified")
-                                        .font(.caption)
-                                        .foregroundStyle(.green)
-                                } else if connectionStatus == .failed {
-                                    Image(systemName: "exclamationmark.circle.fill")
-                                        .foregroundStyle(.red)
-                                        .font(.caption)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Connection failed")
-                                            .font(.caption)
-                                            .foregroundStyle(.red)
-                                        if !connectionErrorMessage.isEmpty {
-                                            Text(connectionErrorMessage)
-                                                .font(.caption2)
-                                                .foregroundStyle(.red.opacity(0.8))
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                } else if connectionStatus == .testing {
-                                    ProgressView()
-                                        .frame(width: 16, height: 16)
-                                    Text("Verifying...")
-                                        .font(.caption)
-                                        .foregroundStyle(theme.palette.accent)
-                                }
-
-                                Spacer()
-                            }
-                            .padding(.top, 6)
-                        }
-                        } // End of if selectedProviderID != "apple-intelligence" for connection test section
-                        
-                        // Add Provider Modal
-                        if showingSaveProvider {
-                            VStack(spacing: 12) {
-                                HStack(spacing: 8) {
-                                    TextField("Provider name (e.g., Local Ollama)", text: $newProviderName)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 250)
-                                    TextField("Base URL (e.g., http://localhost:11434/v1)", text: $newProviderBaseURL)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 300)
-                                }
-
-                                HStack(spacing: 8) {
-                                    SecureField("API Key (optional for local)", text: $newProviderApiKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 300)
-                                    TextField("Available models (comma-separated)", text: $newProviderModels)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 300)
-                                }
-
-                                Text("Example: llama-3.1-8b, codellama-13b, mistral-7b")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                HStack(spacing: 8) {
-                                    Button("Save Provider") {
-                                        let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        let base = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        let api  = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        let isLocal = isLocalEndpoint(base)
-                                        // Name and URL always required, API key only required for non-local endpoints
-                                        guard !name.isEmpty, !base.isEmpty, (isLocal || !api.isEmpty) else { return }
-
-                                        let modelsList = newProviderModels
-                                            .split(separator: ",")
-                                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                                            .filter { !$0.isEmpty }
-                                        let models = modelsList.isEmpty ? defaultModels(for: "openai") : modelsList
-
-                                        let newProvider = SettingsStore.SavedProvider(
-                                            name: name,
-                                            baseURL: base,
-                                            models: models
-                                        )
-
-                                        // upsert by name
-                                        savedProviders.removeAll { $0.name.lowercased() == name.lowercased() }
-                                        savedProviders.append(newProvider)
-                                        saveSavedProviders()
-
-                                        // bind API key and models to canonical key
-                                        let key = providerKey(for: newProvider.id)
-                                        providerAPIKeys[key] = api
-                                        availableModelsByProvider[key] = models
-                                        selectedModelByProvider[key] = models.first ?? selectedModel
-                                        SettingsStore.shared.providerAPIKeys = providerAPIKeys
-                                        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-                                        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-
-                                        // switch selection to the new provider
-                                        selectedProviderID = newProvider.id
-                                        openAIBaseURL = base
-                                        updateCurrentProvider()
-                                        availableModels = models
-                                        selectedModel = models.first ?? selectedModel
-
-                                        showingSaveProvider = false
-                                        newProviderName = ""; newProviderBaseURL = ""; newProviderApiKey = ""; newProviderModels = ""
-                                    }
-                                    .buttonStyle(GlassButtonStyle())
-                                    .buttonHoverEffect()
-                                    .disabled({
-                                        let nameEmpty = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        let urlEmpty = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        let apiKeyEmpty = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        let isLocal = isLocalEndpoint(newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
-                                        
-                                        // Name and URL are always required
-                                        // API key is only required for non-local endpoints
-                                        return nameEmpty || urlEmpty || (!isLocal && apiKeyEmpty)
-                                    }())
-
-                                    Button("Cancel") {
-                                        showingSaveProvider = false
-                                        newProviderName = ""; newProviderBaseURL = ""; newProviderApiKey = ""; newProviderModels = ""
-                                    }
-                            .buttonStyle(GlassButtonStyle())
-                                    .buttonHoverEffect()
-                                }
-                            }
-                            .transition(.opacity)
-                        }
-                    }
-                    .padding(.horizontal, 4)
-
-                }
-                .padding(14)
-            }
-            .modifier(CardAppearAnimation(delay: 0.1, appear: $appear))
-            
-            // Get API Keys Guide (Collapsible)
-            ThemedCard(style: .prominent, hoverEffect: false) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button(action: { showAPIKeysGuide.toggle() }) {
-                        HStack {
-                            Image(systemName: "key.fill")
-                                .font(.title3)
-                                .foregroundStyle(.purple)
-                            Text("Get API Keys")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.primary)
-                            
-                            Spacer()
-                            
-                            Image(systemName: showAPIKeysGuide ? "chevron.up" : "chevron.down")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    if showAPIKeysGuide {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ProviderGuide(
-                                name: "OpenAI",
-                                url: "https://platform.openai.com/api-keys",
-                                baseURL: "https://api.openai.com/v1",
-                                keyPrefix: "sk-"
-                            )
-
-                            ProviderGuide(
-                                name: "Groq",
-                                url: "https://console.groq.com/keys",
-                                baseURL: "https://api.groq.com/openai/v1",
-                                keyPrefix: "gsk_"
-                            )
-                            
-                            ProviderGuide(
-                                name: "OpenRouter",
-                                url: "https://openrouter.ai/keys",
-                                baseURL: "https://openrouter.ai/api/v1",
-                                keyPrefix: "sk-or-"
-                            )
-                            
-                            ProviderGuide(
-                                name: "Google AI Studio",
-                                url: "https://aistudio.google.com/app/apikey",
-                                baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-                                keyPrefix: "AIza"
-                            )
-                            
-                            ProviderGuide(
-                                name: "Cerebras",
-                                url: "https://cloud.cerebras.ai/",
-                                baseURL: "https://api.cerebras.ai/v1",
-                                keyPrefix: "csk-"
-                            )
-                            
-                            Divider()
-                            
-                            // Note about OpenAI compatible endpoints
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(theme.palette.accent)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Any OpenAI compatible API endpoint is supported")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                    Text("Use the '+ Add Provider' button above to add custom providers like Ollama, LM Studio, or other local/cloud services")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(12)
-                            .background(theme.palette.accent.opacity(0.08))
-                            .cornerRadius(8)
-
-                            // Custom Trained Local Models Coming Soon
-                            ThemedCard(hoverEffect: false) {
-                                HStack {
-                                    Text("Custom Trained Local Models")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-
-                                    Spacer()
-
-                                    Text("Coming Soon")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(theme.palette.warning)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 2)
-                                        .background(theme.palette.warning.opacity(0.12))
-                                        .cornerRadius(8)
-                                }
-                                .padding(12)
-                            }
-                        }
-                        .transition(.opacity)
-                    }
-                }
-                .padding(14)
-            }
-            .modifier(CardAppearAnimation(delay: 0.2, appear: $appear))
-        }
     }
 
     // MARK: - Meeting Transcription (Coming Soon)
@@ -2236,180 +876,6 @@ struct ContentView: View {
         StatsView()
     }
 
-    // MARK: - Feedback View
-    private var feedbackView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "envelope.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(theme.palette.accent)
-                        VStack(alignment: .leading) {
-                            Text("Send Feedback")
-                                .font(.system(size: 28, weight: .bold))
-                            Text("Help us improve FluidVoice")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.bottom, 8)
-
-                // Friendly Message & GitHub CTA
-                ThemedCard(style: .prominent, hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.pink)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("We'd love to hear from you!")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(theme.palette.primaryText)
-                                
-                                Text("Your feedback helps us make FluidVoice even better")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(theme.palette.secondaryText)
-                            }
-                        }
-                        
-                        Divider()
-                            .padding(.vertical, 4)
-                        
-                        HStack(spacing: 12) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 24))
-                                .foregroundStyle(.yellow)
-                            
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Loving FluidVoice?")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(theme.palette.primaryText)
-                                
-                                Text("Give us a star on GitHub! It helps others discover the project and motivates us to keep improving.")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(theme.palette.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            
-                            Spacer()
-                            
-                            Link(destination: URL(string: "https://github.com/altic-dev/Fluid-oss")!) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "star.fill")
-                                    Text("Star on GitHub")
-                                        .fontWeight(.semibold)
-                                }
-                                .font(.system(size: 14))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    LinearGradient(
-                                        colors: [.purple, .blue],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
-                            .buttonHoverEffect()
-                        }
-                    }
-                    .padding(20)
-                }
-
-                // Feedback Form
-                ThemedCard(style: .standard, hoverEffect: false) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Email")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-
-                            TextField("your.email@example.com", text: $feedbackEmail)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 14))
-
-                            Text("Feedback")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                                .padding(.top, 8)
-
-                            TextEditor(text: $feedbackText)
-                                .font(.system(size: 14))
-                                .frame(height: 120)
-                                .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color(nsColor: NSColor.textBackgroundColor))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .strokeBorder(Color(nsColor: NSColor.separatorColor), lineWidth: 1.5)
-                                        )
-                                )
-                                .scrollContentBackground(.hidden)
-                                .overlay(
-                                    VStack {
-                                        if feedbackText.isEmpty {
-                                            Text("Share your thoughts, report bugs, or suggest features...")
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .allowsHitTesting(false)
-                                )
-
-                            // Debug logs option
-                            Toggle("Include debug logs", isOn: $includeDebugLogs)
-                                .toggleStyle(GlassToggleStyle())
-
-                            // Send Button
-                            HStack {
-                                Spacer()
-                                
-                                Button(action: {
-                                    Task {
-                                        await sendFeedback()
-                                    }
-                                }) {
-                                    HStack(spacing: 8) {
-                                        if isSendingFeedback {
-                                            ProgressView()
-                                                .scaleEffect(0.8)
-                                        } else {
-                                            Image(systemName: "paperplane.fill")
-                                        }
-                                        Text(isSendingFeedback ? "Sending..." : "Send Feedback")
-                                            .fontWeight(.semibold)
-                                    }
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                }
-                                .buttonStyle(GlassButtonStyle())
-                                .disabled(feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || 
-                                         feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                         isSendingFeedback)
-                                .buttonHoverEffect()
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-                .modifier(CardAppearAnimation(delay: 0.1, appear: $appear))
-            }
-            .padding(24)
-        }
-        .alert("Feedback Sent", isPresented: $showFeedbackConfirmation) {
-            Button("OK") { }
-        } message: {
-            Text("Thank you for helping us improve FluidVoice.")
-        }
-    }
 
     // Audio settings merged into SettingsView
 
@@ -2429,15 +895,6 @@ struct ContentView: View {
         return providerID.isEmpty ? currentProvider : "custom:\(providerID)"
     }
     
-    private func providerDisplayName(for providerID: String) -> String {
-        switch providerID {
-        case "openai": return "OpenAI"
-        case "groq": return "Groq"
-        case "apple-intelligence": return "Apple Intelligence"
-        default:
-            return savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
-        }
-    }
 
     private func defaultModels(for providerKey: String) -> [String] {
         switch providerKey {
@@ -2447,85 +904,8 @@ struct ContentView: View {
         }
     }
 
-    private func saveProviderAPIKeys() {
-        SettingsStore.shared.providerAPIKeys = providerAPIKeys
-    }
-    
-    // MARK: - Keychain Access Helpers
-    private enum KeychainAccessCheckResult {
-        case granted
-        case denied(OSStatus)
-    }
-    
-    private func handleAPIKeyButtonTapped() {
-        switch probeKeychainAccess() {
-        case .granted:
-            newProviderApiKey = providerAPIKeys[currentProvider] ?? ""
-            showAPIKeyEditor = true
-        case .denied(let status):
-            keychainPermissionMessage = keychainPermissionExplanation(for: status)
-            showKeychainPermissionAlert = true
-        }
-    }
-    
-    private func probeKeychainAccess() -> KeychainAccessCheckResult {
-        let service = "com.fluidvoice.provider-api-keys"
-        let account = "fluidApiKeys"
-        
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        
-        var readQuery = query
-        readQuery[kSecReturnData as String] = kCFBooleanTrue
-        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
-        
-        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, nil)
-        switch readStatus {
-        case errSecSuccess:
-            return .granted
-        case errSecItemNotFound:
-            var addQuery = query
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            addQuery[kSecValueData as String] = (try? JSONEncoder().encode([String: String]())) ?? Data()
-            
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            if addStatus == errSecSuccess {
-                SecItemDelete(query as CFDictionary)
-            }
-            
-            switch addStatus {
-            case errSecSuccess, errSecDuplicateItem:
-                return .granted
-            case errSecAuthFailed, errSecInteractionNotAllowed, errSecUserCanceled:
-                return .denied(addStatus)
-            default:
-                DebugLogger.shared.warning("Keychain access probe failed with status \(addStatus)", source: "ContentView")
-                return .denied(addStatus)
-            }
-        case errSecAuthFailed, errSecInteractionNotAllowed, errSecUserCanceled:
-            return .denied(readStatus)
-        default:
-            DebugLogger.shared.warning("Keychain access probe failed with status \(readStatus)", source: "ContentView")
-            return .denied(readStatus)
-        }
-    }
-    
-    private func keychainPermissionExplanation(for status: OSStatus) -> String {
-        var message = "FluidVoice stores provider API keys securely in your macOS Keychain but does not currently have permission to access it."
-        if let detail = SecCopyErrorMessageString(status, nil) as String? {
-            message += "\n\nmacOS reported: \(detail) (\(status))"
-        }
-        message += "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access."
-        return message
-    }
-    
-    private func openKeychainAccessApp() {
-        NSWorkspace.shared.launchApplication("Keychain Access")
-    }
-    
+
+
     private func updateCurrentProvider() {
         // Map baseURL to canonical key for built-ins; else keep existing
         let url = openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
@@ -2754,8 +1134,41 @@ struct ContentView: View {
 
     // MARK: - Modular AI Processing
     private func processTextWithAI(_ inputText: String) async -> String {
+        // CRITICAL FIX: Read current settings from SettingsStore, not stale @State copies
+        // This ensures AI provider/model changes in AISettingsView take effect immediately
+        let currentSelectedProviderID = SettingsStore.shared.selectedProviderID
+        let storedProviderAPIKeys = SettingsStore.shared.providerAPIKeys
+        let storedSelectedModelByProvider = SettingsStore.shared.selectedModelByProvider
+        let storedSavedProviders = SettingsStore.shared.savedProviders
+        
+        // Derive currentProvider and openAIBaseURL from the current settings
+        let derivedCurrentProvider: String
+        let derivedBaseURL: String
+        let derivedSelectedModel: String
+        
+        // Get provider info
+        if let saved = storedSavedProviders.first(where: { $0.id == currentSelectedProviderID }) {
+            derivedCurrentProvider = "custom:\(saved.id)"
+            derivedBaseURL = saved.baseURL
+            derivedSelectedModel = storedSelectedModelByProvider[derivedCurrentProvider] ?? saved.models.first ?? ""
+        } else if currentSelectedProviderID == "openai" {
+            derivedCurrentProvider = "openai"
+            derivedBaseURL = "https://api.openai.com/v1"
+            derivedSelectedModel = storedSelectedModelByProvider["openai"] ?? "gpt-4.1"
+        } else if currentSelectedProviderID == "groq" {
+            derivedCurrentProvider = "groq"
+            derivedBaseURL = "https://api.groq.com/openai/v1"
+            derivedSelectedModel = storedSelectedModelByProvider["groq"] ?? "llama-3.3-70b-versatile"
+        } else {
+            derivedCurrentProvider = currentSelectedProviderID
+            derivedBaseURL = "https://api.openai.com/v1"
+            derivedSelectedModel = storedSelectedModelByProvider[currentSelectedProviderID] ?? ""
+        }
+        
+        DebugLogger.shared.debug("processTextWithAI using provider=\(derivedCurrentProvider), model=\(derivedSelectedModel)", source: "ContentView")
+        
         // Route to Apple Intelligence if selected
-        if selectedProviderID == "apple-intelligence" {
+        if currentSelectedProviderID == "apple-intelligence" {
             #if canImport(FoundationModels)
             if #available(macOS 26.0, *) {
                 let provider = AppleIntelligenceProvider()
@@ -2768,7 +1181,7 @@ struct ContentView: View {
             return inputText // Fallback if not available
         }
         
-        let endpoint = openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ? "https://api.openai.com/v1" : openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let endpoint = derivedBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ? "https://api.openai.com/v1" : derivedBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         
         // Build the full URL - only append /chat/completions if not already present
         let fullEndpoint: String
@@ -2787,26 +1200,14 @@ struct ContentView: View {
         }
         
         let isLocal = isLocalEndpoint(endpoint)
-        let apiKey = providerAPIKeys[currentProvider] ?? ""
+        let apiKey = storedProviderAPIKeys[derivedCurrentProvider] ?? ""
         
         // Skip API key validation for local endpoints
         if !isLocal {
             guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-                return "Error: API Key not set for \(currentProvider)"
+                return "Error: API Key not set for \(derivedCurrentProvider)"
             }
         }
-
-        struct ChatMessage: Codable { let role: String; let content: String }
-        struct ChatRequest: Codable { 
-            let model: String
-            let messages: [ChatMessage]
-            let temperature: Double?
-            let reasoning_effort: String?
-            let stream: Bool?
-        }
-        struct ChatChoiceMessage: Codable { let role: String; let content: String }
-        struct ChatChoice: Codable { let index: Int?; let message: ChatChoiceMessage }
-        struct ChatResponse: Codable { let choices: [ChatChoice] }
         
 
         // Get app context captured at start of recording if available
@@ -2815,27 +1216,36 @@ struct ContentView: View {
         DebugLogger.shared.debug("Using app context for AI: app=\(appInfo.name), bundleId=\(appInfo.bundleId), title=\(appInfo.windowTitle)", source: "ContentView")
         
         // Get reasoning config for this model (uses per-model settings or auto-detection)
-        let providerKey = self.providerKey(for: selectedProviderID)
-        let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: selectedModel, provider: providerKey)
+        let providerKey = self.providerKey(for: currentSelectedProviderID)
+        let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: derivedSelectedModel, provider: providerKey)
         
         if let config = reasoningConfig {
-            DebugLogger.shared.debug("Model '\(selectedModel)' reasoning config: \(config.parameterName)=\(config.parameterValue), enabled=\(config.isEnabled)", source: "ContentView")
+            DebugLogger.shared.debug("Model '\(derivedSelectedModel)' reasoning config: \(config.parameterName)=\(config.parameterValue), enabled=\(config.isEnabled)", source: "ContentView")
         } else {
-            DebugLogger.shared.debug("Model '\(selectedModel)' has no reasoning config", source: "ContentView")
+            DebugLogger.shared.debug("Model '\(derivedSelectedModel)' has no reasoning config", source: "ContentView")
         }
         
         // Get streaming setting
         let enableStreaming = SettingsStore.shared.enableAIStreaming
         
+        // Check if this is a reasoning model that doesn't support temperature parameter
+        let modelLower = derivedSelectedModel.lowercased()
+        let isReasoningModel = modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("gpt-5")
+        
         // Build request body dynamically to support different reasoning parameters
         var requestDict: [String: Any] = [
-            "model": selectedModel,
+            "model": derivedSelectedModel,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": inputText]
-            ],
-            "temperature": 0.2
+            ]
         ]
+        
+        // Only add temperature for non-reasoning models
+        // OpenAI reasoning models (o1, o3, gpt-5) don't support custom temperature
+        if !isReasoningModel {
+            requestDict["temperature"] = 0.2
+        }
         
         // Add reasoning parameter if configured for this model
         if let config = reasoningConfig, config.isEnabled {
@@ -2888,7 +1298,7 @@ struct ContentView: View {
                     let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
                     return "Error: HTTP \(http.statusCode): \(errText)"
                 }
-                let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
+                let decoded = try JSONDecoder().decode(AIProcessingResponse.self, from: data)
                 return decoded.choices.first?.message.content ?? "<no content>"
             }
         } catch {
@@ -3004,10 +1414,20 @@ struct ContentView: View {
         let finalText: String
 
         // Check if we should use AI processing
-        let apiKey = (providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL = openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isLocal = isLocalEndpoint(baseURL)
-        let shouldUseAI = enableAIProcessing && (isLocal || !apiKey.isEmpty)
+        // IMPORTANT: Derive provider context from SettingsStore so AISettingsView changes take effect immediately.
+        let currentProviderID = SettingsStore.shared.selectedProviderID
+        let baseURL: String
+        if let saved = SettingsStore.shared.savedProviders.first(where: { $0.id == currentProviderID }) {
+            baseURL = saved.baseURL
+        } else if currentProviderID == "groq" {
+            baseURL = "https://api.groq.com/openai/v1"
+        } else {
+            baseURL = "https://api.openai.com/v1"
+        }
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isLocal = isLocalEndpoint(trimmedBaseURL)
+        let apiKey = (SettingsStore.shared.getAPIKey(for: currentProviderID) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldUseAI = SettingsStore.shared.enableAIProcessing && (isLocal || !apiKey.isEmpty)
         
         if shouldUseAI {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
@@ -3208,199 +1628,6 @@ struct ContentView: View {
         newModelName = ""
     }
     
-    // MARK: - API Connection Testing
-    private func testAPIConnection() async {
-        guard !isTestingConnection else { return }
-
-        let apiKey = providerAPIKeys[currentProvider] ?? ""
-        let baseURL = openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        let isLocal = isLocalEndpoint(baseURL)
-
-        // For local endpoints, only baseURL is required
-        if isLocal {
-            guard !baseURL.isEmpty else {
-                await MainActor.run {
-                    connectionStatus = .failed
-                    connectionErrorMessage = "Base URL is required"
-                }
-                return
-            }
-        } else {
-            // For remote endpoints, both API key and baseURL are required
-            guard !apiKey.isEmpty && !baseURL.isEmpty else {
-                await MainActor.run {
-                    connectionStatus = .failed
-                    connectionErrorMessage = "API key and base URL are required"
-                }
-                return
-            }
-        }
-
-        await MainActor.run {
-            isTestingConnection = true
-            connectionStatus = .testing
-            connectionErrorMessage = ""
-        }
-
-        do {
-            let endpoint = baseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            
-            // Build the full URL - only append /chat/completions if not already present
-            let fullURL: String
-            if endpoint.contains("/chat/completions") ||
-               endpoint.contains("/api/chat") ||
-               endpoint.contains("/api/generate") {
-                fullURL = endpoint
-            } else {
-                fullURL = endpoint + "/chat/completions"
-            }
-
-            guard let url = URL(string: fullURL) else {
-                await MainActor.run {
-                    connectionStatus = .failed
-                    connectionErrorMessage = "Invalid Base URL format"
-                }
-                return
-            }
-
-            // Get reasoning config for this model (uses per-model settings or auto-detection)
-            let providerKey = self.providerKey(for: selectedProviderID)
-            let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: selectedModel, provider: providerKey)
-            
-            // Build request body dynamically based on model requirements
-            let modelLower = selectedModel.lowercased()
-            let usesMaxCompletionTokens = modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") ||
-                                          modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3")
-            
-            var requestDict: [String: Any] = [
-                "model": selectedModel,
-                "messages": [["role": "user", "content": "test"]]
-            ]
-            
-            // Use appropriate token limit parameter
-            if usesMaxCompletionTokens {
-                requestDict["max_completion_tokens"] = 50
-            } else {
-                requestDict["max_tokens"] = 50
-            }
-            
-            // Add reasoning parameter if configured for this model
-            if let config = reasoningConfig, config.isEnabled {
-                if config.parameterName == "enable_thinking" {
-                    requestDict[config.parameterName] = config.parameterValue == "true"
-                } else {
-                    requestDict[config.parameterName] = config.parameterValue
-                }
-            }
-
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: requestDict, options: []) else {
-                await MainActor.run {
-                    connectionStatus = .failed
-                    connectionErrorMessage = "Failed to encode test request"
-                }
-                return
-            }
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.timeoutInterval = 30
-            
-            if !isLocal {
-                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            }
-            
-            request.httpBody = jsonData
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse {
-                if (200...299).contains(httpResponse.statusCode) {
-                    await MainActor.run {
-                        connectionStatus = .success
-                        connectionErrorMessage = ""
-                    }
-                } else {
-                    // Parse error response for better error messages
-                    var errorMessage = "HTTP \(httpResponse.statusCode)"
-                    
-                    if let responseBody = String(data: data, encoding: .utf8),
-                       let jsonData = responseBody.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                        
-                        if let error = json["error"] as? [String: Any],
-                           let message = error["message"] as? String {
-                            errorMessage = message
-                        } else if let message = json["message"] as? String {
-                            errorMessage = message
-                        } else if let errorStr = json["error"] as? String {
-                            errorMessage = errorStr
-                        }
-                    }
-                    
-                    // Provide helpful error messages based on status code
-                    if errorMessage == "HTTP \(httpResponse.statusCode)" {
-                        switch httpResponse.statusCode {
-                        case 400:
-                            errorMessage = "Bad Request - Model '\(selectedModel)' may be invalid"
-                        case 401:
-                            errorMessage = "Invalid API key or unauthorized"
-                        case 403:
-                            errorMessage = "Access forbidden - check API key permissions"
-                        case 404:
-                            errorMessage = "Model '\(selectedModel)' not found"
-                        case 429:
-                            errorMessage = "Rate limited - try again later"
-                        case 500...599:
-                            errorMessage = "Server error - provider may be down"
-                        default:
-                            break
-                        }
-                    }
-                    
-                    await MainActor.run {
-                        connectionStatus = .failed
-                        connectionErrorMessage = errorMessage
-                    }
-                }
-            } else {
-                await MainActor.run {
-                    connectionStatus = .failed
-                    connectionErrorMessage = "Invalid response from server"
-                }
-            }
-        } catch let urlError as URLError {
-            var errorMessage: String
-            switch urlError.code {
-            case .timedOut:
-                errorMessage = "Request timed out - server not responding"
-            case .cannotConnectToHost:
-                errorMessage = "Cannot connect to host - check URL"
-            case .notConnectedToInternet:
-                errorMessage = "No internet connection"
-            case .secureConnectionFailed:
-                errorMessage = "SSL/TLS connection failed"
-            case .serverCertificateUntrusted:
-                errorMessage = "Server certificate not trusted"
-            default:
-                errorMessage = urlError.localizedDescription
-            }
-
-            await MainActor.run {
-                connectionStatus = .failed
-                connectionErrorMessage = errorMessage
-            }
-        } catch {
-            await MainActor.run {
-                connectionStatus = .failed
-                connectionErrorMessage = error.localizedDescription
-            }
-        }
-
-        await MainActor.run {
-            isTestingConnection = false
-        }
-    }
 
     // MARK: - OpenAI-compatible call for playground
     private func callOpenAIChat() async {
@@ -3503,93 +1730,7 @@ struct ContentView: View {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications"))
     }
     
-    // MARK: - Feedback Functions
-    private func sendFeedback() async {
-        guard !feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-        
-        await MainActor.run {
-            isSendingFeedback = true
-        }
-        
-        let feedbackData = createFeedbackData()
-        let success = await submitFeedback(data: feedbackData)
-        
-        await MainActor.run {
-            isSendingFeedback = false
-            if success {
-                // Show confirmation and clear form
-                showFeedbackConfirmation = true
-                feedbackText = ""
-                feedbackEmail = ""
-                includeDebugLogs = false
-            }
-        }
-    }
-    
-    private func createFeedbackData() -> [String: Any] {
-        var feedbackContent = feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        if includeDebugLogs {
-            feedbackContent += "\n\n--- Debug Information ---\n"
-            feedbackContent += "App Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")\n"
-            feedbackContent += "Build: \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")\n"
-            feedbackContent += "macOS Version: \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
-            feedbackContent += "Date: \(Date().formatted())\n\n"
-            
-            // Add recent log entries
-            let logFileURL = FileLogger.shared.currentLogFileURL()
-            if FileManager.default.fileExists(atPath: logFileURL.path) {
-                do {
-                    let logContent = try String(contentsOf: logFileURL)
-                    let lines = logContent.components(separatedBy: .newlines)
-                    let recentLines = Array(lines.suffix(30)) // Last 30 lines
-                    feedbackContent += "Recent Log Entries:\n"
-                    feedbackContent += recentLines.joined(separator: "\n")
-                } catch {
-                    feedbackContent += "Could not read log file: \(error.localizedDescription)\n"
-                }
-            }
-        }
-        
-        return [
-            "email_id": feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines),
-            "feedback": feedbackContent
-        ]
-    }
-    
-    private func submitFeedback(data: [String: Any]) async -> Bool {
-        guard let url = URL(string: "https://altic.dev/api/fluid/feedback") else {
-            DebugLogger.shared.error("Invalid feedback API URL", source: "ContentView")
-            return false
-        }
-        
-        do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: data)
-            
-            let (_, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                let success = (200...299).contains(httpResponse.statusCode)
-                if success {
-                    DebugLogger.shared.info("Feedback submitted successfully", source: "ContentView")
-                } else {
-                    DebugLogger.shared.error("Feedback submission failed with status: \(httpResponse.statusCode)", source: "ContentView")
-                }
-                return success
-            }
-            return false
-        } catch {
-            DebugLogger.shared.error("Network error submitting feedback: \(error.localizedDescription)", source: "ContentView")
-            return false
-        }
-    }
-    
+
     private func initializeHotkeyManagerIfNeeded() {
         guard hotkeyManager == nil else { return }
         
@@ -3791,3 +1932,4 @@ struct CardAppearAnimation: ViewModifier {
             .animation(.spring(response: 0.8, dampingFraction: 0.75, blendDuration: 0.2).delay(delay), value: appear)
     }
 }
+

@@ -595,8 +595,13 @@ final class GlobalHotkeyManager: NSObject
     }
     
     func validateEventTapHealth() -> Bool {
-        guard isInitialized else { return false }
-        return isEventTapEnabled()
+        // Treat an enabled event tap as "healthy", even if our internal `isInitialized` flag drifted.
+        // This prevents false "initializing" UI while hotkeys are already working.
+        let enabled = isEventTapEnabled()
+        if enabled && !isInitialized {
+            isInitialized = true
+        }
+        return enabled
     }
     
     func reinitialize() {
@@ -625,6 +630,7 @@ final class GlobalHotkeyManager: NSObject
                         }
                         
                         if self.setupGlobalHotkey() {
+                            self.isInitialized = true
                             if UserDefaults.standard.bool(forKey: "enableDebugLogs") {
                                 print("[GlobalHotkeyManager] Health check recovery successful")
                             }

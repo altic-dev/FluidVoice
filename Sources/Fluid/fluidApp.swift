@@ -12,6 +12,7 @@ import ApplicationServices
 @main
 struct fluidApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
+    @StateObject private var appServices = AppServices.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var theme = AppTheme.dark
 
@@ -19,6 +20,7 @@ struct fluidApp: App {
         WindowGroup(id: "main") {
             ContentView()
                 .environmentObject(menuBarManager)
+                .environmentObject(appServices)
                 .appTheme(theme)
                 .preferredColorScheme(.dark)
         }

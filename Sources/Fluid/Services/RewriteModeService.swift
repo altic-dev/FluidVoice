@@ -180,13 +180,18 @@ final class RewriteModeService: ObservableObject {
         // Check streaming setting
         let enableStreaming = settings.enableAIStreaming
         
+        // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = model.hasPrefix("o1") || model.hasPrefix("o3") || model.hasPrefix("gpt-5")
 
         var body: [String: Any] = [
             "model": model,
-            "messages": apiMessages,
-            "temperature": isReasoningModel ? 1.0 : 0.7
+            "messages": apiMessages
         ]
+        
+        // Only add temperature for non-reasoning models
+        if !isReasoningModel {
+            body["temperature"] = 0.7
+        }
         
         if enableStreaming {
             // TODO: Streamed text is still buffered; add incremental UI updates so write mode visibly streams.

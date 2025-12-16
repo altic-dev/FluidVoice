@@ -183,10 +183,14 @@ final class FunctionCallingProvider {
         var messages = conversationHistory
         messages.append(ChatMessage(role: "user", content: userText))
         
+        // Check if this is a reasoning model that doesn't support temperature parameter
+        let modelLower = model.lowercased()
+        let isReasoningModel = modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("gpt-5")
+        
         let body = ChatRequest(
             model: model,
             messages: messages,
-            temperature: 0.2,
+            temperature: isReasoningModel ? nil : 0.2,  // Don't send temperature for reasoning models
             tools: tools.isEmpty ? nil : tools,
             tool_choice: tools.isEmpty ? nil : "auto"
         )
@@ -299,12 +303,16 @@ final class FunctionCallingProvider {
         // Use conversation history as-is (tool messages should already be added by caller)
         let messages = conversationHistory
         
+        // Check if this is a reasoning model that doesn't support temperature parameter
+        let modelLower = model.lowercased()
+        let isReasoningModel = modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("gpt-5")
+        
         // Don't pass tools or tool_choice in the final response request
         // Some providers (like OpenAI) reject tool_choice when tools is nil
         let body = ChatRequest(
             model: model,
             messages: messages,
-            temperature: 0.2,
+            temperature: isReasoningModel ? nil : 0.2,  // Don't send temperature for reasoning models
             tools: nil,
             tool_choice: nil
         )

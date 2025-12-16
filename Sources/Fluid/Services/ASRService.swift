@@ -71,7 +71,6 @@ final class ASRService: ObservableObject
     @Published var isDownloadingModel: Bool = false
     @Published var isLoadingModel: Bool = false  // True when loading cached model into memory (not downloading)
     @Published var modelsExistOnDisk: Bool = false
-    @Published var selectedModel: ModelOption = .parakeetTdt06bV3
     
     // MARK: - Error Handling
     @Published var errorTitle: String = "Error"
@@ -86,14 +85,6 @@ final class ASRService: ObservableObject
         if modelsExistOnDisk { return "Model cached, needs loading" }
         return "Model not downloaded"
     }
-
-    enum ModelOption: String, CaseIterable, Identifiable, Hashable
-    {
-        case parakeetTdt06bV3 = "Parakeet TDT-0.6b v3"
-        case whisperBase = "Whisper Base (Intel)"
-        var id: String { rawValue }
-        var displayName: String { rawValue }
-    }
     
     // MARK: - Transcription Provider (Settable)
     
@@ -106,25 +97,15 @@ final class ASRService: ObservableObject
     private var ensureReadyTask: Task<Void, Error>?
     private var ensureReadyProviderKey: String?
     
-    /// The transcription provider, selected based on user settings or architecture:
-    /// - Auto: Uses FluidAudio on Apple Silicon, Whisper on Intel
-    /// - FluidAudio: Forces FluidAudio (may not work well on Intel)
-    /// - Whisper: Forces Whisper (works on any Mac, useful for testing)
+    /// The transcription provider, selected based on the unified SpeechModel setting.
+    /// Uses the new SettingsStore.selectedSpeechModel instead of old TranscriptionProviderOption.
     private var transcriptionProvider: TranscriptionProvider {
-        let setting = SettingsStore.shared.selectedTranscriptionProvider
+        let model = SettingsStore.shared.selectedSpeechModel
         
-        switch setting {
-        case .auto:
-            // Auto-select based on architecture
-            if CPUArchitecture.isAppleSilicon {
-                return getFluidAudioProvider()
-            } else {
-                return getWhisperProvider()
-            }
-        case .fluidAudio:
-            return getFluidAudioProvider()
-        case .whisper:
+        if model.isWhisperModel {
             return getWhisperProvider()
+        } else {
+            return getFluidAudioProvider()
         }
     }
     
@@ -148,9 +129,9 @@ final class ASRService: ObservableObject
         return provider
     }
     
-    /// Returns the name of the active transcription provider
+    /// Returns the user-friendly name of the currently selected speech model
     var activeProviderName: String {
-        transcriptionProvider.name
+        SettingsStore.shared.selectedSpeechModel.displayName
     }
     
     /// Call this when the transcription provider setting changes to reset state
@@ -161,14 +142,33 @@ final class ASRService: ObservableObject
         ensureReadyTask = nil
         ensureReadyProviderKey = nil
         DebugLogger.shared.info("ASRService: Provider reset, will re-initialize on next use", source: "ASRService")
+        
+        // CRITICAL FIX: Immediately check if the NEW model's files exist on disk
+        // This prevents UI from showing "Download" when model is already downloaded
+        checkIfModelsExist()
     }
 
 
-    // CRITICAL FIX: Use lazy initialization to prevent AVAudioEngine() from being called during
-    // @StateObject init. AVAudioEngine's constructor triggers CoreAudio's HALSystem::InitializeShell()
-    // which races with SwiftUI's AttributeGraph metadata processing and causes EXC_BAD_ACCESS crashes.
-    // By making this lazy, the engine is only created when first accessed (after app launch is complete).
-    private lazy var engine: AVAudioEngine = AVAudioEngine()
+    // CRITICAL FIX (launch-time crash mitigation):
+    // Combine's default ObservableObject.objectWillChange implementation uses Swift reflection to walk *stored*
+    // properties. If we store an AVFoundation ObjC class type (like AVAudioEngine) directly, the reflection
+    // path can trigger Objective-C class lookup for "AVAudioEngine" during SwiftUI/AttributeGraph's early
+    // metadata processing window. On some systems this manifests as an EXC_BAD_ACCESS at 0x0 inside
+    // swift_getTypeByMangledName / AttributeGraph (very similar to the crash reports we've been seeing).
+    //
+    // To reduce risk:
+    // - We do NOT store AVAudioEngine as a stored property.
+    // - We store it as AnyObject? and expose it through a computed property.
+    // This keeps initialization lazy *and* keeps AVAudioEngine out of the reflected stored layout.
+    private var engineStorage: AnyObject?
+    private var engine: AVAudioEngine {
+        if let existing = engineStorage as? AVAudioEngine {
+            return existing
+        }
+        let created = AVAudioEngine()
+        engineStorage = created
+        return created
+    }
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
 
@@ -208,15 +208,18 @@ final class ASRService: ObservableObject
     private let noiseGateThreshold: CGFloat = 0.06
     init()
     {
-        // CRITICAL FIX: Do NOT call any audio-related APIs here!
-        // This includes AVCaptureDevice.authorizationStatus, which can trigger AVFCapture/CoreAudio
-        // initialization. All audio API calls are deferred to initialize() which runs after
-        // SwiftUI's view graph is stable.
+        // CRITICAL FIX: Do NOT call any framework-triggering APIs here!
+        // This includes:
+        // - AVCaptureDevice.authorizationStatus (triggers AVFCapture/CoreAudio)
+        // - checkIfModelsExist() (accesses transcriptionProvider, can trigger FluidAudio/CoreML)
+        //
+        // All such calls are deferred to initialize() which runs 1.5 seconds after
+        // SwiftUI's view graph is stable, preventing race conditions with AttributeGraph.
         //
         // Default values are set in the property declarations:
         // - micStatus = .notDetermined
         // - micPermissionGranted = false
-        checkIfModelsExist()
+        // - modelsExistOnDisk = false
     }
     
     /// Call this AFTER the app has finished launching to complete ASR initialization.
@@ -227,6 +230,9 @@ final class ASRService: ObservableObject
         self.micPermissionGranted = (self.micStatus == .authorized)
         
         registerDefaultDeviceChangeListener()
+        
+        // Check if models exist on disk (deferred from init to avoid FluidAudio/CoreML race)
+        checkIfModelsExist()
         
         // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
         if modelsExistOnDisk {
@@ -356,6 +362,7 @@ final class ASRService: ObservableObject
         stopStreamingTimer()
         removeEngineTap()
         engine.stop()
+        engine.reset()  // Reset engine state to fully release Bluetooth mic
         isRunning = false
         
         isProcessingChunk = false
@@ -395,10 +402,10 @@ final class ASRService: ObservableObject
             DebugLogger.shared.error("Error domain: \(nsError.domain), code: \(nsError.code)", source: "ASRService")
             DebugLogger.shared.error("Error userInfo: \(nsError.userInfo)", source: "ASRService")
             
-            // Expose error to UI (specifically for model download failures on Intel)
-            self.errorTitle = "Transcription Failed"
-            self.errorMessage = error.localizedDescription
-            self.showError = true
+            // Note: We intentionally do NOT show an error popup here.
+            // Common errors like "audio too short" are expected during normal use
+            // (e.g., accidental hotkey press) and would disrupt the user's workflow.
+            // Errors are logged for debugging purposes.
             
             return ""
         }
@@ -415,6 +422,7 @@ final class ASRService: ObservableObject
         stopStreamingTimer()
         removeEngineTap()
         engine.stop()
+        engine.reset()  // Reset engine state to fully release Bluetooth mic
         isRunning = false
         audioBuffer.clear()
         isRecordingWholeSession = false

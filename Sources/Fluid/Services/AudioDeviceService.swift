@@ -167,8 +167,10 @@ enum AudioDevice {
 // MARK: - Audio Hardware Observer
 
 final class AudioHardwareObserver: ObservableObject {
-    private let subject = PassthroughSubject<Void, Never>()
-    var changePublisher: AnyPublisher<Void, Never> { subject.eraseToAnyPublisher() }
+    /// Incremented every time CoreAudio reports a hardware/default-device change.
+    /// Using a simple `@Published` value avoids putting `AnyPublisher`/`SubscriptionView` generics into
+    /// SwiftUI's root view type, which can trigger AttributeGraph metadata-instantiation crashes at launch.
+    @Published private(set) var changeTick: UInt64 = 0
 
     private var installed: Bool = false
 
@@ -211,13 +213,13 @@ final class AudioHardwareObserver: ObservableObject {
         let sys = AudioObjectID(kAudioObjectSystemObject)
 
         _ = AudioObjectAddPropertyListenerBlock(sys, &addrDevices, queue) { [weak self] _, _ in
-            self?.subject.send(())
+            self?.changeTick &+= 1
         }
         _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultIn, queue) { [weak self] _, _ in
-            self?.subject.send(())
+            self?.changeTick &+= 1
         }
         _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultOut, queue) { [weak self] _, _ in
-            self?.subject.send(())
+            self?.changeTick &+= 1
         }
 
         installed = true

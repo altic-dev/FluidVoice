@@ -2,7 +2,8 @@ import SwiftUI
 
 struct CommandModeView: View {
     @ObservedObject var service: CommandModeService
-    @ObservedObject var asr: ASRService
+    @EnvironmentObject var appServices: AppServices
+    private var asr: ASRService { appServices.asr }
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     var onClose: (() -> Void)?
@@ -50,12 +51,12 @@ struct CommandModeView: View {
             // Re-enable notch output when leaving in-app UI
             service.enableNotchOutput = true
         }
-        .onChange(of: asr.finalText) { newText in
+        .onChange(of: asr.finalText) { _, newText in
             if !newText.isEmpty {
                 inputText = newText
             }
         }
-        .onChange(of: settings.commandModeSelectedProviderID) { _ in 
+        .onChange(of: settings.commandModeSelectedProviderID) { _, _ in 
             updateAvailableModels() 
         }
         .onExitCommand {
@@ -295,16 +296,16 @@ struct CommandModeView: View {
                 }
                 .padding()
             }
-            .onChange(of: service.conversationHistory.count) { _ in
+            .onChange(of: service.conversationHistory.count) { _, _ in
                 scrollToBottom(proxy)
             }
-            .onChange(of: service.isProcessing) { isProcessing in
+            .onChange(of: service.isProcessing) { _, isProcessing in
                 // Scroll when processing starts, not on every streaming update
                 if isProcessing {
                     scrollToBottom(proxy)
                 }
             }
-            .onChange(of: service.currentStep) { _ in
+            .onChange(of: service.currentStep) { _, _ in
                 scrollToBottom(proxy)
             }
             // Removed: .onChange(of: service.streamingText) - causes scroll on every token, too expensive
@@ -453,7 +454,7 @@ struct CommandModeView: View {
                 }
             }
             .frame(width: 110)
-            .onChange(of: settings.commandModeSelectedProviderID) { newValue in
+            .onChange(of: settings.commandModeSelectedProviderID) { _, newValue in
                 // Prevent selecting disabled Apple Intelligence
                 if newValue == "apple-intelligence-disabled" || newValue == "apple-intelligence" {
                     settings.commandModeSelectedProviderID = "openai"
@@ -567,9 +568,9 @@ struct CommandModeView: View {
     
     private func defaultModels(for provider: String) -> [String] {
         switch provider {
-        case "openai": return ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]
+        case "openai": return ["gpt-4.1"]
         case "groq": return ["llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]
-        default: return ["gpt-4o"]
+        default: return ["gpt-4.1"]
         }
     }
 }
