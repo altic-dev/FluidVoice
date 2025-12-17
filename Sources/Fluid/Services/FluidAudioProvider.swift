@@ -17,7 +17,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var isReady: Bool = false
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
-        guard isReady == false else { return }
+        guard self.isReady == false else { return }
 
         DebugLogger.shared.info("FluidAudioProvider: Starting model preparation", source: "FluidAudioProvider")
 
@@ -27,9 +27,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Initialize AsrManager
         let manager = AsrManager(config: ASRConfig.default)
         try await manager.initialize(models: models)
-        asrManager = manager
+        self.asrManager = manager
 
-        isReady = true
+        self.isReady = true
         DebugLogger.shared.info("FluidAudioProvider: Models ready", source: "FluidAudioProvider")
     }
 
@@ -67,14 +67,14 @@ final class FluidAudioProvider: TranscriptionProvider {
             try FileManager.default.removeItem(at: v3CacheDir)
         }
 
-        isReady = false
-        asrManager = nil
+        self.isReady = false
+        self.asrManager = nil
     }
 
     /// Provides direct access to the underlying AsrManager for advanced use cases
     /// (e.g., MeetingTranscriptionService sharing)
     var underlyingManager: AsrManager? {
-        return asrManager
+        return self.asrManager
     }
 }
 #else

@@ -26,10 +26,10 @@ final class RewriteModeService: ObservableObject {
 
     func captureSelectedText() -> Bool {
         if let text = textSelectionService.getSelectedText(), !text.isEmpty {
-            originalText = text
-            rewrittenText = ""
-            conversationHistory = []
-            isWriteMode = false
+            self.originalText = text
+            self.rewrittenText = ""
+            self.conversationHistory = []
+            self.isWriteMode = false
             return true
         }
         return false
@@ -37,32 +37,32 @@ final class RewriteModeService: ObservableObject {
 
     /// Start rewrite mode without selected text - user will provide text via voice
     func startWithoutSelection() {
-        originalText = ""
-        rewrittenText = ""
-        conversationHistory = []
-        isWriteMode = true
+        self.originalText = ""
+        self.rewrittenText = ""
+        self.conversationHistory = []
+        self.isWriteMode = true
     }
 
     /// Set the original text directly (from voice input when no text was selected)
     func setOriginalText(_ text: String) {
-        originalText = text
-        rewrittenText = ""
-        conversationHistory = []
+        self.originalText = text
+        self.rewrittenText = ""
+        self.conversationHistory = []
     }
 
     func processRewriteRequest(_ prompt: String) async {
         // If no original text, we're in "Write Mode" - generate content based on user's request
-        if originalText.isEmpty {
-            originalText = prompt
-            isWriteMode = true
+        if self.originalText.isEmpty {
+            self.originalText = prompt
+            self.isWriteMode = true
 
             // Write Mode: User is asking AI to write/generate something
-            conversationHistory.append(Message(role: .user, content: prompt))
+            self.conversationHistory.append(Message(role: .user, content: prompt))
         } else {
             // Rewrite Mode: User has selected text and is giving instructions
-            isWriteMode = false
+            self.isWriteMode = false
 
-            if conversationHistory.isEmpty {
+            if self.conversationHistory.isEmpty {
                 let rewritePrompt = """
                 Here is the text to rewrite:
 
@@ -72,42 +72,42 @@ final class RewriteModeService: ObservableObject {
 
                 Rewrite the text according to the instruction. Output ONLY the rewritten text, nothing else.
                 """
-                conversationHistory.append(Message(role: .user, content: rewritePrompt))
+                self.conversationHistory.append(Message(role: .user, content: rewritePrompt))
             } else {
                 // Follow-up request
-                conversationHistory.append(Message(
+                self.conversationHistory.append(Message(
                     role: .user,
                     content: "Follow-up instruction: \(prompt)\n\nApply this to the previous result. Output ONLY the updated text."
                 ))
             }
         }
 
-        guard !conversationHistory.isEmpty else { return }
+        guard !self.conversationHistory.isEmpty else { return }
 
-        isProcessing = true
+        self.isProcessing = true
 
         do {
             let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode)
-            conversationHistory.append(Message(role: .assistant, content: response))
-            rewrittenText = response
-            isProcessing = false
+            self.conversationHistory.append(Message(role: .assistant, content: response))
+            self.rewrittenText = response
+            self.isProcessing = false
         } catch {
-            conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
-            isProcessing = false
+            self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            self.isProcessing = false
         }
     }
 
     func acceptRewrite() {
-        guard !rewrittenText.isEmpty else { return }
+        guard !self.rewrittenText.isEmpty else { return }
         NSApp.hide(nil) // Restore focus to the previous app
-        typingService.typeTextInstantly(rewrittenText)
+        self.typingService.typeTextInstantly(self.rewrittenText)
     }
 
     func clearState() {
-        originalText = ""
-        rewrittenText = ""
-        conversationHistory = []
-        isWriteMode = false
+        self.originalText = ""
+        self.rewrittenText = ""
+        self.conversationHistory = []
+        self.isWriteMode = false
     }
 
     // MARK: - LLM Integration
@@ -219,7 +219,7 @@ final class RewriteModeService: ObservableObject {
 
         if enableStreaming {
             DebugLogger.shared.info("Using STREAMING mode for Write/Rewrite", source: "RewriteModeService")
-            return try await processStreamingResponse(request: request)
+            return try await self.processStreamingResponse(request: request)
         } else {
             let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -285,7 +285,7 @@ final class RewriteModeService: ObservableObject {
             {
                 fullContent += content
                 // Update UI in real-time for streaming feedback
-                rewrittenText = fullContent
+                self.rewrittenText = fullContent
             }
         }
 

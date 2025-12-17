@@ -31,33 +31,33 @@ struct ThemedCard<Content: View>: View {
         let configuration = CardConfiguration(style: style, theme: theme)
         let shape = RoundedRectangle(cornerRadius: configuration.cornerRadius, style: .continuous)
 
-        content
-            .padding(padding ?? 14)
+        self.content
+            .padding(self.padding ?? 14)
             .background(configuration.material, in: shape)
             .background(shape
                 .fill(configuration.background)
                 .overlay(shape
                     .stroke(
                         configuration.border
-                            .opacity(isHovered && hoverEffect ? configuration.hoverBorderOpacity : configuration
+                            .opacity(self.isHovered && self.hoverEffect ? configuration.hoverBorderOpacity : configuration
                                 .borderOpacity),
                         lineWidth: configuration.borderWidth
                     ))
                 .shadow(
-                    color: configuration.shadow.color.opacity(isHovered && hoverEffect ? min(
+                    color: configuration.shadow.color.opacity(self.isHovered && self.hoverEffect ? min(
                         configuration.shadow.opacity + configuration.hoverShadowBoost,
                         1.0
                     ) : configuration.shadow.opacity),
                     radius: configuration.shadow.radius,
                     x: configuration.shadow.x,
-                    y: isHovered && hoverEffect ? configuration.shadow.y + 1 : configuration.shadow.y
+                    y: self.isHovered && self.hoverEffect ? configuration.shadow.y + 1 : configuration.shadow.y
                 ))
-            .scaleEffect(isHovered && hoverEffect ? 1.01 : 1.0)
+            .scaleEffect(self.isHovered && self.hoverEffect ? 1.01 : 1.0)
             .onHover { hovering in
                 guard self.hoverEffect else { return }
                 self.isHovered = hovering
             }
-            .animation(.easeOut(duration: 0.18), value: isHovered)
+            .animation(.easeOut(duration: 0.18), value: self.isHovered)
     }
 }
 
@@ -78,35 +78,35 @@ private extension ThemedCard {
         init(style: ThemedCardStyle, theme: AppTheme) {
             switch style {
             case .standard:
-                background = theme.palette.cardBackground
-                border = theme.palette.cardBorder
-                borderOpacity = 0.28
-                hoverBorderOpacity = 0.5
-                borderWidth = 1
-                material = theme.materials.card
-                cornerRadius = theme.metrics.corners.lg
-                shadow = theme.metrics.cardShadow
-                hoverShadowBoost = 0.12
+                self.background = theme.palette.cardBackground
+                self.border = theme.palette.cardBorder
+                self.borderOpacity = 0.28
+                self.hoverBorderOpacity = 0.5
+                self.borderWidth = 1
+                self.material = theme.materials.card
+                self.cornerRadius = theme.metrics.corners.lg
+                self.shadow = theme.metrics.cardShadow
+                self.hoverShadowBoost = 0.12
             case .prominent:
-                background = theme.palette.elevatedCardBackground
-                border = theme.palette.accent
-                borderOpacity = 0.25
-                hoverBorderOpacity = 0.55
-                borderWidth = 1.2
-                material = theme.materials.elevatedCard
-                cornerRadius = theme.metrics.corners.lg
-                shadow = theme.metrics.elevatedCardShadow
-                hoverShadowBoost = 0.15
+                self.background = theme.palette.elevatedCardBackground
+                self.border = theme.palette.accent
+                self.borderOpacity = 0.25
+                self.hoverBorderOpacity = 0.55
+                self.borderWidth = 1.2
+                self.material = theme.materials.elevatedCard
+                self.cornerRadius = theme.metrics.corners.lg
+                self.shadow = theme.metrics.elevatedCardShadow
+                self.hoverShadowBoost = 0.15
             case .subtle:
-                background = theme.palette.contentBackground
-                border = theme.palette.cardBorder
-                borderOpacity = 0.18
-                hoverBorderOpacity = 0.32
-                borderWidth = 0.8
-                material = theme.materials.card
-                cornerRadius = theme.metrics.corners.md
-                shadow = theme.metrics.cardShadow
-                hoverShadowBoost = 0.08
+                self.background = theme.palette.contentBackground
+                self.border = theme.palette.cardBorder
+                self.borderOpacity = 0.18
+                self.hoverBorderOpacity = 0.32
+                self.borderWidth = 0.8
+                self.material = theme.materials.card
+                self.cornerRadius = theme.metrics.corners.md
+                self.shadow = theme.metrics.cardShadow
+                self.hoverShadowBoost = 0.08
             }
         }
     }

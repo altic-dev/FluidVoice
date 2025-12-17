@@ -89,7 +89,7 @@ struct FluidIcon: View {
                 context.fill(highlightPath, with: .color(self.color.opacity(0.3)))
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: self.size, height: self.size)
     }
 }
 
@@ -194,7 +194,7 @@ struct FluidIconAdvanced: View {
 
             context.fill(glowPath, with: .color(self.color.opacity(0.4)))
         }
-        .frame(width: size, height: size)
+        .frame(width: self.size, height: self.size)
     }
 }
 

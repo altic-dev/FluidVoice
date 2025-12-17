@@ -79,9 +79,9 @@ struct ChatSession: Codable, Identifiable, Equatable {
         guard let firstUserMessage = messages.first(where: { $0.role == .user }) else { return }
         let content = firstUserMessage.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if content.count > 50 {
-            title = String(content.prefix(47)) + "..."
+            self.title = String(content.prefix(47)) + "..."
         } else {
-            title = content.isEmpty ? "New Chat" : content
+            self.title = content.isEmpty ? "New Chat" : content
         }
     }
 
@@ -89,7 +89,7 @@ struct ChatSession: Codable, Identifiable, Equatable {
     var relativeTimeString: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: updatedAt, relativeTo: Date())
+        return formatter.localizedString(for: self.updatedAt, relativeTo: Date())
     }
 }
 
@@ -111,18 +111,18 @@ final class ChatHistoryStore: ObservableObject {
     @Published var currentChatID: String?
 
     private init() {
-        loadSessions()
+        self.loadSessions()
 
         // Ensure there's always a current chat
-        if currentChatID == nil || sessions.first(where: { $0.id == currentChatID }) == nil {
+        if self.currentChatID == nil || self.sessions.first(where: { $0.id == currentChatID }) == nil {
             if let first = sessions.first {
-                currentChatID = first.id
+                self.currentChatID = first.id
             } else {
                 // Create initial chat
                 let newChat = ChatSession()
-                sessions = [newChat]
-                currentChatID = newChat.id
-                saveSessions()
+                self.sessions = [newChat]
+                self.currentChatID = newChat.id
+                self.saveSessions()
             }
         }
     }
@@ -132,12 +132,12 @@ final class ChatHistoryStore: ObservableObject {
     /// Get the current active chat session
     var currentSession: ChatSession? {
         guard let id = currentChatID else { return nil }
-        return sessions.first(where: { $0.id == id })
+        return self.sessions.first(where: { $0.id == id })
     }
 
     /// Get recent chats for dropdown (excluding current, sorted by updatedAt)
     func getRecentChats(excludingCurrent: Bool = true) -> [ChatSession] {
-        var result = sessions.sorted { $0.updatedAt > $1.updatedAt }
+        var result = self.sessions.sorted { $0.updatedAt > $1.updatedAt }
         if excludingCurrent, let currentID = currentChatID {
             result = result.filter { $0.id != currentID }
         }
@@ -148,12 +148,12 @@ final class ChatHistoryStore: ObservableObject {
     @discardableResult
     func createNewChat() -> ChatSession {
         let newChat = ChatSession()
-        sessions.insert(newChat, at: 0)
-        currentChatID = newChat.id
+        self.sessions.insert(newChat, at: 0)
+        self.currentChatID = newChat.id
 
         // Trim old chats if over limit
-        trimOldChats()
-        saveSessions()
+        self.trimOldChats()
+        self.saveSessions()
 
         return newChat
     }
@@ -163,15 +163,15 @@ final class ChatHistoryStore: ObservableObject {
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             var updated = session
             updated.updatedAt = Date()
-            sessions[index] = updated
+            self.sessions[index] = updated
         } else {
             var updated = session
             updated.updatedAt = Date()
-            sessions.insert(updated, at: 0)
+            self.sessions.insert(updated, at: 0)
         }
 
-        trimOldChats()
-        saveSessions()
+        self.trimOldChats()
+        self.saveSessions()
     }
 
     /// Update current chat with messages
@@ -179,50 +179,50 @@ final class ChatHistoryStore: ObservableObject {
         guard let id = currentChatID,
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
 
-        var session = sessions[index]
+        var session = self.sessions[index]
         session.messages = messages
         session.updatedAt = Date()
         session.updateTitleFromFirstMessage()
-        sessions[index] = session
+        self.sessions[index] = session
 
-        saveSessions()
+        self.saveSessions()
     }
 
     /// Load a chat by ID and set as current
     func loadChat(id: String) -> ChatSession? {
         guard let session = sessions.first(where: { $0.id == id }) else { return nil }
-        currentChatID = id
-        saveCurrentChatID()
+        self.currentChatID = id
+        self.saveCurrentChatID()
         return session
     }
 
     /// Switch to a different chat
     func switchToChat(id: String) -> ChatSession? {
-        return loadChat(id: id)
+        return self.loadChat(id: id)
     }
 
     /// Delete a chat by ID
     func deleteChat(id: String) {
-        sessions.removeAll { $0.id == id }
+        self.sessions.removeAll { $0.id == id }
 
         // If deleted current chat, switch to most recent or create new
-        if currentChatID == id {
+        if self.currentChatID == id {
             if let first = sessions.sorted(by: { $0.updatedAt > $1.updatedAt }).first {
-                currentChatID = first.id
+                self.currentChatID = first.id
             } else {
                 // No chats left, create new
-                let newChat = createNewChat()
-                currentChatID = newChat.id
+                let newChat = self.createNewChat()
+                self.currentChatID = newChat.id
             }
         }
 
-        saveSessions()
+        self.saveSessions()
     }
 
     /// Delete current chat and switch to next
     func deleteCurrentChat() {
         guard let id = currentChatID else { return }
-        deleteChat(id: id)
+        self.deleteChat(id: id)
     }
 
     /// Clear current chat (delete messages but keep session)
@@ -230,11 +230,11 @@ final class ChatHistoryStore: ObservableObject {
         guard let id = currentChatID,
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
 
-        sessions[index].messages = []
-        sessions[index].title = "New Chat"
-        sessions[index].updatedAt = Date()
+        self.sessions[index].messages = []
+        self.sessions[index].title = "New Chat"
+        self.sessions[index].updatedAt = Date()
 
-        saveSessions()
+        self.saveSessions()
     }
 
     // MARK: - Private Methods
@@ -243,32 +243,32 @@ final class ChatHistoryStore: ObservableObject {
         guard let data = defaults.data(forKey: Keys.chatSessions),
               let decoded = try? JSONDecoder().decode([ChatSession].self, from: data)
         else {
-            sessions = []
+            self.sessions = []
             return
         }
-        sessions = decoded
+        self.sessions = decoded
 
         // Load current chat ID
-        currentChatID = defaults.string(forKey: Keys.currentChatID)
+        self.currentChatID = self.defaults.string(forKey: Keys.currentChatID)
     }
 
     private func saveSessions() {
         if let encoded = try? JSONEncoder().encode(sessions) {
-            defaults.set(encoded, forKey: Keys.chatSessions)
+            self.defaults.set(encoded, forKey: Keys.chatSessions)
         }
-        saveCurrentChatID()
+        self.saveCurrentChatID()
         objectWillChange.send()
     }
 
     private func saveCurrentChatID() {
-        defaults.set(currentChatID, forKey: Keys.currentChatID)
+        self.defaults.set(self.currentChatID, forKey: Keys.currentChatID)
     }
 
     private func trimOldChats() {
-        if sessions.count > maxChats {
+        if self.sessions.count > self.maxChats {
             // Sort by updatedAt and keep most recent
-            let sorted = sessions.sorted { $0.updatedAt > $1.updatedAt }
-            sessions = Array(sorted.prefix(maxChats))
+            let sorted = self.sessions.sorted { $0.updatedAt > $1.updatedAt }
+            self.sessions = Array(sorted.prefix(self.maxChats))
         }
     }
 }

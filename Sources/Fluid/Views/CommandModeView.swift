@@ -3,7 +3,7 @@ import SwiftUI
 struct CommandModeView: View {
     @ObservedObject var service: CommandModeService
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { appServices.asr }
+    private var asr: ASRService { self.appServices.asr }
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     var onClose: (() -> Void)?
@@ -51,12 +51,12 @@ struct CommandModeView: View {
             // Re-enable notch output when leaving in-app UI
             self.service.enableNotchOutput = true
         }
-        .onChange(of: asr.finalText) { _, newText in
+        .onChange(of: self.asr.finalText) { _, newText in
             if !newText.isEmpty {
                 self.inputText = newText
             }
         }
-        .onChange(of: settings.commandModeSelectedProviderID) { _, _ in
+        .onChange(of: self.settings.commandModeSelectedProviderID) { _, _ in
             self.updateAvailableModels()
         }
         .onExitCommand {
@@ -156,7 +156,7 @@ struct CommandModeView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .confirmationDialog(
             "Delete this chat?",
-            isPresented: $showingClearConfirmation,
+            isPresented: self.$showingClearConfirmation,
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
@@ -169,7 +169,7 @@ struct CommandModeView: View {
     // MARK: - How To Section
 
     private var shortcutDisplay: String {
-        settings.commandModeHotkeyShortcut.displayString
+        self.settings.commandModeHotkeyShortcut.displayString
     }
 
     private var howToSection: some View {
@@ -315,7 +315,7 @@ struct CommandModeView: View {
     // MARK: - Processing Indicator (Minimal with Shimmer)
 
     private var processingIndicator: some View {
-        CommandShimmerText(text: currentStepLabel)
+        CommandShimmerText(text: self.currentStepLabel)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
@@ -326,7 +326,7 @@ struct CommandModeView: View {
 
     private var streamingTextView: some View {
         // Use fixedSize to prevent expensive re-layout on every update
-        Text(service.streamingText)
+        Text(self.service.streamingText)
             .font(.system(size: 13))
             .foregroundStyle(.primary.opacity(0.9))
             .padding(.horizontal, 12)
@@ -342,8 +342,8 @@ struct CommandModeView: View {
         guard let step = service.currentStep else { return "Working..." }
         switch step {
         case .thinking: return "Thinking..."
-        case let .checking(cmd): return "Checking \(truncateCommand(cmd, to: 30))"
-        case let .executing(cmd): return "Running \(truncateCommand(cmd, to: 30))"
+        case let .checking(cmd): return "Checking \(self.truncateCommand(cmd, to: 30))"
+        case let .executing(cmd): return "Running \(self.truncateCommand(cmd, to: 30))"
         case .verifying: return "Verifying..."
         case let .completed(success): return success ? "Done" : "Stopped"
         }
@@ -504,41 +504,41 @@ struct CommandModeView: View {
     // MARK: - Actions
 
     private func toggleRecording() {
-        if asr.isRunning {
+        if self.asr.isRunning {
             Task { await self.asr.stop() }
         } else {
-            asr.start()
+            self.asr.start()
         }
     }
 
     private func submitCommand() {
-        guard !inputText.isEmpty else { return }
-        let text = inputText
-        inputText = ""
+        guard !self.inputText.isEmpty else { return }
+        let text = self.inputText
+        self.inputText = ""
         Task {
             await self.service.processUserCommand(text)
         }
     }
 
     private func updateAvailableModels() {
-        let currentProviderID = settings.commandModeSelectedProviderID
-        let currentModel = settings.commandModeSelectedModel ?? "gpt-4o"
+        let currentProviderID = self.settings.commandModeSelectedProviderID
+        let currentModel = self.settings.commandModeSelectedModel ?? "gpt-4o"
 
         // Pull models from the shared pool configured in AI Settings
-        let possibleKeys = providerKeys(for: currentProviderID)
+        let possibleKeys = self.providerKeys(for: currentProviderID)
         let storedList = possibleKeys.lazy
             .compactMap { SettingsStore.shared.availableModelsByProvider[$0] }
             .first { !$0.isEmpty }
 
         if let stored = storedList {
-            availableModels = stored
+            self.availableModels = stored
         } else {
-            availableModels = defaultModels(for: currentProviderID)
+            self.availableModels = self.defaultModels(for: currentProviderID)
         }
 
         // If current model not in list, select first available
-        if !availableModels.contains(currentModel) {
-            settings.commandModeSelectedModel = availableModels.first ?? "gpt-4o"
+        if !self.availableModels.contains(currentModel) {
+            self.settings.commandModeSelectedModel = self.availableModels.first ?? "gpt-4o"
         }
     }
 
@@ -586,7 +586,7 @@ struct CommandShimmerText: View {
     @State private var shimmerPhase: CGFloat = 0
 
     var body: some View {
-        Text(text)
+        Text(self.text)
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(LinearGradient(
                 colors: [
@@ -596,8 +596,8 @@ struct CommandShimmerText: View {
                     Color.primary.opacity(0.4),
                     Color.primary.opacity(0.4),
                 ],
-                startPoint: UnitPoint(x: shimmerPhase - 0.3, y: 0.5),
-                endPoint: UnitPoint(x: shimmerPhase + 0.3, y: 0.5)
+                startPoint: UnitPoint(x: self.shimmerPhase - 0.3, y: 0.5),
+                endPoint: UnitPoint(x: self.shimmerPhase + 0.3, y: 0.5)
             ))
             .onAppear {
                 withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
@@ -627,7 +627,7 @@ struct MessageBubble: View {
     // MARK: - User Message
 
     private var userMessageView: some View {
-        Text(message.content)
+        Text(self.message.content)
             .font(.system(size: 13))
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -689,7 +689,7 @@ struct MessageBubble: View {
     // MARK: - Tool Output View (Minimal)
 
     private var toolOutputView: some View {
-        let parsed = parseToolOutput(message.content)
+        let parsed = self.parseToolOutput(self.message.content)
 
         return VStack(alignment: .leading, spacing: 0) {
             // Minimal header - just status and time
@@ -744,7 +744,7 @@ struct MessageBubble: View {
     // MARK: - Text Content View (Minimal)
 
     private var textContentView: some View {
-        Text(markdownAttributedString(from: message.content))
+        Text(self.markdownAttributedString(from: self.message.content))
             .font(.system(size: 13))
             .textSelection(.enabled)
     }

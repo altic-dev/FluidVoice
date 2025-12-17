@@ -106,12 +106,12 @@ final class SimpleUpdater {
         }
 
         let currentVersionString = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let current = parseVersion(currentVersionString)
+        let current = self.parseVersion(currentVersionString)
         let latestTag = latest.tag_name
-        let latestVersion = parseVersion(latestTag)
+        let latestVersion = self.parseVersion(latestTag)
 
         // Return whether update is available
-        return (isVersion(latestVersion, greaterThan: current), latestTag)
+        return (self.isVersion(latestVersion, greaterThan: current), latestTag)
     }
 
     func checkAndUpdate(owner: String, repo: String) async throws {
@@ -137,17 +137,17 @@ final class SimpleUpdater {
         }
 
         let currentVersionString = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let current = parseVersion(currentVersionString)
+        let current = self.parseVersion(currentVersionString)
         let latestTag = latest.tag_name
-        let latestVersion = parseVersion(latestTag)
+        let latestVersion = self.parseVersion(latestTag)
 
         // up to date
-        if !isVersion(latestVersion, greaterThan: current) {
+        if !self.isVersion(latestVersion, greaterThan: current) {
             throw PMKError.cancelled // mimic AppUpdater semantics for up-to-date
         }
 
         // Find asset matching: "{repo-lower}-{version-no-v}.*" and zip preferred
-        let verString = versionString(latestVersion)
+        let verString = self.versionString(latestVersion)
         let prefix = "\(repo.lowercased())-\(verString)"
         let asset = latest.assets.first { asset in
             let base = (asset.name as NSString).deletingPathExtension.lowercased()
@@ -178,7 +178,7 @@ final class SimpleUpdater {
         // unzip
         let extractedBundleURL: URL
         do {
-            extractedBundleURL = try await unzip(at: downloadURL)
+            extractedBundleURL = try await self.unzip(at: downloadURL)
         } catch {
             throw SimpleUpdateError.unzipFailed
         }
@@ -220,7 +220,7 @@ final class SimpleUpdater {
         let sameTeam = (curTeam != nil && curTeam == newTeam)
         let bothAllowed: Bool
         if let curTeam, let newTeam {
-            bothAllowed = allowedTeamIDs.contains(curTeam) && allowedTeamIDs.contains(newTeam)
+            bothAllowed = self.allowedTeamIDs.contains(curTeam) && self.allowedTeamIDs.contains(newTeam)
         } else {
             bothAllowed = false
         }
@@ -233,7 +233,7 @@ final class SimpleUpdater {
         #endif
 
         // Replace and relaunch
-        try performSwapAndRelaunch(installedAppURL: currentBundle.bundleURL, downloadedAppURL: extractedBundleURL)
+        try self.performSwapAndRelaunch(installedAppURL: currentBundle.bundleURL, downloadedAppURL: extractedBundleURL)
     }
 
     // MARK: - Helpers

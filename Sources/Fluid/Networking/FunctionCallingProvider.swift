@@ -44,22 +44,22 @@ final class FunctionCallingProvider {
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            role = try container.decode(String.self, forKey: .role)
-            content = try container.decodeIfPresent(String.self, forKey: .content)
-            tool_calls = try container.decodeIfPresent([ToolCall].self, forKey: .tool_calls) ?? []
-            tool_call_id = try container.decodeIfPresent(String.self, forKey: .tool_call_id)
-            name = try container.decodeIfPresent(String.self, forKey: .name)
+            self.role = try container.decode(String.self, forKey: .role)
+            self.content = try container.decodeIfPresent(String.self, forKey: .content)
+            self.tool_calls = try container.decodeIfPresent([ToolCall].self, forKey: .tool_calls) ?? []
+            self.tool_call_id = try container.decodeIfPresent(String.self, forKey: .tool_call_id)
+            self.name = try container.decodeIfPresent(String.self, forKey: .name)
         }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(role, forKey: .role)
-            try container.encodeIfPresent(content, forKey: .content)
-            if tool_calls.isEmpty == false {
-                try container.encode(tool_calls, forKey: .tool_calls)
+            try container.encode(self.role, forKey: .role)
+            try container.encodeIfPresent(self.content, forKey: .content)
+            if self.tool_calls.isEmpty == false {
+                try container.encode(self.tool_calls, forKey: .tool_calls)
             }
-            try container.encodeIfPresent(tool_call_id, forKey: .tool_call_id)
-            try container.encodeIfPresent(name, forKey: .name)
+            try container.encodeIfPresent(self.tool_call_id, forKey: .tool_call_id)
+            try container.encodeIfPresent(self.name, forKey: .name)
         }
     }
 
@@ -76,13 +76,13 @@ final class FunctionCallingProvider {
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(model, forKey: .model)
-            try container.encode(messages, forKey: .messages)
-            try container.encodeIfPresent(temperature, forKey: .temperature)
-            try container.encodeIfPresent(tool_choice, forKey: .tool_choice)
+            try container.encode(self.model, forKey: .model)
+            try container.encode(self.messages, forKey: .messages)
+            try container.encodeIfPresent(self.temperature, forKey: .temperature)
+            try container.encodeIfPresent(self.tool_choice, forKey: .tool_choice)
 
-            if tools.isEmpty == false {
-                let toolsData = try JSONSerialization.data(withJSONObject: tools)
+            if self.tools.isEmpty == false {
+                let toolsData = try JSONSerialization.data(withJSONObject: self.tools)
                 let toolsArray = try JSONDecoder().decode([AnyCodable].self, from: toolsData)
                 try container.encode(toolsArray, forKey: .tools)
             }
@@ -110,19 +110,19 @@ final class FunctionCallingProvider {
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
             if let dict = try? container.decode([String: AnyCodable].self) {
-                value = dict.mapValues { $0.value }
+                self.value = dict.mapValues { $0.value }
             } else if let array = try? container.decode([AnyCodable].self) {
-                value = array.map { $0.value }
+                self.value = array.map { $0.value }
             } else if let string = try? container.decode(String.self) {
-                value = string
+                self.value = string
             } else if let int = try? container.decode(Int.self) {
-                value = int
+                self.value = int
             } else if let double = try? container.decode(Double.self) {
-                value = double
+                self.value = double
             } else if let bool = try? container.decode(Bool.self) {
-                value = bool
+                self.value = bool
             } else {
-                value = NSNull()
+                self.value = NSNull()
             }
         }
 
@@ -213,7 +213,7 @@ final class FunctionCallingProvider {
             return .error("Invalid Base URL")
         }
 
-        let isLocal = isLocalEndpoint(endpoint)
+        let isLocal = self.isLocalEndpoint(endpoint)
 
         // Build messages array
         var messages = conversationHistory
@@ -356,7 +356,7 @@ final class FunctionCallingProvider {
             return .error("Invalid Base URL")
         }
 
-        let isLocal = isLocalEndpoint(endpoint)
+        let isLocal = self.isLocalEndpoint(endpoint)
 
         // Use conversation history as-is (tool messages should already be added by caller)
         let messages = conversationHistory

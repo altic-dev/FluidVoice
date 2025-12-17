@@ -20,7 +20,7 @@ class DebugLogger: ObservableObject {
         // Delay access to SettingsStore until after initial singleton setup
         // Use UserDefaults directly to avoid the circular dependency
         let enabled = UserDefaults.standard.bool(forKey: "EnableDebugLogs")
-        _loggingEnabledCache = enabled
+        self._loggingEnabledCache = enabled
         return enabled
     }
 
@@ -69,13 +69,13 @@ class DebugLogger: ObservableObject {
 
     /// Refresh the cached logging setting (call after SettingsStore is fully initialized)
     func refreshLoggingEnabled() {
-        _loggingEnabledCache = UserDefaults.standard.bool(forKey: "EnableDebugLogs")
+        self._loggingEnabledCache = UserDefaults.standard.bool(forKey: "EnableDebugLogs")
     }
 
     func log(_ message: String, level: LogLevel = .info, source: String = "App") {
         let loggingEnabled = self.loggingEnabled
 
-        queue.async {
+        self.queue.async {
             let timestamp = Date()
             let timestampString = Self.logFormatter.string(from: timestamp)
             let entry: LogEntry? = loggingEnabled
@@ -120,13 +120,13 @@ class DebugLogger: ObservableObject {
     }
 
     func exportLogs() -> String {
-        return logs.map { entry in
+        return self.logs.map { entry in
             self.formatLogEntry(entry)
         }.joined(separator: "\n")
     }
 
     private func formatLogEntry(_ entry: LogEntry) -> String {
-        formatLogLine(
+        self.formatLogLine(
             timestamp: entry.formattedTimestamp,
             level: entry.level,
             source: entry.source,
@@ -142,18 +142,18 @@ class DebugLogger: ObservableObject {
 // Convenience functions for easier logging
 extension DebugLogger {
     func info(_ message: String, source: String = "App") {
-        log(message, level: .info, source: source)
+        self.log(message, level: .info, source: source)
     }
 
     func warning(_ message: String, source: String = "App") {
-        log(message, level: .warning, source: source)
+        self.log(message, level: .warning, source: source)
     }
 
     func error(_ message: String, source: String = "App") {
-        log(message, level: .error, source: source)
+        self.log(message, level: .error, source: source)
     }
 
     func debug(_ message: String, source: String = "App") {
-        log(message, level: .debug, source: source)
+        self.log(message, level: .debug, source: source)
     }
 }

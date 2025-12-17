@@ -28,12 +28,12 @@ final class AppServices: ObservableObject {
         // instead of observing 'ASRService' directly (which causes metadata crashes),
         // while still triggering UI updates when transcription or audio state changes.
 
-        audioObserver.objectWillChange
+        self.audioObserver.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
+            .store(in: &self.cancellables)
 
-        asr.objectWillChange
+        self.asr.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
+            .store(in: &self.cancellables)
     }
 }

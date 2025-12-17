@@ -4,7 +4,7 @@ import SwiftUI
 
 struct WelcomeView: View {
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { appServices.asr }
+    private var asr: ASRService { self.appServices.asr }
     @ObservedObject private var settings = SettingsStore.shared
     @Binding var selectedSidebarItem: SidebarItem?
     @Binding var playgroundUsed: Bool
@@ -24,11 +24,11 @@ struct WelcomeView: View {
     let openAccessibilitySettings: () -> Void
 
     private var commandModeShortcutDisplay: String {
-        settings.commandModeHotkeyShortcut.displayString
+        self.settings.commandModeHotkeyShortcut.displayString
     }
 
     private var writeModeShortcutDisplay: String {
-        settings.rewriteModeHotkeyShortcut.displayString
+        self.settings.rewriteModeHotkeyShortcut.displayString
     }
 
     var body: some View {

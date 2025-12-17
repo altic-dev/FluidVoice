@@ -9,12 +9,12 @@ struct TranscriptionHistoryView: View {
     @State private var selectedEntryID: UUID?
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
-        historyStore.search(query: searchQuery)
+        self.historyStore.search(query: self.searchQuery)
     }
 
     private var selectedEntry: TranscriptionHistoryEntry? {
-        guard let id = selectedEntryID else { return filteredEntries.first }
-        return filteredEntries.first(where: { $0.id == id })
+        guard let id = selectedEntryID else { return self.filteredEntries.first }
+        return self.filteredEntries.first(where: { $0.id == id })
     }
 
     var body: some View {
@@ -57,7 +57,7 @@ struct TranscriptionHistoryView: View {
                 self.selectedEntryID = self.filteredEntries.first?.id
             }
         }
-        .alert("Clear All History", isPresented: $showClearConfirmation) {
+        .alert("Clear All History", isPresented: self.$showClearConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Clear All", role: .destructive) {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -116,7 +116,7 @@ struct TranscriptionHistoryView: View {
     }
 
     private func entryRow(_ entry: TranscriptionHistoryEntry) -> some View {
-        let isSelected = selectedEntryID == entry.id
+        let isSelected = self.selectedEntryID == entry.id
 
         return Button {
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -335,7 +335,7 @@ struct TranscriptionHistoryView: View {
             }
             .padding(24)
         }
-        .background(theme.palette.cardBackground.opacity(0.15))
+        .background(self.theme.palette.cardBackground.opacity(0.15))
     }
 
     private func detailSection(
@@ -442,7 +442,7 @@ struct TranscriptionHistoryView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.palette.cardBackground.opacity(0.15))
+        .background(self.theme.palette.cardBackground.opacity(0.15))
     }
 }
 

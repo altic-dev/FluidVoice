@@ -68,7 +68,7 @@ struct StatsView: View {
                 .buttonStyle(.plain)
             }
         }
-        .popover(isPresented: $showWPMEditor) {
+        .popover(isPresented: self.$showWPMEditor) {
             self.wpmEditorPopover
         }
     }
@@ -450,7 +450,7 @@ struct StatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8)
-            .fill(theme.palette.accent.opacity(0.08)))
+            .fill(self.theme.palette.accent.opacity(0.08)))
     }
 
     // MARK: - Reset Section
@@ -473,7 +473,7 @@ struct StatsView: View {
             Spacer()
         }
         .padding(.top, 8)
-        .alert("Reset All Stats", isPresented: $showResetConfirmation) {
+        .alert("Reset All Stats", isPresented: self.$showResetConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Reset Everything", role: .destructive) {
                 self.historyStore.clearAllHistory()

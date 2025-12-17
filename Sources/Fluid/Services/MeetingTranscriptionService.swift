@@ -59,16 +59,16 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
     func initializeModels() async throws {
-        guard !asrService.isAsrReady else { return }
+        guard !self.asrService.isAsrReady else { return }
 
-        currentStatus = "Preparing ASR models..."
-        progress = 0.1
+        self.currentStatus = "Preparing ASR models..."
+        self.progress = 0.1
 
         do {
-            try await asrService.ensureAsrReady()
+            try await self.asrService.ensureAsrReady()
 
-            currentStatus = "Models ready"
-            progress = 0.0
+            self.currentStatus = "Models ready"
+            self.progress = 0.0
         } catch {
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
@@ -78,9 +78,9 @@ final class MeetingTranscriptionService: ObservableObject {
     /// - Parameters:
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
-        isTranscribing = true
+        self.isTranscribing = true
         error = nil
-        progress = 0.0
+        self.progress = 0.0
         let startTime = Date()
 
         defer {
@@ -90,8 +90,8 @@ final class MeetingTranscriptionService: ObservableObject {
 
         do {
             // Initialize models if not already done (reuses ASRService models)
-            if !asrService.isAsrReady {
-                try await initializeModels()
+            if !self.asrService.isAsrReady {
+                try await self.initializeModels()
             }
 
             #if arch(arm64)
@@ -100,8 +100,8 @@ final class MeetingTranscriptionService: ObservableObject {
             }
 
             // Convert audio to required format (16kHz mono Float32)
-            currentStatus = "Converting audio..."
-            progress = 0.3
+            self.currentStatus = "Converting audio..."
+            self.progress = 0.3
 
             let converter = AudioConverter()
             let samples: [Float]
@@ -124,13 +124,13 @@ final class MeetingTranscriptionService: ObservableObject {
             let duration = Double(samples.count) / 16_000.0 // 16kHz sample rate
 
             // Transcribe
-            currentStatus = "Transcribing audio (\(Int(duration))s)..."
-            progress = 0.6
+            self.currentStatus = "Transcribing audio (\(Int(duration))s)..."
+            self.progress = 0.6
 
             let transcriptionResult = try await asrManager.transcribe(samples, source: .system)
 
-            currentStatus = "Complete!"
-            progress = 1.0
+            self.currentStatus = "Complete!"
+            self.progress = 1.0
 
             let processingTime = Date().timeIntervalSince(startTime)
 
@@ -188,9 +188,9 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// Reset the service state
     func reset() {
-        result = nil
-        error = nil
-        currentStatus = ""
-        progress = 0.0
+        self.result = nil
+        self.error = nil
+        self.currentStatus = ""
+        self.progress = 0.0
     }
 }

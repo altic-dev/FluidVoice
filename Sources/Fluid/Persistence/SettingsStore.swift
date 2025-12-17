@@ -10,8 +10,8 @@ final class SettingsStore: ObservableObject {
     private let keychain = KeychainService.shared
 
     private init() {
-        migrateProviderAPIKeysIfNeeded()
-        scrubSavedProviderAPIKeys()
+        self.migrateProviderAPIKeysIfNeeded()
+        self.scrubSavedProviderAPIKeys()
     }
 
     // Keys
@@ -133,77 +133,77 @@ final class SettingsStore: ObservableObject {
     }
 
     var enableAIProcessing: Bool {
-        get { defaults.bool(forKey: Keys.enableAIProcessing) }
+        get { self.defaults.bool(forKey: Keys.enableAIProcessing) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.enableAIProcessing)
+            self.defaults.set(newValue, forKey: Keys.enableAIProcessing)
         }
     }
 
     var availableModels: [String] {
-        get { (defaults.array(forKey: Keys.availableAIModels) as? [String]) ?? [] }
+        get { (self.defaults.array(forKey: Keys.availableAIModels) as? [String]) ?? [] }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.availableAIModels)
+            self.defaults.set(newValue, forKey: Keys.availableAIModels)
         }
     }
 
     var availableModelsByProvider: [String: [String]] {
-        get { (defaults.dictionary(forKey: Keys.availableModelsByProvider) as? [String: [String]]) ?? [:] }
+        get { (self.defaults.dictionary(forKey: Keys.availableModelsByProvider) as? [String: [String]]) ?? [:] }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.availableModelsByProvider)
+            self.defaults.set(newValue, forKey: Keys.availableModelsByProvider)
         }
     }
 
     var enableDebugLogs: Bool {
-        get { defaults.bool(forKey: Keys.enableDebugLogs) }
+        get { self.defaults.bool(forKey: Keys.enableDebugLogs) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.enableDebugLogs)
+            self.defaults.set(newValue, forKey: Keys.enableDebugLogs)
         }
     }
 
     var selectedModel: String? {
-        get { defaults.string(forKey: Keys.selectedAIModel) }
+        get { self.defaults.string(forKey: Keys.selectedAIModel) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.selectedAIModel)
+            self.defaults.set(newValue, forKey: Keys.selectedAIModel)
         }
     }
 
     var selectedModelByProvider: [String: String] {
-        get { (defaults.dictionary(forKey: Keys.selectedModelByProvider) as? [String: String]) ?? [:] }
+        get { (self.defaults.dictionary(forKey: Keys.selectedModelByProvider) as? [String: String]) ?? [:] }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.selectedModelByProvider)
+            self.defaults.set(newValue, forKey: Keys.selectedModelByProvider)
         }
     }
 
     var providerAPIKeys: [String: String] {
-        get { (try? keychain.fetchAllKeys()) ?? [:] }
+        get { (try? self.keychain.fetchAllKeys()) ?? [:] }
         set {
             objectWillChange.send()
-            persistProviderAPIKeys(newValue)
+            self.persistProviderAPIKeys(newValue)
         }
     }
 
     /// Securely retrieve API key for a provider, handling custom prefix logic
     func getAPIKey(for providerID: String) -> String? {
-        let keys = providerAPIKeys
+        let keys = self.providerAPIKeys
         // Try exact match first
         if let key = keys[providerID] { return key }
 
         // Try canonical key format (custom:ID)
-        let canonical = canonicalProviderKey(for: providerID)
+        let canonical = self.canonicalProviderKey(for: providerID)
         return keys[canonical]
     }
 
     var selectedProviderID: String {
-        get { defaults.string(forKey: Keys.selectedProviderID) ?? "openai" }
+        get { self.defaults.string(forKey: Keys.selectedProviderID) ?? "openai" }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.selectedProviderID)
+            self.defaults.set(newValue, forKey: Keys.selectedProviderID)
         }
     }
 
@@ -226,7 +226,7 @@ final class SettingsStore: ObservableObject {
                 )
             }
             if let encoded = try? JSONEncoder().encode(sanitized) {
-                defaults.set(encoded, forKey: Keys.savedProviders)
+                self.defaults.set(encoded, forKey: Keys.savedProviders)
             }
         }
     }
@@ -243,66 +243,66 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: Keys.hotkeyShortcutKey)
+                self.defaults.set(data, forKey: Keys.hotkeyShortcutKey)
             }
         }
     }
 
     var pressAndHoldMode: Bool {
-        get { defaults.bool(forKey: Keys.pressAndHoldMode) }
-        set { defaults.set(newValue, forKey: Keys.pressAndHoldMode) }
+        get { self.defaults.bool(forKey: Keys.pressAndHoldMode) }
+        set { self.defaults.set(newValue, forKey: Keys.pressAndHoldMode) }
     }
 
     var enableStreamingPreview: Bool {
         get {
-            let value = defaults.object(forKey: Keys.enableStreamingPreview)
+            let value = self.defaults.object(forKey: Keys.enableStreamingPreview)
             return value as? Bool ?? true // Default to true (enabled)
         }
-        set { defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
+        set { self.defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
     }
 
     var enableAIStreaming: Bool {
         get {
-            let value = defaults.object(forKey: Keys.enableAIStreaming)
+            let value = self.defaults.object(forKey: Keys.enableAIStreaming)
             return value as? Bool ?? false // Default to false (disabled)
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.enableAIStreaming)
+            self.defaults.set(newValue, forKey: Keys.enableAIStreaming)
         }
     }
 
     var copyTranscriptionToClipboard: Bool {
-        get { defaults.bool(forKey: Keys.copyTranscriptionToClipboard) }
-        set { defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard) }
+        get { self.defaults.bool(forKey: Keys.copyTranscriptionToClipboard) }
+        set { self.defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard) }
     }
 
     var preferredInputDeviceUID: String? {
-        get { defaults.string(forKey: Keys.preferredInputDeviceUID) }
-        set { defaults.set(newValue, forKey: Keys.preferredInputDeviceUID) }
+        get { self.defaults.string(forKey: Keys.preferredInputDeviceUID) }
+        set { self.defaults.set(newValue, forKey: Keys.preferredInputDeviceUID) }
     }
 
     var preferredOutputDeviceUID: String? {
-        get { defaults.string(forKey: Keys.preferredOutputDeviceUID) }
-        set { defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
+        get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
+        set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
     var visualizerNoiseThreshold: Double {
         get {
-            let value = defaults.double(forKey: Keys.visualizerNoiseThreshold)
+            let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
             return value == 0.0 ? 0.4 : value // Default to 0.4 if not set
         }
-        set { defaults.set(newValue, forKey: Keys.visualizerNoiseThreshold) }
+        set { self.defaults.set(newValue, forKey: Keys.visualizerNoiseThreshold) }
     }
 
     // MARK: - Preferences Settings
 
     var launchAtStartup: Bool {
-        get { defaults.bool(forKey: Keys.launchAtStartup) }
+        get { self.defaults.bool(forKey: Keys.launchAtStartup) }
         set {
-            defaults.set(newValue, forKey: Keys.launchAtStartup)
+            self.defaults.set(newValue, forKey: Keys.launchAtStartup)
             // Update launch agent registration
-            updateLaunchAtStartup(newValue)
+            self.updateLaunchAtStartup(newValue)
         }
     }
 
@@ -311,7 +311,7 @@ final class SettingsStore: ObservableObject {
     func initializeAppSettings() {
         #if os(macOS)
         // Apply dock visibility setting on app launch
-        let dockVisible = showInDock
+        let dockVisible = self.showInDock
         DebugLogger.shared.info("Initializing app with dock visibility: \(dockVisible)", source: "SettingsStore")
 
         // Set activation policy based on saved preference
@@ -323,39 +323,39 @@ final class SettingsStore: ObservableObject {
 
     var showInDock: Bool {
         get {
-            let value = defaults.object(forKey: Keys.showInDock)
+            let value = self.defaults.object(forKey: Keys.showInDock)
             return value as? Bool ?? true // Default to true if not set
         }
         set {
-            defaults.set(newValue, forKey: Keys.showInDock)
+            self.defaults.set(newValue, forKey: Keys.showInDock)
             // Update dock visibility
-            updateDockVisibility(newValue)
+            self.updateDockVisibility(newValue)
         }
     }
 
     var autoUpdateCheckEnabled: Bool {
         get {
-            let value = defaults.object(forKey: Keys.autoUpdateCheckEnabled)
+            let value = self.defaults.object(forKey: Keys.autoUpdateCheckEnabled)
             return value as? Bool ?? true // Default to enabled
         }
         set {
-            defaults.set(newValue, forKey: Keys.autoUpdateCheckEnabled)
+            self.defaults.set(newValue, forKey: Keys.autoUpdateCheckEnabled)
         }
     }
 
     var lastUpdateCheckDate: Date? {
         get {
-            return defaults.object(forKey: Keys.lastUpdateCheckDate) as? Date
+            return self.defaults.object(forKey: Keys.lastUpdateCheckDate) as? Date
         }
         set {
-            defaults.set(newValue, forKey: Keys.lastUpdateCheckDate)
+            self.defaults.set(newValue, forKey: Keys.lastUpdateCheckDate)
         }
     }
 
     // MARK: - Update Check Helper
 
     func shouldCheckForUpdates() -> Bool {
-        guard autoUpdateCheckEnabled else { return false }
+        guard self.autoUpdateCheckEnabled else { return false }
 
         guard let lastCheck = lastUpdateCheckDate else {
             // Never checked before, should check
@@ -368,52 +368,52 @@ final class SettingsStore: ObservableObject {
     }
 
     func updateLastCheckDate() {
-        lastUpdateCheckDate = Date()
+        self.lastUpdateCheckDate = Date()
     }
 
     var playgroundUsed: Bool {
-        get { defaults.bool(forKey: Keys.playgroundUsed) }
-        set { defaults.set(newValue, forKey: Keys.playgroundUsed) }
+        get { self.defaults.bool(forKey: Keys.playgroundUsed) }
+        set { self.defaults.set(newValue, forKey: Keys.playgroundUsed) }
     }
 
     // MARK: - Command Mode Settings
 
     var commandModeSelectedModel: String? {
-        get { defaults.string(forKey: Keys.commandModeSelectedModel) }
+        get { self.defaults.string(forKey: Keys.commandModeSelectedModel) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.commandModeSelectedModel)
+            self.defaults.set(newValue, forKey: Keys.commandModeSelectedModel)
         }
     }
 
     var commandModeSelectedProviderID: String {
-        get { defaults.string(forKey: Keys.commandModeSelectedProviderID) ?? "openai" }
+        get { self.defaults.string(forKey: Keys.commandModeSelectedProviderID) ?? "openai" }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.commandModeSelectedProviderID)
+            self.defaults.set(newValue, forKey: Keys.commandModeSelectedProviderID)
         }
     }
 
     var commandModeLinkedToGlobal: Bool {
         get {
-            defaults
+            self.defaults
                 .bool(forKey: Keys.commandModeLinkedToGlobal)
         } // Default to false (let user opt-in, or true if
         // preferred)
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.commandModeLinkedToGlobal)
+            self.defaults.set(newValue, forKey: Keys.commandModeLinkedToGlobal)
         }
     }
 
     var commandModeShortcutEnabled: Bool {
         get {
-            let value = defaults.object(forKey: Keys.commandModeShortcutEnabled)
+            let value = self.defaults.object(forKey: Keys.commandModeShortcutEnabled)
             return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.commandModeShortcutEnabled)
+            self.defaults.set(newValue, forKey: Keys.commandModeShortcutEnabled)
         }
     }
 
@@ -430,7 +430,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: Keys.commandModeHotkeyShortcut)
+                self.defaults.set(data, forKey: Keys.commandModeHotkeyShortcut)
             }
         }
     }
@@ -438,12 +438,12 @@ final class SettingsStore: ObservableObject {
     var commandModeConfirmBeforeExecute: Bool {
         get {
             // Default to true (safer - ask before running commands)
-            let value = defaults.object(forKey: Keys.commandModeConfirmBeforeExecute)
+            let value = self.defaults.object(forKey: Keys.commandModeConfirmBeforeExecute)
             return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.commandModeConfirmBeforeExecute)
+            self.defaults.set(newValue, forKey: Keys.commandModeConfirmBeforeExecute)
         }
     }
 
@@ -462,36 +462,36 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: Keys.rewriteModeHotkeyShortcut)
+                self.defaults.set(data, forKey: Keys.rewriteModeHotkeyShortcut)
             }
         }
     }
 
     var rewriteModeSelectedModel: String? {
-        get { defaults.string(forKey: Keys.rewriteModeSelectedModel) }
+        get { self.defaults.string(forKey: Keys.rewriteModeSelectedModel) }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.rewriteModeSelectedModel)
+            self.defaults.set(newValue, forKey: Keys.rewriteModeSelectedModel)
         }
     }
 
     var rewriteModeSelectedProviderID: String {
-        get { defaults.string(forKey: Keys.rewriteModeSelectedProviderID) ?? "openai" }
+        get { self.defaults.string(forKey: Keys.rewriteModeSelectedProviderID) ?? "openai" }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.rewriteModeSelectedProviderID)
+            self.defaults.set(newValue, forKey: Keys.rewriteModeSelectedProviderID)
         }
     }
 
     var rewriteModeLinkedToGlobal: Bool {
         get {
             // Default to true - sync with global settings by default
-            let value = defaults.object(forKey: Keys.rewriteModeLinkedToGlobal)
+            let value = self.defaults.object(forKey: Keys.rewriteModeLinkedToGlobal)
             return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.rewriteModeLinkedToGlobal)
+            self.defaults.set(newValue, forKey: Keys.rewriteModeLinkedToGlobal)
         }
     }
 
@@ -511,7 +511,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             if let encoded = try? JSONEncoder().encode(newValue) {
-                defaults.set(encoded, forKey: Keys.modelReasoningConfigs)
+                self.defaults.set(encoded, forKey: Keys.modelReasoningConfigs)
             }
         }
     }
@@ -555,7 +555,7 @@ final class SettingsStore: ObservableObject {
     /// Set reasoning config for a specific model
     func setReasoningConfig(_ config: ModelReasoningConfig?, forModel model: String, provider: String) {
         let key = "\(provider):\(model)"
-        var configs = modelReasoningConfigs
+        var configs = self.modelReasoningConfigs
 
         if let config = config {
             configs[key] = config
@@ -563,23 +563,23 @@ final class SettingsStore: ObservableObject {
             configs.removeValue(forKey: key)
         }
 
-        modelReasoningConfigs = configs
+        self.modelReasoningConfigs = configs
     }
 
     /// Check if a model has a custom (user-defined) reasoning config
     func hasCustomReasoningConfig(forModel model: String, provider: String) -> Bool {
         let key = "\(provider):\(model)"
-        return modelReasoningConfigs[key] != nil
+        return self.modelReasoningConfigs[key] != nil
     }
 
     var rewriteModeShortcutEnabled: Bool {
         get {
-            let value = defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
+            let value = self.defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
             return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.rewriteModeShortcutEnabled)
+            self.defaults.set(newValue, forKey: Keys.rewriteModeShortcutEnabled)
         }
     }
 
@@ -588,21 +588,21 @@ final class SettingsStore: ObservableObject {
     /// User's typing speed in words per minute (for time saved calculation)
     var userTypingWPM: Int {
         get {
-            let value = defaults.integer(forKey: Keys.userTypingWPM)
+            let value = self.defaults.integer(forKey: Keys.userTypingWPM)
             return value > 0 ? value : 40 // Default to 40 WPM
         }
         set {
             objectWillChange.send()
-            defaults.set(max(1, min(200, newValue)), forKey: Keys.userTypingWPM) // Clamp 1-200
+            self.defaults.set(max(1, min(200, newValue)), forKey: Keys.userTypingWPM) // Clamp 1-200
         }
     }
 
     // MARK: - Private Methods
 
     private func persistProviderAPIKeys(_ values: [String: String]) {
-        let trimmed = sanitizeAPIKeys(values)
+        let trimmed = self.sanitizeAPIKeys(values)
         do {
-            try keychain.storeAllKeys(trimmed)
+            try self.keychain.storeAllKeys(trimmed)
         } catch {
             DebugLogger.shared.error(
                 "Failed to persist provider API keys: \(error.localizedDescription)",
@@ -612,29 +612,29 @@ final class SettingsStore: ObservableObject {
     }
 
     private func migrateProviderAPIKeysIfNeeded() {
-        defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+        self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
 
-        var merged = (try? keychain.fetchAllKeys()) ?? [:]
+        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
         var didMutate = false
 
         if let legacyDefaults = defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String],
            legacyDefaults.isEmpty == false
         {
-            merged.merge(sanitizeAPIKeys(legacyDefaults)) { _, new in new }
+            merged.merge(self.sanitizeAPIKeys(legacyDefaults)) { _, new in new }
             didMutate = true
         }
-        defaults.removeObject(forKey: Keys.providerAPIKeys)
+        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
 
         if let legacyKeychain = try? keychain.legacyProviderEntries(),
            legacyKeychain.isEmpty == false
         {
-            merged.merge(sanitizeAPIKeys(legacyKeychain)) { _, new in new }
+            merged.merge(self.sanitizeAPIKeys(legacyKeychain)) { _, new in new }
             didMutate = true
-            try? keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
+            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
         }
 
         if didMutate {
-            persistProviderAPIKeys(merged)
+            self.persistProviderAPIKeys(merged)
         }
     }
 
@@ -648,9 +648,9 @@ final class SettingsStore: ObservableObject {
             let trimmed = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.isEmpty == false else { continue }
 
-            let keyID = canonicalProviderKey(for: provider.id)
+            let keyID = self.canonicalProviderKey(for: provider.id)
             do {
-                try keychain.storeKey(trimmed, for: keyID)
+                try self.keychain.storeKey(trimmed, for: keyID)
                 didModify = true
             } catch {
                 DebugLogger.shared
@@ -672,7 +672,7 @@ final class SettingsStore: ObservableObject {
         if didModify,
            let encoded = try? JSONEncoder().encode(decoded)
         {
-            defaults.set(encoded, forKey: Keys.savedProviders)
+            self.defaults.set(encoded, forKey: Keys.savedProviders)
         }
 
         // No need to track migrated IDs; consolidated storage keeps them together.
@@ -801,15 +801,15 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.fillerWords)
+            self.defaults.set(newValue, forKey: Keys.fillerWords)
         }
     }
 
     var removeFillerWordsEnabled: Bool {
-        get { defaults.object(forKey: Keys.removeFillerWordsEnabled) as? Bool ?? true }
+        get { self.defaults.object(forKey: Keys.removeFillerWordsEnabled) as? Bool ?? true }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.removeFillerWordsEnabled)
+            self.defaults.set(newValue, forKey: Keys.removeFillerWordsEnabled)
         }
     }
 
@@ -992,7 +992,7 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue.rawValue, forKey: Keys.selectedTranscriptionProvider)
+            self.defaults.set(newValue.rawValue, forKey: Keys.selectedTranscriptionProvider)
         }
     }
 
@@ -1008,7 +1008,7 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue.rawValue, forKey: Keys.whisperModelSize)
+            self.defaults.set(newValue.rawValue, forKey: Keys.whisperModelSize)
         }
     }
 
@@ -1030,18 +1030,18 @@ final class SettingsStore: ObservableObject {
             }
 
             // Migration: Convert old settings to new SpeechModel
-            return migrateToSpeechModel()
+            return self.migrateToSpeechModel()
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue.rawValue, forKey: Keys.selectedSpeechModel)
+            self.defaults.set(newValue.rawValue, forKey: Keys.selectedSpeechModel)
         }
     }
 
     /// Migrates old TranscriptionProviderOption + WhisperModelSize settings to new SpeechModel
     private func migrateToSpeechModel() -> SpeechModel {
-        let oldProvider = defaults.string(forKey: Keys.selectedTranscriptionProvider) ?? "auto"
-        let oldWhisperSize = defaults.string(forKey: Keys.whisperModelSize) ?? "ggml-base.bin"
+        let oldProvider = self.defaults.string(forKey: Keys.selectedTranscriptionProvider) ?? "auto"
+        let oldWhisperSize = self.defaults.string(forKey: Keys.whisperModelSize) ?? "ggml-base.bin"
 
         let newModel: SpeechModel
 
@@ -1063,7 +1063,7 @@ final class SettingsStore: ObservableObject {
         }
 
         // Persist the migrated value
-        defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
+        self.defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
         DebugLogger.shared
             .info(
                 "Migrated speech model settings: \(oldProvider)/\(oldWhisperSize) -> \(newModel.rawValue)",

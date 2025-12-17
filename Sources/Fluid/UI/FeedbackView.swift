@@ -187,12 +187,12 @@ struct FeedbackView: View {
         .onAppear {
             self.appear = true
         }
-        .alert("Feedback Sent", isPresented: $showFeedbackConfirmation) {
+        .alert("Feedback Sent", isPresented: self.$showFeedbackConfirmation) {
             Button("OK") {}
         } message: {
             Text("Thank you for helping us improve FluidVoice.")
         }
-        .alert("Feedback Failed", isPresented: $showFeedbackError) {
+        .alert("Feedback Failed", isPresented: self.$showFeedbackError) {
             Button("Try Again") {
                 Task {
                     await self.sendFeedback()
@@ -207,8 +207,8 @@ struct FeedbackView: View {
     // MARK: - Feedback Functions
 
     private func sendFeedback() async {
-        guard !feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !self.feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return
         }
@@ -217,7 +217,7 @@ struct FeedbackView: View {
             self.isSendingFeedback = true
         }
 
-        let feedbackData = createFeedbackData()
+        let feedbackData = self.createFeedbackData()
         let success = await submitFeedback(data: feedbackData)
 
         await MainActor.run {
@@ -237,9 +237,9 @@ struct FeedbackView: View {
     }
 
     private func createFeedbackData() -> [String: Any] {
-        var feedbackContent = feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var feedbackContent = self.feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if includeDebugLogs {
+        if self.includeDebugLogs {
             feedbackContent += "\n\n--- Debug Information ---\n"
             feedbackContent += "App Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")\n"
             feedbackContent += "Build: \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")\n"
@@ -262,7 +262,7 @@ struct FeedbackView: View {
         }
 
         return [
-            "email_id": feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+            "email_id": self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines),
             "feedback": feedbackContent,
         ]
     }

@@ -16,10 +16,10 @@ struct HoverableGlossyCard<Content: View>: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: theme.metrics.corners.lg, style: .continuous)
-        let cardShadow = theme.metrics.cardShadow
+        let cardShadow = self.theme.metrics.cardShadow
 
-        return content
-            .background(theme.materials.card, in: shape)
+        return self.content
+            .background(self.theme.materials.card, in: shape)
             .background {
                 shape
                     .fill(self.theme.palette.cardBackground)
@@ -36,11 +36,11 @@ struct HoverableGlossyCard<Content: View>: View {
                         y: self.isHovered ? cardShadow.y + 1 : cardShadow.y
                     )
             }
-            .scaleEffect(isHovered && !excludeInteractiveElements ? 1.02 : 1.0)
+            .scaleEffect(self.isHovered && !self.excludeInteractiveElements ? 1.02 : 1.0)
             .onHover { hovering in
                 self.isHovered = hovering
             }
-            .animation(.easeOut(duration: 0.18), value: isHovered)
+            .animation(.easeOut(duration: 0.18), value: self.isHovered)
     }
 }
 
@@ -58,17 +58,17 @@ struct ButtonHoverModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(isHovered ? 1.05 : 1.0)
+            .scaleEffect(self.isHovered ? 1.05 : 1.0)
             .shadow(
-                color: theme.palette.accent.opacity(isHovered ? 0.35 : 0.0),
-                radius: isHovered ? 8 : 0,
+                color: self.theme.palette.accent.opacity(self.isHovered ? 0.35 : 0.0),
+                radius: self.isHovered ? 8 : 0,
                 x: 0,
-                y: isHovered ? 3 : 0
+                y: self.isHovered ? 3 : 0
             )
             .onHover { hovering in
                 self.isHovered = hovering
             }
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: self.isHovered)
     }
 }
 

@@ -3,7 +3,7 @@ import SwiftUI
 struct RewriteModeView: View {
     @ObservedObject var service: RewriteModeService
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { appServices.asr }
+    private var asr: ASRService { self.appServices.asr }
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     var onClose: (() -> Void)?
@@ -226,7 +226,7 @@ struct RewriteModeView: View {
             .padding()
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .onChange(of: asr.finalText) { _, newText in
+        .onChange(of: self.asr.finalText) { _, newText in
             if !newText.isEmpty {
                 self.inputText = newText
             }
@@ -242,17 +242,17 @@ struct RewriteModeView: View {
     }
 
     private func toggleRecording() {
-        if asr.isRunning {
+        if self.asr.isRunning {
             Task { await self.asr.stop() }
         } else {
-            asr.start()
+            self.asr.start()
         }
     }
 
     private func submitRequest() {
-        guard !inputText.isEmpty else { return }
-        let prompt = inputText
-        inputText = ""
+        guard !self.inputText.isEmpty else { return }
+        let prompt = self.inputText
+        self.inputText = ""
         Task {
             await self.service.processRewriteRequest(prompt)
         }
@@ -261,30 +261,30 @@ struct RewriteModeView: View {
     // MARK: - Model Management (pulls from shared AI Settings pool)
 
     private func updateAvailableModels() {
-        let currentProviderID = settings.rewriteModeSelectedProviderID
-        let currentModel = settings.rewriteModeSelectedModel ?? "gpt-4o"
+        let currentProviderID = self.settings.rewriteModeSelectedProviderID
+        let currentModel = self.settings.rewriteModeSelectedModel ?? "gpt-4o"
 
         // Apple Intelligence has only one model
         if currentProviderID == "apple-intelligence" {
-            availableModels = ["System Model"]
+            self.availableModels = ["System Model"]
             return
         }
 
         // Pull models from the shared pool configured in AI Settings
-        let possibleKeys = providerKeys(for: currentProviderID)
+        let possibleKeys = self.providerKeys(for: currentProviderID)
         let storedList = possibleKeys.lazy
             .compactMap { SettingsStore.shared.availableModelsByProvider[$0] }
             .first { !$0.isEmpty }
 
         if let stored = storedList {
-            availableModels = stored
+            self.availableModels = stored
         } else {
-            availableModels = defaultModels(for: currentProviderID)
+            self.availableModels = self.defaultModels(for: currentProviderID)
         }
 
         // If current model not in list, select first available
-        if !availableModels.contains(currentModel) {
-            settings.rewriteModeSelectedModel = availableModels.first ?? "gpt-4o"
+        if !self.availableModels.contains(currentModel) {
+            self.settings.rewriteModeSelectedModel = self.availableModels.first ?? "gpt-4o"
         }
     }
 
@@ -323,7 +323,7 @@ struct RewriteModeView: View {
     // MARK: - How To Section
 
     private var shortcutDisplay: String {
-        settings.rewriteModeHotkeyShortcut.displayString
+        self.settings.rewriteModeHotkeyShortcut.displayString
     }
 
     private var howToSection: some View {

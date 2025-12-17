@@ -101,10 +101,10 @@ final class OpenAICompatibleProvider: AIProvider {
 
         guard let url = URL(string: fullEndpoint) else { return "Error: Invalid Base URL" }
 
-        let isLocal = isLocalEndpoint(endpoint)
+        let isLocal = self.isLocalEndpoint(endpoint)
 
         // Check if model is gpt-oss and add reasoning_effort parameter
-        let shouldAddReasoningEffort = isGptOssModel(model)
+        let shouldAddReasoningEffort = self.isGptOssModel(model)
 
         // Check if this is a reasoning model that doesn't support temperature parameter
         let modelLower = model.lowercased()

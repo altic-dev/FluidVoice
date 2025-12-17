@@ -12,10 +12,10 @@ class MousePositionTracker: ObservableObject {
     private let frameUpdateInterval: TimeInterval = 0.1 // Debounce frame updates during scroll
 
     var relativePosition: CGPoint {
-        guard windowFrame.width > 0 && windowFrame.height > 0 else { return .zero }
+        guard self.windowFrame.width > 0 && self.windowFrame.height > 0 else { return .zero }
         return CGPoint(
-            x: (mousePosition.x - windowFrame.minX) / windowFrame.width,
-            y: (mousePosition.y - windowFrame.minY) / windowFrame.height
+            x: (self.mousePosition.x - self.windowFrame.minX) / self.windowFrame.width,
+            y: (self.mousePosition.y - self.windowFrame.minY) / self.windowFrame.height
         )
     }
 
@@ -25,10 +25,10 @@ class MousePositionTracker: ObservableObject {
         guard position.x >= 0, position.y >= 0 else { return }
 
         let now = CACurrentMediaTime()
-        guard now - lastUpdateTime >= updateInterval else { return }
+        guard now - self.lastUpdateTime >= self.updateInterval else { return }
 
-        mousePosition = position
-        lastUpdateTime = now
+        self.mousePosition = position
+        self.lastUpdateTime = now
     }
 
     func updateWindowFrame(_ frame: CGRect) {
@@ -39,10 +39,10 @@ class MousePositionTracker: ObservableObject {
 
         // Debounce frame updates during scroll to prevent rapid invalid geometry
         let now = CACurrentMediaTime()
-        guard now - lastFrameUpdateTime >= frameUpdateInterval else { return }
+        guard now - self.lastFrameUpdateTime >= self.frameUpdateInterval else { return }
 
-        windowFrame = frame
-        lastFrameUpdateTime = now
+        self.windowFrame = frame
+        self.lastFrameUpdateTime = now
     }
 }
 

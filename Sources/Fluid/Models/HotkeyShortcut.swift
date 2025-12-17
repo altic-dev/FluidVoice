@@ -8,18 +8,18 @@ struct HotkeyShortcut: Codable, Equatable {
 
     var displayString: String {
         var parts: [String] = []
-        if modifierFlags.contains(.function) { parts.append("🌐") }
-        if modifierFlags.contains(.command) { parts.append("⌘") }
-        if modifierFlags.contains(.option) { parts.append("⌥") }
-        if modifierFlags.contains(.control) { parts.append("⌃") }
-        if modifierFlags.contains(.shift) { parts.append("⇧") }
+        if self.modifierFlags.contains(.function) { parts.append("🌐") }
+        if self.modifierFlags.contains(.command) { parts.append("⌘") }
+        if self.modifierFlags.contains(.option) { parts.append("⌥") }
+        if self.modifierFlags.contains(.control) { parts.append("⌃") }
+        if self.modifierFlags.contains(.shift) { parts.append("⇧") }
         if let key = Self.keyCodeToString(keyCode) {
             parts.append(key)
         } else {
-            parts.append(String(Character(UnicodeScalar(keyCode) ?? "?")))
+            parts.append(String(Character(UnicodeScalar(self.keyCode) ?? "?")))
         }
 
-        if modifierFlags.isEmpty {
+        if self.modifierFlags.isEmpty {
             return parts.last ?? "Unknown"
         }
 
@@ -101,14 +101,14 @@ struct HotkeyShortcut: Codable, Equatable {
 extension HotkeyShortcut {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        keyCode = try c.decode(UInt16.self, forKey: .keyCode)
+        self.keyCode = try c.decode(UInt16.self, forKey: .keyCode)
         let raw = try c.decode(UInt.self, forKey: .modifierFlagsRawValue)
-        modifierFlags = NSEvent.ModifierFlags(rawValue: raw)
+        self.modifierFlags = NSEvent.ModifierFlags(rawValue: raw)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(keyCode, forKey: .keyCode)
-        try c.encode(modifierFlags.rawValue, forKey: .modifierFlagsRawValue)
+        try c.encode(self.keyCode, forKey: .keyCode)
+        try c.encode(self.modifierFlags.rawValue, forKey: .modifierFlagsRawValue)
     }
 }

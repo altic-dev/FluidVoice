@@ -50,18 +50,18 @@ enum AudioDevice {
         devices.reserveCapacity(deviceIDs.count)
 
         for devId in deviceIDs {
-            let name = getStringProperty(
+            let name = self.getStringProperty(
                 devId,
                 selector: kAudioObjectPropertyName,
                 scope: kAudioObjectPropertyScopeGlobal
             ) ?? "Unknown"
-            let uid = getStringProperty(
+            let uid = self.getStringProperty(
                 devId,
                 selector: kAudioDevicePropertyDeviceUID,
                 scope: kAudioObjectPropertyScopeGlobal
             ) ?? ""
-            let hasIn = hasChannels(devId, scope: kAudioObjectPropertyScopeInput)
-            let hasOut = hasChannels(devId, scope: kAudioObjectPropertyScopeOutput)
+            let hasIn = self.hasChannels(devId, scope: kAudioObjectPropertyScopeInput)
+            let hasOut = self.hasChannels(devId, scope: kAudioObjectPropertyScopeOutput)
             devices.append(Device(id: devId, uid: uid, name: name, hasInput: hasIn, hasOutput: hasOut))
         }
 
@@ -69,35 +69,35 @@ enum AudioDevice {
     }
 
     static func listInputDevices() -> [Device] {
-        return listAllDevices().filter { $0.hasInput }
+        return self.listAllDevices().filter { $0.hasInput }
     }
 
     static func listOutputDevices() -> [Device] {
-        return listAllDevices().filter { $0.hasOutput }
+        return self.listAllDevices().filter { $0.hasOutput }
     }
 
     static func getDefaultInputDevice() -> Device? {
         guard let devId: AudioObjectID = getDefaultDeviceId(selector: kAudioHardwarePropertyDefaultInputDevice)
         else { return nil }
-        return listAllDevices().first { $0.id == devId }
+        return self.listAllDevices().first { $0.id == devId }
     }
 
     static func getDefaultOutputDevice() -> Device? {
         guard let devId: AudioObjectID = getDefaultDeviceId(selector: kAudioHardwarePropertyDefaultOutputDevice)
         else { return nil }
-        return listAllDevices().first { $0.id == devId }
+        return self.listAllDevices().first { $0.id == devId }
     }
 
     @discardableResult
     static func setDefaultInputDevice(uid: String) -> Bool {
         guard let device = listInputDevices().first(where: { $0.uid == uid }) else { return false }
-        return setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultInputDevice)
+        return self.setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultInputDevice)
     }
 
     @discardableResult
     static func setDefaultOutputDevice(uid: String) -> Bool {
         guard let device = listOutputDevices().first(where: { $0.uid == uid }) else { return false }
-        return setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultOutputDevice)
+        return self.setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultOutputDevice)
     }
 
     private static func getDefaultDeviceId(selector: AudioObjectPropertySelector) -> AudioObjectID? {
@@ -218,7 +218,7 @@ final class AudioHardwareObserver: ObservableObject {
     /// Call this AFTER the app has finished launching to start observing audio hardware changes.
     /// This must be called from onAppear or later, never during init.
     func startObserving() {
-        register()
+        self.register()
     }
 
     deinit {
@@ -226,7 +226,7 @@ final class AudioHardwareObserver: ObservableObject {
     }
 
     private func register() {
-        guard installed == false else { return }
+        guard self.installed == false else { return }
         var addrDevices = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -256,12 +256,12 @@ final class AudioHardwareObserver: ObservableObject {
             self?.changeTick &+= 1
         }
 
-        installed = true
+        self.installed = true
     }
 
     private func unregister() {
-        guard installed else { return }
+        guard self.installed else { return }
         // Intentionally omitted: removing blocks is optional; listeners end with object lifetime.
-        installed = false
+        self.installed = false
     }
 }

@@ -67,7 +67,7 @@ final class NotchOverlayManager {
     private var localEscapeMonitor: Any?
 
     private init() {
-        setupEscapeKeyMonitors()
+        self.setupEscapeKeyMonitors()
     }
 
     deinit {
@@ -101,34 +101,34 @@ final class NotchOverlayManager {
         }
 
         // Global monitor - catches escape when OTHER apps have focus
-        globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+        self.globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
             _ = escapeHandler(event)
         }
 
         // Local monitor - catches escape when OUR app/notch has focus
-        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: escapeHandler)
+        self.localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: escapeHandler)
     }
 
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
         // Don't show regular notch if expanded command output is visible
-        if isCommandOutputExpanded {
+        if self.isCommandOutputExpanded {
             // Just store the publisher for later use
-            lastAudioPublisher = audioLevelPublisher
+            self.lastAudioPublisher = audioLevelPublisher
             return
         }
 
         // Cancel any pending retry operations
-        pendingRetryTask?.cancel()
-        pendingRetryTask = nil
+        self.pendingRetryTask?.cancel()
+        self.pendingRetryTask = nil
 
         // If already visible or in transition, wait for cleanup to complete
-        if notch != nil || state != .idle {
+        if self.notch != nil || self.state != .idle {
             // Increment generation to invalidate stale operations
-            generation &+= 1
-            let targetGeneration = generation
+            self.generation &+= 1
+            let targetGeneration = self.generation
 
             // Start async cleanup and retry
-            pendingRetryTask = Task { [weak self] in
+            self.pendingRetryTask = Task { [weak self] in
                 guard let self = self else { return }
 
                 // Perform cleanup synchronously first
@@ -146,21 +146,21 @@ final class NotchOverlayManager {
             return
         }
 
-        showInternal(audioLevelPublisher: audioLevelPublisher, mode: mode)
+        self.showInternal(audioLevelPublisher: audioLevelPublisher, mode: mode)
     }
 
     private func showInternal(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
-        guard state == .idle else { return }
+        guard self.state == .idle else { return }
 
         // Store for potential re-show during processing
-        lastAudioPublisher = audioLevelPublisher
+        self.lastAudioPublisher = audioLevelPublisher
 
         // Increment generation for this operation
-        generation &+= 1
-        let currentGeneration = generation
+        self.generation &+= 1
+        let currentGeneration = self.generation
 
-        state = .showing
-        currentMode = mode
+        self.state = .showing
+        self.currentMode = mode
 
         // Update shared content state immediately
         NotchContentState.shared.mode = mode
@@ -178,7 +178,7 @@ final class NotchOverlayManager {
             NotchCompactTrailingView()
         }
 
-        notch = newNotch
+        self.notch = newNotch
 
         // Show in expanded state
         Task { [weak self] in
@@ -191,24 +191,24 @@ final class NotchOverlayManager {
 
     func hide() {
         // Cancel any pending retry operations
-        pendingRetryTask?.cancel()
-        pendingRetryTask = nil
+        self.pendingRetryTask?.cancel()
+        self.pendingRetryTask = nil
 
         // Safety: reset processing state when hiding
         NotchContentState.shared.setProcessing(false)
 
         // Increment generation to invalidate any pending show tasks
-        generation &+= 1
-        let currentGeneration = generation
+        self.generation &+= 1
+        let currentGeneration = self.generation
 
         // Handle visible or showing states (can hide while still expanding)
-        guard state == .visible || state == .showing, let currentNotch = notch else {
+        guard self.state == .visible || self.state == .showing, let currentNotch = notch else {
             // Force cleanup if stuck or in inconsistent state
             Task { [weak self] in await self?.performCleanup() }
             return
         }
 
-        state = .hiding
+        self.state = .hiding
 
         Task { [weak self] in
             await currentNotch.hide()
@@ -222,20 +222,20 @@ final class NotchOverlayManager {
     /// Async cleanup that properly waits for hide to complete
     private func performCleanup() async {
         // Cancel any pending retry operations
-        pendingRetryTask?.cancel()
-        pendingRetryTask = nil
+        self.pendingRetryTask?.cancel()
+        self.pendingRetryTask = nil
 
         if let existingNotch = notch {
             await existingNotch.hide()
         }
-        notch = nil
-        state = .idle
+        self.notch = nil
+        self.state = .idle
     }
 
     func setMode(_ mode: OverlayMode) {
         // Always update NotchContentState to ensure UI stays in sync
         // (can get out of sync during show/hide transitions)
-        currentMode = mode
+        self.currentMode = mode
         NotchContentState.shared.mode = mode
     }
 
@@ -247,16 +247,16 @@ final class NotchOverlayManager {
         NotchContentState.shared.setProcessing(processing)
 
         // If expanded command output is showing, don't mess with regular notch
-        if isCommandOutputExpanded {
+        if self.isCommandOutputExpanded {
             return
         }
 
         if processing {
             // If notch isn't visible, re-show it for processing state
-            if state == .idle || state == .hiding {
+            if self.state == .idle || self.state == .hiding {
                 // Use stored publisher or create empty one
-                let publisher = lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
-                show(audioLevelPublisher: publisher, mode: currentMode)
+                let publisher = self.lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
+                self.show(audioLevelPublisher: publisher, mode: self.currentMode)
             }
         }
     }
@@ -266,8 +266,8 @@ final class NotchOverlayManager {
     /// Show expanded command output notch
     func showExpandedCommandOutput() {
         // Hide regular notch first if visible
-        if notch != nil {
-            hide()
+        if self.notch != nil {
+            self.hide()
         }
 
         // Wait a bit for cleanup
@@ -278,19 +278,19 @@ final class NotchOverlayManager {
     }
 
     private func showExpandedCommandOutputInternal() async {
-        guard commandOutputState == .idle else { return }
+        guard self.commandOutputState == .idle else { return }
 
-        commandOutputGeneration &+= 1
-        let currentGeneration = commandOutputGeneration
+        self.commandOutputGeneration &+= 1
+        let currentGeneration = self.commandOutputGeneration
 
-        commandOutputState = .showing
-        isCommandOutputExpanded = true
+        self.commandOutputState = .showing
+        self.isCommandOutputExpanded = true
 
         // Update content state
         NotchContentState.shared.mode = .command
         NotchContentState.shared.isExpandedForCommandOutput = true
 
-        let publisher = lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
+        let publisher = self.lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
 
         let newNotch = DynamicNotch(
             hoverBehavior: [], // No keepVisible - allows closing with X/Escape even when cursor
@@ -334,35 +334,35 @@ final class NotchOverlayManager {
             NotchCompactTrailingView()
         }
 
-        commandOutputNotch = newNotch
+        self.commandOutputNotch = newNotch
 
         await newNotch.expand()
 
-        guard commandOutputGeneration == currentGeneration else { return }
-        commandOutputState = .visible
+        guard self.commandOutputGeneration == currentGeneration else { return }
+        self.commandOutputState = .visible
     }
 
     /// Hide expanded command output notch - force close regardless of hover state
     func hideExpandedCommandOutput() {
-        commandOutputGeneration &+= 1
-        let currentGeneration = commandOutputGeneration
+        self.commandOutputGeneration &+= 1
+        let currentGeneration = self.commandOutputGeneration
 
         // Force cleanup state immediately
-        isCommandOutputExpanded = false
+        self.isCommandOutputExpanded = false
         NotchContentState.shared.collapseCommandOutput()
 
-        guard commandOutputState == .visible || commandOutputState == .showing,
+        guard self.commandOutputState == .visible || self.commandOutputState == .showing,
               let currentNotch = commandOutputNotch
         else {
-            commandOutputState = .idle
+            self.commandOutputState = .idle
             return
         }
 
-        commandOutputState = .hiding
+        self.commandOutputState = .hiding
 
         // Store reference and nil out immediately to prevent hover from keeping it alive
         let notchToHide = currentNotch
-        commandOutputNotch = nil
+        self.commandOutputNotch = nil
 
         Task { [weak self] in
             // Try to hide gracefully, but we've already removed our reference
@@ -374,22 +374,22 @@ final class NotchOverlayManager {
 
     /// Toggle expanded command output (for hotkey handling)
     func toggleExpandedCommandOutput() {
-        if isCommandOutputExpanded {
-            hideExpandedCommandOutput()
+        if self.isCommandOutputExpanded {
+            self.hideExpandedCommandOutput()
         } else if NotchContentState.shared.commandConversationHistory.isEmpty == false {
             // Only show if there's history to show
-            showExpandedCommandOutput()
+            self.showExpandedCommandOutput()
         }
     }
 
     /// Check if any notch (regular or expanded) is visible
     var isAnyNotchVisible: Bool {
-        return state == .visible || state == .showing || isCommandOutputExpanded
+        return self.state == .visible || self.state == .showing || self.isCommandOutputExpanded
     }
 
     /// Update audio publisher for expanded notch (when recording starts within it)
     func updateAudioPublisher(_ publisher: AnyPublisher<CGFloat, Never>) {
-        lastAudioPublisher = publisher
-        currentAudioPublisher = publisher
+        self.lastAudioPublisher = publisher
+        self.currentAudioPublisher = publisher
     }
 }

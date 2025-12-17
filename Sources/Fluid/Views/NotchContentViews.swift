@@ -50,23 +50,23 @@ class NotchContentState: ObservableObject {
 
     /// Set AI processing state
     func setProcessing(_ processing: Bool) {
-        isProcessing = processing
+        self.isProcessing = processing
     }
 
     /// Update transcription and recompute cached lines
     func updateTranscription(_ text: String) {
-        guard text != transcriptionText else { return }
-        transcriptionText = text
-        recomputeTranscriptionLines()
+        guard text != self.transcriptionText else { return }
+        self.transcriptionText = text
+        self.recomputeTranscriptionLines()
     }
 
     /// Recompute cached transcription lines (called only when text changes)
     private func recomputeTranscriptionLines() {
-        let text = transcriptionText
+        let text = self.transcriptionText
 
         guard !text.isEmpty else {
-            cachedLine1 = ""
-            cachedLine2 = ""
+            self.cachedLine1 = ""
+            self.cachedLine2 = ""
             return
         }
 
@@ -79,13 +79,13 @@ class NotchContentState: ObservableObject {
 
         if words.count <= 6 {
             // Short: only line 2
-            cachedLine1 = ""
-            cachedLine2 = displayText
+            self.cachedLine1 = ""
+            self.cachedLine2 = displayText
         } else {
             // Long: split roughly in half
             let midPoint = words.count / 2
-            cachedLine1 = words[..<midPoint].joined(separator: " ")
-            cachedLine2 = words[midPoint...].joined(separator: " ")
+            self.cachedLine1 = words[..<midPoint].joined(separator: " ")
+            self.cachedLine2 = words[midPoint...].joined(separator: " ")
         }
     }
 
@@ -96,66 +96,66 @@ class NotchContentState: ObservableObject {
 
     /// Set recording state (for waveform visibility in expanded view)
     func setRecordingInExpandedMode(_ recording: Bool) {
-        isRecordingInExpandedMode = recording
+        self.isRecordingInExpandedMode = recording
         if !recording {
-            expandedModeAudioLevel = 0
+            self.expandedModeAudioLevel = 0
         }
     }
 
     /// Update audio level for expanded mode waveform
     func updateExpandedModeAudioLevel(_ level: CGFloat) {
-        guard isRecordingInExpandedMode else { return }
-        expandedModeAudioLevel = level
+        guard self.isRecordingInExpandedMode else { return }
+        self.expandedModeAudioLevel = level
     }
 
     // MARK: - Command Output Methods
 
     /// Show expanded output view with content
     func showExpandedCommandOutput(output: String) {
-        commandOutput = output
-        commandStreamingText = ""
-        isExpandedForCommandOutput = true
-        isRecordingInExpandedMode = false // Not recording when first showing output
+        self.commandOutput = output
+        self.commandStreamingText = ""
+        self.isExpandedForCommandOutput = true
+        self.isRecordingInExpandedMode = false // Not recording when first showing output
     }
 
     /// Update streaming text in real-time
     func updateCommandStreamingText(_ text: String) {
-        commandStreamingText = text
+        self.commandStreamingText = text
     }
 
     /// Add a message to the conversation history
     func addCommandMessage(role: CommandOutputMessage.Role, content: String) {
         let message = CommandOutputMessage(role: role, content: content)
-        commandConversationHistory.append(message)
+        self.commandConversationHistory.append(message)
     }
 
     /// Set command processing state
     func setCommandProcessing(_ processing: Bool) {
-        isCommandProcessing = processing
+        self.isCommandProcessing = processing
     }
 
     /// Clear command output and hide expanded view
     func clearCommandOutput() {
-        isExpandedForCommandOutput = false
-        commandOutput = ""
-        commandStreamingText = ""
-        commandInputText = ""
-        commandConversationHistory.removeAll()
-        isCommandProcessing = false
+        self.isExpandedForCommandOutput = false
+        self.commandOutput = ""
+        self.commandStreamingText = ""
+        self.commandInputText = ""
+        self.commandConversationHistory.removeAll()
+        self.isCommandProcessing = false
     }
 
     /// Hide expanded view but keep history
     func collapseCommandOutput() {
-        isExpandedForCommandOutput = false
+        self.isExpandedForCommandOutput = false
     }
 
     // MARK: - Chat History Methods
 
     /// Refresh recent chats from store
     func refreshRecentChats() {
-        recentChats = ChatHistoryStore.shared.getRecentChats(excludingCurrent: false)
+        self.recentChats = ChatHistoryStore.shared.getRecentChats(excludingCurrent: false)
         if let current = ChatHistoryStore.shared.currentSession {
-            currentChatTitle = current.title
+            self.currentChatTitle = current.title
         }
     }
 }
@@ -187,18 +187,18 @@ struct ShimmerText: View {
     @State private var shimmerPhase: CGFloat = 0
 
     var body: some View {
-        Text(text)
+        Text(self.text)
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(LinearGradient(
                 colors: [
-                    color.opacity(0.4),
-                    color.opacity(0.4),
-                    color.opacity(1.0),
-                    color.opacity(0.4),
-                    color.opacity(0.4),
+                    self.color.opacity(0.4),
+                    self.color.opacity(0.4),
+                    self.color.opacity(1.0),
+                    self.color.opacity(0.4),
+                    self.color.opacity(0.4),
                 ],
-                startPoint: UnitPoint(x: shimmerPhase - 0.3, y: 0.5),
-                endPoint: UnitPoint(x: shimmerPhase + 0.3, y: 0.5)
+                startPoint: UnitPoint(x: self.shimmerPhase - 0.3, y: 0.5),
+                endPoint: UnitPoint(x: self.shimmerPhase + 0.3, y: 0.5)
             ))
             .onAppear {
                 withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
@@ -215,11 +215,11 @@ struct NotchExpandedView: View {
     @ObservedObject private var contentState = NotchContentState.shared
 
     private var modeColor: Color {
-        contentState.mode.notchColor
+        self.contentState.mode.notchColor
     }
 
     private var modeLabel: String {
-        switch contentState.mode {
+        switch self.contentState.mode {
         case .dictation: return "Dictate"
         case .rewrite: return "Rewrite"
         case .write: return "Write"
@@ -228,7 +228,7 @@ struct NotchExpandedView: View {
     }
 
     private var processingLabel: String {
-        switch contentState.mode {
+        switch self.contentState.mode {
         case .dictation: return "Refining..."
         case .rewrite: return "Thinking..."
         case .write: return "Thinking..."
@@ -237,12 +237,12 @@ struct NotchExpandedView: View {
     }
 
     private var hasTranscription: Bool {
-        !contentState.transcriptionText.isEmpty
+        !self.contentState.transcriptionText.isEmpty
     }
 
     // Check if there's command history that can be expanded
     private var canExpandCommandHistory: Bool {
-        contentState.mode == .command && !contentState.commandConversationHistory.isEmpty
+        self.contentState.mode == .command && !self.contentState.commandConversationHistory.isEmpty
     }
 
     var body: some View {
@@ -287,9 +287,9 @@ struct NotchExpandedView: View {
                 NotchOverlayManager.shared.onNotchClicked?()
             }
         }
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hasTranscription)
-        .animation(.easeInOut(duration: 0.2), value: contentState.mode)
-        .animation(.easeInOut(duration: 0.25), value: contentState.isProcessing)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.hasTranscription)
+        .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
+        .animation(.easeInOut(duration: 0.25), value: self.contentState.isProcessing)
     }
 }
 
@@ -314,15 +314,15 @@ struct NotchWaveformView: View {
 
     // Computed glow values based on phase (sine wave for smooth pulsing)
     private var currentGlowIntensity: CGFloat {
-        contentState.isProcessing ? 0.4 + 0.4 * sin(glowPhase * .pi * 2) : 0.4
+        self.contentState.isProcessing ? 0.4 + 0.4 * sin(self.glowPhase * .pi * 2) : 0.4
     }
 
     private var currentGlowRadius: CGFloat {
-        contentState.isProcessing ? 2 + 4 * sin(glowPhase * .pi * 2) : 2
+        self.contentState.isProcessing ? 2 + 4 * sin(self.glowPhase * .pi * 2) : 2
     }
 
     private var currentOuterGlowRadius: CGFloat {
-        contentState.isProcessing ? 6 * sin(glowPhase * .pi * 2) : 0
+        self.contentState.isProcessing ? 6 * sin(self.glowPhase * .pi * 2) : 0
     }
 
     init(audioPublisher: AnyPublisher<CGFloat, Never>, color: Color, isProcessing: Bool = false) {
@@ -332,7 +332,7 @@ struct NotchWaveformView: View {
     }
 
     var body: some View {
-        HStack(spacing: barSpacing) {
+        HStack(spacing: self.barSpacing) {
             ForEach(0..<self.barCount, id: \.self) { index in
                 RoundedRectangle(cornerRadius: self.barWidth / 2)
                     .fill(self.color)
@@ -351,12 +351,12 @@ struct NotchWaveformView: View {
                     )
             }
         }
-        .onChange(of: data.audioLevel) { _, level in
+        .onChange(of: self.data.audioLevel) { _, level in
             if !self.contentState.isProcessing {
                 self.updateBars(level: level)
             }
         }
-        .onChange(of: contentState.isProcessing) { _, processing in
+        .onChange(of: self.contentState.isProcessing) { _, processing in
             if processing {
                 self.setStaticProcessingBars()
                 self.startGlowAnimation()
@@ -385,11 +385,11 @@ struct NotchWaveformView: View {
     }
 
     private func startGlowAnimation() {
-        stopGlowAnimation() // Clean up any existing timer
-        glowPhase = 0
+        self.stopGlowAnimation() // Clean up any existing timer
+        self.glowPhase = 0
 
         // Timer-based animation for explicit control
-        glowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+        self.glowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
             withAnimation(.linear(duration: 1.0 / 30.0)) {
                 self.glowPhase += 1.0 / 30.0 / 1.5 // Complete cycle in 1.5 seconds
                 if self.glowPhase >= 1.0 {
@@ -400,9 +400,9 @@ struct NotchWaveformView: View {
     }
 
     private func stopGlowAnimation() {
-        glowTimer?.invalidate()
-        glowTimer = nil
-        glowPhase = 0
+        self.glowTimer?.invalidate()
+        self.glowTimer = nil
+        self.glowPhase = 0
     }
 
     private func setStaticProcessingBars() {
@@ -418,7 +418,7 @@ struct NotchWaveformView: View {
 
     private func updateBars(level: CGFloat) {
         let normalizedLevel = min(max(level, 0), 1)
-        let isActive = normalizedLevel > noiseThreshold // Use user's sensitivity setting
+        let isActive = normalizedLevel > self.noiseThreshold // Use user's sensitivity setting
 
         withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) {
             for i in 0..<self.barCount {
@@ -449,9 +449,9 @@ struct NotchCompactLeadingView: View {
     var body: some View {
         Image(systemName: "waveform")
             .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(contentState.mode.notchColor)
-            .scaleEffect(isPulsing ? 1.1 : 1.0)
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
+            .foregroundStyle(self.contentState.mode.notchColor)
+            .scaleEffect(self.isPulsing ? 1.1 : 1.0)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: self.isPulsing)
             .onAppear { self.isPulsing = true }
             .onDisappear { self.isPulsing = false }
     }
@@ -463,11 +463,11 @@ struct NotchCompactTrailingView: View {
 
     var body: some View {
         Circle()
-            .fill(contentState.mode.notchColor)
+            .fill(self.contentState.mode.notchColor)
             .frame(width: 5, height: 5)
-            .opacity(isPulsing ? 0.5 : 1.0)
-            .scaleEffect(isPulsing ? 0.85 : 1.0)
-            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: isPulsing)
+            .opacity(self.isPulsing ? 0.5 : 1.0)
+            .scaleEffect(self.isPulsing ? 0.85 : 1.0)
+            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: self.isPulsing)
             .onAppear { self.isPulsing = true }
             .onDisappear { self.isPulsing = false }
     }
@@ -497,7 +497,7 @@ struct NotchCommandOutputExpandedView: View {
     // Dynamic height based on content (max half screen)
     private var dynamicHeight: CGFloat {
         let baseHeight: CGFloat = 120 // Minimum height
-        let contentHeight = estimateContentHeight()
+        let contentHeight = self.estimateContentHeight()
         let maxHeight = (NSScreen.main?.frame.height ?? 800) * 0.45 // 45% of screen
         return min(max(baseHeight, contentHeight), maxHeight)
     }
@@ -506,13 +506,13 @@ struct NotchCommandOutputExpandedView: View {
         var height: CGFloat = 80 // Header + input area
 
         // Estimate based on conversation history
-        for message in contentState.commandConversationHistory {
+        for message in self.contentState.commandConversationHistory {
             let lineCount = max(1, message.content.count / 60) // ~60 chars per line
             height += CGFloat(lineCount) * 18 + 16 // Line height + padding
         }
 
         // Add streaming text height
-        if !contentState.commandStreamingText.isEmpty {
+        if !self.contentState.commandStreamingText.isEmpty {
             let lineCount = max(1, contentState.commandStreamingText.count / 60)
             height += CGFloat(lineCount) * 18 + 16
         }
@@ -537,15 +537,15 @@ struct NotchCommandOutputExpandedView: View {
             // Input area for follow-up commands
             self.inputArea
         }
-        .frame(width: 380, height: dynamicHeight)
+        .frame(width: 380, height: self.dynamicHeight)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .animation(
             .spring(response: 0.3, dampingFraction: 0.8),
-            value: contentState.commandConversationHistory.count
+            value: self.contentState.commandConversationHistory.count
         )
         // No animation on streamingText - it updates too frequently, animations add overhead
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: contentState.isRecordingInExpandedMode)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.contentState.isRecordingInExpandedMode)
     }
 
     // MARK: - Header
@@ -727,8 +727,8 @@ struct NotchCommandOutputExpandedView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: contentState.isRecordingInExpandedMode)
-        .animation(.easeInOut(duration: 0.15), value: contentState.transcriptionText)
+        .animation(.easeInOut(duration: 0.2), value: self.contentState.isRecordingInExpandedMode)
+        .animation(.easeInOut(duration: 0.15), value: self.contentState.transcriptionText)
     }
 
     // MARK: - Conversation Area
@@ -866,7 +866,7 @@ struct NotchCommandOutputExpandedView: View {
     private func processingOffset(for index: Int) -> CGFloat {
         // Offset varies by index for staggered animation effect
         _ = Double(index) * 0.15 // Reserved for future animation timing
-        return processingAnimation ? -3 : 3
+        return self.processingAnimation ? -3 : 3
     }
 
     // MARK: - Input Area
@@ -900,9 +900,9 @@ struct NotchCommandOutputExpandedView: View {
     }
 
     private func submitFollowUp() {
-        guard !inputText.isEmpty else { return }
-        let text = inputText
-        inputText = ""
+        guard !self.inputText.isEmpty else { return }
+        let text = self.inputText
+        self.inputText = ""
 
         Task {
             await self.onSubmit(text)
@@ -926,7 +926,7 @@ struct ExpandedModeWaveformView: View {
     private let noiseThreshold: CGFloat = 0.05
 
     var body: some View {
-        HStack(spacing: barSpacing) {
+        HStack(spacing: self.barSpacing) {
             ForEach(0..<self.barCount, id: \.self) { index in
                 RoundedRectangle(cornerRadius: self.barWidth / 2)
                     .fill(self.color)
@@ -934,7 +934,7 @@ struct ExpandedModeWaveformView: View {
                     .shadow(color: self.color.opacity(0.4), radius: 2, x: 0, y: 0)
             }
         }
-        .onChange(of: contentState.expandedModeAudioLevel) { _, level in
+        .onChange(of: self.contentState.expandedModeAudioLevel) { _, level in
             self.updateBars(level: level)
         }
         .onAppear {
@@ -944,7 +944,7 @@ struct ExpandedModeWaveformView: View {
 
     private func updateBars(level: CGFloat) {
         let normalizedLevel = min(max(level, 0), 1)
-        let isActive = normalizedLevel > noiseThreshold
+        let isActive = normalizedLevel > self.noiseThreshold
 
         withAnimation(.spring(response: 0.12, dampingFraction: 0.6)) {
             for i in 0..<self.barCount {

@@ -95,12 +95,12 @@ struct SetupStepView: View {
                     )))
         }
         .buttonStyle(.plain)
-        .disabled(status == .completed || !showActionButton)
-        .opacity(status == .completed ? 0.9 : 1.0)
+        .disabled(self.status == .completed || !self.showActionButton)
+        .opacity(self.status == .completed ? 0.9 : 1.0)
     }
 
     private var statusColor: Color {
-        switch status {
+        switch self.status {
         case .completed: return .green
         case .inProgress: return .blue
         case .pending: return .secondary

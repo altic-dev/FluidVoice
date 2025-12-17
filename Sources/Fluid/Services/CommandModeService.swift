@@ -26,19 +26,19 @@ final class CommandModeService: ObservableObject {
 
     init() {
         // Load current chat from store
-        loadCurrentChatFromStore()
+        self.loadCurrentChatFromStore()
     }
 
     private func loadCurrentChatFromStore() {
         if let session = chatStore.currentSession {
-            currentChatID = session.id
-            conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
-            syncToNotchState()
+            self.currentChatID = session.id
+            self.conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
+            self.syncToNotchState()
         } else {
             // Create new chat if none exists
-            let newSession = chatStore.createNewChat()
-            currentChatID = newSession.id
-            conversationHistory = []
+            let newSession = self.chatStore.createNewChat()
+            self.currentChatID = newSession.id
+            self.conversationHistory = []
         }
     }
 
@@ -90,7 +90,7 @@ final class CommandModeService: ObservableObject {
             self.content = content
             self.toolCall = toolCall
             self.stepType = stepType
-            timestamp = Date()
+            self.timestamp = Date()
         }
     }
 
@@ -104,12 +104,12 @@ final class CommandModeService: ObservableObject {
     // MARK: - Public Methods
 
     func clearHistory() {
-        conversationHistory.removeAll()
-        pendingCommand = nil
-        currentTurnCount = 0
+        self.conversationHistory.removeAll()
+        self.pendingCommand = nil
+        self.currentTurnCount = 0
 
         // Clear in store as well
-        chatStore.clearCurrentChat()
+        self.chatStore.clearCurrentChat()
 
         // Also clear notch state
         NotchContentState.shared.clearCommandOutput()
@@ -119,24 +119,24 @@ final class CommandModeService: ObservableObject {
 
     /// Get recent chats for dropdown
     func getRecentChats() -> [ChatSession] {
-        return chatStore.getRecentChats(excludingCurrent: false)
+        return self.chatStore.getRecentChats(excludingCurrent: false)
     }
 
     /// Create a new chat and switch to it
     func createNewChat() {
         // Can't switch while processing
-        guard !isProcessing else { return }
+        guard !self.isProcessing else { return }
 
         // Save current chat first
-        saveCurrentChat()
+        self.saveCurrentChat()
 
         // Create new
-        let newSession = chatStore.createNewChat()
-        currentChatID = newSession.id
-        conversationHistory = []
-        pendingCommand = nil
-        currentTurnCount = 0
-        currentStep = nil
+        let newSession = self.chatStore.createNewChat()
+        self.currentChatID = newSession.id
+        self.conversationHistory = []
+        self.pendingCommand = nil
+        self.currentTurnCount = 0
+        self.currentStep = nil
 
         // Clear notch state
         NotchContentState.shared.clearCommandOutput()
@@ -148,25 +148,25 @@ final class CommandModeService: ObservableObject {
     @discardableResult
     func switchToChat(id: String) -> Bool {
         // Can't switch while processing
-        guard !isProcessing else { return false }
+        guard !self.isProcessing else { return false }
 
         // Don't switch to current
-        guard id != currentChatID else { return true }
+        guard id != self.currentChatID else { return true }
 
         // Save current chat first
-        saveCurrentChat()
+        self.saveCurrentChat()
 
         // Load the target chat
         guard let session = chatStore.switchToChat(id: id) else { return false }
 
-        currentChatID = session.id
-        conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
-        pendingCommand = nil
-        currentTurnCount = 0
-        currentStep = nil
+        self.currentChatID = session.id
+        self.conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
+        self.pendingCommand = nil
+        self.currentTurnCount = 0
+        self.currentStep = nil
 
         // Sync to notch state
-        syncToNotchState()
+        self.syncToNotchState()
         NotchContentState.shared.refreshRecentChats()
 
         return true
@@ -175,21 +175,21 @@ final class CommandModeService: ObservableObject {
     /// Delete current chat and switch to next
     func deleteCurrentChat() {
         // Can't delete while processing
-        guard !isProcessing else { return }
+        guard !self.isProcessing else { return }
 
-        chatStore.deleteCurrentChat()
+        self.chatStore.deleteCurrentChat()
 
         // Load the new current chat
-        loadCurrentChatFromStore()
+        self.loadCurrentChatFromStore()
         NotchContentState.shared.refreshRecentChats()
     }
 
     /// Save current conversation to store
     func saveCurrentChat() {
-        guard currentChatID != nil else { return }
+        guard self.currentChatID != nil else { return }
 
-        let messages = conversationHistory.map { self.messageToChatMessage($0) }
-        chatStore.updateCurrentChat(messages: messages)
+        let messages = self.conversationHistory.map { self.messageToChatMessage($0) }
+        self.chatStore.updateCurrentChat(messages: messages)
     }
 
     // MARK: - Conversion Helpers
@@ -274,7 +274,7 @@ final class CommandModeService: ObservableObject {
     private func syncToNotchState() {
         NotchContentState.shared.clearCommandOutput()
 
-        for msg in conversationHistory {
+        for msg in self.conversationHistory {
             let role: NotchContentState.CommandOutputMessage.Role
             switch msg.role {
             case .user: role = .user
@@ -293,20 +293,20 @@ final class CommandModeService: ObservableObject {
     func processUserCommand(_ text: String) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        isProcessing = true
-        currentTurnCount = 0
-        conversationHistory.append(Message(role: .user, content: text))
+        self.isProcessing = true
+        self.currentTurnCount = 0
+        self.conversationHistory.append(Message(role: .user, content: text))
 
         // Auto-save after adding user message
-        saveCurrentChat()
+        self.saveCurrentChat()
 
         // Push to notch
-        if enableNotchOutput {
+        if self.enableNotchOutput {
             NotchContentState.shared.addCommandMessage(role: .user, content: text)
             NotchContentState.shared.setCommandProcessing(true)
         }
 
-        await processNextTurn()
+        await self.processNextTurn()
     }
 
     /// Process follow-up command from notch input
@@ -314,69 +314,69 @@ final class CommandModeService: ObservableObject {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         // Add to both histories
-        conversationHistory.append(Message(role: .user, content: text))
+        self.conversationHistory.append(Message(role: .user, content: text))
         NotchContentState.shared.addCommandMessage(role: .user, content: text)
 
         // Auto-save after adding user message
-        saveCurrentChat()
+        self.saveCurrentChat()
 
-        isProcessing = true
+        self.isProcessing = true
         NotchContentState.shared.setCommandProcessing(true)
 
-        await processNextTurn()
+        await self.processNextTurn()
     }
 
     /// Execute pending command (after user confirmation)
     func confirmAndExecute() async {
         guard let pending = pendingCommand else { return }
-        pendingCommand = nil
-        isProcessing = true
+        self.pendingCommand = nil
+        self.isProcessing = true
 
-        await executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
+        await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
     }
 
     /// Cancel pending command
     func cancelPendingCommand() {
-        pendingCommand = nil
-        conversationHistory.append(Message(
+        self.pendingCommand = nil
+        self.conversationHistory.append(Message(
             role: .assistant,
             content: "Command cancelled.",
             stepType: .failure
         ))
-        isProcessing = false
-        currentStep = nil
+        self.isProcessing = false
+        self.currentStep = nil
     }
 
     // MARK: - Agent Loop
 
     private func processNextTurn() async {
-        if currentTurnCount >= maxTurns {
+        if self.currentTurnCount >= self.maxTurns {
             let errorMsg = "Reached maximum steps limit. Please review the progress and continue if needed."
-            conversationHistory.append(Message(
+            self.conversationHistory.append(Message(
                 role: .assistant,
                 content: errorMsg,
                 stepType: .failure
             ))
-            isProcessing = false
-            currentStep = .completed(false)
+            self.isProcessing = false
+            self.currentStep = .completed(false)
 
             // Auto-save on completion
-            saveCurrentChat()
+            self.saveCurrentChat()
 
             // Push to notch
-            if enableNotchOutput {
+            if self.enableNotchOutput {
                 NotchContentState.shared.addCommandMessage(role: .assistant, content: errorMsg)
                 NotchContentState.shared.setCommandProcessing(false)
-                showExpandedNotchIfNeeded()
+                self.showExpandedNotchIfNeeded()
             }
             return
         }
 
-        currentTurnCount += 1
-        currentStep = .thinking("Analyzing...")
+        self.currentTurnCount += 1
+        self.currentStep = .thinking("Analyzing...")
 
         // Push status to notch
-        if enableNotchOutput {
+        if self.enableNotchOutput {
             NotchContentState.shared.addCommandMessage(role: .status, content: "Thinking...")
         }
 
@@ -385,13 +385,13 @@ final class CommandModeService: ObservableObject {
 
             if let tc = response.toolCall {
                 // Determine step type based on command purpose
-                let stepType = determineStepType(for: tc.command, purpose: tc.purpose)
-                currentStep = stepType == .checking ? .checking(tc.command) : .executing(tc.command)
+                let stepType = self.determineStepType(for: tc.command, purpose: tc.purpose)
+                self.currentStep = stepType == .checking ? .checking(tc.command) : .executing(tc.command)
 
                 // AI wants to run a command
-                conversationHistory.append(Message(
+                self.conversationHistory.append(Message(
                     role: .assistant,
-                    content: response.content.isEmpty ? stepDescription(for: stepType) : response.content,
+                    content: response.content.isEmpty ? self.stepDescription(for: stepType) : response.content,
                     toolCall: Message.ToolCall(
                         id: tc.id,
                         command: tc.command,
@@ -403,24 +403,24 @@ final class CommandModeService: ObservableObject {
                 ))
 
                 // Push step to notch
-                if enableNotchOutput {
-                    let statusText = tc.purpose ?? stepDescription(for: stepType)
+                if self.enableNotchOutput {
+                    let statusText = tc.purpose ?? self.stepDescription(for: stepType)
                     NotchContentState.shared.addCommandMessage(role: .status, content: statusText)
                 }
 
                 // Check if we need confirmation for destructive commands
-                if SettingsStore.shared.commandModeConfirmBeforeExecute, isDestructiveCommand(tc.command) {
-                    pendingCommand = PendingCommand(
+                if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
+                    self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
                         workingDirectory: tc.workingDirectory,
                         purpose: tc.purpose
                     )
-                    isProcessing = false
-                    currentStep = nil
+                    self.isProcessing = false
+                    self.currentStep = nil
 
                     // Push confirmation needed to notch
-                    if enableNotchOutput {
+                    if self.enableNotchOutput {
                         NotchContentState.shared.addCommandMessage(
                             role: .status,
                             content: "⚠️ Confirmation needed in Command Mode window"
@@ -431,7 +431,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Auto-execute
-                await executeCommand(
+                await self.executeCommand(
                     tc.command,
                     workingDirectory: tc.workingDirectory,
                     callId: tc.id,
@@ -445,51 +445,51 @@ final class CommandModeService: ObservableObject {
                     response.content.lowercased().contains("success") ||
                     response.content.lowercased().contains("finished")
 
-                conversationHistory.append(Message(
+                self.conversationHistory.append(Message(
                     role: .assistant,
                     content: response.content,
                     stepType: isFinal ? .success : .normal
                 ))
-                isProcessing = false
-                currentStep = .completed(isFinal)
+                self.isProcessing = false
+                self.currentStep = .completed(isFinal)
 
                 // Auto-save on completion
-                saveCurrentChat()
+                self.saveCurrentChat()
 
                 // Push final response to notch and show expanded view
-                if enableNotchOutput {
+                if self.enableNotchOutput {
                     NotchContentState.shared.updateCommandStreamingText("") // Clear streaming
                     NotchContentState.shared.addCommandMessage(role: .assistant, content: response.content)
                     NotchContentState.shared.setCommandProcessing(false)
-                    showExpandedNotchIfNeeded()
+                    self.showExpandedNotchIfNeeded()
                 }
             }
 
         } catch {
             let errorMsg = "Error: \(error.localizedDescription)"
-            conversationHistory.append(Message(
+            self.conversationHistory.append(Message(
                 role: .assistant,
                 content: errorMsg,
                 stepType: .failure
             ))
-            isProcessing = false
-            currentStep = .completed(false)
+            self.isProcessing = false
+            self.currentStep = .completed(false)
 
             // Auto-save on error
-            saveCurrentChat()
+            self.saveCurrentChat()
 
             // Push error to notch
-            if enableNotchOutput {
+            if self.enableNotchOutput {
                 NotchContentState.shared.addCommandMessage(role: .assistant, content: errorMsg)
                 NotchContentState.shared.setCommandProcessing(false)
-                showExpandedNotchIfNeeded()
+                self.showExpandedNotchIfNeeded()
             }
         }
     }
 
     /// Show expanded notch output if there's content to display
     private func showExpandedNotchIfNeeded() {
-        guard enableNotchOutput else { return }
+        guard self.enableNotchOutput else { return }
         guard !NotchContentState.shared.commandConversationHistory.isEmpty else { return }
 
         // Show the expanded notch
@@ -576,7 +576,7 @@ final class CommandModeService: ObservableObject {
         callId: String,
         purpose: String? = nil
     ) async {
-        currentStep = .executing(command)
+        self.currentStep = .executing(command)
 
         let result = await terminalService.execute(
             command: command,
@@ -595,14 +595,14 @@ final class CommandModeService: ObservableObject {
         let resultStepType: Message.StepType = result.success ? .success : .failure
 
         // Add tool result to conversation
-        conversationHistory.append(Message(
+        self.conversationHistory.append(Message(
             role: .tool,
             content: resultJSON,
             stepType: resultStepType
         ))
 
         // Continue the loop - let the AI see the result and decide what to do next
-        await processNextTurn()
+        await self.processNextTurn()
     }
 
     // MARK: - Enhanced Result
@@ -617,12 +617,12 @@ final class CommandModeService: ObservableObject {
         let purpose: String?
 
         init(result: TerminalService.CommandResult, purpose: String?) {
-            success = result.success
-            command = result.command
-            output = result.output
-            error = result.error
-            exitCode = result.exitCode
-            executionTimeMs = result.executionTimeMs
+            self.success = result.success
+            self.command = result.command
+            self.output = result.output
+            self.error = result.error
+            self.exitCode = result.exitCode
+            self.executionTimeMs = result.executionTimeMs
             self.purpose = purpose
         }
 
@@ -635,7 +635,7 @@ final class CommandModeService: ObservableObject {
                 return json
             }
             return """
-            {"success": \(success), "output": "\(output)", "exitCode": \(exitCode)}
+            {"success": \(self.success), "output": "\(self.output)", "exitCode": \(self.exitCode)}
             """
         }
     }
@@ -759,7 +759,7 @@ final class CommandModeService: ObservableObject {
         // Add conversation history
         var lastToolCallId: String? = nil
 
-        for msg in conversationHistory {
+        for msg in self.conversationHistory {
             switch msg.role {
             case .user:
                 messages.append(["role": "user", "content": msg.content])
@@ -842,9 +842,9 @@ final class CommandModeService: ObservableObject {
         for attempt in 1...3 {
             do {
                 if enableStreaming {
-                    return try await processStreamingLLMResponse(request: request)
+                    return try await self.processStreamingLLMResponse(request: request)
                 } else {
-                    return try await processNonStreamingLLMResponse(request: request)
+                    return try await self.processNonStreamingLLMResponse(request: request)
                 }
             } catch let error as URLError where error.code == .notConnectedToInternet ||
                 error.code == .timedOut ||
@@ -887,15 +887,15 @@ final class CommandModeService: ObservableObject {
             throw NSError(domain: "CommandMode", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
         }
 
-        return parseMessageResponse(message)
+        return self.parseMessageResponse(message)
     }
 
     // MARK: - Streaming Response with Real-time UI Updates
 
     private func processStreamingLLMResponse(request: URLRequest) async throws -> LLMResponse {
-        streamingText = ""
-        streamingBuffer = []
-        lastUIUpdate = CFAbsoluteTimeGetCurrent()
+        self.streamingText = ""
+        self.streamingBuffer = []
+        self.lastUIUpdate = CFAbsoluteTimeGetCurrent()
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
@@ -938,10 +938,10 @@ final class CommandModeService: ObservableObject {
 
             // Handle text content - use buffer to avoid O(n²) string concat
             if let content = delta["content"] as? String {
-                streamingBuffer.append(content)
+                self.streamingBuffer.append(content)
 
                 // Adaptive throttle: slower updates as content grows (reduces SwiftUI layout overhead)
-                let bufferLength = streamingBuffer.count
+                let bufferLength = self.streamingBuffer.count
                 let updateInterval: CFAbsoluteTime
                 if bufferLength < 50 {
                     updateInterval = 0.016 // 60fps for first ~50 tokens
@@ -952,13 +952,13 @@ final class CommandModeService: ObservableObject {
                 }
 
                 let now = CFAbsoluteTimeGetCurrent()
-                if now - lastUIUpdate >= updateInterval {
-                    lastUIUpdate = now
-                    let fullContent = streamingBuffer.joined()
-                    streamingText = fullContent
+                if now - self.lastUIUpdate >= updateInterval {
+                    self.lastUIUpdate = now
+                    let fullContent = self.streamingBuffer.joined()
+                    self.streamingText = fullContent
 
                     // Push to notch for real-time display
-                    if enableNotchOutput {
+                    if self.enableNotchOutput {
                         NotchContentState.shared.updateCommandStreamingText(fullContent)
                     }
                 }
@@ -984,10 +984,10 @@ final class CommandModeService: ObservableObject {
         }
 
         // Final update - join buffer once at the end
-        let fullContent = streamingBuffer.joined()
+        let fullContent = self.streamingBuffer.joined()
         if !fullContent.isEmpty {
-            streamingText = fullContent
-            if enableNotchOutput {
+            self.streamingText = fullContent
+            if self.enableNotchOutput {
                 NotchContentState.shared.updateCommandStreamingText(fullContent)
             }
         }
@@ -995,11 +995,11 @@ final class CommandModeService: ObservableObject {
         // Small delay to let the final content render, then clear
         try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
 
-        streamingText = "" // Clear streaming text when done
-        streamingBuffer = [] // Clear buffer
+        self.streamingText = "" // Clear streaming text when done
+        self.streamingBuffer = [] // Clear buffer
 
         // Clear notch streaming text as well
-        if enableNotchOutput {
+        if self.enableNotchOutput {
             NotchContentState.shared.updateCommandStreamingText("")
         }
 

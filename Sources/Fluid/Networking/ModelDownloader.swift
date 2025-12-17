@@ -29,26 +29,26 @@ final class HuggingFaceModelDownloader {
 
     /// Initialize with default model repository settings
     init() {
-        owner = "FluidInference"
-        repo = "parakeet-tdt-0.6b-v3-coreml"
-        revision = "main"
+        self.owner = "FluidInference"
+        self.repo = "parakeet-tdt-0.6b-v3-coreml"
+        self.revision = "main"
         guard var apiBase = URL(string: "https://huggingface.co/api/models/") else {
             preconditionFailure("Invalid base Hugging Face API URL")
         }
-        apiBase.appendPathComponent(owner)
-        apiBase.appendPathComponent(repo)
+        apiBase.appendPathComponent(self.owner)
+        apiBase.appendPathComponent(self.repo)
         apiBase.appendPathComponent("tree")
-        apiBase.appendPathComponent(revision)
-        baseApiURL = apiBase
+        apiBase.appendPathComponent(self.revision)
+        self.baseApiURL = apiBase
 
         guard var resolveBase = URL(string: "https://huggingface.co/") else {
             preconditionFailure("Invalid base Hugging Face resolve URL")
         }
-        resolveBase.appendPathComponent(owner)
-        resolveBase.appendPathComponent(repo)
+        resolveBase.appendPathComponent(self.owner)
+        resolveBase.appendPathComponent(self.repo)
         resolveBase.appendPathComponent("resolve")
-        resolveBase.appendPathComponent(revision)
-        baseResolveURL = resolveBase
+        resolveBase.appendPathComponent(self.revision)
+        self.baseResolveURL = resolveBase
     }
 
     /// Initialize with custom model repository settings
@@ -67,7 +67,7 @@ final class HuggingFaceModelDownloader {
         apiBase.appendPathComponent(repo)
         apiBase.appendPathComponent("tree")
         apiBase.appendPathComponent(revision)
-        baseApiURL = apiBase
+        self.baseApiURL = apiBase
 
         guard var resolveBase = URL(string: "https://huggingface.co/") else {
             preconditionFailure("Invalid base Hugging Face resolve URL")
@@ -76,7 +76,7 @@ final class HuggingFaceModelDownloader {
         resolveBase.appendPathComponent(repo)
         resolveBase.appendPathComponent("resolve")
         resolveBase.appendPathComponent(revision)
-        baseResolveURL = resolveBase
+        self.baseResolveURL = resolveBase
     }
 
     func ensureModelsPresent(at targetRoot: URL, onProgress: ((Double, String) -> Void)? = nil) async throws {
@@ -84,7 +84,7 @@ final class HuggingFaceModelDownloader {
 
         // Build list of files to download (flatten directories via HF API tree)
         var pendingFiles: [String] = []
-        for item in requiredItems() {
+        for item in self.requiredItems() {
             if item.isDirectory {
                 let files = try await listFilesRecursively(relativePath: item.path)
                 for rel in files {
@@ -126,7 +126,7 @@ final class HuggingFaceModelDownloader {
 
         for (idx, rel) in pendingFiles.enumerated() {
             print("[ModelDL] (\(idx + 1)/\(pendingFiles.count)) Downloading: \(rel)")
-            try await downloadFile(relativePath: rel, to: targetRoot.appendingPathComponent(rel)) { perFilePct in
+            try await self.downloadFile(relativePath: rel, to: targetRoot.appendingPathComponent(rel)) { perFilePct in
                 if totalBytes > 0 {
                     let expected = sizeByPath[rel] ?? 0
                     if expected > 0 {
@@ -175,7 +175,7 @@ final class HuggingFaceModelDownloader {
                 at: dest.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try await downloadFile(relativePath: rel, to: dest)
+            try await self.downloadFile(relativePath: rel, to: dest)
         }
     }
 
@@ -184,7 +184,7 @@ final class HuggingFaceModelDownloader {
         to destination: URL,
         perFileProgress: ((Double) -> Void)? = nil
     ) async throws {
-        let fileURL = baseResolveURL.appendingPathComponent(relativePath)
+        let fileURL = self.baseResolveURL.appendingPathComponent(relativePath)
 
         let delegate = DownloadProgressDelegate(onProgress: perFileProgress)
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
@@ -232,11 +232,11 @@ final class HuggingFaceModelDownloader {
             didFinishDownloadingTo location: URL
         ) {
             guard let response = downloadTask.response else { return }
-            onFinish?(location, response)
+            self.onFinish?(location, response)
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            if let error = error { onError?(error) }
+            if let error = error { self.onError?(error) }
         }
 
         func urlSession(
@@ -248,12 +248,12 @@ final class HuggingFaceModelDownloader {
         ) {
             guard totalBytesExpectedToWrite > 0 else { return }
             let pct = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            onProgress?(pct)
+            self.onProgress?(pct)
         }
     }
 
     private func headExpectedLength(relativePath: String) async throws -> Int64 {
-        let fileURL = baseResolveURL.appendingPathComponent(relativePath)
+        let fileURL = self.baseResolveURL.appendingPathComponent(relativePath)
         var req = URLRequest(url: fileURL)
         req.httpMethod = "HEAD"
         let (_, resp) = try await URLSession.shared.data(for: req)
@@ -264,7 +264,7 @@ final class HuggingFaceModelDownloader {
     }
 
     private func listFilesRecursively(relativePath: String) async throws -> [String] {
-        let listingURL = baseApiURL
+        let listingURL = self.baseApiURL
             .appendingPathComponent(relativePath)
         guard var comps = URLComponents(url: listingURL, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "HF", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid listing URL components"])

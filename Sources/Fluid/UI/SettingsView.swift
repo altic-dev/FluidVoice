@@ -4,7 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { appServices.asr }
+    private var asr: ASRService { self.appServices.asr }
     @Environment(\.theme) private var theme
     @Binding var appear: Bool
     @Binding var visualizerNoiseThreshold: Double
@@ -611,7 +611,7 @@ struct SettingsView: View {
                 self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
             }
         }
-        .onChange(of: visualizerNoiseThreshold) { _, newValue in
+        .onChange(of: self.visualizerNoiseThreshold) { _, newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
         }
     }
@@ -708,7 +708,7 @@ struct SettingsView: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill((warningStyle ? theme.palette.warning : theme.palette.accent).opacity(0.12)))
+            .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12)))
     }
 
     @ViewBuilder
@@ -843,16 +843,16 @@ struct FillerWordsEditor: View {
     }
 
     private func addWord() {
-        let word = newWord.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !word.isEmpty, !fillerWords.contains(word) else { return }
-        fillerWords.append(word)
-        SettingsStore.shared.fillerWords = fillerWords
-        newWord = ""
+        let word = self.newWord.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !word.isEmpty, !self.fillerWords.contains(word) else { return }
+        self.fillerWords.append(word)
+        SettingsStore.shared.fillerWords = self.fillerWords
+        self.newWord = ""
     }
 
     private func removeWord(_ word: String) {
-        fillerWords.removeAll { $0 == word }
-        SettingsStore.shared.fillerWords = fillerWords
+        self.fillerWords.removeAll { $0 == word }
+        SettingsStore.shared.fillerWords = self.fillerWords
     }
 }
 
@@ -862,12 +862,12 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
+        let result = self.arrangeSubviews(proposal: proposal, subviews: subviews)
         return result.size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
+        let result = self.arrangeSubviews(proposal: proposal, subviews: subviews)
         for (index, position) in result.positions.enumerated() {
             subviews[index].place(
                 at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
@@ -890,12 +890,12 @@ struct FlowLayout: Layout {
             let size = subview.sizeThatFits(.unspecified)
             if x + size.width > maxWidth, x > 0 {
                 x = 0
-                y += rowHeight + spacing
+                y += rowHeight + self.spacing
                 rowHeight = 0
             }
             positions.append(CGPoint(x: x, y: y))
             rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
+            x += size.width + self.spacing
         }
 
         return (CGSize(width: maxWidth, height: y + rowHeight), positions)

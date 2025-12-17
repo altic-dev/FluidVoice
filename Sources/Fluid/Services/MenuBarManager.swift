@@ -45,18 +45,18 @@ final class MenuBarManager: ObservableObject {
     init() {
         // Don't setup menu bar immediately - defer until app is ready
         // Initialize from persisted setting
-        aiProcessingEnabled = SettingsStore.shared.enableAIProcessing
+        self.aiProcessingEnabled = SettingsStore.shared.enableAIProcessing
         // Reflect changes to menu when toggled from elsewhere (e.g., General tab)
-        $aiProcessingEnabled
+        self.$aiProcessingEnabled
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateMenu()
             }
-            .store(in: &cancellables)
+            .store(in: &self.cancellables)
     }
 
     func initializeMenuBar() {
-        guard !isSetup else { return }
+        guard !self.isSetup else { return }
 
         // Ensure we're on main thread and app is active
         DispatchQueue.main.async { [weak self] in
@@ -82,7 +82,7 @@ final class MenuBarManager: ObservableObject {
                 // Handle overlay lifecycle (independent of window state)
                 self?.handleOverlayState(isRunning: isRunning, asrService: asrService)
             }
-            .store(in: &cancellables)
+            .store(in: &self.cancellables)
 
         // Subscribe to partial transcription updates for streaming preview
         asrService.$partialTranscription
@@ -95,40 +95,40 @@ final class MenuBarManager: ObservableObject {
                     NotchOverlayManager.shared.updateTranscriptionText(newText)
                 }
             }
-            .store(in: &cancellables)
+            .store(in: &self.cancellables)
 
         // Subscribe to AI processing state
-        aiProcessingEnabled = SettingsStore.shared.enableAIProcessing
+        self.aiProcessingEnabled = SettingsStore.shared.enableAIProcessing
     }
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
         // Prevent rapid state changes that could cause cycles
-        guard overlayVisible != isRunning else { return }
+        guard self.overlayVisible != isRunning else { return }
 
         let delay: DispatchTimeInterval = .milliseconds(150)
         if isRunning {
             // Cancel any pending hide operation
-            pendingHideOperation?.cancel()
-            pendingHideOperation = nil
+            self.pendingHideOperation?.cancel()
+            self.pendingHideOperation = nil
 
-            overlayVisible = true
+            self.overlayVisible = true
 
             // If expanded command output is showing, check if we should keep it or close it
             if NotchOverlayManager.shared.isCommandOutputExpanded {
                 // Only keep expanded notch if this is a command mode recording (follow-up)
                 // For other modes (dictation, rewrite), close it and show regular notch
-                if currentOverlayMode == .command {
+                if self.currentOverlayMode == .command {
                     // Enable recording visualization in the expanded notch
                     NotchContentState.shared.setRecordingInExpandedMode(true)
 
                     // Subscribe to audio levels and forward to expanded notch
-                    expandedModeAudioSubscription = asrService.audioLevelPublisher
+                    self.expandedModeAudioSubscription = asrService.audioLevelPublisher
                         .receive(on: DispatchQueue.main)
                         .sink { level in
                             NotchContentState.shared.updateExpandedModeAudioLevel(level)
                         }
 
-                    pendingShowOperation = nil
+                    self.pendingShowOperation = nil
                     return
                 } else {
                     // Close expanded command notch to transition to regular notch
@@ -154,23 +154,23 @@ final class MenuBarManager: ObservableObject {
 
                 self.pendingShowOperation = nil
             }
-            pendingShowOperation = showItem
+            self.pendingShowOperation = showItem
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: showItem)
         } else {
             // Cancel any pending show operation
-            pendingShowOperation?.cancel()
-            pendingShowOperation = nil
+            self.pendingShowOperation?.cancel()
+            self.pendingShowOperation = nil
 
-            overlayVisible = false
+            self.overlayVisible = false
 
             // If expanded command output is showing, don't hide it - let it stay visible
             if NotchOverlayManager.shared.isCommandOutputExpanded {
                 // Stop recording visualization in expanded notch
                 NotchContentState.shared.setRecordingInExpandedMode(false)
-                expandedModeAudioSubscription?.cancel()
-                expandedModeAudioSubscription = nil
+                self.expandedModeAudioSubscription?.cancel()
+                self.expandedModeAudioSubscription = nil
 
-                pendingHideOperation = nil
+                self.pendingHideOperation = nil
                 return
             }
 
@@ -188,7 +188,7 @@ final class MenuBarManager: ObservableObject {
 
                 self.pendingHideOperation = nil
             }
-            pendingHideOperation = hideItem
+            self.pendingHideOperation = hideItem
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: hideItem)
         }
     }
@@ -200,23 +200,23 @@ final class MenuBarManager: ObservableObject {
     }
 
     func setOverlayMode(_ mode: OverlayMode) {
-        currentOverlayMode = mode
+        self.currentOverlayMode = mode
         NotchOverlayManager.shared.setMode(mode)
     }
 
     func setProcessing(_ processing: Bool) {
         if processing {
             // Cancel any pending hide - we want to keep the overlay visible for AI processing
-            pendingHideOperation?.cancel()
-            pendingHideOperation = nil
-            overlayVisible = true
+            self.pendingHideOperation?.cancel()
+            self.pendingHideOperation = nil
+            self.overlayVisible = true
         } else {
             // When processing ends, schedule the hide (unless expanded output is showing)
-            overlayVisible = false
+            self.overlayVisible = false
 
             // If expanded command output is showing, don't hide it
             if NotchOverlayManager.shared.isCommandOutputExpanded {
-                pendingHideOperation = nil
+                self.pendingHideOperation = nil
                 NotchOverlayManager.shared.setProcessing(processing)
                 return
             }
@@ -233,7 +233,7 @@ final class MenuBarManager: ObservableObject {
                 NotchOverlayManager.shared.hide()
                 self.pendingHideOperation = nil
             }
-            pendingHideOperation = hideItem
+            self.pendingHideOperation = hideItem
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: hideItem)
         }
         NotchOverlayManager.shared.setProcessing(processing)
@@ -250,8 +250,8 @@ final class MenuBarManager: ObservableObject {
         }
 
         do {
-            try setupMenuBar()
-            isSetup = true
+            try self.setupMenuBar()
+            self.isSetup = true
         } catch {
             // If setup fails, retry after delay
             print("MenuBar setup failed, retrying: \(error)")
@@ -263,7 +263,7 @@ final class MenuBarManager: ObservableObject {
 
     private func setupMenuBar() throws {
         // Ensure we're not already set up
-        guard !isSetup else { return }
+        guard !self.isSetup else { return }
 
         // Create status item with error handling
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -277,20 +277,20 @@ final class MenuBarManager: ObservableObject {
         }
 
         // Set initial icon
-        updateMenuBarIcon()
+        self.updateMenuBarIcon()
 
         // Create menu
-        menu = NSMenu()
-        statusItem.menu = menu
+        self.menu = NSMenu()
+        statusItem.menu = self.menu
 
-        updateMenu()
+        self.updateMenu()
     }
 
     private func updateMenuBarIcon() {
         guard let statusItem = statusItem else { return }
 
         // Use custom F icon instead of microphone
-        let image = createFluidIcon(isRecording: isRecording)
+        let image = self.createFluidIcon(isRecording: self.isRecording)
 
         statusItem.button?.image = image
         statusItem.button?.imagePosition = .imageOnly
@@ -347,7 +347,7 @@ final class MenuBarManager: ObservableObject {
         // Status indicator with hotkey info
         let statusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
-        statusMenuItem = statusItem
+        self.statusMenuItem = statusItem
         menu.addItem(statusItem)
 
         menu.addItem(.separator())
@@ -355,7 +355,7 @@ final class MenuBarManager: ObservableObject {
         // AI Processing Toggle
         let aiItem = NSMenuItem(title: "", action: #selector(toggleAIProcessing), keyEquivalent: "")
         aiItem.target = self
-        aiMenuItem = aiItem
+        self.aiMenuItem = aiItem
         menu.addItem(aiItem)
 
         menu.addItem(.separator())
@@ -392,16 +392,16 @@ final class MenuBarManager: ObservableObject {
         menu.addItem(quitItem)
 
         // Now update the text content
-        updateMenuItemsText()
+        self.updateMenuItemsText()
     }
 
     private func updateMenu() {
         // If menu structure hasn't been built yet, build it
-        if statusMenuItem == nil {
-            buildMenuStructure()
+        if self.statusMenuItem == nil {
+            self.buildMenuStructure()
         } else {
             // Just update the text of existing items
-            updateMenuItemsText()
+            self.updateMenuItemsText()
         }
     }
 
@@ -409,20 +409,20 @@ final class MenuBarManager: ObservableObject {
         // Update status text with hotkey info
         let hotkeyShortcut = SettingsStore.shared.hotkeyShortcut
         let hotkeyInfo = hotkeyShortcut.displayString.isEmpty ? "" : " (\(hotkeyShortcut.displayString))"
-        let statusTitle = isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
-        statusMenuItem?.title = statusTitle
+        let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
+        self.statusMenuItem?.title = statusTitle
 
         // Update AI toggle text
-        let aiTitle = aiProcessingEnabled ? "Disable AI Processing" : "Enable AI Processing"
-        aiMenuItem?.title = aiTitle
+        let aiTitle = self.aiProcessingEnabled ? "Disable AI Processing" : "Enable AI Processing"
+        self.aiMenuItem?.title = aiTitle
     }
 
     @objc private func toggleAIProcessing() {
-        aiProcessingEnabled.toggle()
+        self.aiProcessingEnabled.toggle()
         // Persist and broadcast change
-        SettingsStore.shared.enableAIProcessing = aiProcessingEnabled
+        SettingsStore.shared.enableAIProcessing = self.aiProcessingEnabled
         // If a ContentView has bound to MenuBarManager, its onChange sync will mirror this
-        updateMenu()
+        self.updateMenu()
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
@@ -472,7 +472,7 @@ final class MenuBarManager: ObservableObject {
         // Important: avoid programmatic deminiaturize() — it creates internal window transform animations
         // (NSWindowTransformAnimation) that have been unstable on macOS 26.x for this app.
         if let window = hostedWindow, window.isReleasedWhenClosed == false {
-            ensureUsableMainWindow(window)
+            self.ensureUsableMainWindow(window)
             window.animationBehavior = .none
             window.makeKeyAndOrderFront(nil)
         } else if let window = NSApp.windows.first(where: { win in
@@ -485,13 +485,13 @@ final class MenuBarManager: ObservableObject {
             // Prefer our main window title when present (both SwiftUI and our fallback window use this)
             return win.title == "FluidVoice" || win.title.contains("FluidVoice")
         }) {
-            ensureUsableMainWindow(window)
+            self.ensureUsableMainWindow(window)
             window.animationBehavior = .none
             window.makeKeyAndOrderFront(nil)
-            hostedWindow = window
+            self.hostedWindow = window
         } else {
             // If there is no suitable window (or it's minimized), create a fresh one.
-            createAndShowMainWindow()
+            self.createAndShowMainWindow()
         }
 
         // Final attempt: ensure app is active and visible
@@ -500,10 +500,10 @@ final class MenuBarManager: ObservableObject {
 
     @objc private func openPreferences() {
         // Ensure a fresh one-shot request every time the menu item is clicked.
-        requestedNavigationDestination = nil
-        requestedNavigationDestination = .preferences
+        self.requestedNavigationDestination = nil
+        self.requestedNavigationDestination = .preferences
 
-        openMainWindow()
+        self.openMainWindow()
 
         // Nudge again after the window is front-most, so an already-open ContentView
         // will still switch tabs even if it consumed a previous preference request.
@@ -534,9 +534,9 @@ final class MenuBarManager: ObservableObject {
         window.minSize = NSSize(width: 800, height: 500)
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController
-        window.setFrame(defaultWindowFrame(), display: false)
+        window.setFrame(self.defaultWindowFrame(), display: false)
         window.makeKeyAndOrderFront(nil)
-        hostedWindow = window
+        self.hostedWindow = window
 
         // Bring app to front in case we're running as an accessory app (no Dock)
         NSApp.activate(ignoringOtherApps: true)
@@ -549,7 +549,7 @@ final class MenuBarManager: ObservableObject {
 
         let frame = window.frame
         if frame.height < minSize.height || frame.width < minSize.width {
-            window.setFrame(defaultWindowFrame(), display: false)
+            window.setFrame(self.defaultWindowFrame(), display: false)
         }
     }
 

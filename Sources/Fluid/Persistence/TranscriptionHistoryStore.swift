@@ -27,13 +27,13 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         self.processedText = processedText
         self.appName = appName
         self.windowTitle = windowTitle
-        characterCount = processedText.count
-        wasAIProcessed = rawText != processedText
+        self.characterCount = processedText.count
+        self.wasAIProcessed = rawText != processedText
     }
 
     /// Preview text for list display (first 80 chars)
     var previewText: String {
-        let text = processedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = self.processedText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.count > 80 {
             return String(text.prefix(77)) + "..."
         }
@@ -44,7 +44,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
     var relativeTimeString: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: timestamp, relativeTo: Date())
+        return formatter.localizedString(for: self.timestamp, relativeTo: Date())
     }
 
     /// Full formatted date string
@@ -52,7 +52,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return formatter.string(from: timestamp)
+        return formatter.string(from: self.timestamp)
     }
 }
 
@@ -73,7 +73,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     @Published var selectedEntryID: UUID?
 
     private init() {
-        loadEntries()
+        self.loadEntries()
     }
 
     // MARK: - Public Methods
@@ -81,7 +81,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Get selected entry
     var selectedEntry: TranscriptionHistoryEntry? {
         guard let id = selectedEntryID else { return nil }
-        return entries.first(where: { $0.id == id })
+        return self.entries.first(where: { $0.id == id })
     }
 
     /// Add a new transcription entry
@@ -102,46 +102,46 @@ final class TranscriptionHistoryStore: ObservableObject {
         )
 
         // Insert at beginning (newest first)
-        entries.insert(entry, at: 0)
+        self.entries.insert(entry, at: 0)
 
         // Trim old entries if over limit
-        trimOldEntries()
-        saveEntries()
+        self.trimOldEntries()
+        self.saveEntries()
 
         DebugLogger.shared.debug(
-            "Added transcription to history (total: \(entries.count))",
+            "Added transcription to history (total: \(self.entries.count))",
             source: "TranscriptionHistoryStore"
         )
     }
 
     /// Delete a specific entry
     func deleteEntry(id: UUID) {
-        entries.removeAll { $0.id == id }
+        self.entries.removeAll { $0.id == id }
 
         // Clear selection if deleted
-        if selectedEntryID == id {
-            selectedEntryID = entries.first?.id
+        if self.selectedEntryID == id {
+            self.selectedEntryID = self.entries.first?.id
         }
 
-        saveEntries()
+        self.saveEntries()
     }
 
     /// Delete multiple entries
     func deleteEntries(ids: Set<UUID>) {
-        entries.removeAll { ids.contains($0.id) }
+        self.entries.removeAll { ids.contains($0.id) }
 
         if let selected = selectedEntryID, ids.contains(selected) {
-            selectedEntryID = entries.first?.id
+            self.selectedEntryID = self.entries.first?.id
         }
 
-        saveEntries()
+        self.saveEntries()
     }
 
     /// Clear all history
     func clearAllHistory() {
-        entries.removeAll()
-        selectedEntryID = nil
-        saveEntries()
+        self.entries.removeAll()
+        self.selectedEntryID = nil
+        self.saveEntries()
 
         DebugLogger.shared.info("Cleared all transcription history", source: "TranscriptionHistoryStore")
     }
@@ -149,11 +149,11 @@ final class TranscriptionHistoryStore: ObservableObject {
     /// Search entries by text content
     func search(query: String) -> [TranscriptionHistoryEntry] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return entries
+            return self.entries
         }
 
         let lowercased = query.lowercased()
-        return entries.filter { entry in
+        return self.entries.filter { entry in
             entry.rawText.lowercased().contains(lowercased) ||
                 entry.processedText.lowercased().contains(lowercased) ||
                 entry.appName.lowercased().contains(lowercased) ||
@@ -163,17 +163,17 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Get entries filtered by date range
     func entriesInRange(from startDate: Date, to endDate: Date) -> [TranscriptionHistoryEntry] {
-        entries.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        self.entries.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
     }
 
     /// Get total character count across all entries
     var totalCharacterCount: Int {
-        entries.reduce(0) { $0 + $1.characterCount }
+        self.entries.reduce(0) { $0 + $1.characterCount }
     }
 
     /// Get count of AI-processed entries
     var aiProcessedCount: Int {
-        entries.filter { $0.wasAIProcessed }.count
+        self.entries.filter { $0.wasAIProcessed }.count
     }
 
     // MARK: - Private Methods
@@ -182,23 +182,23 @@ final class TranscriptionHistoryStore: ObservableObject {
         guard let data = defaults.data(forKey: Keys.transcriptionHistory),
               let decoded = try? JSONDecoder().decode([TranscriptionHistoryEntry].self, from: data)
         else {
-            entries = []
+            self.entries = []
             return
         }
-        entries = decoded
+        self.entries = decoded
     }
 
     private func saveEntries() {
         if let encoded = try? JSONEncoder().encode(entries) {
-            defaults.set(encoded, forKey: Keys.transcriptionHistory)
+            self.defaults.set(encoded, forKey: Keys.transcriptionHistory)
         }
         objectWillChange.send()
     }
 
     private func trimOldEntries() {
-        if entries.count > maxEntries {
+        if self.entries.count > self.maxEntries {
             // Keep most recent entries
-            entries = Array(entries.prefix(maxEntries))
+            self.entries = Array(self.entries.prefix(self.maxEntries))
         }
     }
 }
@@ -220,22 +220,22 @@ extension TranscriptionHistoryStore {
 
     /// Total words across all transcriptions
     var totalWords: Int {
-        entries.reduce(0) { $0 + self.wordCount(in: $1.processedText) }
+        self.entries.reduce(0) { $0 + self.wordCount(in: $1.processedText) }
     }
 
     /// Words transcribed today
     var wordsToday: Int {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        return entries
+        return self.entries
             .filter { calendar.isDate($0.timestamp, inSameDayAs: today) }
             .reduce(0) { $0 + self.wordCount(in: $1.processedText) }
     }
 
     /// Average words per transcription
     var averageWordsPerTranscription: Int {
-        guard !entries.isEmpty else { return 0 }
-        return totalWords / entries.count
+        guard !self.entries.isEmpty else { return 0 }
+        return self.totalWords / self.entries.count
     }
 
     // MARK: - Time Saved Calculation
@@ -256,7 +256,7 @@ extension TranscriptionHistoryStore {
 
     /// Formatted time saved string (e.g., "2h 45m" or "45m")
     func formattedTimeSaved(typingWPM: Int = 40) -> String {
-        let minutes = timeSavedMinutes(typingWPM: typingWPM)
+        let minutes = self.timeSavedMinutes(typingWPM: typingWPM)
 
         if minutes < 1 {
             return "< 1m"
@@ -279,7 +279,7 @@ extension TranscriptionHistoryStore {
         let calendar = Calendar.current
         var uniqueDays = Set<Date>()
 
-        for entry in entries {
+        for entry in self.entries {
             let day = calendar.startOfDay(for: entry.timestamp)
             uniqueDays.insert(day)
         }
@@ -290,7 +290,7 @@ extension TranscriptionHistoryStore {
     /// Current streak (consecutive days including today or yesterday)
     var currentStreak: Int {
         let calendar = Calendar.current
-        let days = activeDays
+        let days = self.activeDays
 
         guard !days.isEmpty else { return 0 }
 
@@ -328,7 +328,7 @@ extension TranscriptionHistoryStore {
     /// Best streak ever achieved
     var bestStreak: Int {
         let calendar = Calendar.current
-        let days = activeDays.sorted() // oldest first for this calculation
+        let days = self.activeDays.sorted() // oldest first for this calculation
 
         guard !days.isEmpty else { return 0 }
 
@@ -365,7 +365,7 @@ extension TranscriptionHistoryStore {
         for dayOffset in 0..<days {
             guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
 
-            let dayEntries = entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }
+            let dayEntries = self.entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }
             let words = dayEntries.reduce(0) { $0 + self.wordCount(in: $1.processedText) }
 
             result.append((date: date, words: words))
@@ -384,7 +384,7 @@ extension TranscriptionHistoryStore {
         for dayOffset in 0..<days {
             guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
 
-            let count = entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }.count
+            let count = self.entries.filter { calendar.isDate($0.timestamp, inSameDayAs: date) }.count
             result.append((date: date, count: count))
         }
 
@@ -397,7 +397,7 @@ extension TranscriptionHistoryStore {
     var topApps: [(app: String, count: Int)] {
         var appCounts: [String: Int] = [:]
 
-        for entry in entries {
+        for entry in self.entries {
             let app = entry.appName.isEmpty ? "Unknown" : entry.appName
             appCounts[app, default: 0] += 1
         }
@@ -409,27 +409,27 @@ extension TranscriptionHistoryStore {
 
     /// Top N apps formatted for display
     func topAppsFormatted(limit: Int = 5) -> [String] {
-        topApps.prefix(limit).map { $0.app }
+        self.topApps.prefix(limit).map { $0.app }
     }
 
     // MARK: - AI Enhancement Rate
 
     /// Percentage of transcriptions that were AI-enhanced (0-100)
     var aiEnhancementRate: Int {
-        guard !entries.isEmpty else { return 0 }
-        return (aiProcessedCount * 100) / entries.count
+        guard !self.entries.isEmpty else { return 0 }
+        return (self.aiProcessedCount * 100) / self.entries.count
     }
 
     // MARK: - Peak Usage Hours
 
     /// Hour of day with most transcriptions (0-23)
     var peakHour: Int? {
-        guard !entries.isEmpty else { return nil }
+        guard !self.entries.isEmpty else { return nil }
 
         let calendar = Calendar.current
         var hourCounts: [Int: Int] = [:]
 
-        for entry in entries {
+        for entry in self.entries {
             let hour = calendar.component(.hour, from: entry.timestamp)
             hourCounts[hour, default: 0] += 1
         }
@@ -464,7 +464,7 @@ extension TranscriptionHistoryStore {
 
     /// Longest single transcription (word count)
     var longestTranscriptionWords: Int {
-        entries.map { self.wordCount(in: $0.processedText) }.max() ?? 0
+        self.entries.map { self.wordCount(in: $0.processedText) }.max() ?? 0
     }
 
     /// Most words in a single day
@@ -472,9 +472,9 @@ extension TranscriptionHistoryStore {
         let calendar = Calendar.current
         var dayTotals: [Date: Int] = [:]
 
-        for entry in entries {
+        for entry in self.entries {
             let day = calendar.startOfDay(for: entry.timestamp)
-            dayTotals[day, default: 0] += wordCount(in: entry.processedText)
+            dayTotals[day, default: 0] += self.wordCount(in: entry.processedText)
         }
 
         return dayTotals.values.max() ?? 0
@@ -485,7 +485,7 @@ extension TranscriptionHistoryStore {
         let calendar = Calendar.current
         var dayCounts: [Date: Int] = [:]
 
-        for entry in entries {
+        for entry in self.entries {
             let day = calendar.startOfDay(for: entry.timestamp)
             dayCounts[day, default: 0] += 1
         }
@@ -506,7 +506,7 @@ extension TranscriptionHistoryStore {
             (1_000_000, "1M"),
         ]
 
-        let total = totalWords
+        let total = self.totalWords
         return milestones.map { (target: $0.0, achieved: total >= $0.0, label: $0.1) }
     }
 
@@ -521,7 +521,7 @@ extension TranscriptionHistoryStore {
             (10_000, "10K"),
         ]
 
-        let total = entries.count
+        let total = self.entries.count
         return milestones.map { (target: $0.0, achieved: total >= $0.0, label: $0.1) }
     }
 
@@ -536,19 +536,19 @@ extension TranscriptionHistoryStore {
             (365, "1 year"),
         ]
 
-        let best = bestStreak
+        let best = self.bestStreak
         return milestones.map { (target: $0.0, achieved: best >= $0.0, label: $0.1) }
     }
 
     /// Total milestones achieved
     var totalMilestonesAchieved: Int {
-        wordMilestones.filter { $0.achieved }.count +
-            transcriptionMilestones.filter { $0.achieved }.count +
-            streakMilestones.filter { $0.achieved }.count
+        self.wordMilestones.filter { $0.achieved }.count +
+            self.transcriptionMilestones.filter { $0.achieved }.count +
+            self.streakMilestones.filter { $0.achieved }.count
     }
 
     /// Total possible milestones
     var totalMilestonesPossible: Int {
-        wordMilestones.count + transcriptionMilestones.count + streakMilestones.count
+        self.wordMilestones.count + self.transcriptionMilestones.count + self.streakMilestones.count
     }
 }

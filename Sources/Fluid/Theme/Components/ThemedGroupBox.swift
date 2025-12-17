@@ -21,7 +21,7 @@ struct ThemedGroupBox<Label: View, Content: View>: View {
     }
 
     var body: some View {
-        ThemedCard(style: style, padding: 0, hoverEffect: hoverEffect) {
+        ThemedCard(style: self.style, padding: 0, hoverEffect: self.hoverEffect) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 self.label
                     .font(.headline)

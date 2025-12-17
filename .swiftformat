@@ -19,7 +19,7 @@
 --operatorfunc spaced
 --patternlet hoist
 --ranges nospace
---self remove
+--self insert
 --semicolons inline
 --stripunusedargs closure-only
 --trimwhitespace always

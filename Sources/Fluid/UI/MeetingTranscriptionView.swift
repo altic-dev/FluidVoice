@@ -167,7 +167,7 @@ struct MeetingTranscriptionView: View {
             }
         }
         .fileImporter(
-            isPresented: $showingFilePicker,
+            isPresented: self.$showingFilePicker,
             allowedContentTypes: {
                 var types: [UTType] = [.audio, .movie, .mpeg4Movie]
                 ["wav", "mp3", "m4a"]
@@ -271,14 +271,14 @@ struct MeetingTranscriptionView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .cornerRadius(12)
         .fileExporter(
-            isPresented: $showingExportDialog,
+            isPresented: self.$showingExportDialog,
             document: TranscriptionDocument(
                 result: result,
-                format: exportFormat,
-                service: transcriptionService
+                format: self.exportFormat,
+                service: self.transcriptionService
             ),
-            contentType: exportFormat == .text ? .plainText : .json,
-            defaultFilename: "\(result.fileName)_transcript.\(exportFormat.fileExtension)"
+            contentType: self.exportFormat == .text ? .plainText : .json,
+            defaultFilename: "\(result.fileName)_transcript.\(self.exportFormat.fileExtension)"
         ) { result in
             switch result {
             case .success:
@@ -317,7 +317,7 @@ struct MeetingTranscriptionView: View {
         guard let fileURL = selectedFileURL else { return }
 
         do {
-            _ = try await transcriptionService.transcribeFile(fileURL)
+            _ = try await self.transcriptionService.transcribeFile(fileURL)
         } catch {
             print("Transcription error: \(error)")
         }
@@ -375,13 +375,13 @@ struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(format.fileExtension)")
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(self.format.fileExtension)")
 
-        switch format {
+        switch self.format {
         case .text:
-            try service.exportToText(result, to: tempURL)
+            try self.service.exportToText(self.result, to: tempURL)
         case .json:
-            try service.exportToJSON(result, to: tempURL)
+            try self.service.exportToJSON(self.result, to: tempURL)
         }
 
         let data = try Data(contentsOf: tempURL)

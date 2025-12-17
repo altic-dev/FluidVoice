@@ -25,46 +25,46 @@ final class WhisperProvider: TranscriptionProvider {
     private var modelURL: URL {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return cacheDir.appendingPathComponent("WhisperModels").appendingPathComponent(modelName)
+        return cacheDir.appendingPathComponent("WhisperModels").appendingPathComponent(self.modelName)
     }
 
     private var modelDirectory: URL {
-        modelURL.deletingLastPathComponent()
+        self.modelURL.deletingLastPathComponent()
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
         // Detect model change: if a different model is now selected, force reload
-        let currentModelName = modelName
-        if isReady, loadedModelName != currentModelName {
+        let currentModelName = self.modelName
+        if self.isReady, self.loadedModelName != currentModelName {
             DebugLogger.shared
                 .info(
-                    "WhisperProvider: Model changed from \(loadedModelName ?? "nil") to \(currentModelName), forcing reload",
+                    "WhisperProvider: Model changed from \(self.loadedModelName ?? "nil") to \(currentModelName), forcing reload",
                     source: "WhisperProvider"
                 )
-            isReady = false
-            whisper = nil
-            loadedModelName = nil
+            self.isReady = false
+            self.whisper = nil
+            self.loadedModelName = nil
         }
 
-        guard isReady == false else { return }
+        guard self.isReady == false else { return }
 
         DebugLogger.shared.info("WhisperProvider: Starting model preparation", source: "WhisperProvider")
 
         // Ensure model directory exists
-        try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
 
         // Download model if not present
-        if !FileManager.default.fileExists(atPath: modelURL.path) {
+        if !FileManager.default.fileExists(atPath: self.modelURL.path) {
             DebugLogger.shared.info("WhisperProvider: Downloading Whisper model...", source: "WhisperProvider")
-            try await downloadModel(progressHandler: progressHandler)
+            try await self.downloadModel(progressHandler: progressHandler)
         }
 
         // Load the model
         DebugLogger.shared.info("WhisperProvider: Loading Whisper model...", source: "WhisperProvider")
-        whisper = Whisper(fromFileURL: modelURL)
+        self.whisper = Whisper(fromFileURL: self.modelURL)
 
-        loadedModelName = currentModelName
-        isReady = true
+        self.loadedModelName = currentModelName
+        self.isReady = true
         DebugLogger.shared.info("WhisperProvider: Model ready (\(currentModelName))", source: "WhisperProvider")
     }
 
@@ -89,16 +89,16 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        return FileManager.default.fileExists(atPath: modelURL.path)
+        return FileManager.default.fileExists(atPath: self.modelURL.path)
     }
 
     func clearCache() async throws {
-        if FileManager.default.fileExists(atPath: modelDirectory.path) {
-            try FileManager.default.removeItem(at: modelDirectory)
+        if FileManager.default.fileExists(atPath: self.modelDirectory.path) {
+            try FileManager.default.removeItem(at: self.modelDirectory)
         }
-        isReady = false
-        whisper = nil
-        loadedModelName = nil
+        self.isReady = false
+        self.whisper = nil
+        self.loadedModelName = nil
     }
 
     // MARK: - Model Download
@@ -139,10 +139,10 @@ final class WhisperProvider: TranscriptionProvider {
             }
 
             // Move to final location
-            if FileManager.default.fileExists(atPath: modelURL.path) {
-                try FileManager.default.removeItem(at: modelURL)
+            if FileManager.default.fileExists(atPath: self.modelURL.path) {
+                try FileManager.default.removeItem(at: self.modelURL)
             }
-            try FileManager.default.moveItem(at: tempURL, to: modelURL)
+            try FileManager.default.moveItem(at: tempURL, to: self.modelURL)
 
             DebugLogger.shared.info("WhisperProvider: Model downloaded successfully", source: "WhisperProvider")
         } catch let error as NSError {

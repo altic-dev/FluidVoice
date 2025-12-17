@@ -21,7 +21,7 @@ struct AISettingsView: View {
     @EnvironmentObject private var menuBarManager: MenuBarManager
     @Environment(\.theme) private var theme
 
-    private var asr: ASRService { appServices.asr }
+    private var asr: ASRService { self.appServices.asr }
 
     // MARK: - State Variables (moved from ContentView)
 
@@ -92,21 +92,21 @@ struct AISettingsView: View {
             // This ensures the speech recognition card shows current download status
             self.asr.checkIfModelsExist()
         }
-        .onChange(of: enableAIProcessing) { _, newValue in
+        .onChange(of: self.enableAIProcessing) { _, newValue in
             SettingsStore.shared.enableAIProcessing = newValue
             // Keep menu bar UI in sync when toggled from this screen
             self.menuBarManager.aiProcessingEnabled = newValue
         }
-        .onChange(of: selectedModel) { _, newValue in
+        .onChange(of: self.selectedModel) { _, newValue in
             if newValue != "__ADD_MODEL__" {
                 self.selectedModelByProvider[self.currentProvider] = newValue
                 SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
             }
         }
-        .onChange(of: selectedProviderID) { _, newValue in
+        .onChange(of: self.selectedProviderID) { _, newValue in
             SettingsStore.shared.selectedProviderID = newValue
         }
-        .onChange(of: showKeychainPermissionAlert) { _, isPresented in
+        .onChange(of: self.showKeychainPermissionAlert) { _, isPresented in
             guard isPresented else { return }
             self.presentKeychainAccessAlert(message: self.keychainPermissionMessage)
             self.showKeychainPermissionAlert = false
@@ -116,18 +116,18 @@ struct AISettingsView: View {
     // MARK: - Load Settings
 
     private func loadSettings() {
-        selectedProviderID = SettingsStore.shared.selectedProviderID
-        updateCurrentProvider()
+        self.selectedProviderID = SettingsStore.shared.selectedProviderID
+        self.updateCurrentProvider()
 
-        enableAIProcessing = SettingsStore.shared.enableAIProcessing
-        availableModelsByProvider = SettingsStore.shared.availableModelsByProvider
-        selectedModelByProvider = SettingsStore.shared.selectedModelByProvider
-        providerAPIKeys = SettingsStore.shared.providerAPIKeys
-        savedProviders = SettingsStore.shared.savedProviders
+        self.enableAIProcessing = SettingsStore.shared.enableAIProcessing
+        self.availableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+        self.selectedModelByProvider = SettingsStore.shared.selectedModelByProvider
+        self.providerAPIKeys = SettingsStore.shared.providerAPIKeys
+        self.savedProviders = SettingsStore.shared.savedProviders
 
         // Normalize provider keys
         var normalized: [String: [String]] = [:]
-        for (key, models) in availableModelsByProvider {
+        for (key, models) in self.availableModelsByProvider {
             let lower = key.lowercased()
             let newKey: String
             if lower == "openai" || lower == "groq" {
@@ -138,35 +138,35 @@ struct AISettingsView: View {
             let clean = Array(Set(models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
             if !clean.isEmpty { normalized[newKey] = clean }
         }
-        availableModelsByProvider = normalized
+        self.availableModelsByProvider = normalized
         SettingsStore.shared.availableModelsByProvider = normalized
 
         // Normalize selected model by provider
         var normalizedSel: [String: String] = [:]
-        for (key, model) in selectedModelByProvider {
+        for (key, model) in self.selectedModelByProvider {
             let lower = key.lowercased()
             let newKey: String = (lower == "openai" || lower == "groq") ? lower :
                 (key.hasPrefix("custom:") ? key : "custom:\(key)")
             if let list = normalized[newKey], list.contains(model) { normalizedSel[newKey] = model }
         }
-        selectedModelByProvider = normalizedSel
+        self.selectedModelByProvider = normalizedSel
         SettingsStore.shared.selectedModelByProvider = normalizedSel
 
         // Determine initial model list
         if let saved = savedProviders.first(where: { $0.id == selectedProviderID }) {
-            availableModels = saved.models
-            openAIBaseURL = saved.baseURL
+            self.availableModels = saved.models
+            self.openAIBaseURL = saved.baseURL
         } else if let stored = availableModelsByProvider[currentProvider], !stored.isEmpty {
-            availableModels = stored
+            self.availableModels = stored
         } else {
-            availableModels = defaultModels(for: providerKey(for: selectedProviderID))
+            self.availableModels = self.defaultModels(for: self.providerKey(for: self.selectedProviderID))
         }
 
         // Restore selected model
         if let sel = selectedModelByProvider[currentProvider], availableModels.contains(sel) {
-            selectedModel = sel
+            self.selectedModel = sel
         } else if let first = availableModels.first {
-            selectedModel = first
+            self.selectedModel = first
         }
     }
 
@@ -346,7 +346,7 @@ struct AISettingsView: View {
 
     private func downloadModels() async {
         do {
-            try await asr.ensureAsrReady()
+            try await self.asr.ensureAsrReady()
         } catch {
             DebugLogger.shared.error("Failed to download models: \(error)", source: "AISettingsView")
         }
@@ -354,7 +354,7 @@ struct AISettingsView: View {
 
     private func deleteModels() async {
         do {
-            try await asr.clearModelCache()
+            try await self.asr.clearModelCache()
         } catch {
             DebugLogger.shared.error("Failed to delete models: \(error)", source: "AISettingsView")
         }
@@ -364,7 +364,7 @@ struct AISettingsView: View {
 
     private func providerKey(for providerID: String) -> String {
         if providerID == "openai" || providerID == "groq" { return providerID }
-        return providerID.isEmpty ? currentProvider : "custom:\(providerID)"
+        return providerID.isEmpty ? self.currentProvider : "custom:\(providerID)"
     }
 
     private func providerDisplayName(for providerID: String) -> String {
@@ -373,7 +373,7 @@ struct AISettingsView: View {
         case "groq": return "Groq"
         case "apple-intelligence": return "Apple Intelligence"
         default:
-            return savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
+            return self.savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
         }
     }
 
@@ -386,18 +386,18 @@ struct AISettingsView: View {
     }
 
     private func saveProviderAPIKeys() {
-        SettingsStore.shared.providerAPIKeys = providerAPIKeys
+        SettingsStore.shared.providerAPIKeys = self.providerAPIKeys
     }
 
     private func updateCurrentProvider() {
-        let url = openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if url.contains("openai.com") { currentProvider = "openai"; return }
-        if url.contains("groq.com") { currentProvider = "groq"; return }
-        currentProvider = providerKey(for: selectedProviderID)
+        let url = self.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if url.contains("openai.com") { self.currentProvider = "openai"; return }
+        if url.contains("groq.com") { self.currentProvider = "groq"; return }
+        self.currentProvider = self.providerKey(for: self.selectedProviderID)
     }
 
     private func saveSavedProviders() {
-        SettingsStore.shared.savedProviders = savedProviders
+        SettingsStore.shared.savedProviders = self.savedProviders
     }
 
     private func isLocalEndpoint(_ urlString: String) -> Bool {
@@ -415,13 +415,13 @@ struct AISettingsView: View {
     }
 
     private func hasReasoningConfigForCurrentModel() -> Bool {
-        let pKey = providerKey(for: selectedProviderID)
-        if SettingsStore.shared.hasCustomReasoningConfig(forModel: selectedModel, provider: pKey) {
+        let pKey = self.providerKey(for: self.selectedProviderID)
+        if SettingsStore.shared.hasCustomReasoningConfig(forModel: self.selectedModel, provider: pKey) {
             if let config = SettingsStore.shared.getReasoningConfig(forModel: selectedModel, provider: pKey) {
                 return config.isEnabled
             }
         }
-        let modelLower = selectedModel.lowercased()
+        let modelLower = self.selectedModel.lowercased()
         return modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") ||
             modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") ||
             modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/") ||
@@ -429,35 +429,35 @@ struct AISettingsView: View {
     }
 
     private func addNewModel() {
-        guard !newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let modelName = newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = providerKey(for: selectedProviderID)
+        guard !self.newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let modelName = self.newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = self.providerKey(for: self.selectedProviderID)
 
-        var list = availableModelsByProvider[key] ?? availableModels
+        var list = self.availableModelsByProvider[key] ?? self.availableModels
         if !list.contains(modelName) {
             list.append(modelName)
-            availableModelsByProvider[key] = list
-            SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+            self.availableModelsByProvider[key] = list
+            SettingsStore.shared.availableModelsByProvider = self.availableModelsByProvider
 
             if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
                 let updatedProvider = SettingsStore.SavedProvider(
-                    id: savedProviders[providerIndex].id,
-                    name: savedProviders[providerIndex].name,
-                    baseURL: savedProviders[providerIndex].baseURL,
+                    id: self.savedProviders[providerIndex].id,
+                    name: self.savedProviders[providerIndex].name,
+                    baseURL: self.savedProviders[providerIndex].baseURL,
                     models: list
                 )
-                savedProviders[providerIndex] = updatedProvider
-                saveSavedProviders()
+                self.savedProviders[providerIndex] = updatedProvider
+                self.saveSavedProviders()
             }
 
-            availableModels = list
-            selectedModel = modelName
-            selectedModelByProvider[key] = modelName
-            SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+            self.availableModels = list
+            self.selectedModel = modelName
+            self.selectedModelByProvider[key] = modelName
+            SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
         }
 
-        showingAddModel = false
-        newModelName = ""
+        self.showingAddModel = false
+        self.newModelName = ""
     }
 
     // MARK: - Keychain Access Helpers
@@ -468,13 +468,13 @@ struct AISettingsView: View {
     }
 
     private func handleAPIKeyButtonTapped() {
-        switch probeKeychainAccess() {
+        switch self.probeKeychainAccess() {
         case .granted:
-            newProviderApiKey = providerAPIKeys[currentProvider] ?? ""
-            showAPIKeyEditor = true
+            self.newProviderApiKey = self.providerAPIKeys[self.currentProvider] ?? ""
+            self.showAPIKeyEditor = true
         case let .denied(status):
-            keychainPermissionMessage = keychainPermissionExplanation(for: status)
-            showKeychainPermissionAlert = true
+            self.keychainPermissionMessage = self.keychainPermissionExplanation(for: status)
+            self.showKeychainPermissionAlert = true
         }
     }
 
@@ -558,11 +558,11 @@ struct AISettingsView: View {
     // MARK: - API Connection Testing
 
     private func testAPIConnection() async {
-        guard !isTestingConnection else { return }
+        guard !self.isTestingConnection else { return }
 
-        let apiKey = providerAPIKeys[currentProvider] ?? ""
-        let baseURL = openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isLocal = isLocalEndpoint(baseURL)
+        let apiKey = self.providerAPIKeys[self.currentProvider] ?? ""
+        let baseURL = self.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isLocal = self.isLocalEndpoint(baseURL)
 
         if isLocal {
             guard !baseURL.isEmpty else {
@@ -607,13 +607,13 @@ struct AISettingsView: View {
                 return
             }
 
-            let provKey = providerKey(for: selectedProviderID)
+            let provKey = self.providerKey(for: self.selectedProviderID)
             let reasoningConfig = SettingsStore.shared.getReasoningConfig(
-                forModel: selectedModel,
+                forModel: self.selectedModel,
                 provider: provKey
             )
 
-            let modelLower = selectedModel.lowercased()
+            let modelLower = self.selectedModel.lowercased()
             let usesMaxCompletionTokens = modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") ||
                 modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3")
 
@@ -841,9 +841,9 @@ struct AISettingsView: View {
             }
         }
         .padding(14)
-        .background(theme.palette.accent.opacity(0.08))
+        .background(self.theme.palette.accent.opacity(0.08))
         .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.palette.accent.opacity(0.2), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(self.theme.palette.accent.opacity(0.2), lineWidth: 1))
         .padding(.horizontal, 4)
         .transition(.opacity)
     }
@@ -974,57 +974,57 @@ struct AISettingsView: View {
     private func handleProviderChange(_ newValue: String) {
         switch newValue {
         case "openai":
-            openAIBaseURL = "https://api.openai.com/v1"
-            updateCurrentProvider()
+            self.openAIBaseURL = "https://api.openai.com/v1"
+            self.updateCurrentProvider()
             let key = "openai"
-            availableModels = availableModelsByProvider[key] ?? defaultModels(for: key)
-            selectedModel = selectedModelByProvider[key] ?? availableModels.first ?? selectedModel
+            self.availableModels = self.availableModelsByProvider[key] ?? self.defaultModels(for: key)
+            self.selectedModel = self.selectedModelByProvider[key] ?? self.availableModels.first ?? self.selectedModel
         case "groq":
-            openAIBaseURL = "https://api.groq.com/openai/v1"
-            updateCurrentProvider()
+            self.openAIBaseURL = "https://api.groq.com/openai/v1"
+            self.updateCurrentProvider()
             let key = "groq"
-            availableModels = availableModelsByProvider[key] ?? defaultModels(for: key)
-            selectedModel = selectedModelByProvider[key] ?? availableModels.first ?? selectedModel
+            self.availableModels = self.availableModelsByProvider[key] ?? self.defaultModels(for: key)
+            self.selectedModel = self.selectedModelByProvider[key] ?? self.availableModels.first ?? self.selectedModel
         case "apple-intelligence":
-            openAIBaseURL = ""
-            updateCurrentProvider()
-            availableModels = ["System Model"]
-            selectedModel = "System Model"
+            self.openAIBaseURL = ""
+            self.updateCurrentProvider()
+            self.availableModels = ["System Model"]
+            self.selectedModel = "System Model"
         default:
             if let provider = savedProviders.first(where: { $0.id == newValue }) {
-                openAIBaseURL = provider.baseURL
-                updateCurrentProvider()
-                let key = providerKey(for: newValue)
-                availableModels = provider.models.isEmpty ? (availableModelsByProvider[key] ?? []) : provider
+                self.openAIBaseURL = provider.baseURL
+                self.updateCurrentProvider()
+                let key = self.providerKey(for: newValue)
+                self.availableModels = provider.models.isEmpty ? (self.availableModelsByProvider[key] ?? []) : provider
                     .models
-                selectedModel = selectedModelByProvider[key] ?? availableModels.first ?? selectedModel
+                self.selectedModel = self.selectedModelByProvider[key] ?? self.availableModels.first ?? self.selectedModel
             }
         }
     }
 
     private func startEditingProvider() {
         if let provider = savedProviders.first(where: { $0.id == selectedProviderID }) {
-            editProviderName = provider.name
-            editProviderBaseURL = provider.baseURL
-            showingEditProvider = true
+            self.editProviderName = provider.name
+            self.editProviderBaseURL = provider.baseURL
+            self.showingEditProvider = true
         }
     }
 
     private func deleteCurrentProvider() {
-        savedProviders.removeAll { $0.id == self.selectedProviderID }
-        saveSavedProviders()
-        let key = providerKey(for: selectedProviderID)
-        availableModelsByProvider.removeValue(forKey: key)
-        selectedModelByProvider.removeValue(forKey: key)
-        providerAPIKeys.removeValue(forKey: key)
-        saveProviderAPIKeys()
-        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
-        selectedProviderID = "openai"
-        openAIBaseURL = "https://api.openai.com/v1"
-        updateCurrentProvider()
-        availableModels = defaultModels(for: "openai")
-        selectedModel = availableModels.first ?? selectedModel
+        self.savedProviders.removeAll { $0.id == self.selectedProviderID }
+        self.saveSavedProviders()
+        let key = self.providerKey(for: self.selectedProviderID)
+        self.availableModelsByProvider.removeValue(forKey: key)
+        self.selectedModelByProvider.removeValue(forKey: key)
+        self.providerAPIKeys.removeValue(forKey: key)
+        self.saveProviderAPIKeys()
+        SettingsStore.shared.availableModelsByProvider = self.availableModelsByProvider
+        SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
+        self.selectedProviderID = "openai"
+        self.openAIBaseURL = "https://api.openai.com/v1"
+        self.updateCurrentProvider()
+        self.availableModels = self.defaultModels(for: "openai")
+        self.selectedModel = self.availableModels.first ?? self.selectedModel
     }
 
     private var editProviderSection: some View {
@@ -1056,33 +1056,33 @@ struct AISettingsView: View {
             }
         }
         .padding(12)
-        .background(theme.palette.cardBackground.opacity(0.5))
+        .background(self.theme.palette.cardBackground.opacity(0.5))
         .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.palette.accent.opacity(0.3), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(self.theme.palette.accent.opacity(0.3), lineWidth: 1))
         .padding(.vertical, 8)
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func saveEditedProvider() {
-        let name = editProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = self.editProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = self.editProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !base.isEmpty else { return }
 
         if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-            let oldProvider = savedProviders[providerIndex]
+            let oldProvider = self.savedProviders[providerIndex]
             let updatedProvider = SettingsStore.SavedProvider(
                 id: oldProvider.id,
                 name: name,
                 baseURL: base,
                 models: oldProvider.models
             )
-            savedProviders[providerIndex] = updatedProvider
-            saveSavedProviders()
-            openAIBaseURL = base
-            updateCurrentProvider()
+            self.savedProviders[providerIndex] = updatedProvider
+            self.saveSavedProviders()
+            self.openAIBaseURL = base
+            self.updateCurrentProvider()
         }
-        showingEditProvider = false
-        editProviderName = ""; editProviderBaseURL = ""
+        self.showingEditProvider = false
+        self.editProviderName = ""; self.editProviderBaseURL = ""
     }
 
     private var appleIntelligenceBadge: some View {
@@ -1167,49 +1167,49 @@ struct AISettingsView: View {
     }
 
     private func deleteSelectedModel() {
-        let key = providerKey(for: selectedProviderID)
-        var list = availableModelsByProvider[key] ?? availableModels
+        let key = self.providerKey(for: self.selectedProviderID)
+        var list = self.availableModelsByProvider[key] ?? self.availableModels
         list.removeAll { $0 == self.selectedModel }
-        if list.isEmpty { list = defaultModels(for: key) }
-        availableModelsByProvider[key] = list
-        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+        if list.isEmpty { list = self.defaultModels(for: key) }
+        self.availableModelsByProvider[key] = list
+        SettingsStore.shared.availableModelsByProvider = self.availableModelsByProvider
 
         if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
             let updatedProvider = SettingsStore.SavedProvider(
-                id: savedProviders[providerIndex].id,
-                name: savedProviders[providerIndex].name,
-                baseURL: savedProviders[providerIndex].baseURL,
+                id: self.savedProviders[providerIndex].id,
+                name: self.savedProviders[providerIndex].name,
+                baseURL: self.savedProviders[providerIndex].baseURL,
                 models: list
             )
-            savedProviders[providerIndex] = updatedProvider
-            saveSavedProviders()
+            self.savedProviders[providerIndex] = updatedProvider
+            self.saveSavedProviders()
         }
 
-        availableModels = list
-        selectedModel = list.first ?? ""
-        selectedModelByProvider[key] = selectedModel
-        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+        self.availableModels = list
+        self.selectedModel = list.first ?? ""
+        self.selectedModelByProvider[key] = self.selectedModel
+        SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
     }
 
     private func openReasoningConfig() {
-        let pKey = providerKey(for: selectedProviderID)
+        let pKey = self.providerKey(for: self.selectedProviderID)
         if let config = SettingsStore.shared.getReasoningConfig(forModel: selectedModel, provider: pKey) {
-            editingReasoningParamName = config.parameterName
-            editingReasoningParamValue = config.parameterValue
-            editingReasoningEnabled = config.isEnabled
+            self.editingReasoningParamName = config.parameterName
+            self.editingReasoningParamValue = config.parameterValue
+            self.editingReasoningEnabled = config.isEnabled
         } else {
-            let modelLower = selectedModel.lowercased()
+            let modelLower = self.selectedModel.lowercased()
             if modelLower.hasPrefix("gpt-5") || modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower
                 .contains("gpt-oss")
             {
-                editingReasoningParamName = "reasoning_effort"; editingReasoningParamValue = "low"; editingReasoningEnabled = true
+                self.editingReasoningParamName = "reasoning_effort"; self.editingReasoningParamValue = "low"; self.editingReasoningEnabled = true
             } else if modelLower.contains("deepseek"), modelLower.contains("reasoner") {
-                editingReasoningParamName = "enable_thinking"; editingReasoningParamValue = "true"; editingReasoningEnabled = true
+                self.editingReasoningParamName = "enable_thinking"; self.editingReasoningParamValue = "true"; self.editingReasoningEnabled = true
             } else {
-                editingReasoningParamName = "reasoning_effort"; editingReasoningParamValue = "low"; editingReasoningEnabled = false
+                self.editingReasoningParamName = "reasoning_effort"; self.editingReasoningParamValue = "low"; self.editingReasoningEnabled = false
             }
         }
-        showingReasoningConfig = true
+        self.showingReasoningConfig = true
     }
 
     private var addModelSection: some View {
@@ -1272,9 +1272,9 @@ struct AISettingsView: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(theme.palette.accent.opacity(0.08))
+        .background(RoundedRectangle(cornerRadius: 8).fill(self.theme.palette.accent.opacity(0.08))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(
-                theme.palette.accent.opacity(0.2),
+                self.theme.palette.accent.opacity(0.2),
                 lineWidth: 1
             )))
         .padding(.leading, 122)
@@ -1282,19 +1282,19 @@ struct AISettingsView: View {
     }
 
     private func saveReasoningConfig() {
-        let pKey = providerKey(for: selectedProviderID)
-        if editingReasoningEnabled {
+        let pKey = self.providerKey(for: self.selectedProviderID)
+        if self.editingReasoningEnabled {
             let config = SettingsStore.ModelReasoningConfig(
-                parameterName: editingReasoningParamName,
-                parameterValue: editingReasoningParamValue,
+                parameterName: self.editingReasoningParamName,
+                parameterValue: self.editingReasoningParamValue,
                 isEnabled: true
             )
-            SettingsStore.shared.setReasoningConfig(config, forModel: selectedModel, provider: pKey)
+            SettingsStore.shared.setReasoningConfig(config, forModel: self.selectedModel, provider: pKey)
         } else {
             let config = SettingsStore.ModelReasoningConfig(parameterName: "", parameterValue: "", isEnabled: false)
-            SettingsStore.shared.setReasoningConfig(config, forModel: selectedModel, provider: pKey)
+            SettingsStore.shared.setReasoningConfig(config, forModel: self.selectedModel, provider: pKey)
         }
-        showingReasoningConfig = false
+        self.showingReasoningConfig = false
     }
 
     private var connectionTestSection: some View {
@@ -1398,36 +1398,36 @@ struct AISettingsView: View {
     }
 
     private func saveNewProvider() {
-        let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let api = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = self.newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = self.newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let api = self.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !base.isEmpty else { return }
 
-        let modelsList = newProviderModels.split(separator: ",")
+        let modelsList = self.newProviderModels.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        let models = modelsList.isEmpty ? defaultModels(for: "openai") : modelsList
+        let models = modelsList.isEmpty ? self.defaultModels(for: "openai") : modelsList
 
         let newProvider = SettingsStore.SavedProvider(name: name, baseURL: base, models: models)
-        savedProviders.removeAll { $0.name.lowercased() == name.lowercased() }
-        savedProviders.append(newProvider)
-        saveSavedProviders()
+        self.savedProviders.removeAll { $0.name.lowercased() == name.lowercased() }
+        self.savedProviders.append(newProvider)
+        self.saveSavedProviders()
 
-        let key = providerKey(for: newProvider.id)
-        providerAPIKeys[key] = api
-        availableModelsByProvider[key] = models
-        selectedModelByProvider[key] = models.first ?? selectedModel
-        SettingsStore.shared.providerAPIKeys = providerAPIKeys
-        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
-        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+        let key = self.providerKey(for: newProvider.id)
+        self.providerAPIKeys[key] = api
+        self.availableModelsByProvider[key] = models
+        self.selectedModelByProvider[key] = models.first ?? self.selectedModel
+        SettingsStore.shared.providerAPIKeys = self.providerAPIKeys
+        SettingsStore.shared.availableModelsByProvider = self.availableModelsByProvider
+        SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
 
-        selectedProviderID = newProvider.id
-        openAIBaseURL = base
-        updateCurrentProvider()
-        availableModels = models
-        selectedModel = models.first ?? selectedModel
+        self.selectedProviderID = newProvider.id
+        self.openAIBaseURL = base
+        self.updateCurrentProvider()
+        self.availableModels = models
+        self.selectedModel = models.first ?? self.selectedModel
 
-        showingSaveProvider = false
-        newProviderName = ""; newProviderBaseURL = ""; newProviderApiKey = ""; newProviderModels = ""
+        self.showingSaveProvider = false
+        self.newProviderName = ""; self.newProviderBaseURL = ""; self.newProviderApiKey = ""; self.newProviderModels = ""
     }
 
     private var apiKeysGuideCard: some View {
@@ -1487,6 +1487,6 @@ struct AISettingsView: View {
             }
             .padding(14)
         }
-        .modifier(CardAppearAnimation(delay: 0.2, appear: $appear))
+        .modifier(CardAppearAnimation(delay: 0.2, appear: self.$appear))
     }
 }

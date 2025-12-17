@@ -12,7 +12,7 @@ final class AudioVisualizationData: ObservableObject {
     private var cancellable: AnyCancellable?
 
     init(audioLevelPublisher: AnyPublisher<CGFloat, Never>) {
-        cancellable = audioLevelPublisher
+        self.cancellable = audioLevelPublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] level in
                 self?.audioLevel = level

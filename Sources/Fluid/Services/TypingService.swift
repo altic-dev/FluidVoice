@@ -16,29 +16,29 @@ final class TypingService {
     private var isCurrentlyTyping = false
 
     func typeTextInstantly(_ text: String) {
-        log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
-        log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
+        self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
+        self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
 
         guard text.isEmpty == false else {
-            log("[TypingService] ERROR: Empty text provided, aborting")
+            self.log("[TypingService] ERROR: Empty text provided, aborting")
             return
         }
 
         // Prevent concurrent typing operations
-        guard !isCurrentlyTyping else {
-            log("[TypingService] WARNING: Skipping text injection - already in progress")
+        guard !self.isCurrentlyTyping else {
+            self.log("[TypingService] WARNING: Skipping text injection - already in progress")
             return
         }
 
         // Check accessibility permissions first
         guard AXIsProcessTrusted() else {
-            log("[TypingService] ERROR: Accessibility permissions required for text injection")
-            log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
+            self.log("[TypingService] ERROR: Accessibility permissions required for text injection")
+            self.log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
             return
         }
 
-        log("[TypingService] Accessibility check passed, proceeding with text injection")
-        isCurrentlyTyping = true
+        self.log("[TypingService] Accessibility check passed, proceeding with text injection")
+        self.isCurrentlyTyping = true
 
         DispatchQueue.global(qos: .userInitiated).async {
             defer {
@@ -55,94 +55,94 @@ final class TypingService {
     }
 
     private func insertTextInstantly(_ text: String) {
-        log("[TypingService] insertTextInstantly called with \(text.count) characters")
-        log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+        self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
+        self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         // Get frontmost app info
         if let frontApp = NSWorkspace.shared.frontmostApplication {
-            log("[TypingService] Target app: \(frontApp.localizedName ?? "Unknown") (\(frontApp.bundleIdentifier ?? "Unknown"))")
+            self.log("[TypingService] Target app: \(frontApp.localizedName ?? "Unknown") (\(frontApp.bundleIdentifier ?? "Unknown"))")
         } else {
-            log("[TypingService] WARNING: Could not get frontmost application")
+            self.log("[TypingService] WARNING: Could not get frontmost application")
         }
 
         // Check if we have permission to create events
-        log("[TypingService] Accessibility trusted: \(AXIsProcessTrusted())")
+        self.log("[TypingService] Accessibility trusted: \(AXIsProcessTrusted())")
 
         // Try direct bulk CGEvent insertion (NO CLIPBOARD)
-        log("[TypingService] Trying INSTANT bulk CGEvent insertion (no clipboard)")
-        if insertTextBulkInstant(text) {
-            log("[TypingService] SUCCESS: Instant bulk CGEvent completed")
+        self.log("[TypingService] Trying INSTANT bulk CGEvent insertion (no clipboard)")
+        if self.insertTextBulkInstant(text) {
+            self.log("[TypingService] SUCCESS: Instant bulk CGEvent completed")
         } else {
-            log("[TypingService] FAILED: Bulk CGEvent, trying character-by-character")
+            self.log("[TypingService] FAILED: Bulk CGEvent, trying character-by-character")
             // Fallback to character-by-character if bulk fails
             for (index, char) in text.enumerated() {
                 if index % 10 == 0 { // Log every 10th character to avoid spam
-                    log("[TypingService] Typing character \(index + 1)/\(text.count): '\(char)'")
+                    self.log("[TypingService] Typing character \(index + 1)/\(text.count): '\(char)'")
                 }
-                typeCharacter(char)
+                self.typeCharacter(char)
                 usleep(1000) // Small delay between characters (1ms)
             }
 
-            log("[TypingService] Character-by-character typing completed")
+            self.log("[TypingService] Character-by-character typing completed")
         }
     }
 
     private func insertTextBulkInstant(_ text: String) -> Bool {
-        log("[TypingService] Starting INSTANT bulk CGEvent insertion (NO CLIPBOARD)")
+        self.log("[TypingService] Starting INSTANT bulk CGEvent insertion (NO CLIPBOARD)")
 
         // Create single CGEvent with entire text - truly instant
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            log("[TypingService] ERROR: Failed to create bulk CGEvent")
+            self.log("[TypingService] ERROR: Failed to create bulk CGEvent")
             return false
         }
 
         // Convert entire text to UTF16
         let utf16Array = Array(text.utf16)
-        log("[TypingService] Converting \(text.count) characters to single CGEvent")
+        self.log("[TypingService] Converting \(text.count) characters to single CGEvent")
 
         // Set the entire text as unicode string
         event.keyboardSetUnicodeString(stringLength: utf16Array.count, unicodeString: utf16Array)
 
         // Post single event - INSTANT insertion
         event.post(tap: .cghidEventTap)
-        log("[TypingService] Posted single CGEvent with entire text - INSTANT!")
+        self.log("[TypingService] Posted single CGEvent with entire text - INSTANT!")
 
         return true
     }
 
     private func insertTextViaAccessibility(_ text: String) -> Bool {
-        log("[TypingService] Starting Accessibility API insertion")
+        self.log("[TypingService] Starting Accessibility API insertion")
 
         // Try multiple strategies to find text input element
 
         // Strategy 1: Get focused element directly
-        log("[TypingService] Strategy 1: Getting focused UI element...")
+        self.log("[TypingService] Strategy 1: Getting focused UI element...")
         if let textElement = getFocusedTextElement() {
-            log("[TypingService] Found focused text element")
-            if tryAllTextInsertionMethods(textElement, text) {
+            self.log("[TypingService] Found focused text element")
+            if self.tryAllTextInsertionMethods(textElement, text) {
                 return true
             }
         }
 
         // Strategy 2: Traverse frontmost app UI hierarchy to find text elements
-        log("[TypingService] Strategy 2: Traversing app UI hierarchy...")
+        self.log("[TypingService] Strategy 2: Traversing app UI hierarchy...")
         if let textElement = findTextElementInFrontmostApp() {
-            log("[TypingService] Found text element in app hierarchy")
-            if tryAllTextInsertionMethods(textElement, text) {
+            self.log("[TypingService] Found text element in app hierarchy")
+            if self.tryAllTextInsertionMethods(textElement, text) {
                 return true
             }
         }
 
         // Strategy 3: Find element with keyboard focus
-        log("[TypingService] Strategy 3: Looking for keyboard focus...")
+        self.log("[TypingService] Strategy 3: Looking for keyboard focus...")
         if let textElement = findKeyboardFocusedElement() {
-            log("[TypingService] Found keyboard focused element")
-            if tryAllTextInsertionMethods(textElement, text) {
+            self.log("[TypingService] Found keyboard focused element")
+            if self.tryAllTextInsertionMethods(textElement, text) {
                 return true
             }
         }
 
-        log("[TypingService] All Accessibility API strategies failed")
+        self.log("[TypingService] All Accessibility API strategies failed")
         return false
     }
 
@@ -160,11 +160,11 @@ final class TypingService {
             guard CFGetTypeID(focusedElement) == AXUIElementGetTypeID() else { return nil }
             let axElement = unsafeBitCast(focusedElement, to: AXUIElement.self)
             if let role = getElementAttribute(axElement, kAXRoleAttribute as CFString) {
-                log("[TypingService] Found focused element with role: \(role)")
+                self.log("[TypingService] Found focused element with role: \(role)")
                 return axElement
             }
         } else {
-            log("[TypingService] Could not get focused UI element - result: \(result.rawValue)")
+            self.log("[TypingService] Could not get focused UI element - result: \(result.rawValue)")
         }
 
         return nil
@@ -172,12 +172,12 @@ final class TypingService {
 
     private func findTextElementInFrontmostApp() -> AXUIElement? {
         guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
-            log("[TypingService] Could not get frontmost app")
+            self.log("[TypingService] Could not get frontmost app")
             return nil
         }
 
         let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
-        return findTextElementRecursively(appElement, depth: 0, maxDepth: 8)
+        return self.findTextElementRecursively(appElement, depth: 0, maxDepth: 8)
     }
 
     private func findTextElementRecursively(_ element: AXUIElement, depth: Int, maxDepth: Int) -> AXUIElement? {
@@ -187,7 +187,7 @@ final class TypingService {
         if let role = getElementAttribute(element, kAXRoleAttribute as CFString) {
             let textRoles = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXStaticText"]
             if textRoles.contains(role) {
-                log("[TypingService] Found text element at depth \(depth) with role: \(role)")
+                self.log("[TypingService] Found text element at depth \(depth) with role: \(role)")
                 return element
             }
         }
@@ -223,7 +223,7 @@ final class TypingService {
             guard CFGetTypeID(focusedElement) == AXUIElementGetTypeID() else { return nil }
             let axElement = unsafeBitCast(focusedElement, to: AXUIElement.self)
             if let role = getElementAttribute(axElement, kAXRoleAttribute as CFString) {
-                log("[TypingService] Found app-level focused element with role: \(role)")
+                self.log("[TypingService] Found app-level focused element with role: \(role)")
                 return axElement
             }
         }
@@ -234,26 +234,26 @@ final class TypingService {
     private func tryAllTextInsertionMethods(_ element: AXUIElement, _ text: String) -> Bool {
         // Get element info for debugging
         if let role = getElementAttribute(element, kAXRoleAttribute as CFString) {
-            log("[TypingService] Trying insertion on element with role: \(role)")
+            self.log("[TypingService] Trying insertion on element with role: \(role)")
 
             if let title = getElementAttribute(element, kAXTitleAttribute as CFString) {
-                log("[TypingService] Element title: \(title)")
+                self.log("[TypingService] Element title: \(title)")
             }
         }
 
         // Try multiple approaches for text insertion
-        log("[TypingService] Trying approach 1: Direct kAXValueAttribute")
-        if setTextViaValue(element, text) {
+        self.log("[TypingService] Trying approach 1: Direct kAXValueAttribute")
+        if self.setTextViaValue(element, text) {
             return true
         }
 
-        log("[TypingService] Trying approach 2: kAXSelectedTextAttribute (replace selection)")
-        if setTextViaSelection(element, text) {
+        self.log("[TypingService] Trying approach 2: kAXSelectedTextAttribute (replace selection)")
+        if self.setTextViaSelection(element, text) {
             return true
         }
 
-        log("[TypingService] Trying approach 3: Insert text at insertion point")
-        if insertTextAtInsertionPoint(element, text) {
+        self.log("[TypingService] Trying approach 3: Insert text at insertion point")
+        if self.insertTextAtInsertionPoint(element, text) {
             return true
         }
 
@@ -275,10 +275,10 @@ final class TypingService {
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, cfText)
 
         if result == .success {
-            log("[TypingService] SUCCESS: Set text via kAXValueAttribute")
+            self.log("[TypingService] SUCCESS: Set text via kAXValueAttribute")
             return true
         } else {
-            log("[TypingService] FAILED: kAXValueAttribute - error: \(result.rawValue)")
+            self.log("[TypingService] FAILED: kAXValueAttribute - error: \(result.rawValue)")
             return false
         }
     }
@@ -290,17 +290,17 @@ final class TypingService {
             kAXSelectedTextAttribute as CFString,
             "" as CFString
         )
-        log("[TypingService] Select all result: \(selectAllResult.rawValue)")
+        self.log("[TypingService] Select all result: \(selectAllResult.rawValue)")
 
         // Then replace the selection with our text
         let cfText = text as CFString
         let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, cfText)
 
         if result == .success {
-            log("[TypingService] SUCCESS: Set text via kAXSelectedTextAttribute")
+            self.log("[TypingService] SUCCESS: Set text via kAXSelectedTextAttribute")
             return true
         } else {
-            log("[TypingService] FAILED: kAXSelectedTextAttribute - error: \(result.rawValue)")
+            self.log("[TypingService] FAILED: kAXSelectedTextAttribute - error: \(result.rawValue)")
             return false
         }
     }
@@ -313,52 +313,52 @@ final class TypingService {
             kAXInsertionPointLineNumberAttribute as CFString,
             &insertionPoint
         )
-        log("[TypingService] Get insertion point result: \(getResult.rawValue)")
+        self.log("[TypingService] Get insertion point result: \(getResult.rawValue)")
 
         // Try to insert text using parameterized attribute
         let cfText = text as CFString
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, cfText)
 
         if result == .success {
-            log("[TypingService] SUCCESS: Inserted text at insertion point")
+            self.log("[TypingService] SUCCESS: Inserted text at insertion point")
             return true
         } else {
-            log("[TypingService] FAILED: Insertion point method - error: \(result.rawValue)")
+            self.log("[TypingService] FAILED: Insertion point method - error: \(result.rawValue)")
             return false
         }
     }
 
     private func insertTextBulk(_ text: String) -> Bool {
-        log("[TypingService] Starting bulk CGEvent insertion")
+        self.log("[TypingService] Starting bulk CGEvent insertion")
 
         // Get the frontmost application's PID for targeted event posting
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
-            log("[TypingService] ERROR: Could not get frontmost application for bulk insertion")
+            self.log("[TypingService] ERROR: Could not get frontmost application for bulk insertion")
             return false
         }
 
         let targetPID = frontApp.processIdentifier
-        log("[TypingService] Targeting PID \(targetPID) for bulk insertion")
+        self.log("[TypingService] Targeting PID \(targetPID) for bulk insertion")
 
         // Try word-by-word insertion instead of entire text at once (faster than char-by-char but more reliable than
         // bulk)
         let words = text.components(separatedBy: " ")
-        log("[TypingService] Splitting text into \(words.count) words for bulk insertion")
+        self.log("[TypingService] Splitting text into \(words.count) words for bulk insertion")
 
         for (index, word) in words.enumerated() {
             let wordToType = word + (index < words.count - 1 ? " " : "") // Add space except for last word
 
-            if !insertWordViaCGEvent(wordToType, targetPID: targetPID) {
-                log("[TypingService] Failed to insert word \(index + 1): '\(word)', falling back to character method")
+            if !self.insertWordViaCGEvent(wordToType, targetPID: targetPID) {
+                self.log("[TypingService] Failed to insert word \(index + 1): '\(word)', falling back to character method")
                 return false
             }
 
             if index % 5 == 0 && index > 0 {
-                log("[TypingService] Bulk insertion progress: \(index + 1)/\(words.count) words")
+                self.log("[TypingService] Bulk insertion progress: \(index + 1)/\(words.count) words")
             }
         }
 
-        log("[TypingService] Successfully completed bulk word-by-word insertion")
+        self.log("[TypingService] Successfully completed bulk word-by-word insertion")
         return true
     }
 
@@ -370,7 +370,7 @@ final class TypingService {
         guard let keyDownEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
               let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
-            log("[TypingService] ERROR: Failed to create CGEvents for word: '\(word)'")
+            self.log("[TypingService] ERROR: Failed to create CGEvents for word: '\(word)'")
             return false
         }
 
@@ -394,7 +394,7 @@ final class TypingService {
         guard let keyDownEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
               let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
-            log("[TypingService] ERROR: Failed to create CGEvents for character: \(char)")
+            self.log("[TypingService] ERROR: Failed to create CGEvents for character: \(char)")
             return
         }
 

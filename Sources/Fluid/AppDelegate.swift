@@ -9,16 +9,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize AppUpdater for automatic updates
         // Repository: https://github.com/altic-dev/Fluid-oss
-        updater = AppUpdater(owner: "altic-dev", repo: "Fluid-oss")
+        self.updater = AppUpdater(owner: "altic-dev", repo: "Fluid-oss")
 
         // Request accessibility permissions for global hotkey monitoring
-        requestAccessibilityPermissions()
+        self.requestAccessibilityPermissions()
 
         // Initialize app settings (dock visibility, etc.)
         SettingsStore.shared.initializeAppSettings()
 
         // Check for updates automatically if enabled
-        checkForUpdatesAutomatically()
+        self.checkForUpdatesAutomatically()
 
         // Note: App UI is designed with dark color scheme in mind
         // All gradients and effects are optimized for dark mode
@@ -136,7 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if response == .alertFirstButtonReturn {
             DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
-            checkForUpdatesManually()
+            self.checkForUpdatesManually()
         } else {
             DebugLogger.shared.info("User postponed update", source: "AppDelegate")
         }
