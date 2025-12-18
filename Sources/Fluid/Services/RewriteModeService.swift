@@ -6,13 +6,15 @@ import Foundation
 final class RewriteModeService: ObservableObject {
     @Published var originalText: String = ""
     @Published var rewrittenText: String = ""
+    @Published var streamingThinkingText: String = ""  // Real-time thinking tokens for UI
     @Published var isProcessing = false
     @Published var conversationHistory: [Message] = []
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
-
+    private var thinkingBuffer: [String] = []  // Buffer thinking tokens
+    
     struct Message: Identifiable, Equatable {
         let id = UUID()
         let role: Role
@@ -104,10 +106,12 @@ final class RewriteModeService: ObservableObject {
     }
 
     func clearState() {
-        self.originalText = ""
-        self.rewrittenText = ""
-        self.conversationHistory = []
-        self.isWriteMode = false
+        originalText = ""
+        rewrittenText = ""
+        streamingThinkingText = ""
+        conversationHistory = []
+        isWriteMode = false
+        thinkingBuffer = []
     }
 
     // MARK: - LLM Integration
@@ -176,7 +180,8 @@ final class RewriteModeService: ObservableObject {
             Output ONLY the rewritten text. No explanations, no quotes around the text, no preamble.
             """
         }
-
+        
+        // Build messages array for LLMClient
         var apiMessages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],
         ]
@@ -189,110 +194,75 @@ final class RewriteModeService: ObservableObject {
         let enableStreaming = settings.enableAIStreaming
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
-        let isReasoningModel = model.hasPrefix("o1") || model.hasPrefix("o3") || model.hasPrefix("gpt-5")
-
-        var body: [String: Any] = [
-            "model": model,
-            "messages": apiMessages,
-        ]
-
-        // Only add temperature for non-reasoning models
-        if !isReasoningModel {
-            body["temperature"] = 0.7
-        }
-
-        if enableStreaming {
-            // TODO: Streamed text is still buffered; add incremental UI updates so write mode visibly streams.
-            body["stream"] = true
-        }
-
-        let endpoint = baseURL.hasSuffix("/chat/completions") ? baseURL : "\(baseURL)/chat/completions"
-        guard let url = URL(string: endpoint) else {
-            throw NSError(domain: "RewriteMode", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        if enableStreaming {
-            DebugLogger.shared.info("Using STREAMING mode for Write/Rewrite", source: "RewriteModeService")
-            return try await self.processStreamingResponse(request: request)
-        } else {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                let err = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw NSError(domain: "RewriteMode", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: err])
+        let isReasoningModel = settings.isReasoningModel(model)
+        
+        // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
+        let reasoningConfig = settings.getReasoningConfig(forModel: model, provider: providerID)
+        var extraParams: [String: Any]? = nil
+        if let rConfig = reasoningConfig, rConfig.isEnabled {
+            if rConfig.parameterName == "enable_thinking" {
+                extraParams = [rConfig.parameterName: rConfig.parameterValue == "true"]
+            } else {
+                extraParams = [rConfig.parameterName: rConfig.parameterValue]
             }
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let choice = choices.first,
-                  let message = choice["message"] as? [String: Any],
-                  let content = message["content"] as? String
-            else {
-                throw NSError(
-                    domain: "RewriteMode",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid response"]
-                )
-            }
-
-            return content
+            DebugLogger.shared.debug("Added reasoning param: \(rConfig.parameterName)=\(rConfig.parameterValue)", source: "RewriteModeService")
         }
-    }
-
-    // MARK: - Streaming Response Handler
-
-    private func processStreamingResponse(request: URLRequest) async throws -> String {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "RewriteMode", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: errText])
-        }
-
-        var fullContent = ""
-
-        // Use efficient line-based iteration instead of byte-by-byte
-        for try await rawLine in bytes.lines {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-
-            guard line.hasPrefix("data:") else { continue }
-
-            var jsonString = String(line.dropFirst(5))
-            if jsonString.hasPrefix(" ") {
-                jsonString = String(jsonString.dropFirst(1))
-            }
-
-            if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
-                continue
-            }
-
-            if let jsonData = jsonString.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-               let choices = json["choices"] as? [[String: Any]],
-               let firstChoice = choices.first,
-               let delta = firstChoice["delta"] as? [String: Any],
-               let content = delta["content"] as? String
-            {
-                fullContent += content
-                // Update UI in real-time for streaming feedback
-                self.rewrittenText = fullContent
-            }
-        }
-
-        DebugLogger.shared.debug(
-            "Streaming complete. Content length: \(fullContent.count)",
-            source: "RewriteModeService"
+        
+        // Build LLMClient configuration
+        var config = LLMClient.Config(
+            messages: apiMessages,
+            model: model,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            streaming: enableStreaming,
+            tools: nil,
+            temperature: isReasoningModel ? nil : 0.7,
+            extraParameters: extraParams
         )
-        return fullContent.isEmpty ? "" : fullContent
+        
+        // Add real-time streaming callbacks for UI updates
+        if enableStreaming {
+            // Thinking tokens callback
+            config.onThinkingChunk = { [weak self] chunk in
+                Task { @MainActor in
+                    self?.thinkingBuffer.append(chunk)
+                    self?.streamingThinkingText = self?.thinkingBuffer.joined() ?? ""
+                }
+            }
+            
+            // Content callback
+            config.onContentChunk = { [weak self] chunk in
+                Task { @MainActor in
+                    self?.rewrittenText += chunk
+                }
+            }
+        }
+        
+        DebugLogger.shared.info("Using LLMClient for Write/Rewrite (streaming=\(enableStreaming))", source: "RewriteModeService")
+        
+        // Clear streaming buffers before starting
+        if enableStreaming {
+            rewrittenText = ""
+            streamingThinkingText = ""
+            thinkingBuffer = []
+        }
+        
+        let response = try await LLMClient.shared.call(config)
+        
+        // Clear thinking display after response complete
+        streamingThinkingText = ""
+        thinkingBuffer = []
+        
+        // Log thinking if present (for debugging)
+        if let thinking = response.thinking {
+            DebugLogger.shared.debug("LLM thinking tokens extracted (\(thinking.count) chars)", source: "RewriteModeService")
+        }
+        
+        DebugLogger.shared.debug("Response complete. Content length: \(response.content.count)", source: "RewriteModeService")
+        
+        // For non-streaming, we return the content directly
+        // For streaming, rewrittenText is already updated via callback,
+        // but we return the final content for consistency
+        return response.content
     }
 }

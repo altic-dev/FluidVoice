@@ -57,7 +57,8 @@ final class SettingsStore: ObservableObject {
         // Model Reasoning Config Keys
         static let modelReasoningConfigs = "ModelReasoningConfigs"
         static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
-
+        static let showThinkingTokens = "ShowThinkingTokens"
+        
         // Stats Keys
         static let userTypingWPM = "UserTypingWPM"
 
@@ -582,7 +583,34 @@ final class SettingsStore: ObservableObject {
             self.defaults.set(newValue, forKey: Keys.rewriteModeShortcutEnabled)
         }
     }
-
+    
+    /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
+    func isReasoningModel(_ model: String) -> Bool {
+        let modelLower = model.lowercased()
+        return modelLower.hasPrefix("gpt-5") || 
+               modelLower.contains("gpt-5.") ||
+               modelLower.hasPrefix("o1") || 
+               modelLower.hasPrefix("o3") ||
+               modelLower.contains("gpt-oss") || 
+               modelLower.hasPrefix("openai/") ||
+               (modelLower.contains("deepseek") && modelLower.contains("reasoner"))
+    }
+    
+    
+    /// Whether to display thinking tokens in the UI (Command Mode, Rewrite Mode)
+    /// If false, thinking tokens are extracted but not shown to user
+    var showThinkingTokens: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.showThinkingTokens)
+            return value as? Bool ?? true  // Default to true (show thinking)
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.showThinkingTokens)
+        }
+    }
+    
     // MARK: - Stats Settings
 
     /// User's typing speed in words per minute (for time saved calculation)
