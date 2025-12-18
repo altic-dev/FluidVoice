@@ -579,7 +579,7 @@ final class SettingsStore: ObservableObject {
             self.defaults.set(newValue, forKey: Keys.rewriteModeShortcutEnabled)
         }
     }
-    
+
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
         let modelLower = model.lowercased()

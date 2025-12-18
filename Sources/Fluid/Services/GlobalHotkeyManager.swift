@@ -260,10 +260,7 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Check command mode hotkey first
-            if self.commandModeShortcutEnabled, self.matchesCommandModeShortcut(
-                keyCode: keyCode,
-                modifiers: eventModifiers
-            ) {
+            if self.commandModeShortcutEnabled, self.matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
                 if self.pressAndHoldMode {
                     // Press and hold: start on keyDown, stop on keyUp
                     if !self.isCommandModeKeyPressed {
@@ -285,10 +282,7 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Check dedicated rewrite mode hotkey
-            if self.rewriteModeShortcutEnabled, self.matchesRewriteModeShortcut(
-                keyCode: keyCode,
-                modifiers: eventModifiers
-            ) {
+            if self.rewriteModeShortcutEnabled, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
                 if self.pressAndHoldMode {
                     // Press and hold: start on keyDown, stop on keyUp
                     if !self.isRewriteKeyPressed {
@@ -324,26 +318,16 @@ final class GlobalHotkeyManager: NSObject {
 
         case .keyUp:
             // Command mode key up (press and hold mode)
-            if self.commandModeShortcutEnabled, self.pressAndHoldMode, self.isCommandModeKeyPressed,
-               self.matchesCommandModeShortcut(
-                   keyCode: keyCode,
-                   modifiers: eventModifiers
-               )
-            {
-                isCommandModeKeyPressed = false
+            if self.commandModeShortcutEnabled, self.pressAndHoldMode, self.isCommandModeKeyPressed, self.matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                self.isCommandModeKeyPressed = false
                 DebugLogger.shared.info("Command mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                 self.stopRecordingIfNeeded()
                 return nil
             }
 
             // Rewrite mode key up (press and hold mode)
-            if self.rewriteModeShortcutEnabled, self.pressAndHoldMode, self.isRewriteKeyPressed,
-               self.matchesRewriteModeShortcut(
-                   keyCode: keyCode,
-                   modifiers: eventModifiers
-               )
-            {
-                isRewriteKeyPressed = false
+            if self.rewriteModeShortcutEnabled, self.pressAndHoldMode, self.isRewriteKeyPressed, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                self.isRewriteKeyPressed = false
                 DebugLogger.shared.info("Rewrite mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                 self.stopRecordingIfNeeded()
                 return nil
@@ -364,13 +348,11 @@ final class GlobalHotkeyManager: NSObject {
                 || flags.contains(.maskShift)
 
             // Check command mode shortcut (if it's a modifier-only shortcut)
-            if self.commandModeShortcutEnabled, self.commandModeShortcut.modifierFlags.isEmpty,
-               keyCode == self.commandModeShortcut.keyCode
-            {
+            if self.commandModeShortcutEnabled, self.commandModeShortcut.modifierFlags.isEmpty, keyCode == self.commandModeShortcut.keyCode {
                 if isModifierPressed {
-                    if pressAndHoldMode {
-                        if !isCommandModeKeyPressed {
-                            isCommandModeKeyPressed = true
+                    if self.pressAndHoldMode {
+                        if !self.isCommandModeKeyPressed {
+                            self.isCommandModeKeyPressed = true
                             DebugLogger.shared.info("Command mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
                             self.triggerCommandMode()
                         }
@@ -394,13 +376,11 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Check rewrite mode shortcut (if it's a modifier-only shortcut)
-            if self.rewriteModeShortcutEnabled, self.rewriteModeShortcut.modifierFlags.isEmpty,
-               keyCode == self.rewriteModeShortcut.keyCode
-            {
+            if self.rewriteModeShortcutEnabled, self.rewriteModeShortcut.modifierFlags.isEmpty, keyCode == self.rewriteModeShortcut.keyCode {
                 if isModifierPressed {
-                    if pressAndHoldMode {
-                        if !isRewriteKeyPressed {
-                            isRewriteKeyPressed = true
+                    if self.pressAndHoldMode {
+                        if !self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = true
                             DebugLogger.shared.info("Rewrite mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
                             self.triggerRewriteMode()
                         }
