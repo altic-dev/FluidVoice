@@ -68,7 +68,7 @@ enum ThinkingParserFactory {
 
     /// Get model-specific extra parameters for the API request.
     /// These are parameters beyond the standard model/messages/temperature.
-    static func getExtraParameters(for model: String) -> [String: Any]? {
+    static func getExtraParameters(for model: String) -> [String: Any] {
         let modelLower = model.lowercased()
 
         // Nemotron/Nemo models: require enable_thinking flag
@@ -91,7 +91,7 @@ enum ThinkingParserFactory {
         // Claude with thinking: requires thinking parameters (handled via Anthropic API differently)
         // OpenAI o1/o3 with reasoning: uses reasoning_effort parameter
 
-        return nil
+        return [:]
     }
 }
 

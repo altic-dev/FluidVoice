@@ -804,7 +804,7 @@ final class CommandModeService: ObservableObject {
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: model, provider: providerID)
-        var extraParams: [String: Any]? = nil
+        var extraParams: [String: Any] = [:]
         if let rConfig = reasoningConfig, rConfig.isEnabled {
             if rConfig.parameterName == "enable_thinking" {
                 extraParams = [rConfig.parameterName: rConfig.parameterValue == "true"]
@@ -913,8 +913,7 @@ final class CommandModeService: ObservableObject {
 
         // Convert LLMClient.Response to our internal LLMResponse
         // Check for tool calls
-        if let toolCalls = response.toolCalls,
-           let tc = toolCalls.first,
+        if let tc = response.toolCalls.first,
            tc.name == "execute_terminal_command"
         {
             let command = tc.getString("command") ?? ""

@@ -23,7 +23,9 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     private var modelURL: URL {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            preconditionFailure("Could not find caches directory")
+        }
         return cacheDir.appendingPathComponent("WhisperModels").appendingPathComponent(self.modelName)
     }
 

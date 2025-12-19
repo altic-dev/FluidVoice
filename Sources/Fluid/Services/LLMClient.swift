@@ -43,7 +43,7 @@ final class LLMClient {
         /// Main response content with thinking tags stripped
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
-        let toolCalls: [ToolCall]?
+        let toolCalls: [ToolCall]
     }
 
     struct ToolCall {
@@ -71,7 +71,7 @@ final class LLMClient {
         let baseURL: String
         let apiKey: String
         let streaming: Bool
-        let tools: [[String: Any]]?
+        let tools: [[String: Any]]
         let temperature: Double?
 
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
@@ -79,7 +79,7 @@ final class LLMClient {
 
         /// Extra parameters to add to the request body (e.g., reasoning_effort, enable_thinking)
         /// These are model-specific and come from user settings
-        var extraParameters: [String: Any]?
+        var extraParameters: [String: Any]
 
         // Retry configuration
         var maxRetries: Int = 3
@@ -98,10 +98,10 @@ final class LLMClient {
             baseURL: String,
             apiKey: String,
             streaming: Bool = true,
-            tools: [[String: Any]]? = nil,
+            tools: [[String: Any]] = [],
             temperature: Double? = nil,
             maxTokens: Int? = nil,
-            extraParameters: [String: Any]? = nil
+            extraParameters: [String: Any] = [:]
         ) {
             self.messages = messages
             self.model = model
@@ -184,8 +184,8 @@ final class LLMClient {
         }
 
         // Add tools if provided
-        if let tools = config.tools, !tools.isEmpty {
-            body["tools"] = tools
+        if !config.tools.isEmpty {
+            body["tools"] = config.tools
             body["tool_choice"] = "auto"
         }
 
@@ -199,17 +199,14 @@ final class LLMClient {
         // 2. User-provided parameters (can override model defaults)
 
         // Layer 1: Model-specific parameters (e.g., enable_thinking for Nemotron)
-        if let modelExtras = ThinkingParserFactory.getExtraParameters(for: config.model) {
-            for (key, value) in modelExtras {
-                body[key] = value
-            }
+        let modelExtras = ThinkingParserFactory.getExtraParameters(for: config.model)
+        for (key, value) in modelExtras {
+            body[key] = value
         }
 
         // Layer 2: User-provided extra parameters (e.g., reasoning_effort from settings)
-        if let extras = config.extraParameters {
-            for (key, value) in extras {
-                body[key] = value
-            }
+        for (key, value) in config.extraParameters {
+            body[key] = value
         }
 
         // Final Layer: Common parameters with model-specific keys
@@ -413,7 +410,7 @@ final class LLMClient {
         DebugLogger.shared.debug("LLMClient: Streaming complete. Thinking: \(thinkingText.count) chars, Content: \(contentText.count) chars", source: "LLMClient")
 
         // Build tool calls array
-        var parsedToolCalls: [ToolCall]? = nil
+        var parsedToolCalls: [ToolCall] = []
         if let name = toolCallName,
            let argsData = toolCallArguments.data(using: .utf8),
            let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
@@ -444,7 +441,7 @@ final class LLMClient {
         let rawContent = message["content"] as? String ?? ""
 
         // Check for tool calls
-        var parsedToolCalls: [ToolCall]? = nil
+        var parsedToolCalls: [ToolCall] = []
         if let toolCalls = message["tool_calls"] as? [[String: Any]] {
             parsedToolCalls = toolCalls.compactMap { tc -> ToolCall? in
                 guard let function = tc["function"] as? [String: Any],
@@ -458,9 +455,7 @@ final class LLMClient {
                 let id = tc["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))"
                 return ToolCall(id: id, name: name, arguments: args)
             }
-            if parsedToolCalls?.isEmpty == true {
-                parsedToolCalls = nil
-            }
+            // Empty tool calls are fine, no action needed
         }
 
         // Strip thinking tags and extract thinking content

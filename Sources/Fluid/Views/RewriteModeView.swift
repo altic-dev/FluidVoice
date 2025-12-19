@@ -459,7 +459,7 @@ struct RewriteModeView: View {
                 .frame(maxHeight: 150)
             } else {
                 // Preview - first 100 chars
-                if self.service.streamingThinkingText.count > 0 {
+                if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(100)) + (self.service.streamingThinkingText.count > 100 ? "..." : ""))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary.opacity(0.7))

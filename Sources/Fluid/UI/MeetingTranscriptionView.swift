@@ -172,9 +172,9 @@ struct MeetingTranscriptionView: View {
                 .audio,
                 .movie,
                 .mpeg4Movie,
-                UTType(filenameExtension: "wav")!,
-                UTType(filenameExtension: "mp3")!,
-                UTType(filenameExtension: "m4a")!,
+                UTType(filenameExtension: "wav") ?? .audio,
+                UTType(filenameExtension: "mp3") ?? .audio,
+                UTType(filenameExtension: "m4a") ?? .audio,
             ],
             allowsMultipleSelection: false
         ) { result in

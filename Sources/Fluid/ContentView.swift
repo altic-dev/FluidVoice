@@ -1247,7 +1247,7 @@ struct ContentView: View {
         let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: derivedSelectedModel, provider: providerKey)
 
         // Build extra parameters from reasoning config
-        var extraParams: [String: Any]? = nil
+        var extraParams: [String: Any] = [:]
         if let config = reasoningConfig, config.isEnabled {
             if config.parameterName == "enable_thinking" {
                 // DeepSeek uses boolean
@@ -1282,7 +1282,7 @@ struct ContentView: View {
             baseURL: derivedBaseURL,
             apiKey: apiKey,
             streaming: enableStreaming,
-            tools: nil,
+            tools: [],
             temperature: isReasoningModel ? nil : 0.2,
             extraParameters: extraParams
         )

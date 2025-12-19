@@ -355,7 +355,7 @@ struct CommandModeView: View {
                 .frame(maxHeight: 200)
             } else {
                 // Preview - first 150 chars
-                if self.service.streamingThinkingText.count > 0 {
+                if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(150)) + (self.service.streamingThinkingText.count > 150 ? "..." : ""))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary.opacity(0.7))

@@ -30,7 +30,7 @@ excluded:
   - .build
   - DerivedData
   - Fluid.xcodeproj
-
+  - scratch
 line_length:
   warning: 250
   error: 300

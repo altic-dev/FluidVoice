@@ -195,7 +195,7 @@ final class RewriteModeService: ObservableObject {
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = settings.getReasoningConfig(forModel: model, provider: providerID)
-        var extraParams: [String: Any]? = nil
+        var extraParams: [String: Any] = [:]
         if let rConfig = reasoningConfig, rConfig.isEnabled {
             if rConfig.parameterName == "enable_thinking" {
                 extraParams = [rConfig.parameterName: rConfig.parameterValue == "true"]
@@ -212,7 +212,7 @@ final class RewriteModeService: ObservableObject {
             baseURL: baseURL,
             apiKey: apiKey,
             streaming: enableStreaming,
-            tools: nil,
+            tools: [],
             temperature: isReasoningModel ? nil : 0.7,
             extraParameters: extraParams
         )

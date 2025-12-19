@@ -32,17 +32,23 @@ final class HuggingFaceModelDownloader {
         self.owner = "FluidInference"
         self.repo = "parakeet-tdt-0.6b-v3-coreml"
         self.revision = "main"
-        self.baseApiURL = URL(string: "https://huggingface.co/api/models/")!
-            .appendingPathComponent(self.owner)
-            .appendingPathComponent(self.repo)
-            .appendingPathComponent("tree")
-            .appendingPathComponent(self.revision)
+        guard var apiBase = URL(string: "https://huggingface.co/api/models/") else {
+            preconditionFailure("Invalid base Hugging Face API URL")
+        }
+        apiBase.appendPathComponent(self.owner)
+        apiBase.appendPathComponent(self.repo)
+        apiBase.appendPathComponent("tree")
+        apiBase.appendPathComponent(self.revision)
+        self.baseApiURL = apiBase
 
-        self.baseResolveURL = URL(string: "https://huggingface.co/")!
-            .appendingPathComponent(self.owner)
-            .appendingPathComponent(self.repo)
-            .appendingPathComponent("resolve")
-            .appendingPathComponent(self.revision)
+        guard var resolveBase = URL(string: "https://huggingface.co/") else {
+            preconditionFailure("Invalid base Hugging Face resolve URL")
+        }
+        resolveBase.appendPathComponent(self.owner)
+        resolveBase.appendPathComponent(self.repo)
+        resolveBase.appendPathComponent("resolve")
+        resolveBase.appendPathComponent(self.revision)
+        self.baseResolveURL = resolveBase
     }
 
     /// Initialize with custom model repository settings

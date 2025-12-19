@@ -343,14 +343,18 @@ final class MenuBarManager: ObservableObject {
         // Status indicator with hotkey info
         self.statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         self.statusMenuItem?.isEnabled = false
-        menu.addItem(self.statusMenuItem!)
+        if let statusItem = statusMenuItem {
+            menu.addItem(statusItem)
+        }
 
         menu.addItem(.separator())
 
         // AI Processing Toggle
         self.aiMenuItem = NSMenuItem(title: "", action: #selector(self.toggleAIProcessing), keyEquivalent: "")
         self.aiMenuItem?.target = self
-        menu.addItem(self.aiMenuItem!)
+        if let aiItem = aiMenuItem {
+            menu.addItem(aiItem)
+        }
 
         menu.addItem(.separator())
 

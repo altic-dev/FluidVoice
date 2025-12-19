@@ -1218,9 +1218,13 @@ struct AISettingsView: View {
                         Picker("", selection: Binding(
                             get: {
                                 // Map current value to picker options
-                                if self.editingReasoningParamName == "reasoning_effort" { return "reasoning_effort" }
-                                else if self.editingReasoningParamName == "enable_thinking" { return "enable_thinking" }
-                                else { return "custom" }
+                                if self.editingReasoningParamName == "reasoning_effort" {
+                                    return "reasoning_effort"
+                                } else if self.editingReasoningParamName == "enable_thinking" {
+                                    return "enable_thinking"
+                                } else {
+                                    return "custom"
+                                }
                             },
                             set: { newValue in
                                 if newValue == "custom" {
