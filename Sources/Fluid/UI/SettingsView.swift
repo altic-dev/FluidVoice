@@ -448,9 +448,24 @@ struct SettingsView: View {
                 // Audio Devices Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Audio Devices", systemImage: "speaker.wave.2.fill")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
+                        HStack {
+                            Label("Audio Devices", systemImage: "speaker.wave.2.fill")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+
+                            Spacer()
+
+                            Button {
+                                self.refreshDevices()
+                                // Update cached default device names on refresh
+                                self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+                                self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+                            } label: {
+                                Label("Refresh", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
 
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
@@ -472,7 +487,10 @@ struct SettingsView: View {
                                 .onChange(of: self.selectedInputUID) { _, newUID in
                                     guard !newUID.isEmpty else { return }
                                     SettingsStore.shared.preferredInputDeviceUID = newUID
-                                    _ = AudioDevice.setDefaultInputDevice(uid: newUID)
+                                    // Only change system default if sync is enabled
+                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
+                                        _ = AudioDevice.setDefaultInputDevice(uid: newUID)
+                                    }
                                     if self.asr.isRunning {
                                         Task {
                                             await self.asr.stopWithoutTranscription()
@@ -521,7 +539,10 @@ struct SettingsView: View {
                                 .onChange(of: self.selectedOutputUID) { _, newUID in
                                     guard !newUID.isEmpty else { return }
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
-                                    _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
+                                    // Only change system default if sync is enabled
+                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
+                                        _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
+                                    }
                                 }
                                 // Sync selection when devices load or change
                                 .onChange(of: self.outputDevices) { _, newDevices in
@@ -544,29 +565,45 @@ struct SettingsView: View {
                                 }
                             }
 
-                            HStack(spacing: 10) {
-                                Button {
-                                    self.refreshDevices()
-                                    // Update cached default device names on refresh
-                                    self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
-                                    self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
-                                } label: {
-                                    Label("Refresh", systemImage: "arrow.clockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.regular)
-
-                                Spacer()
-
-                                // CRITICAL FIX: Use cached values instead of querying CoreAudio in view body.
-                                // Querying AudioDevice here triggers HALSystem::InitializeShell() race condition.
-                                if !self.cachedDefaultInputName.isEmpty && !self.cachedDefaultOutputName.isEmpty {
+                            // CRITICAL FIX: Use cached values instead of querying CoreAudio in view body.
+                            // Querying AudioDevice here triggers HALSystem::InitializeShell() race condition.
+                            if !self.cachedDefaultInputName.isEmpty && !self.cachedDefaultOutputName.isEmpty {
+                                HStack {
+                                    Spacer()
                                     Text("Default: \(self.cachedDefaultInputName) / \(self.cachedDefaultOutputName)")
                                         .font(.caption)
                                         .foregroundStyle(.tertiary)
                                         .lineLimit(1)
                                 }
                             }
+
+                            Divider().padding(.vertical, 4)
+
+                            self.optionToggleRow(
+                                title: "Sync with System Settings",
+                                description: "When enabled, FV and macOS share the same audio devices (bidirectional sync).",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.syncAudioDevicesWithSystem },
+                                    set: { newValue in
+                                        SettingsStore.shared.syncAudioDevicesWithSystem = newValue
+
+                                        // When sync is toggled ON, adopt system's current devices as the source of truth
+                                        if newValue {
+                                            if let sysInputUID = AudioDevice.getDefaultInputDevice()?.uid {
+                                                self.selectedInputUID = sysInputUID
+                                                SettingsStore.shared.preferredInputDeviceUID = sysInputUID
+                                            }
+                                            if let sysOutputUID = AudioDevice.getDefaultOutputDevice()?.uid {
+                                                self.selectedOutputUID = sysOutputUID
+                                                SettingsStore.shared.preferredOutputDeviceUID = sysOutputUID
+                                            }
+                                            DebugLogger.shared.info("Sync enabled: adopted system audio devices", source: "SettingsView")
+                                        } else {
+                                            DebugLogger.shared.info("Sync disabled: FV will use independent audio device selection", source: "SettingsView")
+                                        }
+                                    }
+                                )
+                            )
                         }
                     }
                     .padding(16)

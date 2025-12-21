@@ -287,7 +287,7 @@ final class MenuBarManager: ObservableObject {
 
         // Use MenuBarIcon asset - vectorized from logo
         if let image = NSImage(named: "MenuBarIcon") {
-            image.isTemplate = true  // Adapts to light/dark mode and tints red when recording
+            image.isTemplate = true // Adapts to light/dark mode and tints red when recording
             statusItem.button?.image = image
         }
     }

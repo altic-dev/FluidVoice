@@ -6,6 +6,7 @@ import Foundation
 import FluidAudio
 #endif
 import AppKit
+import AudioToolbox
 import CoreAudio
 
 /// Serializes all CoreML transcription operations to prevent concurrent access issues.
@@ -449,7 +450,73 @@ final class ASRService: ObservableObject {
             self.engine.stop()
         }
         self.engine.reset()
+        // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
         _ = self.engine.inputNode
+
+        // If we're running in "independent" mode, bind the engine to the preferred input device
+        // instead of inheriting macOS' current system-default input.
+        self.bindPreferredInputDeviceIfNeeded()
+    }
+
+    /// In independent mode, attempt to bind AVAudioEngine's input to the user's preferred input device.
+    /// In sync-with-system mode, we intentionally do nothing so the engine follows macOS defaults.
+    private func bindPreferredInputDeviceIfNeeded() {
+        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else { return }
+        guard let preferredUID = SettingsStore.shared.preferredInputDeviceUID, preferredUID.isEmpty == false else { return }
+
+        guard let device = AudioDevice.getInputDevice(byUID: preferredUID) else {
+            DebugLogger.shared.warning(
+                "Preferred input device not found (uid: \(preferredUID)). Falling back to system default input.",
+                source: "ASRService"
+            )
+            return
+        }
+
+        let ok = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
+        if ok == false {
+            DebugLogger.shared.warning(
+                "Failed to bind engine input to preferred device '\(device.name)' (uid: \(device.uid)). Using system default input.",
+                source: "ASRService"
+            )
+        }
+    }
+
+    /// Selects a specific CoreAudio device for AVAudioEngine's input node without changing system defaults.
+    /// This uses the AUHAL AudioUnit backing `engine.inputNode` on macOS.
+    @discardableResult
+    private func setEngineInputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
+        let inputNode = self.engine.inputNode
+
+        // `AVAudioInputNode` is backed by an AudioUnit on macOS. Setting this property selects
+        // which physical device the node captures from.
+        guard let audioUnit = inputNode.audioUnit else {
+            DebugLogger.shared.error(
+                "Unable to access AudioUnit for AVAudioEngine.inputNode; cannot bind to '\(deviceName)' (uid: \(deviceUID))",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        var mutableDeviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioObjectID>.size)
+        )
+
+        if status != noErr {
+            DebugLogger.shared.error(
+                "AudioUnitSetProperty(CurrentDevice) failed for '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with status \(status)",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.info("Bound ASR input to '\(deviceName)' (uid: \(deviceUID))", source: "ASRService")
+        return true
     }
 
     private func startEngine() throws {
@@ -463,6 +530,10 @@ final class ASRService: ObservableObject {
                 attempts += 1
                 Thread.sleep(forTimeInterval: 0.1)
                 self.engine.reset()
+                // After a reset, the underlying AUHAL unit may revert to system-default input.
+                // Re-create the input node and re-bind the preferred device (independent mode).
+                _ = self.engine.inputNode
+                self.bindPreferredInputDeviceIfNeeded()
             }
         }
         throw NSError(domain: "ASRService", code: -1)
@@ -482,6 +553,13 @@ final class ASRService: ObservableObject {
     }
 
     private func handleDefaultInputChanged() {
+        // If we're not syncing with macOS system settings, ignore system-default changes.
+        // In independent mode, we explicitly bind to `preferredInputDeviceUID` on start/restart.
+        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
+            DebugLogger.shared.debug("Ignoring system default input change (sync disabled)", source: "ASRService")
+            return
+        }
+
         // Restart engine to bind to the new default input and resume level publishing
         if self.isRunning {
             self.removeEngineTap()

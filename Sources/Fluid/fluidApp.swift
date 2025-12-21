@@ -12,9 +12,14 @@ import SwiftUI
 @main
 struct FluidApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
-    @StateObject private var appServices = AppServices.shared
+    @StateObject private var appServices: AppServices
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var theme = AppTheme.dark
+
+    init() {
+        // Use the shared singleton instance
+        _appServices = StateObject(wrappedValue: AppServices.shared)
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {

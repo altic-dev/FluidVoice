@@ -97,6 +97,16 @@ enum AudioDevice {
         return self.setDefaultDeviceId(device.id, selector: kAudioHardwarePropertyDefaultOutputDevice)
     }
 
+    /// Get input device by UID without affecting system settings
+    static func getInputDevice(byUID uid: String) -> Device? {
+        return self.listInputDevices().first { $0.uid == uid }
+    }
+
+    /// Get device AudioObjectID from UID
+    static func getDeviceId(forUID uid: String) -> AudioObjectID? {
+        return self.listAllDevices().first { $0.uid == uid }?.id
+    }
+
     private static func getDefaultDeviceId(selector: AudioObjectPropertySelector) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,

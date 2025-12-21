@@ -214,7 +214,7 @@ final class RewriteModeService: ObservableObject {
             streaming: enableStreaming,
             tools: [],
             temperature: isReasoningModel ? nil : 0.7,
-            maxTokens: isReasoningModel ? 32000 : nil, // Reasoning models like o1 need a large budget for extended thought chains
+            maxTokens: isReasoningModel ? 32_000 : nil, // Reasoning models like o1 need a large budget for extended thought chains
             extraParameters: extraParams
         )
 

@@ -214,6 +214,26 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func handleKeyEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // macOS can temporarily disable event taps (e.g. timeouts, user input protection).
+        // If we don't immediately re-enable here, hotkeys will silently stop working until our
+        // periodic health check kicks in, and the OS may handle the key (e.g. system dictation).
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            let reason = (type == .tapDisabledByTimeout) ? "timeout" : "user input"
+            DebugLogger.shared.warning("Event tap disabled by \(reason) — attempting immediate re-enable", source: "GlobalHotkeyManager")
+
+            if let tap = self.eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+
+            // If re-enable failed, recreate the tap.
+            if !self.isEventTapEnabled() {
+                DebugLogger.shared.warning("Event tap re-enable failed — recreating tap", source: "GlobalHotkeyManager")
+                self.setupGlobalHotkeyWithRetry()
+            }
+
+            return nil
+        }
+
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
 

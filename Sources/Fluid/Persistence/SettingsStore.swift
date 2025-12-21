@@ -29,6 +29,7 @@ final class SettingsStore: ObservableObject {
         static let hotkeyShortcutKey = "HotkeyShortcutKey"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
+        static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
@@ -288,6 +289,19 @@ final class SettingsStore: ObservableObject {
     var preferredOutputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
+    }
+
+    /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
+    /// When disabled (default), FluidVoice manages its own device selection independently.
+    var syncAudioDevicesWithSystem: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.syncAudioDevicesWithSystem)
+            return value as? Bool ?? false // Default to false (decoupled from system)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.syncAudioDevicesWithSystem)
+        }
     }
 
     var visualizerNoiseThreshold: Double {

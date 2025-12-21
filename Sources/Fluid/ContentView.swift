@@ -36,12 +36,17 @@ enum SidebarItem: Hashable {
 // NOTE: Streaming and AI response parsing is now handled by LLMClient
 
 struct ContentView: View {
-    @StateObject private var audioObserver = AudioHardwareObserver()
-    @StateObject private var asr = ASRService()
+    @EnvironmentObject private var appServices: AppServices
     @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
     @EnvironmentObject private var menuBarManager: MenuBarManager
+
+    // Computed properties to access shared services from AppServices container
+    // This maintains backward compatibility with the existing code while
+    // removing the duplicate service instances that cause startup crashes.
+    private var asr: ASRService { self.appServices.asr }
+    private var audioObserver: AudioHardwareObserver { self.appServices.audioObserver }
     @Environment(\.theme) private var theme
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
@@ -160,20 +165,29 @@ struct ContentView: View {
             // Initialize menu bar after app is ready (prevents window server crash)
             self.menuBarManager.initializeMenuBar()
 
-            // Configure menu bar manager with ASR service
-            self.menuBarManager.configure(asrService: self.asr)
-
-            // CRITICAL FIX: Defer all audio subsystem initialization by 1.5 seconds.
-            // There is a known race condition between CoreAudio's HALSystem initialization (triggered by
-            // AudioObjectAddPropertyListenerBlock) and SwiftUI's AttributeGraph metadata processing during app launch.
-            // This race causes an EXC_BAD_ACCESS (SIGSEGV) at 0x0.
-            // By waiting for the main runloop to settle and SwiftUI to finish its initial layout passes,
-            // we ensure the audio system initializes safely.
+            // DEFENSIVE STRATEGY: Multi-layer protection against startup crash
+            // Layer 1: Service consolidation (already done - no duplicate @StateObjects)
+            // Layer 2: Lazy service initialization (services created on first access)
+            // Layer 3: Startup gate (signalUIReady + 1.5s delay)
+            // Layer 4: Delayed audio initialization (CoreAudio listeners start after UI is stable)
+            //
+            // This delay ensures SwiftUI's AttributeGraph has finished processing before
+            // any heavy audio system work begins. The race condition between CoreAudio's
+            // HALSystem initialization and SwiftUI metadata processing causes EXC_BAD_ACCESS at 0x0.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                DebugLogger.shared.info("🚦 Startup delay complete, signaling UI ready...", source: "ContentView")
+
+                // Signal that UI is ready - this enables service initialization
+                self.appServices.signalUIReady()
+
                 DebugLogger.shared.info("🔊 Starting delayed audio initialization...", source: "ContentView")
 
+                // Now it's safe to access services (they'll be lazily created)
                 self.audioObserver.startObserving()
                 self.asr.initialize()
+
+                // Configure menu bar manager with ASR service AFTER services are initialized
+                self.menuBarManager.configure(asrService: self.appServices.asr)
 
                 // Load available devices
                 self.refreshDevices()
@@ -510,24 +524,52 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .center) {}
-        .alert(self.asr.errorTitle, isPresented: self.$asr.showError) {
+        .alert(
+            self.asr.errorTitle,
+            isPresented: Binding(
+                get: { self.asr.showError },
+                set: { self.asr.showError = $0 }
+            )
+        ) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(self.asr.errorMessage)
         }
         .onChange(of: self.audioObserver.changeTick) { _, _ in
-            // Hardware change detected → refresh device lists only
-            // NOTE: We do NOT force system defaults here anymore.
-            // FluidVoice should not hijack system-wide audio routing.
-            // The saved preferences are only used when FluidVoice actively records.
+            // Hardware change detected → refresh device lists
             self.refreshDevices()
 
-            // Just sync the UI to show current system defaults (don't force them)
-            if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
-                self.selectedInputUID = sysIn
-            }
-            if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
-                self.selectedOutputUID = sysOut
+            // Only sync UI with system defaults when sync is enabled
+            // When sync is disabled, keep the user's preferred device selection
+            if SettingsStore.shared.syncAudioDevicesWithSystem {
+                // Sync mode: Update UI to match current system defaults
+                if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
+                    self.selectedInputUID = sysIn
+                }
+                if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
+                    self.selectedOutputUID = sysOut
+                }
+            } else {
+                // Independent mode: Only update if preferred device is no longer available
+                if let prefIn = SettingsStore.shared.preferredInputDeviceUID,
+                   inputDevices.contains(where: { $0.uid == prefIn })
+                {
+                    self.selectedInputUID = prefIn
+                } else if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
+                    // Fallback to system default if preferred device disconnected
+                    self.selectedInputUID = sysIn
+                    SettingsStore.shared.preferredInputDeviceUID = sysIn
+                }
+
+                if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
+                   outputDevices.contains(where: { $0.uid == prefOut })
+                {
+                    self.selectedOutputUID = prefOut
+                } else if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
+                    // Fallback to system default if preferred device disconnected
+                    self.selectedOutputUID = sysOut
+                    SettingsStore.shared.preferredOutputDeviceUID = sysOut
+                }
             }
         }
         .onDisappear {
