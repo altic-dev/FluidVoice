@@ -11,7 +11,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.1</string>
+	<string>1.5.2-beta.1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSApplicationCategoryType</key>
@@ -28,5 +28,7 @@
 	<string>phc_coNu37345O2bgaAeQMD3tezkg1rDCbDS9Y3pOVvp2VM</string>
 	<key>POSTHOG_HOST</key>
 	<string>https://eu.i.posthog.com</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>FluidVoice uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
 </dict>
 </plist>

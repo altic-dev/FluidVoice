@@ -90,7 +90,10 @@ struct AISettingsView: View {
 
             // CRITICAL FIX: Refresh model status immediately on appear
             // This ensures the speech recognition card shows current download status
-            self.asr.checkIfModelsExist()
+            // Use async variant for accurate detection (especially for AppleSpeechAnalyzerProvider)
+            Task {
+                await self.asr.checkIfModelsExistAsync()
+            }
         }
         .onChange(of: self.enableAIProcessing) { _, newValue in
             SettingsStore.shared.enableAIProcessing = newValue
@@ -249,9 +252,7 @@ struct AISettingsView: View {
                         Image(systemName: "info.circle.fill")
                             .foregroundStyle(self.theme.palette.accent)
                             .font(.caption)
-                        Text(SettingsStore.shared.selectedSpeechModel.isWhisperModel
-                            ? "Whisper models support 99 languages and work on any Mac."
-                            : "Parakeet TDT uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon.")
+                        Text(self.modelDescriptionText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -265,6 +266,21 @@ struct AISettingsView: View {
                 }
             }
             .padding(14)
+        }
+    }
+
+    /// Returns the appropriate description text for the currently selected speech model
+    private var modelDescriptionText: String {
+        let model = SettingsStore.shared.selectedSpeechModel
+        switch model {
+        case .appleSpeech:
+            return "Apple Speech (Legacy) uses on-device recognition. No download required, works on Intel and Apple Silicon."
+        case .appleSpeechAnalyzer:
+            return "Apple Speech uses advanced on-device recognition with fast, accurate transcription. Requires macOS 26+."
+        case .parakeetTDT:
+            return "Parakeet TDT uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
+        default:
+            return "Whisper models support 99 languages and work on any Mac."
         }
     }
 

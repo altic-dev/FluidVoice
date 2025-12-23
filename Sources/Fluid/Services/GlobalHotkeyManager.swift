@@ -292,25 +292,27 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Check dedicated rewrite mode hotkey
-            if self.rewriteModeShortcutEnabled, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                if self.pressAndHoldMode {
-                    // Press and hold: start on keyDown, stop on keyUp
-                    if !self.isRewriteKeyPressed {
-                        self.isRewriteKeyPressed = true
-                        DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                        self.triggerRewriteMode()
-                    }
-                } else {
-                    // Toggle mode: press to start, press again to stop
-                    if self.asrService.isRunning {
-                        DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
-                        self.stopRecordingIfNeeded()
+            if self.rewriteModeShortcutEnabled {
+                if self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                    if self.pressAndHoldMode {
+                        // Press and hold: start on keyDown, stop on keyUp
+                        if !self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = true
+                            DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                            self.triggerRewriteMode()
+                        }
                     } else {
-                        DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
-                        self.triggerRewriteMode()
+                        // Toggle mode: press to start, press again to stop
+                        if self.asrService.isRunning {
+                            DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
+                            self.triggerRewriteMode()
+                        }
                     }
+                    return nil
                 }
-                return nil
             }
 
             // Then check transcription hotkey
@@ -385,32 +387,43 @@ final class GlobalHotkeyManager: NSObject {
                 return nil
             }
 
-            // Check rewrite mode shortcut (if it's a modifier-only shortcut)
-            if self.rewriteModeShortcutEnabled, self.rewriteModeShortcut.modifierFlags.isEmpty, keyCode == self.rewriteModeShortcut.keyCode {
-                if isModifierPressed {
-                    if self.pressAndHoldMode {
-                        if !self.isRewriteKeyPressed {
-                            self.isRewriteKeyPressed = true
-                            DebugLogger.shared.info("Rewrite mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                            self.triggerRewriteMode()
-                        }
-                    } else {
-                        // Toggle mode
-                        if self.asrService.isRunning {
-                            DebugLogger.shared.info("Rewrite mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
-                            self.stopRecordingIfNeeded()
+            // Check rewrite mode shortcut (if it's a modifier-only shortcut - actual modifier keys only)
+            // Note: Regular keys with no modifiers are handled in keyDown, not flagsChanged
+            // Only handle actual modifier keys (Command, Option, Control, Shift, Function) here
+            if self.rewriteModeShortcutEnabled, self.rewriteModeShortcut.modifierFlags.isEmpty {
+                // Check if this is an actual modifier key (not a regular key)
+                let isModifierKey = keyCode == 54 || keyCode == 55 || // Command keys
+                    keyCode == 58 || keyCode == 61 || // Option keys
+                    keyCode == 59 || keyCode == 62 || // Control keys
+                    keyCode == 56 || keyCode == 60 || // Shift keys
+                    keyCode == 63 // Function key
+
+                if isModifierKey, keyCode == self.rewriteModeShortcut.keyCode {
+                    if isModifierPressed {
+                        if self.pressAndHoldMode {
+                            if !self.isRewriteKeyPressed {
+                                self.isRewriteKeyPressed = true
+                                DebugLogger.shared.info("Rewrite mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                                self.triggerRewriteMode()
+                            }
                         } else {
-                            DebugLogger.shared.info("Rewrite mode modifier pressed - starting", source: "GlobalHotkeyManager")
-                            self.triggerRewriteMode()
+                            // Toggle mode
+                            if self.asrService.isRunning {
+                                DebugLogger.shared.info("Rewrite mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
+                                self.stopRecordingIfNeeded()
+                            } else {
+                                DebugLogger.shared.info("Rewrite mode modifier pressed - starting", source: "GlobalHotkeyManager")
+                                self.triggerRewriteMode()
+                            }
                         }
+                    } else if self.pressAndHoldMode, self.isRewriteKeyPressed {
+                        // Key released in press-and-hold mode
+                        self.isRewriteKeyPressed = false
+                        DebugLogger.shared.info("Rewrite mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                        self.stopRecordingIfNeeded()
                     }
-                } else if self.pressAndHoldMode, self.isRewriteKeyPressed {
-                    // Key released in press-and-hold mode
-                    self.isRewriteKeyPressed = false
-                    DebugLogger.shared.info("Rewrite mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
-                    self.stopRecordingIfNeeded()
+                    return nil
                 }
-                return nil
             }
 
             // Check transcription shortcut (if it's a modifier-only shortcut)

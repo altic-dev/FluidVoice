@@ -20,6 +20,7 @@ enum SidebarItem: Hashable {
     case aiSettings
     case preferences
     case meetingTools
+    case customDictionary
     case stats
     case history
     case feedback
@@ -693,6 +694,11 @@ struct ContentView: View {
                     .font(.system(size: 15, weight: .medium))
             }
 
+            NavigationLink(value: SidebarItem.customDictionary) {
+                Label("Custom Dictionary", systemImage: "text.book.closed.fill")
+                    .font(.system(size: 15, weight: .medium))
+            }
+
             NavigationLink(value: SidebarItem.stats) {
                 Label("Stats", systemImage: "chart.bar.fill")
                     .font(.system(size: 15, weight: .medium))
@@ -751,6 +757,8 @@ struct ContentView: View {
             return AnyView(self.preferencesView)
         case .meetingTools:
             return AnyView(self.meetingToolsView)
+        case .customDictionary:
+            return AnyView(CustomDictionaryView())
         case .stats:
             return AnyView(self.statsView)
         case .feedback:

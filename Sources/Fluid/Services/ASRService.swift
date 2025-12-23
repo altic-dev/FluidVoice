@@ -105,6 +105,9 @@ final class ASRService: ObservableObject {
     /// Cached providers to avoid re-instantiation
     private var fluidAudioProvider: FluidAudioProvider?
     private var whisperProvider: WhisperProvider?
+    private var appleSpeechProvider: AppleSpeechProvider?
+    /// Stored as Any? because @available cannot be applied to stored properties
+    private var _appleSpeechAnalyzerProvider: Any?
 
     /// Prevent concurrent provider.prepare() calls (download/load) from overlapping.
     /// Subsequent callers await the in-flight task.
@@ -116,10 +119,20 @@ final class ASRService: ObservableObject {
     private var transcriptionProvider: TranscriptionProvider {
         let model = SettingsStore.shared.selectedSpeechModel
 
-        if model.isWhisperModel {
-            return self.getWhisperProvider()
-        } else {
+        switch model {
+        case .appleSpeechAnalyzer:
+            if #available(macOS 26.0, *) {
+                return self.getAppleSpeechAnalyzerProvider()
+            } else {
+                // Fallback to legacy Apple Speech on older macOS
+                return self.getAppleSpeechProvider()
+            }
+        case .appleSpeech:
+            return self.getAppleSpeechProvider()
+        case .parakeetTDT:
             return self.getFluidAudioProvider()
+        default:
+            return self.getWhisperProvider()
         }
     }
 
@@ -143,6 +156,27 @@ final class ASRService: ObservableObject {
         return provider
     }
 
+    private func getAppleSpeechProvider() -> AppleSpeechProvider {
+        if let existing = appleSpeechProvider {
+            return existing
+        }
+        let provider = AppleSpeechProvider()
+        self.appleSpeechProvider = provider
+        DebugLogger.shared.info("ASRService: Created AppleSpeech provider", source: "ASRService")
+        return provider
+    }
+
+    @available(macOS 26.0, *)
+    private func getAppleSpeechAnalyzerProvider() -> AppleSpeechAnalyzerProvider {
+        if let existing = _appleSpeechAnalyzerProvider as? AppleSpeechAnalyzerProvider {
+            return existing
+        }
+        let provider = AppleSpeechAnalyzerProvider()
+        self._appleSpeechAnalyzerProvider = provider
+        DebugLogger.shared.info("ASRService: Created AppleSpeechAnalyzer provider", source: "ASRService")
+        return provider
+    }
+
     /// Returns the user-friendly name of the currently selected speech model
     var activeProviderName: String {
         SettingsStore.shared.selectedSpeechModel.displayName
@@ -150,16 +184,23 @@ final class ASRService: ObservableObject {
 
     /// Call this when the transcription provider setting changes to reset state
     func resetTranscriptionProvider() {
+        let newModel = SettingsStore.shared.selectedSpeechModel
+        DebugLogger.shared.info("ASRService: Switching to '\(newModel.displayName)', resetting provider state...", source: "ASRService")
+
         self.isAsrReady = false
         self.modelsExistOnDisk = false
         self.ensureReadyTask?.cancel()
         self.ensureReadyTask = nil
         self.ensureReadyProviderKey = nil
-        DebugLogger.shared.info("ASRService: Provider reset, will re-initialize on next use", source: "ASRService")
 
-        // CRITICAL FIX: Immediately check if the NEW model's files exist on disk
+        // CRITICAL FIX: Check if the NEW model's files exist on disk
         // This prevents UI from showing "Download" when model is already downloaded
-        self.checkIfModelsExist()
+        // Use Task for async check to support providers like AppleSpeechAnalyzerProvider
+        Task { [weak self] in
+            guard let self = self else { return }
+            await self.checkIfModelsExistAsync()
+            DebugLogger.shared.info("ASRService: Provider reset complete, will initialize '\(newModel.displayName)' on next use", source: "ASRService")
+        }
     }
 
     // CRITICAL FIX (launch-time crash mitigation):
@@ -244,14 +285,17 @@ final class ASRService: ObservableObject {
 
         self.registerDefaultDeviceChangeListener()
 
-        // Check if models exist on disk (deferred from init to avoid FluidAudio/CoreML race)
-        self.checkIfModelsExist()
+        // Check if models exist on disk and auto-load if present
+        // This is done in a Task to support async model detection (e.g., AppleSpeechAnalyzerProvider)
+        Task { [weak self] in
+            guard let self = self else { return }
 
-        // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
-        if self.modelsExistOnDisk {
-            DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
-            Task { [weak self] in
-                guard let self = self else { return }
+            // Use async check to accurately detect models (especially for Apple Speech Analyzer)
+            await self.checkIfModelsExistAsync()
+
+            // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
+            if self.modelsExistOnDisk {
+                DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
                 do {
                     try await self.ensureAsrReady()
                     DebugLogger.shared.info("Models auto-loaded successfully on startup", source: "ASRService")
@@ -262,8 +306,34 @@ final class ASRService: ObservableObject {
         }
     }
 
-    /// Check if models exist on disk without loading them
+    /// Check if models exist on disk without loading them (synchronous).
+    ///
+    /// **Note**: For `AppleSpeechAnalyzerProvider`, this returns a cached value that may be stale.
+    /// Use `checkIfModelsExistAsync()` for an up-to-date result.
     func checkIfModelsExist() {
+        self.modelsExistOnDisk = self.transcriptionProvider.modelsExistOnDisk()
+        DebugLogger.shared.debug("Models exist on disk: \(self.modelsExistOnDisk)", source: "ASRService")
+    }
+
+    /// Check if models exist on disk without loading them (async).
+    ///
+    /// This method performs an accurate async check for providers that require it
+    /// (e.g., `AppleSpeechAnalyzerProvider` uses `SpeechTranscriber.installedLocales`).
+    func checkIfModelsExistAsync() async {
+        let model = SettingsStore.shared.selectedSpeechModel
+
+        // For Apple Speech Analyzer, use the async refresh method
+        if model == .appleSpeechAnalyzer {
+            if #available(macOS 26.0, *) {
+                let provider = self.getAppleSpeechAnalyzerProvider()
+                let isInstalled = await provider.refreshModelsExistOnDiskAsync()
+                self.modelsExistOnDisk = isInstalled
+                DebugLogger.shared.debug("Models exist on disk (async): \(self.modelsExistOnDisk)", source: "ASRService")
+                return
+            }
+        }
+
+        // For other providers, use the synchronous method
         self.modelsExistOnDisk = self.transcriptionProvider.modelsExistOnDisk()
         DebugLogger.shared.debug("Models exist on disk: \(self.modelsExistOnDisk)", source: "ASRService")
     }
@@ -402,8 +472,8 @@ final class ASRService: ObservableObject {
                 source: "ASRService"
             )
             // Do not update self.finalText here to avoid instant binding insert in playground
-            let cleanedText = ASRService.removeFillerWords(result.text)
-            DebugLogger.shared.debug("After filler removal: '\(cleanedText)'", source: "ASRService")
+            let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+            DebugLogger.shared.debug("After post-processing: '\(cleanedText)'", source: "ASRService")
             return cleanedText
         } catch {
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
@@ -962,7 +1032,7 @@ final class ASRService: ObservableObject {
                 source: "ASRService"
             )
             let rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let newText = ASRService.removeFillerWords(rawText)
+            let newText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(rawText))
 
             if !newText.isEmpty {
                 // Smart diff: only show truly new words
@@ -1035,5 +1105,74 @@ final class ASRService: ObservableObject {
         }
 
         return filtered.joined(separator: " ")
+    }
+
+    // MARK: - Custom Dictionary (Cached Regex)
+
+    /// Cache for compiled custom dictionary regexes.
+    /// Key: trigger word, Value: (compiled regex, replacement text)
+    /// Cleared when dictionary entries change.
+    private static var cachedDictionaryPatterns: [(regex: NSRegularExpression, replacement: String)] = []
+    private static var dictionaryCacheNeedsRebuild: Bool = true
+
+    /// Rebuilds the regex cache if dictionary has changed.
+    /// Called lazily on first apply after settings change.
+    private static func rebuildDictionaryCache() {
+        let entries = SettingsStore.shared.customDictionaryEntries
+        var patterns: [(regex: NSRegularExpression, replacement: String)] = []
+
+        for entry in entries {
+            for trigger in entry.triggers {
+                guard !trigger.isEmpty else { continue }
+
+                let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
+                guard let regex = try? NSRegularExpression(
+                    pattern: "\\b" + escapedTrigger + "\\b",
+                    options: .caseInsensitive
+                ) else { continue }
+
+                patterns.append((regex: regex, replacement: entry.replacement))
+            }
+        }
+
+        self.cachedDictionaryPatterns = patterns
+        self.dictionaryCacheNeedsRebuild = false
+    }
+
+    /// Invalidates the dictionary cache. Called when settings change.
+    static func invalidateDictionaryCache() {
+        self.dictionaryCacheNeedsRebuild = true
+    }
+
+    /// Applies custom dictionary replacements to transcribed text.
+    /// Replaces trigger words/phrases with their designated replacements.
+    /// Uses case-insensitive matching with word boundaries.
+    /// Optimized: caches compiled regexes to avoid per-call compilation overhead.
+    static func applyCustomDictionary(_ text: String) -> String {
+        // Fast path: no entries configured
+        let entries = SettingsStore.shared.customDictionaryEntries
+        guard !entries.isEmpty else { return text }
+
+        // Rebuild cache if needed (lazy initialization)
+        if self.dictionaryCacheNeedsRebuild {
+            self.rebuildDictionaryCache()
+        }
+
+        guard !self.cachedDictionaryPatterns.isEmpty else {
+            return text
+        }
+
+        var result = text
+
+        // Apply cached regexes - O(n) where n = number of patterns
+        for pattern in self.cachedDictionaryPatterns {
+            result = pattern.regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: pattern.replacement
+            )
+        }
+
+        return result
     }
 }

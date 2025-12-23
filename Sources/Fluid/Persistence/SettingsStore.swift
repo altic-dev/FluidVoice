@@ -40,6 +40,8 @@ final class SettingsStore: ObservableObject {
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let lastUpdateCheckDate = "LastUpdateCheckDate"
+        static let updatePromptSnoozedUntil = "UpdatePromptSnoozedUntil"
+        static let snoozedUpdateVersion = "SnoozedUpdateVersion"
         static let playgroundUsed = "PlaygroundUsed"
 
         // Command Mode Keys
@@ -68,6 +70,9 @@ final class SettingsStore: ObservableObject {
         // Filler Words
         static let fillerWords = "FillerWords"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
+
+        // Custom Dictionary
+        static let customDictionaryEntries = "CustomDictionaryEntries"
 
         // Transcription Provider (ASR)
         static let selectedTranscriptionProvider = "SelectedTranscriptionProvider"
@@ -394,13 +399,57 @@ final class SettingsStore: ObservableObject {
             return true
         }
 
-        // Check if more than 24 hours have passed
-        let dayInSeconds: TimeInterval = 24 * 60 * 60
-        return Date().timeIntervalSince(lastCheck) >= dayInSeconds
+        // Check if more than 1 hour has passed
+        let hourInSeconds: TimeInterval = 60 * 60
+        return Date().timeIntervalSince(lastCheck) >= hourInSeconds
     }
 
     func updateLastCheckDate() {
         self.lastUpdateCheckDate = Date()
+    }
+
+    // MARK: - Update Prompt Snooze
+
+    /// Date until which update prompts are snoozed (user clicked "Later")
+    var updatePromptSnoozedUntil: Date? {
+        get { self.defaults.object(forKey: Keys.updatePromptSnoozedUntil) as? Date }
+        set { self.defaults.set(newValue, forKey: Keys.updatePromptSnoozedUntil) }
+    }
+
+    /// The version that was snoozed (to allow prompting for newer versions)
+    var snoozedUpdateVersion: String? {
+        get { self.defaults.string(forKey: Keys.snoozedUpdateVersion) }
+        set { self.defaults.set(newValue, forKey: Keys.snoozedUpdateVersion) }
+    }
+
+    /// Check if we should show the update prompt for a given version
+    /// Returns false if user snoozed this version within the last 24 hours
+    func shouldShowUpdatePrompt(forVersion version: String) -> Bool {
+        // If a different (newer) version is available, always show
+        if let snoozedVersion = snoozedUpdateVersion, snoozedVersion != version {
+            return true
+        }
+
+        // Check if snooze period has expired
+        guard let snoozedUntil = updatePromptSnoozedUntil else {
+            return true // Never snoozed, show prompt
+        }
+
+        return Date() >= snoozedUntil
+    }
+
+    /// Snooze update prompts for 24 hours for the given version
+    func snoozeUpdatePrompt(forVersion version: String) {
+        let snoozeUntil = Date().addingTimeInterval(24 * 60 * 60) // 24 hours
+        self.updatePromptSnoozedUntil = snoozeUntil
+        self.snoozedUpdateVersion = version
+        DebugLogger.shared.info("Update prompt snoozed for version \(version) until \(snoozeUntil)", source: "SettingsStore")
+    }
+
+    /// Clear the snooze (e.g., when update is installed)
+    func clearUpdateSnooze() {
+        self.updatePromptSnoozedUntil = nil
+        self.snoozedUpdateVersion = nil
     }
 
     var playgroundUsed: Bool {
@@ -879,6 +928,48 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    // MARK: - Custom Dictionary
+
+    /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
+    /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
+    struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
+        let id: UUID
+        /// Words/phrases to look for (case-insensitive matching)
+        var triggers: [String]
+        /// The correct replacement text
+        var replacement: String
+
+        init(triggers: [String], replacement: String) {
+            self.id = UUID()
+            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            self.replacement = replacement
+        }
+
+        init(id: UUID, triggers: [String], replacement: String) {
+            self.id = id
+            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            self.replacement = replacement
+        }
+    }
+
+    /// Custom dictionary entries for word replacement
+    var customDictionaryEntries: [CustomDictionaryEntry] {
+        get {
+            guard let data = defaults.data(forKey: Keys.customDictionaryEntries),
+                  let decoded = try? JSONDecoder().decode([CustomDictionaryEntry].self, from: data)
+            else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            objectWillChange.send()
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(encoded, forKey: Keys.customDictionaryEntries)
+            }
+        }
+    }
+
     // MARK: - Speech Model (Unified ASR Model Selection)
 
     /// Unified speech recognition model selection.
@@ -887,6 +978,11 @@ final class SettingsStore: ObservableObject {
         // MARK: - FluidAudio Models (Apple Silicon Only)
 
         case parakeetTDT = "parakeet-tdt"
+
+        // MARK: - Apple Native
+
+        case appleSpeech = "apple-speech"
+        case appleSpeechAnalyzer = "apple-speech-analyzer"
 
         // MARK: - Whisper Models (Universal)
 
@@ -904,6 +1000,8 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .parakeetTDT: return "Parakeet TDT"
+            case .appleSpeech: return "Apple Speech (Legacy)"
+            case .appleSpeechAnalyzer: return "Apple Speech (macOS 26+)"
             case .whisperTiny: return "Whisper Tiny"
             case .whisperBase: return "Whisper Base"
             case .whisperSmall: return "Whisper Small"
@@ -916,6 +1014,8 @@ final class SettingsStore: ObservableObject {
         var languageSupport: String {
             switch self {
             case .parakeetTDT: return "25 Languages"
+            case .appleSpeech: return "System Languages"
+            case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "99 Languages"
             }
@@ -924,6 +1024,8 @@ final class SettingsStore: ObservableObject {
         var downloadSize: String {
             switch self {
             case .parakeetTDT: return "~500 MB"
+            case .appleSpeech: return "Built-in (Zero Download)"
+            case .appleSpeechAnalyzer: return "Built-in"
             case .whisperTiny: return "~75 MB"
             case .whisperBase: return "~142 MB"
             case .whisperSmall: return "~466 MB"
@@ -942,7 +1044,7 @@ final class SettingsStore: ObservableObject {
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT: return false
+            case .parakeetTDT, .appleSpeech, .appleSpeechAnalyzer: return false
             default: return true
             }
         }
@@ -975,10 +1077,30 @@ final class SettingsStore: ObservableObject {
 
         // MARK: - Architecture Filtering
 
-        /// Returns models available for the current Mac's architecture
+        /// Requires macOS 26 (Tahoe) or later
+        var requiresMacOS26: Bool {
+            switch self {
+            case .appleSpeechAnalyzer: return true
+            default: return false
+            }
+        }
+
+        /// Returns models available for the current Mac's architecture and OS
         static var availableModels: [SpeechModel] {
             allCases.filter { model in
-                !model.requiresAppleSilicon || CPUArchitecture.isAppleSilicon
+                // Filter by Apple Silicon requirement
+                if model.requiresAppleSilicon, !CPUArchitecture.isAppleSilicon {
+                    return false
+                }
+                // Filter by macOS 26 requirement
+                if model.requiresMacOS26 {
+                    if #available(macOS 26.0, *) {
+                        return true
+                    } else {
+                        return false
+                    }
+                }
+                return true
             }
         }
 

@@ -237,7 +237,14 @@ final class SimpleUpdater {
     // MARK: - Helpers
 
     private func parseVersion(_ s: String) -> [Int] {
-        let t = s.hasPrefix("v") ? String(s.dropFirst()) : s
+        var t = s.hasPrefix("v") ? String(s.dropFirst()) : s
+
+        // Strip any suffix after hyphen (e.g., "1.5.2-beta.1" → "1.5.2")
+        // This handles pre-release suffixes like -beta, -alpha, -rc1, etc.
+        if let hyphenIndex = t.firstIndex(of: "-") {
+            t = String(t[..<hyphenIndex])
+        }
+
         let comps = t.split(separator: ".").map { Int($0) ?? 0 }
         return [comps[safe: 0] ?? 0, comps[safe: 1] ?? 0, comps[safe: 2] ?? 0]
     }

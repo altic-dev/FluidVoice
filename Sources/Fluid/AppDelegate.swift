@@ -12,6 +12,7 @@ import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var updater: AppUpdater?
+    private var updateCheckTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize AppUpdater for automatic updates
@@ -35,11 +36,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             properties: ["accessibility_trusted": AXIsProcessTrusted()]
         )
 
-        // Check for updates automatically if enabled
+        // Check for updates automatically if enabled (initial check on launch)
         self.checkForUpdatesAutomatically()
+
+        // Schedule periodic update checks every hour while app is running
+        self.schedulePeriodicUpdateChecks()
 
         // Note: App UI is designed with dark color scheme in mind
         // All gradients and effects are optimized for dark mode
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clean up the update check timer
+        self.updateCheckTimer?.invalidate()
+        self.updateCheckTimer = nil
+    }
+
+    // MARK: - Periodic Update Checks
+
+    private func schedulePeriodicUpdateChecks() {
+        // Schedule a timer to check for updates every hour (3600 seconds)
+        // The actual check logic inside checkForUpdatesAutomatically() handles:
+        // - Whether auto-updates are enabled
+        // - Whether enough time has passed since last check
+        // - Whether the user snoozed the prompt
+        self.updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            DebugLogger.shared.debug("Periodic update check timer fired", source: "AppDelegate")
+            self?.checkForUpdatesAutomatically()
+        }
     }
 
     // MARK: - Manual Update Check
@@ -117,9 +141,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if result.hasUpdate {
                     DebugLogger.shared.info("✅ Update available: \(result.latestVersion)", source: "AppDelegate")
-                    // Show update notification on main thread
-                    await MainActor.run {
-                        self.showUpdateNotification(version: result.latestVersion)
+
+                    // Check if user snoozed this version (clicked "Later")
+                    if SettingsStore.shared.shouldShowUpdatePrompt(forVersion: result.latestVersion) {
+                        // Show update notification on main thread
+                        await MainActor.run {
+                            self.showUpdateNotification(version: result.latestVersion)
+                        }
+                    } else {
+                        DebugLogger.shared.debug("Update prompt snoozed for \(result.latestVersion), skipping notification", source: "AppDelegate")
                     }
                 } else {
                     DebugLogger.shared.info("✅ App is up to date", source: "AppDelegate")
@@ -142,7 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Update Available"
-        alert.informativeText = "Fluid \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
+        alert.informativeText = "FluidVoice \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Install Now")
         alert.addButton(withTitle: "Later")
@@ -151,9 +181,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if response == .alertFirstButtonReturn {
             DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
+            SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
             self.checkForUpdatesManually()
         } else {
-            DebugLogger.shared.info("User postponed update", source: "AppDelegate")
+            DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
+            SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
         }
     }
 

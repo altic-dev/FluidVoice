@@ -470,8 +470,8 @@ struct WelcomeView: View {
                 // Check microphone status without triggering the full initialize() delay
                 self.asr.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
-                // Check if models exist on disk
-                self.asr.checkIfModelsExist()
+                // Check if models exist on disk (async for accurate detection with AppleSpeechAnalyzerProvider)
+                await self.asr.checkIfModelsExistAsync()
             }
         }
     }

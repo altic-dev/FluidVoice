@@ -96,7 +96,7 @@ struct SettingsView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Automatic Updates")
                                             .font(.body)
-                                        Text("Check for updates automatically once per day")
+                                        Text("Check for updates automatically once per hour")
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                     }
