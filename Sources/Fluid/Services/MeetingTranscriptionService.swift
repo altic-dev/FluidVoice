@@ -57,6 +57,26 @@ final class MeetingTranscriptionService: ObservableObject {
         }
     }
 
+    private func errorCategory(for error: Error) -> String {
+        guard let transcriptionError = error as? TranscriptionError else {
+            return "unknownError"
+        }
+        return self.errorCategory(for: transcriptionError)
+    }
+
+    private func errorCategory(for error: TranscriptionError) -> String {
+        switch error {
+        case .modelLoadFailed:
+            return "modelLoadFailed"
+        case .audioConversionFailed:
+            return "audioConversionFailed"
+        case .transcriptionFailed:
+            return "transcriptionFailed"
+        case .fileNotSupported:
+            return "fileNotSupported"
+        }
+    }
+
     /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
     func initializeModels() async throws {
         guard !self.asrService.isAsrReady else { return }
@@ -166,7 +186,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 properties: [
                     "success": false,
                     "file_type": fileURL.pathExtension.lowercased(),
-                    "category": String(describing: error),
+                    "category": errorCategory(for: error),
                 ]
             )
             throw error
@@ -178,7 +198,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 properties: [
                     "success": false,
                     "file_type": fileURL.pathExtension.lowercased(),
-                    "category": "unknown",
+                    "category": self.errorCategory(for: wrappedError),
                 ]
             )
             throw wrappedError
