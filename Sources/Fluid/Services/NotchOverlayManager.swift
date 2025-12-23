@@ -17,6 +17,7 @@ enum OverlayMode: String {
     case rewrite = "Rewrite"
     case write = "Write"
     case command = "Command"
+    case ask = "Ask"
 }
 
 @MainActor
@@ -271,7 +272,7 @@ final class NotchOverlayManager {
     // MARK: - Expanded Command Output
 
     /// Show expanded command output notch
-    func showExpandedCommandOutput() {
+    func showExpandedCommandOutput(mode: OverlayMode = .command) {
         // Hide regular notch first if visible
         if self.notch != nil {
             self.hide()
@@ -280,11 +281,11 @@ final class NotchOverlayManager {
         // Wait a bit for cleanup
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            await self?.showExpandedCommandOutputInternal()
+            await self?.showExpandedCommandOutputInternal(mode: mode)
         }
     }
 
-    private func showExpandedCommandOutputInternal() async {
+    private func showExpandedCommandOutputInternal(mode: OverlayMode) async {
         guard self.commandOutputState == .idle else { return }
 
         self.commandOutputGeneration &+= 1
@@ -294,7 +295,7 @@ final class NotchOverlayManager {
         self.isCommandOutputExpanded = true
 
         // Update content state
-        NotchContentState.shared.mode = .command
+        NotchContentState.shared.mode = mode
         NotchContentState.shared.isExpandedForCommandOutput = true
 
         let publisher = self.lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()

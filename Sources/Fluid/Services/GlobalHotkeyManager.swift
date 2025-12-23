@@ -9,17 +9,32 @@ final class GlobalHotkeyManager: NSObject {
     private var shortcut: HotkeyShortcut
     private var commandModeShortcut: HotkeyShortcut
     private var rewriteModeShortcut: HotkeyShortcut
+    private var askModeShortcut: HotkeyShortcut
     private var commandModeShortcutEnabled: Bool
     private var rewriteModeShortcutEnabled: Bool
+    private var askModeShortcutEnabled: Bool
     private var startRecordingCallback: (() async -> Void)?
     private var stopAndProcessCallback: (() async -> Void)?
     private var commandModeCallback: (() async -> Void)?
     private var rewriteModeCallback: (() async -> Void)?
+    private var askModeCallback: (() async -> Void)?
     private var cancelCallback: (() -> Bool)? // Returns true if handled
     private var pressAndHoldMode: Bool = SettingsStore.shared.pressAndHoldMode
     private var isKeyPressed = false
     private var isCommandModeKeyPressed = false
     private var isRewriteKeyPressed = false
+    private var isAskKeyPressed = false
+
+    // Double-tap detection for Ask Mode (triggered by double-tapping Rewrite shortcut)
+    private var lastRewriteShortcutTime: Date?
+    private var doubleTapThreshold: TimeInterval = 0.35 // 350ms window for double-tap
+    private var pendingRewriteTask: Task<Void, Never>?
+    private var singleTapDelay: TimeInterval = 0.25 // Delay before executing single-tap rewrite
+
+    // Debouncing to prevent rapid-fire activations (crashes Speech framework)
+    private var lastModeActivationTime: Date?
+    private var minimumModeInterval: TimeInterval = 0.5 // 500ms between mode activations
+    private var isModeSwitching: Bool = false // Prevents concurrent mode switches
 
     // Busy flag to prevent race conditions during stop processing
     private var isProcessingStop = false
@@ -36,23 +51,29 @@ final class GlobalHotkeyManager: NSObject {
         shortcut: HotkeyShortcut,
         commandModeShortcut: HotkeyShortcut,
         rewriteModeShortcut: HotkeyShortcut,
+        askModeShortcut: HotkeyShortcut,
         commandModeShortcutEnabled: Bool,
         rewriteModeShortcutEnabled: Bool,
+        askModeShortcutEnabled: Bool,
         startRecordingCallback: (() async -> Void)? = nil,
         stopAndProcessCallback: (() async -> Void)? = nil,
         commandModeCallback: (() async -> Void)? = nil,
-        rewriteModeCallback: (() async -> Void)? = nil
+        rewriteModeCallback: (() async -> Void)? = nil,
+        askModeCallback: (() async -> Void)? = nil
     ) {
         self.asrService = asrService
         self.shortcut = shortcut
         self.commandModeShortcut = commandModeShortcut
         self.rewriteModeShortcut = rewriteModeShortcut
+        self.askModeShortcut = askModeShortcut
         self.commandModeShortcutEnabled = commandModeShortcutEnabled
         self.rewriteModeShortcutEnabled = rewriteModeShortcutEnabled
+        self.askModeShortcutEnabled = askModeShortcutEnabled
         self.startRecordingCallback = startRecordingCallback
         self.stopAndProcessCallback = stopAndProcessCallback
         self.commandModeCallback = commandModeCallback
         self.rewriteModeCallback = rewriteModeCallback
+        self.askModeCallback = askModeCallback
         super.init()
 
         self.initializeWithDelay()
@@ -115,6 +136,26 @@ final class GlobalHotkeyManager: NSObject {
         }
         DebugLogger.shared.info(
             "Rewrite mode shortcut \(enabled ? "enabled" : "disabled")",
+            source: "GlobalHotkeyManager"
+        )
+    }
+
+    func setAskModeCallback(_ callback: @escaping () async -> Void) {
+        self.askModeCallback = callback
+    }
+
+    func updateAskModeShortcut(_ newShortcut: HotkeyShortcut) {
+        self.askModeShortcut = newShortcut
+        DebugLogger.shared.info("Updated ask mode hotkey", source: "GlobalHotkeyManager")
+    }
+
+    func updateAskModeShortcutEnabled(_ enabled: Bool) {
+        self.askModeShortcutEnabled = enabled
+        if !enabled {
+            self.isAskKeyPressed = false
+        }
+        DebugLogger.shared.info(
+            "Ask mode shortcut \(enabled ? "enabled" : "disabled")",
             source: "GlobalHotkeyManager"
         )
     }
@@ -291,11 +332,42 @@ final class GlobalHotkeyManager: NSObject {
                 return nil
             }
 
-            // Check dedicated rewrite mode hotkey
+            // Check dedicated rewrite mode hotkey (with double-tap detection for Ask Mode)
             if self.rewriteModeShortcutEnabled {
                 if self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                    let now = Date()
+
+                    // Check if this is a double-tap (within threshold of last tap)
+                    // Only check if Ask Mode is enabled (otherwise no need for double-tap detection)
+                    if self.askModeShortcutEnabled,
+                       let lastTap = self.lastRewriteShortcutTime,
+                       now.timeIntervalSince(lastTap) < self.doubleTapThreshold
+                    {
+                        // Double-tap detected! Cancel pending rewrite and trigger Ask Mode
+                        DebugLogger.shared.info("Double-tap detected - triggering Ask Mode", source: "GlobalHotkeyManager")
+                        self.pendingRewriteTask?.cancel()
+                        self.pendingRewriteTask = nil
+                        self.lastRewriteShortcutTime = nil
+
+                        if self.pressAndHoldMode {
+                            // In press-and-hold mode, a quick double-tap may have already started rewrite
+                            // Stop it and switch to ask mode
+                            if self.asrService.isRunning {
+                                Task { await self.asrService.stopWithoutTranscription() }
+                            }
+                            self.isRewriteKeyPressed = false
+                            self.isAskKeyPressed = true
+                        }
+                        self.triggerAskMode()
+                        return nil
+                    }
+
+                    // Record tap time for double-tap detection
+                    self.lastRewriteShortcutTime = now
+
                     if self.pressAndHoldMode {
-                        // Press and hold: start on keyDown, stop on keyUp
+                        // Press and hold: START IMMEDIATELY (no delay for responsiveness)
+                        // If user double-taps quickly, we'll cancel and switch to Ask Mode
                         if !self.isRewriteKeyPressed {
                             self.isRewriteKeyPressed = true
                             DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
@@ -305,10 +377,47 @@ final class GlobalHotkeyManager: NSObject {
                         // Toggle mode: press to start, press again to stop
                         if self.asrService.isRunning {
                             DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
+                            self.pendingRewriteTask?.cancel()
+                            self.pendingRewriteTask = nil
                             self.stopRecordingIfNeeded()
+                        } else if self.askModeShortcutEnabled {
+                            // Ask Mode enabled: use delay for double-tap detection in toggle mode
+                            self.pendingRewriteTask?.cancel()
+                            self.pendingRewriteTask = Task { @MainActor [weak self] in
+                                guard let self = self else { return }
+                                try? await Task.sleep(nanoseconds: UInt64(self.singleTapDelay * 1_000_000_000))
+                                guard !Task.isCancelled else { return }
+                                DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
+                                self.triggerRewriteMode()
+                            }
                         } else {
+                            // Ask Mode disabled: no need for delay, trigger immediately
                             DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
                             self.triggerRewriteMode()
+                        }
+                    }
+                    return nil
+                }
+            }
+
+            // Check dedicated ask mode hotkey
+            if self.askModeShortcutEnabled {
+                if self.matchesAskModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                    if self.pressAndHoldMode {
+                        // Press and hold: start on keyDown, stop on keyUp
+                        if !self.isAskKeyPressed {
+                            self.isAskKeyPressed = true
+                            DebugLogger.shared.info("Ask mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                            self.triggerAskMode()
+                        }
+                    } else {
+                        // Toggle mode: press to start, press again to stop
+                        if self.asrService.isRunning {
+                            DebugLogger.shared.info("Ask mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            DebugLogger.shared.info("Ask mode shortcut triggered - starting", source: "GlobalHotkeyManager")
+                            self.triggerAskMode()
                         }
                     }
                     return nil
@@ -338,9 +447,31 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Rewrite mode key up (press and hold mode)
-            if self.rewriteModeShortcutEnabled, self.pressAndHoldMode, self.isRewriteKeyPressed, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                self.isRewriteKeyPressed = false
-                DebugLogger.shared.info("Rewrite mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
+            // Also handles Ask Mode triggered via double-tap of Rewrite shortcut
+            if self.rewriteModeShortcutEnabled, self.pressAndHoldMode, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                // Cancel any pending rewrite task on key release
+                self.pendingRewriteTask?.cancel()
+                self.pendingRewriteTask = nil
+
+                if self.isRewriteKeyPressed {
+                    self.isRewriteKeyPressed = false
+                    DebugLogger.shared.info("Rewrite mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                    self.stopRecordingIfNeeded()
+                    return nil
+                }
+                // Also handle if Ask Mode was triggered via double-tap (key release on rewrite key)
+                if self.isAskKeyPressed {
+                    self.isAskKeyPressed = false
+                    DebugLogger.shared.info("Ask mode (via double-tap) shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                    self.stopRecordingIfNeeded()
+                    return nil
+                }
+            }
+
+            // Ask mode key up (press and hold mode)
+            if self.askModeShortcutEnabled, self.pressAndHoldMode, self.isAskKeyPressed, self.matchesAskModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                self.isAskKeyPressed = false
+                DebugLogger.shared.info("Ask mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                 self.stopRecordingIfNeeded()
                 return nil
             }
@@ -390,6 +521,7 @@ final class GlobalHotkeyManager: NSObject {
             // Check rewrite mode shortcut (if it's a modifier-only shortcut - actual modifier keys only)
             // Note: Regular keys with no modifiers are handled in keyDown, not flagsChanged
             // Only handle actual modifier keys (Command, Option, Control, Shift, Function) here
+            // Includes double-tap detection for Ask Mode
             if self.rewriteModeShortcutEnabled, self.rewriteModeShortcut.modifierFlags.isEmpty {
                 // Check if this is an actual modifier key (not a regular key)
                 let isModifierKey = keyCode == 54 || keyCode == 55 || // Command keys
@@ -400,7 +532,36 @@ final class GlobalHotkeyManager: NSObject {
 
                 if isModifierKey, keyCode == self.rewriteModeShortcut.keyCode {
                     if isModifierPressed {
+                        let now = Date()
+
+                        // Check for double-tap (only if Ask Mode is enabled)
+                        if self.askModeShortcutEnabled,
+                           let lastTap = self.lastRewriteShortcutTime,
+                           now.timeIntervalSince(lastTap) < self.doubleTapThreshold
+                        {
+                            // Double-tap detected! Trigger Ask Mode
+                            DebugLogger.shared.info("Double-tap modifier detected - triggering Ask Mode", source: "GlobalHotkeyManager")
+                            self.pendingRewriteTask?.cancel()
+                            self.pendingRewriteTask = nil
+                            self.lastRewriteShortcutTime = nil
+
+                            if self.pressAndHoldMode {
+                                // Stop any already-started rewrite recording
+                                if self.asrService.isRunning {
+                                    Task { await self.asrService.stopWithoutTranscription() }
+                                }
+                                self.isRewriteKeyPressed = false
+                                self.isAskKeyPressed = true
+                            }
+                            self.triggerAskMode()
+                            return nil
+                        }
+
+                        // First tap - record time
+                        self.lastRewriteShortcutTime = now
+
                         if self.pressAndHoldMode {
+                            // Press and hold: START IMMEDIATELY (no delay for responsiveness)
                             if !self.isRewriteKeyPressed {
                                 self.isRewriteKeyPressed = true
                                 DebugLogger.shared.info("Rewrite mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
@@ -410,16 +571,75 @@ final class GlobalHotkeyManager: NSObject {
                             // Toggle mode
                             if self.asrService.isRunning {
                                 DebugLogger.shared.info("Rewrite mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
+                                self.pendingRewriteTask?.cancel()
+                                self.pendingRewriteTask = nil
                                 self.stopRecordingIfNeeded()
+                            } else if self.askModeShortcutEnabled {
+                                // Ask Mode enabled: use delay for double-tap detection
+                                self.pendingRewriteTask?.cancel()
+                                self.pendingRewriteTask = Task { @MainActor [weak self] in
+                                    guard let self = self else { return }
+                                    try? await Task.sleep(nanoseconds: UInt64(self.singleTapDelay * 1_000_000_000))
+                                    guard !Task.isCancelled else { return }
+                                    DebugLogger.shared.info("Rewrite mode modifier pressed - starting", source: "GlobalHotkeyManager")
+                                    self.triggerRewriteMode()
+                                }
                             } else {
+                                // Ask Mode disabled: no delay needed
                                 DebugLogger.shared.info("Rewrite mode modifier pressed - starting", source: "GlobalHotkeyManager")
                                 self.triggerRewriteMode()
                             }
                         }
-                    } else if self.pressAndHoldMode, self.isRewriteKeyPressed {
+                    } else if self.pressAndHoldMode {
                         // Key released in press-and-hold mode
-                        self.isRewriteKeyPressed = false
-                        DebugLogger.shared.info("Rewrite mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                        self.pendingRewriteTask?.cancel()
+                        self.pendingRewriteTask = nil
+
+                        if self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = false
+                            DebugLogger.shared.info("Rewrite mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        }
+                        if self.isAskKeyPressed {
+                            self.isAskKeyPressed = false
+                            DebugLogger.shared.info("Ask mode (via double-tap) modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        }
+                    }
+                    return nil
+                }
+            }
+
+            // Check ask mode shortcut (if it's a modifier-only shortcut - actual modifier keys only)
+            if self.askModeShortcutEnabled, self.askModeShortcut.modifierFlags.isEmpty {
+                let isModifierKey = keyCode == 54 || keyCode == 55 || // Command keys
+                    keyCode == 58 || keyCode == 61 || // Option keys
+                    keyCode == 59 || keyCode == 62 || // Control keys
+                    keyCode == 56 || keyCode == 60 || // Shift keys
+                    keyCode == 63 // Function key
+
+                if isModifierKey, keyCode == self.askModeShortcut.keyCode {
+                    if isModifierPressed {
+                        if self.pressAndHoldMode {
+                            if !self.isAskKeyPressed {
+                                self.isAskKeyPressed = true
+                                DebugLogger.shared.info("Ask mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                                self.triggerAskMode()
+                            }
+                        } else {
+                            // Toggle mode
+                            if self.asrService.isRunning {
+                                DebugLogger.shared.info("Ask mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
+                                self.stopRecordingIfNeeded()
+                            } else {
+                                DebugLogger.shared.info("Ask mode modifier pressed - starting", source: "GlobalHotkeyManager")
+                                self.triggerAskMode()
+                            }
+                        }
+                    } else if self.pressAndHoldMode, self.isAskKeyPressed {
+                        // Key released in press-and-hold mode
+                        self.isAskKeyPressed = false
+                        DebugLogger.shared.info("Ask mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
                         self.stopRecordingIfNeeded()
                     }
                     return nil
@@ -453,7 +673,42 @@ final class GlobalHotkeyManager: NSObject {
         return Unmanaged.passUnretained(event)
     }
 
+    /// Check if we can safely activate a mode (debouncing)
+    private func canActivateMode() -> Bool {
+        // Check if we're already switching modes
+        if self.isModeSwitching {
+            DebugLogger.shared.debug("Mode activation blocked: already switching modes", source: "GlobalHotkeyManager")
+            return false
+        }
+
+        // Check minimum interval since last activation
+        if let lastTime = self.lastModeActivationTime {
+            let elapsed = Date().timeIntervalSince(lastTime)
+            if elapsed < self.minimumModeInterval {
+                DebugLogger.shared.debug("Mode activation blocked: too soon (\(Int(elapsed * 1000))ms < \(Int(minimumModeInterval * 1000))ms)", source: "GlobalHotkeyManager")
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /// Record that a mode was activated
+    private func recordModeActivation() {
+        self.lastModeActivationTime = Date()
+        self.isModeSwitching = true
+
+        // Reset the switching flag after a short delay
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+            self?.isModeSwitching = false
+        }
+    }
+
     private func triggerCommandMode() {
+        guard canActivateMode() else { return }
+        recordModeActivation()
+
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             DebugLogger.shared.info("Command mode hotkey triggered", source: "GlobalHotkeyManager")
@@ -462,10 +717,24 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func triggerRewriteMode() {
+        guard canActivateMode() else { return }
+        recordModeActivation()
+
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             DebugLogger.shared.info("Rewrite mode hotkey triggered", source: "GlobalHotkeyManager")
             await self.rewriteModeCallback?()
+        }
+    }
+
+    private func triggerAskMode() {
+        guard canActivateMode() else { return }
+        recordModeActivation()
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            DebugLogger.shared.info("Ask mode hotkey triggered", source: "GlobalHotkeyManager")
+            await self.askModeCallback?()
         }
     }
 
@@ -585,6 +854,12 @@ final class GlobalHotkeyManager: NSObject {
         let relevantModifiers: NSEvent.ModifierFlags = modifiers.intersection([.function, .command, .option, .control, .shift])
         let shortcutModifiers = self.rewriteModeShortcut.modifierFlags.intersection([.function, .command, .option, .control, .shift])
         return keyCode == self.rewriteModeShortcut.keyCode && relevantModifiers == shortcutModifiers
+    }
+
+    private func matchesAskModeShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        let relevantModifiers: NSEvent.ModifierFlags = modifiers.intersection([.function, .command, .option, .control, .shift])
+        let shortcutModifiers = self.askModeShortcut.modifierFlags.intersection([.function, .command, .option, .control, .shift])
+        return keyCode == self.askModeShortcut.keyCode && relevantModifiers == shortcutModifiers
     }
 
     func isEventTapEnabled() -> Bool {

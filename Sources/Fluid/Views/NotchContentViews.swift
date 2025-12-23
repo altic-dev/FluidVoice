@@ -165,6 +165,51 @@ class NotchContentState: ObservableObject {
             self.currentChatTitle = current.title
         }
     }
+
+    // MARK: - Ask Mode State
+
+    @Published var isExpandedForAskOutput: Bool = false
+    @Published var askStreamingText: String = ""
+    @Published var askConversationHistory: [CommandOutputMessage] = [] // Reuse message model
+    @Published var isAskProcessing: Bool = false
+
+    // Callback for submitting follow-up questions from the notch
+    var onAskFollowUp: ((String) async -> Void)?
+
+    /// Add a message to the ask conversation history
+    func addAskMessage(role: CommandOutputMessage.Role, content: String) {
+        let message = CommandOutputMessage(role: role, content: content)
+        self.askConversationHistory.append(message)
+    }
+
+    /// Update ask streaming text
+    func updateAskStreamingText(_ text: String) {
+        self.askStreamingText = text
+    }
+
+    /// Set ask processing state
+    func setAskProcessing(_ processing: Bool) {
+        self.isAskProcessing = processing
+    }
+
+    /// Show expanded ask output view
+    func showExpandedAskOutput() {
+        self.askStreamingText = ""
+        self.isExpandedForAskOutput = true
+    }
+
+    /// Clear ask output and hide expanded view
+    func clearAskOutput() {
+        self.isExpandedForAskOutput = false
+        self.askStreamingText = ""
+        self.askConversationHistory.removeAll()
+        self.isAskProcessing = false
+    }
+
+    /// Hide expanded ask view but keep history
+    func collapseAskOutput() {
+        self.isExpandedForAskOutput = false
+    }
 }
 
 // MARK: - Shared Mode Color Helper
@@ -181,6 +226,8 @@ extension OverlayMode {
             return Color(red: 0.4, green: 0.6, blue: 1.0) // Blue
         case .command:
             return Color(red: 1.0, green: 0.35, blue: 0.35) // Red
+        case .ask:
+            return Color(red: 0.4, green: 0.85, blue: 0.6) // Green
         }
     }
 }
@@ -233,6 +280,7 @@ struct NotchExpandedView: View {
         case .rewrite: return "Rewrite"
         case .write: return "Write"
         case .command: return "Command"
+        case .ask: return "Ask"
         }
     }
 
@@ -242,6 +290,7 @@ struct NotchExpandedView: View {
         case .rewrite: return "Thinking..."
         case .write: return "Thinking..."
         case .command: return "Working..."
+        case .ask: return "Thinking..."
         }
     }
 
@@ -252,6 +301,11 @@ struct NotchExpandedView: View {
     // Check if there's command history that can be expanded
     private var canExpandCommandHistory: Bool {
         self.contentState.mode == .command && !self.contentState.commandConversationHistory.isEmpty
+    }
+
+    // Check if there's ask history that can be expanded
+    private var canExpandAskHistory: Bool {
+        self.contentState.mode == .ask && !self.contentState.askConversationHistory.isEmpty
     }
 
     var body: some View {
@@ -490,7 +544,31 @@ struct NotchCommandOutputExpandedView: View {
     @State private var isHoveringClear = false
     @State private var isHoveringDismiss = false
 
+    // Tab state
+    enum NotchTab {
+        case command
+        case ask
+    }
+    @State private var selectedTab: NotchTab = .command
+
     private let commandRed = Color(red: 1.0, green: 0.35, blue: 0.35)
+    private let askGreen = Color(red: 0.2, green: 0.8, blue: 0.4)
+
+    private var activeColor: Color {
+        self.selectedTab == .command ? self.commandRed : self.askGreen
+    }
+
+    private var activeHistory: [NotchContentState.CommandOutputMessage] {
+        self.selectedTab == .command ? self.contentState.commandConversationHistory : self.contentState.askConversationHistory
+    }
+
+    private var activeStreamingText: String {
+        self.selectedTab == .command ? self.contentState.commandStreamingText : self.contentState.askStreamingText
+    }
+
+    private var isProcessing: Bool {
+        self.selectedTab == .command ? self.contentState.isCommandProcessing : self.contentState.isAskProcessing
+    }
 
     // Dynamic height based on content (max half screen)
     private var dynamicHeight: CGFloat {
@@ -504,14 +582,16 @@ struct NotchCommandOutputExpandedView: View {
         var height: CGFloat = 80 // Header + input area
 
         // Estimate based on conversation history
-        for message in self.contentState.commandConversationHistory {
+        let history = self.selectedTab == .command ? self.contentState.commandConversationHistory : self.contentState.askConversationHistory
+        for message in history {
             let lineCount = max(1, message.content.count / 60) // ~60 chars per line
             height += CGFloat(lineCount) * 18 + 16 // Line height + padding
         }
 
         // Add streaming text height
-        if !self.contentState.commandStreamingText.isEmpty {
-            let lineCount = max(1, contentState.commandStreamingText.count / 60)
+        let streamingText = self.selectedTab == .command ? self.contentState.commandStreamingText : self.contentState.askStreamingText
+        if !streamingText.isEmpty {
+            let lineCount = max(1, streamingText.count / 60)
             height += CGFloat(lineCount) * 18 + 16
         }
 
@@ -520,27 +600,35 @@ struct NotchCommandOutputExpandedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header with waveform and dismiss
+            // Header with waveform, tabs, and dismiss
             self.headerView
 
             // Transcription preview (shown while recording)
             self.transcriptionPreview
 
             Divider()
-                .background(self.commandRed.opacity(0.3))
+                .background(self.activeColor.opacity(0.3))
 
             // Scrollable conversation area
             self.conversationArea
 
-            // Input area for follow-up commands
+            // Input area for follow-up commands (only showing for command mode for now, or unified if Ask supports follow-up)
             self.inputArea
         }
         .frame(width: 380, height: self.dynamicHeight)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: self.contentState.commandConversationHistory.count)
-        // No animation on streamingText - it updates too frequently, animations add overhead
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.contentState.isRecordingInExpandedMode)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: self.contentState.askConversationHistory.count)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.selectedTab)
+        .onAppear {
+            // Initialize tab based on launch mode
+            if self.contentState.mode == .ask {
+                self.selectedTab = .ask
+            } else {
+                self.selectedTab = .command
+            }
+        }
     }
 
     // MARK: - Header
@@ -551,31 +639,44 @@ struct NotchCommandOutputExpandedView: View {
             HStack(spacing: 6) {
                 // Waveform - only show when recording, otherwise show static indicator
                 if self.contentState.isRecordingInExpandedMode {
-                    ExpandedModeWaveformView(color: self.commandRed)
+                    ExpandedModeWaveformView(color: self.activeColor)
                         .frame(width: 50, height: 18)
                 } else {
                     // Static indicator when not recording
                     HStack(spacing: 3) {
                         ForEach(0..<5, id: \.self) { _ in
                             RoundedRectangle(cornerRadius: 1.5)
-                                .fill(self.commandRed.opacity(0.4))
+                                .fill(self.activeColor.opacity(0.4))
                                 .frame(width: 3, height: 6)
                         }
                     }
                     .frame(width: 50, height: 18)
                 }
 
-                // Mode label
+                // Mode label or Tab Switcher
                 if self.contentState.isRecordingInExpandedMode {
                     Text("Listening...")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(self.commandRed)
-                } else if self.contentState.isCommandProcessing {
-                    ShimmerText(text: "Working...", color: self.commandRed)
+                        .foregroundStyle(self.activeColor)
+                } else if (self.selectedTab == .command && self.contentState.isCommandProcessing) || (self.selectedTab == .ask && self.contentState.isAskProcessing) {
+                    ShimmerText(text: "Working...", color: self.activeColor)
                 } else {
-                    Text("Command")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(self.commandRed.opacity(0.7))
+                    // Tab Switcher
+                    HStack(spacing: 12) {
+                        Button(action: { withAnimation { self.selectedTab = .command } }) {
+                            Text("Command")
+                                .font(.system(size: 11, weight: self.selectedTab == .command ? .bold : .medium))
+                                .foregroundStyle(self.selectedTab == .command ? self.commandRed : .white.opacity(0.4))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: { withAnimation { self.selectedTab = .ask } }) {
+                            Text("Ask")
+                                .font(.system(size: 11, weight: self.selectedTab == .ask ? .bold : .medium))
+                                .foregroundStyle(self.selectedTab == .ask ? self.askGreen : .white.opacity(0.4))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
 
@@ -583,8 +684,10 @@ struct NotchCommandOutputExpandedView: View {
 
             // Right: Chat management buttons + Dismiss
             HStack(spacing: 6) {
-                // New Chat Button (+)
-                Button(action: self.onNewChat) {
+                // Chat management only for Command Mode currently
+                if self.selectedTab == .command {
+                    // New Chat Button (+)
+                    Button(action: self.onNewChat) {
                     ZStack {
                         Circle()
                             .fill(self.isHoveringNewChat ? self.commandRed.opacity(0.25) : self.commandRed.opacity(0.12))
@@ -664,6 +767,8 @@ struct NotchCommandOutputExpandedView: View {
                 .disabled(self.contentState.isCommandProcessing)
                 .help("Delete chat")
 
+                }
+
                 // Vertical divider
                 Rectangle()
                     .fill(.white.opacity(0.15))
@@ -674,11 +779,11 @@ struct NotchCommandOutputExpandedView: View {
                 Button(action: self.onDismiss) {
                     ZStack {
                         Circle()
-                            .fill(self.isHoveringDismiss ? self.commandRed.opacity(0.25) : self.commandRed.opacity(0.12))
+                            .fill(self.isHoveringDismiss ? self.activeColor.opacity(0.25) : self.activeColor.opacity(0.12))
                             .frame(width: 22, height: 22)
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(self.commandRed.opacity(0.85))
+                            .foregroundStyle(self.activeColor.opacity(0.85))
                     }
                 }
                 .buttonStyle(.plain)
@@ -714,7 +819,7 @@ struct NotchCommandOutputExpandedView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(self.commandRed.opacity(0.1))
+                .background(self.activeColor.opacity(0.1))
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
@@ -728,19 +833,19 @@ struct NotchCommandOutputExpandedView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(self.contentState.commandConversationHistory) { message in
+                    ForEach(self.activeHistory) { message in
                         self.messageView(for: message)
                             .id(message.id)
                     }
 
                     // Streaming text (real-time)
-                    if !self.contentState.commandStreamingText.isEmpty {
+                    if !self.activeStreamingText.isEmpty {
                         self.streamingMessageView
                             .id("streaming")
                     }
 
                     // Processing indicator
-                    if self.contentState.isCommandProcessing && self.contentState.commandStreamingText.isEmpty {
+                    if self.isProcessing && self.activeStreamingText.isEmpty {
                         self.processingIndicator
                             .id("processing")
                     }
@@ -756,14 +861,23 @@ struct NotchCommandOutputExpandedView: View {
                 self.scrollToBottom(proxy, animated: false)
             }
             .onChange(of: self.contentState.commandConversationHistory.count) { _, _ in
-                self.scrollToBottom(proxy, animated: true)
+                if self.selectedTab == .command { self.scrollToBottom(proxy, animated: true) }
+            }
+            .onChange(of: self.contentState.askConversationHistory.count) { _, _ in
+                if self.selectedTab == .ask { self.scrollToBottom(proxy, animated: true) }
             }
             .onChange(of: self.contentState.commandStreamingText) { _, _ in
-                self.scrollToBottom(proxy, animated: true)
+                if self.selectedTab == .command { self.scrollToBottom(proxy, animated: true) }
             }
-            .onChange(of: self.contentState.isCommandProcessing) { _, _ in
+            .onChange(of: self.contentState.askStreamingText) { _, _ in
+                if self.selectedTab == .ask { self.scrollToBottom(proxy, animated: true) }
+            }
+            .onChange(of: self.isProcessing) { _, _ in
                 // Scroll when processing state changes
                 self.scrollToBottom(proxy, animated: true)
+            }
+            .onChange(of: self.selectedTab) { _, _ in
+                self.scrollToBottom(proxy, animated: false)
             }
         }
     }
@@ -792,7 +906,7 @@ struct NotchCommandOutputExpandedView: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(self.commandRed.opacity(0.25))
+                    .background(self.activeColor.opacity(0.25))
                     .cornerRadius(8)
                     .frame(maxWidth: 280, alignment: .trailing)
                     .textSelection(.enabled)
@@ -812,7 +926,7 @@ struct NotchCommandOutputExpandedView: View {
             case .status:
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(self.commandRed.opacity(0.6))
+                        .fill(self.activeColor.opacity(0.6))
                         .frame(width: 4, height: 4)
                     Text(message.content)
                         .font(.system(size: 10, weight: .medium))
@@ -826,7 +940,7 @@ struct NotchCommandOutputExpandedView: View {
 
     private var streamingMessageView: some View {
         HStack(alignment: .top) {
-            Text(self.contentState.commandStreamingText)
+            Text(self.activeStreamingText)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 10)
@@ -844,7 +958,7 @@ struct NotchCommandOutputExpandedView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(self.commandRed.opacity(0.6))
+                    .fill(self.activeColor.opacity(0.6))
                     .frame(width: 4, height: 4)
                     .offset(y: self.processingOffset(for: index))
             }
@@ -863,31 +977,35 @@ struct NotchCommandOutputExpandedView: View {
     // MARK: - Input Area
 
     private var inputArea: some View {
-        HStack(spacing: 8) {
-            TextField("Ask follow-up...", text: self.$inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.08))
-                .cornerRadius(8)
-                .focused(self.$isInputFocused)
-                .onSubmit {
-                    self.submitFollowUp()
-                }
+        Group {
+            if self.selectedTab == .command {
+                HStack(spacing: 8) {
+                    TextField("Ask follow-up...", text: self.$inputText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(8)
+                        .focused(self.$isInputFocused)
+                        .onSubmit {
+                            self.submitFollowUp()
+                        }
 
-            Button(action: self.submitFollowUp) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(self.inputText.isEmpty ? .white.opacity(0.3) : self.commandRed)
+                    Button(action: self.submitFollowUp) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(self.inputText.isEmpty ? .white.opacity(0.3) : self.activeColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.inputText.isEmpty || self.isProcessing)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.03))
             }
-            .buttonStyle(.plain)
-            .disabled(self.inputText.isEmpty || self.contentState.isCommandProcessing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.03))
     }
 
     private func submitFollowUp() {

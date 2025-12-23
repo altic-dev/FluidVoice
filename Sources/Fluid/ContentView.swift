@@ -41,6 +41,7 @@ struct ContentView: View {
     @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
+    @StateObject private var askModeService = AskModeService()
     @EnvironmentObject private var menuBarManager: MenuBarManager
 
     // Computed properties to access shared services from AppServices container
@@ -59,8 +60,11 @@ struct ContentView: View {
     @State private var rewriteModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.rewriteModeHotkeyShortcut
     @State private var isCommandModeShortcutEnabled: Bool = SettingsStore.shared.commandModeShortcutEnabled
     @State private var isRewriteModeShortcutEnabled: Bool = SettingsStore.shared.rewriteModeShortcutEnabled
+    @State private var askModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.askModeHotkeyShortcut
+    @State private var isAskModeShortcutEnabled: Bool = SettingsStore.shared.askModeShortcutEnabled
     @State private var isRecordingForRewrite: Bool = false // Track if current recording is for rewrite mode
     @State private var isRecordingForCommand: Bool = false // Track if current recording is for command mode
+    @State private var isRecordingForAsk: Bool = false // Track if current recording is for ask mode
     @State private var isRecordingShortcut = false
     @State private var isRecordingCommandModeShortcut = false
     @State private var isRecordingRewriteShortcut = false
@@ -514,6 +518,21 @@ struct ContentView: View {
                     }
                     self.isRecordingForRewrite = false
                     self.rewriteModeService.clearState()
+                    self.menuBarManager.setOverlayMode(.dictation)
+                }
+            }
+        }
+        .onChange(of: self.isAskModeShortcutEnabled) { newValue in
+            SettingsStore.shared.askModeShortcutEnabled = newValue
+            self.hotkeyManager?.updateAskModeShortcutEnabled(newValue)
+
+            if !newValue {
+                if self.isRecordingForAsk {
+                    if self.asr.isRunning {
+                        Task { await self.asr.stopWithoutTranscription() }
+                    }
+                    self.isRecordingForAsk = false
+                    self.askModeService.clearState()
                     self.menuBarManager.setOverlayMode(.dictation)
                 }
             }
@@ -1363,15 +1382,20 @@ struct ContentView: View {
     private func stopAndProcessTranscription() async {
         DebugLogger.shared.debug("stopAndProcessTranscription called", source: "ContentView")
 
-        // Check if we're in rewrite or command mode
+        // Check if we're in rewrite, command, or ask mode
         let wasRewriteMode = self.isRecordingForRewrite
         let wasCommandMode = self.isRecordingForCommand
+        let wasAskMode = self.isRecordingForAsk
         if wasRewriteMode {
             self.isRecordingForRewrite = false
             // Don't reset overlay mode here - let it stay colored until it hides
         }
         if wasCommandMode {
             self.isRecordingForCommand = false
+            // Don't reset overlay mode here - let it stay colored until it hides
+        }
+        if wasAskMode {
+            self.isRecordingForAsk = false
             // Don't reset overlay mode here - let it stay colored until it hides
         }
 
@@ -1396,6 +1420,13 @@ struct ContentView: View {
         if wasCommandMode {
             DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
             await self.processCommandWithVoice(transcribedText)
+            return
+        }
+
+        // If this was an ask recording, process the question
+        if wasAskMode {
+            DebugLogger.shared.info("Processing ask question: \(transcribedText)", source: "ContentView")
+            await self.processAskWithVoiceQuestion(transcribedText)
             return
         }
 
@@ -1520,10 +1551,28 @@ struct ContentView: View {
         DebugLogger.shared.info("Command processed, conversation stored in Command Mode", source: "ContentView")
     }
 
+    // MARK: - Ask Mode Voice Processing
+
+    private func processAskWithVoiceQuestion(_ question: String) async {
+        DebugLogger.shared.info("Processing voice question: '\(question)'", source: "ContentView")
+
+        // Show processing animation
+        self.menuBarManager.setProcessing(true)
+
+        // Process the question through AskModeService
+        // This interacts with the LLM and displays the answer in the notch
+        await self.askModeService.processQuestion(question)
+
+        // Hide processing animation
+        self.menuBarManager.setProcessing(false)
+
+        DebugLogger.shared.info("Question processed, answer displayed in notch", source: "ContentView")
+    }
+
     // Capture app context at start to avoid mismatches if the user switches apps mid-session
     private func startRecording() {
-        // Ensure normal dictation mode is set (command/rewrite modes set their own)
-        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
+        // Ensure normal dictation mode is set (command/rewrite/ask modes set their own)
+        if !self.isRecordingForCommand, !self.isRecordingForRewrite, !self.isRecordingForAsk {
             self.menuBarManager.setOverlayMode(.dictation)
         }
 
@@ -1732,8 +1781,10 @@ struct ContentView: View {
             shortcut: self.hotkeyShortcut,
             commandModeShortcut: self.commandModeHotkeyShortcut,
             rewriteModeShortcut: self.rewriteModeHotkeyShortcut,
+            askModeShortcut: self.askModeHotkeyShortcut,
             commandModeShortcutEnabled: self.isCommandModeShortcutEnabled,
             rewriteModeShortcutEnabled: self.isRewriteModeShortcutEnabled,
+            askModeShortcutEnabled: self.isAskModeShortcutEnabled,
             startRecordingCallback: {
                 self.startRecording()
             },
@@ -1783,6 +1834,24 @@ struct ContentView: View {
                 // Start recording immediately for the rewrite instruction (or text to improve)
                 DebugLogger.shared.info("Starting voice recording for rewrite/write mode", source: "ContentView")
                 self.asr.start()
+            },
+            askModeCallback: {
+                // Try to capture text as context first while still in the other app
+                let captured = self.askModeService.captureSelectedText()
+                DebugLogger.shared.info("Ask mode triggered, context captured: \(captured)", source: "ContentView")
+
+                // Set overlay mode to ask
+                self.menuBarManager.setOverlayMode(.ask)
+
+                // Set flag so stopAndProcessTranscription knows to process as ask
+                self.isRecordingForAsk = true
+
+                // Set up the output handler for notch display
+                self.askModeService.setOutputHandler(AskModeNotchHandler.shared)
+
+                // Start recording immediately for the question
+                DebugLogger.shared.info("Starting voice recording for ask mode", source: "ContentView")
+                self.asr.start()
             }
         )
 
@@ -1810,6 +1879,11 @@ struct ContentView: View {
             }
             if self.isRecordingForRewrite {
                 self.isRecordingForRewrite = false
+                self.menuBarManager.setOverlayMode(.dictation)
+                handled = true
+            }
+            if self.isRecordingForAsk {
+                self.isRecordingForAsk = false
                 self.menuBarManager.setOverlayMode(.dictation)
                 handled = true
             }

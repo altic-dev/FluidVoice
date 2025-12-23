@@ -79,6 +79,12 @@ final class SettingsStore: ObservableObject {
 
         // Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+
+        // Ask Mode Keys
+        static let askModeHotkeyShortcut = "AskModeHotkeyShortcut"
+        static let askModeSelectedModel = "AskModeSelectedModel"
+        static let askModeSelectedProviderID = "AskModeSelectedProviderID"
+        static let askModeShortcutEnabled = "AskModeShortcutEnabled"
     }
 
     // MARK: - Model Reasoning Configuration
@@ -554,6 +560,53 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.rewriteModeLinkedToGlobal)
+        }
+    }
+
+    // MARK: - Ask Mode Settings
+
+    var askModeHotkeyShortcut: HotkeyShortcut {
+        get {
+            if let data = defaults.data(forKey: Keys.askModeHotkeyShortcut),
+               let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data)
+            {
+                return shortcut
+            }
+            // Default to Option+A (keyCode: 0 is A, with Option modifier)
+            return HotkeyShortcut(keyCode: 0, modifierFlags: [.option])
+        }
+        set {
+            objectWillChange.send()
+            if let data = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(data, forKey: Keys.askModeHotkeyShortcut)
+            }
+        }
+    }
+
+    var askModeSelectedModel: String? {
+        get { self.defaults.string(forKey: Keys.askModeSelectedModel) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.askModeSelectedModel)
+        }
+    }
+
+    var askModeSelectedProviderID: String {
+        get { self.defaults.string(forKey: Keys.askModeSelectedProviderID) ?? "openai" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.askModeSelectedProviderID)
+        }
+    }
+
+    var askModeShortcutEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.askModeShortcutEnabled)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.askModeShortcutEnabled)
         }
     }
 
