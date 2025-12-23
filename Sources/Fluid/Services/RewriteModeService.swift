@@ -53,6 +53,7 @@ final class RewriteModeService: ObservableObject {
     }
 
     func processRewriteRequest(_ prompt: String) async {
+        let startTime = Date()
         // If no original text, we're in "Write Mode" - generate content based on user's request
         if self.originalText.isEmpty {
             self.originalText = prompt
@@ -90,9 +91,27 @@ final class RewriteModeService: ObservableObject {
             self.conversationHistory.append(Message(role: .assistant, content: response))
             self.rewrittenText = response
             self.isProcessing = false
+
+            AnalyticsService.shared.capture(
+                .rewriteRunCompleted,
+                properties: [
+                    "write_mode": self.isWriteMode,
+                    "success": true,
+                    "latency_bucket": AnalyticsBuckets.bucketSeconds(Date().timeIntervalSince(startTime)),
+                ]
+            )
         } catch {
             self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
             self.isProcessing = false
+
+            AnalyticsService.shared.capture(
+                .rewriteRunCompleted,
+                properties: [
+                    "write_mode": self.isWriteMode,
+                    "success": false,
+                    "latency_bucket": AnalyticsBuckets.bucketSeconds(Date().timeIntervalSince(startTime)),
+                ]
+            )
         }
     }
 
@@ -100,6 +119,14 @@ final class RewriteModeService: ObservableObject {
         guard !self.rewrittenText.isEmpty else { return }
         NSApp.hide(nil) // Restore focus to the previous app
         self.typingService.typeTextInstantly(self.rewrittenText)
+
+        AnalyticsService.shared.capture(
+            .outputDelivered,
+            properties: [
+                "mode": AnalyticsMode.rewrite.rawValue,
+                "method": AnalyticsOutputMethod.typed.rawValue,
+            ]
+        )
     }
 
     func clearState() {

@@ -39,6 +39,10 @@ struct SettingsView: View {
     @State private var cachedDefaultInputName: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
+    // Analytics consent UI state (default ON; user can opt-out)
+    @State private var shareAnonymousAnalytics: Bool = SettingsStore.shared.shareAnonymousAnalytics
+    @State private var showAnalyticsPrivacy: Bool = false
+
     let hotkeyManager: GlobalHotkeyManager?
     let menuBarManager: MenuBarManager
     let startRecording: () -> Void
@@ -378,6 +382,29 @@ struct SettingsView: View {
                                             set: { SettingsStore.shared.saveTranscriptionHistory = $0 }
                                         )
                                     )
+
+                                    Divider().padding(.vertical, 8)
+
+                                    self.optionToggleRow(
+                                        title: "Share Anonymous Analytics",
+                                        description: "Send anonymous usage and performance metrics to help improve FluidVoice. Never includes transcription text or prompts.",
+                                        isOn: self.$shareAnonymousAnalytics
+                                    )
+                                    .onChange(of: self.shareAnonymousAnalytics) { _, newValue in
+                                        SettingsStore.shared.shareAnonymousAnalytics = newValue
+                                        AnalyticsService.shared.setEnabled(newValue)
+                                        AnalyticsService.shared.capture(.analyticsConsentChanged, properties: ["enabled": newValue])
+                                    }
+
+                                    HStack {
+                                        Button("What we collect") {
+                                            self.showAnalyticsPrivacy = true
+                                        }
+                                        .buttonStyle(.link)
+
+                                        Spacer()
+                                    }
+                                    .padding(.top, 6)
                                 }
                                 .padding(12)
                                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -701,6 +728,12 @@ struct SettingsView: View {
                 }
             }
             .padding(16)
+        }
+        .sheet(isPresented: self.$showAnalyticsPrivacy) {
+            AnalyticsPrivacyView()
+                .frame(minWidth: 520, minHeight: 520)
+                .appTheme(self.theme)
+                .preferredColorScheme(.dark)
         }
         .onAppear {
             Task { @MainActor in

@@ -142,6 +142,16 @@ final class MeetingTranscriptionService: ObservableObject {
                 fileName: fileURL.lastPathComponent
             )
 
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": true,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "audio_duration_bucket": AnalyticsBuckets.bucketSeconds(duration),
+                    "processing_time_bucket": AnalyticsBuckets.bucketSeconds(processingTime),
+                ]
+            )
+
             self.result = result
             return result
             #else
@@ -151,10 +161,26 @@ final class MeetingTranscriptionService: ObservableObject {
 
         } catch let error as TranscriptionError {
             self.error = error.localizedDescription
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": false,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "category": String(describing: error),
+                ]
+            )
             throw error
         } catch {
             let wrappedError = TranscriptionError.transcriptionFailed(error.localizedDescription)
             self.error = wrappedError.localizedDescription
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": false,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "category": "unknown",
+                ]
+            )
             throw wrappedError
         }
     }

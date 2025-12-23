@@ -1381,6 +1381,14 @@ struct ContentView: View {
         if wasRewriteMode {
             DebugLogger.shared.info("Processing rewrite with instruction: \(transcribedText)", source: "ContentView")
             await self.processRewriteWithVoiceInstruction(transcribedText)
+            AnalyticsService.shared.capture(
+                .transcriptionCompleted,
+                properties: [
+                    "mode": AnalyticsMode.rewrite.rawValue,
+                    "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: transcribedText)),
+                    "ai_used": true,
+                ]
+            )
             return
         }
 
@@ -1388,6 +1396,14 @@ struct ContentView: View {
         if wasCommandMode {
             DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
             await self.processCommandWithVoice(transcribedText)
+            AnalyticsService.shared.capture(
+                .transcriptionCompleted,
+                properties: [
+                    "mode": AnalyticsMode.command.rawValue,
+                    "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: transcribedText)),
+                    "ai_used": true,
+                ]
+            )
             return
         }
 
@@ -1425,6 +1441,16 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Transcription finalized (chars: \(finalText.count))", source: "ContentView")
 
+        AnalyticsService.shared.capture(
+            .transcriptionCompleted,
+            properties: [
+                "mode": AnalyticsMode.dictation.rawValue,
+                "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText)),
+                "ai_used": shouldUseAI,
+                "ai_changed_text": transcribedText != finalText,
+            ]
+        )
+
         // Save to transcription history (transcription mode only, if enabled)
         if SettingsStore.shared.saveTranscriptionHistory {
             let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
@@ -1439,8 +1465,16 @@ struct ContentView: View {
         // Copy to clipboard if enabled (happens before typing as a backup)
         if SettingsStore.shared.copyTranscriptionToClipboard {
             ClipboardService.copyToClipboard(finalText)
+            AnalyticsService.shared.capture(
+                .outputDelivered,
+                properties: [
+                    "mode": AnalyticsMode.dictation.rawValue,
+                    "method": AnalyticsOutputMethod.clipboard.rawValue,
+                ]
+            )
         }
 
+        var didTypeExternally = false
         await MainActor.run {
             let frontmostApp = NSWorkspace.shared.frontmostApplication
             let frontmostName = frontmostApp?.localizedName ?? "Unknown"
@@ -1454,7 +1488,28 @@ struct ContentView: View {
 
             if shouldTypeExternally {
                 self.asr.typeTextToActiveField(finalText)
+                didTypeExternally = true
             }
+        }
+
+        if didTypeExternally {
+            AnalyticsService.shared.capture(
+                .outputDelivered,
+                properties: [
+                    "mode": AnalyticsMode.dictation.rawValue,
+                    "method": AnalyticsOutputMethod.typed.rawValue,
+                ]
+            )
+        } else if SettingsStore.shared.copyTranscriptionToClipboard == false,
+                  SettingsStore.shared.saveTranscriptionHistory
+        {
+            AnalyticsService.shared.capture(
+                .outputDelivered,
+                properties: [
+                    "mode": AnalyticsMode.dictation.rawValue,
+                    "method": AnalyticsOutputMethod.historyOnly.rawValue,
+                ]
+            )
         }
     }
 
@@ -1482,15 +1537,36 @@ struct ContentView: View {
             // Copy to clipboard as backup
             if SettingsStore.shared.copyTranscriptionToClipboard {
                 ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
+                AnalyticsService.shared.capture(
+                    .outputDelivered,
+                    properties: [
+                        "mode": AnalyticsMode.rewrite.rawValue,
+                        "method": AnalyticsOutputMethod.clipboard.rawValue,
+                    ]
+                )
             }
 
             // Type the rewritten text
             self.asr.typeTextToActiveField(self.rewriteModeService.rewrittenText)
+            AnalyticsService.shared.capture(
+                .outputDelivered,
+                properties: [
+                    "mode": AnalyticsMode.rewrite.rawValue,
+                    "method": AnalyticsOutputMethod.typed.rawValue,
+                ]
+            )
 
             // Clear the rewrite service state for next use
             self.rewriteModeService.clearState()
         } else {
             DebugLogger.shared.error("Rewrite failed - no result", source: "ContentView")
+            AnalyticsService.shared.capture(
+                .errorOccurred,
+                properties: [
+                    "domain": AnalyticsErrorDomain.llm.rawValue,
+                    "category": "rewrite_no_result",
+                ]
+            )
         }
     }
 
