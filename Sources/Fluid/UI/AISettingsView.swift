@@ -235,7 +235,7 @@ struct AISettingsView: View {
 
                         Spacer()
 
-                        if !SettingsStore.shared.selectedSpeechModel.isWhisperModel {
+                        if SettingsStore.shared.selectedSpeechModel.requiresAppleSilicon {
                             Text("Apple Silicon")
                                 .font(.caption)
                                 .padding(.horizontal, 8)
@@ -278,7 +278,9 @@ struct AISettingsView: View {
         case .appleSpeechAnalyzer:
             return "Apple Speech uses advanced on-device recognition with fast, accurate transcription. Requires macOS 26+."
         case .parakeetTDT:
-            return "Parakeet TDT uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
+            return "Parakeet TDT v3 uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
+        case .parakeetTDTv2:
+            return "Parakeet TDT v2 is an English-only model optimized for accuracy and consistency on Apple Silicon."
         default:
             return "Whisper models support 99 languages and work on any Mac."
         }

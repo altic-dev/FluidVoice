@@ -1,5 +1,7 @@
 # FluidVoice
 
+[![Supported Models](https://img.shields.io/badge/Models-Parakeet%20v3%20%26%20v2%20%7C%20Apple%20Speech%20%7C%20Whisper-blue)](https://github.com/altic-dev/Fluid-oss)
+
 Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
 **Get the latest release from [here](https://github.com/altic-dev/Fluid-oss/releases/latest)**
@@ -44,15 +46,31 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **New History stats**  
 - **Stats to monitor usage**  
 
+
 ## Features
 - **Live Preview Mode**: Real-time transcription preview in overlay
-- **Real-time transcription** using Parakeet TDT v3 model
+- **Multiple Speech Models**: Parakeet TDT v3 & v2, Apple Speech, and Whisper
+- **Real-time transcription** with extremely low latency
 - **AI enhancement** with OpenAI, Groq, and custom providers
-- **25+ languages** with auto-detection
 - **Global hotkey** for instant voice capture
 - **Smart typing** directly into any app
 - **Menu bar integration** for quick access
 - **Auto-updates** with seamless restart
+
+## Supported Models
+
+### Parakeet TDT v3 (Default)
+Optimized for Apple Silicon. Supports 25 languages with auto-detection:
+**Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, Ukrainian.**
+
+### Parakeet TDT v2
+English-only model optimized for higher accuracy and consistency on Apple Silicon.
+
+### Apple Speech
+Uses the native macOS Speech Recognition engine and Speech Analyzer API (macOS 26+).
+
+### Whisper
+Universal support (runs on Intel & Apple Silicon). Supports 99 languages.
 
 ## Quick Start
 

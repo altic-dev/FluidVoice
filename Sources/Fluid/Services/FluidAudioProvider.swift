@@ -19,10 +19,18 @@ final class FluidAudioProvider: TranscriptionProvider {
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
         guard self.isReady == false else { return }
 
-        DebugLogger.shared.info("FluidAudioProvider: Starting model preparation", source: "FluidAudioProvider")
+        let selectedModel = SettingsStore.shared.selectedSpeechModel
+        DebugLogger.shared.info("FluidAudioProvider: Starting model preparation for \(selectedModel.displayName)", source: "FluidAudioProvider")
 
         // Download and load models
-        let models = try await AsrModels.downloadAndLoad()
+        let models: AsrModels
+        if selectedModel == .parakeetTDTv2 {
+            // Explicitly load v2 (English Only)
+            models = try await AsrModels.downloadAndLoad(version: .v2)
+        } else {
+            // Default to v3 (Multilingual)
+            models = try await AsrModels.downloadAndLoad(version: .v3)
+        }
 
         // Initialize AsrManager
         let manager = AsrManager(config: ASRConfig.default)
@@ -48,23 +56,34 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     func modelsExistOnDisk() -> Bool {
         let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
-        let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
-        return FileManager.default.fileExists(atPath: v3CacheDir.path)
+
+        if SettingsStore.shared.selectedSpeechModel == .parakeetTDTv2 {
+            let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
+            return FileManager.default.fileExists(atPath: v2CacheDir.path)
+        } else {
+            let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
+            return FileManager.default.fileExists(atPath: v3CacheDir.path)
+        }
     }
 
     func clearCache() async throws {
         let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let selectedModel = SettingsStore.shared.selectedSpeechModel
 
-        // Clear v2 cache
-        let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
-        if FileManager.default.fileExists(atPath: v2CacheDir.path) {
-            try FileManager.default.removeItem(at: v2CacheDir)
-        }
-
-        // Clear v3 cache
-        let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
-        if FileManager.default.fileExists(atPath: v3CacheDir.path) {
-            try FileManager.default.removeItem(at: v3CacheDir)
+        if selectedModel == .parakeetTDTv2 {
+            // Clear v2 cache only
+            let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
+            if FileManager.default.fileExists(atPath: v2CacheDir.path) {
+                try FileManager.default.removeItem(at: v2CacheDir)
+                DebugLogger.shared.info("FluidAudioProvider: Deleted Parakeet v2 cache", source: "FluidAudioProvider")
+            }
+        } else {
+            // Clear v3 cache only (default)
+            let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
+            if FileManager.default.fileExists(atPath: v3CacheDir.path) {
+                try FileManager.default.removeItem(at: v3CacheDir)
+                DebugLogger.shared.info("FluidAudioProvider: Deleted Parakeet v3 cache", source: "FluidAudioProvider")
+            }
         }
 
         self.isReady = false

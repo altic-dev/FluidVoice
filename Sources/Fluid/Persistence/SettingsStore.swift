@@ -963,6 +963,7 @@ final class SettingsStore: ObservableObject {
         // MARK: - FluidAudio Models (Apple Silicon Only)
 
         case parakeetTDT = "parakeet-tdt"
+        case parakeetTDTv2 = "parakeet-tdt-v2"
 
         // MARK: - Apple Native
 
@@ -984,7 +985,8 @@ final class SettingsStore: ObservableObject {
 
         var displayName: String {
             switch self {
-            case .parakeetTDT: return "Parakeet TDT"
+            case .parakeetTDT: return "Parakeet TDT v3 (Multilingual)"
+            case .parakeetTDTv2: return "Parakeet TDT v2 (English Only)"
             case .appleSpeech: return "Apple Speech (Legacy)"
             case .appleSpeechAnalyzer: return "Apple Speech (macOS 26+)"
             case .whisperTiny: return "Whisper Tiny"
@@ -999,6 +1001,7 @@ final class SettingsStore: ObservableObject {
         var languageSupport: String {
             switch self {
             case .parakeetTDT: return "25 Languages"
+            case .parakeetTDTv2: return "English Only (Higher Accuracy)"
             case .appleSpeech: return "System Languages"
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
@@ -1009,6 +1012,7 @@ final class SettingsStore: ObservableObject {
         var downloadSize: String {
             switch self {
             case .parakeetTDT: return "~500 MB"
+            case .parakeetTDTv2: return "~500 MB"
             case .appleSpeech: return "Built-in (Zero Download)"
             case .appleSpeechAnalyzer: return "Built-in"
             case .whisperTiny: return "~75 MB"
@@ -1022,14 +1026,14 @@ final class SettingsStore: ObservableObject {
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT: return true
+            case .parakeetTDT, .parakeetTDTv2: return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .appleSpeech, .appleSpeechAnalyzer: return false
+            case .parakeetTDT, .parakeetTDTv2, .appleSpeech, .appleSpeechAnalyzer: return false
             default: return true
             }
         }

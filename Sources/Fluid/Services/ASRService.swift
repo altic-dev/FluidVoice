@@ -61,12 +61,16 @@ private actor TranscriptionExecutor {
 /// ```
 ///
 /// ## Language Support
-/// The service automatically detects and transcribes 25 European languages with Parakeet TDT v3:
-/// Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German,
-/// Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian,
-/// Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian.
+/// The service supports multiple models with varying language capabilities:
+/// - **Parakeet TDT v3** (Default): Automatically detects and transcribes 25 European languages:
+///   Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German,
+///   Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian,
+///   Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian.
+/// - **Parakeet TDT v2**: Specialized for high-accuracy English transcription.
+/// - **Apple Speech**: Supports all system languages available on macOS.
+/// - **Whisper**: Supports 99 languages.
 ///
-/// No manual language selection is required - the model automatically detects the spoken language.
+/// No manual language selection is required for Parakeet models - v3 automatically detects the spoken language.
 /// ## Thread Safety
 /// All public methods are marked with @MainActor to ensure thread safety.
 /// Audio processing happens on background threads for optimal performance.
@@ -129,7 +133,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return self.getAppleSpeechProvider()
-        case .parakeetTDT:
+        case .parakeetTDT, .parakeetTDTv2:
             return self.getFluidAudioProvider()
         default:
             return self.getWhisperProvider()
@@ -192,6 +196,12 @@ final class ASRService: ObservableObject {
         self.ensureReadyTask?.cancel()
         self.ensureReadyTask = nil
         self.ensureReadyProviderKey = nil
+
+        // Reset cached providers to force re-initialization with new settings
+        self.fluidAudioProvider = nil
+        self.whisperProvider = nil
+        self.appleSpeechProvider = nil
+        self._appleSpeechAnalyzerProvider = nil
 
         // CRITICAL FIX: Check if the NEW model's files exist on disk
         // This prevents UI from showing "Download" when model is already downloaded
