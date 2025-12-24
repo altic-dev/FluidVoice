@@ -1166,6 +1166,19 @@ struct AnalyticsConfirmationView: View {
             Text("Are you sure you want to stop sharing anonymous analytics?")
                 .font(.headline)
 
+            Text("By sharing anonymous usage data, you help us build the features you care about most. We never collect personal information (Audio, Transcription text etc), ever. Your support simply helps us make FluidVoice better for you.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(self.theme.palette.accent.opacity(0.3), lineWidth: 1)
+                )
+
             Text(self.contactInfoText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
