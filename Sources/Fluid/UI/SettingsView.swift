@@ -39,6 +39,12 @@ struct SettingsView: View {
     @State private var cachedDefaultInputName: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
+    // Analytics consent UI state (default ON; user can opt-out)
+    @State private var shareAnonymousAnalytics: Bool = SettingsStore.shared.shareAnonymousAnalytics
+    @State private var showAnalyticsPrivacy: Bool = false
+    @State private var pendingAnalyticsValue: Bool? = nil
+    @State private var showAreYouSureToStopAnalytics: Bool = false
+
     let hotkeyManager: GlobalHotkeyManager?
     let menuBarManager: MenuBarManager
     let startRecording: () -> Void
@@ -47,6 +53,45 @@ struct SettingsView: View {
     let restartApp: () -> Void
     let revealAppInFinder: () -> Void
     let openApplicationsFolder: () -> Void
+
+    private var analyticsToggleBinding: Binding<Bool> {
+        Binding(
+            get: {
+                self.pendingAnalyticsValue ?? self.shareAnonymousAnalytics
+            },
+            set: { newValue in
+                // User is trying to turn OFF → ask first
+                if self.shareAnonymousAnalytics == true, newValue == false {
+                    self.pendingAnalyticsValue = false
+                    self.showAreYouSureToStopAnalytics = true
+
+                    return
+                }
+
+                // Normal ON path
+                self.shareAnonymousAnalytics = newValue
+                self.applyAnalyticsConsentChange(newValue)
+            }
+        )
+    }
+
+    private var analyticsConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { self.showAreYouSureToStopAnalytics },
+            set: { newValue in
+                // Only open modal if we have a pending value
+                if newValue {
+                    if self.pendingAnalyticsValue != nil {
+                        self.showAreYouSureToStopAnalytics = true
+                    }
+                } else {
+                    // Closing the modal: reset pending state
+                    self.showAreYouSureToStopAnalytics = false
+                    self.pendingAnalyticsValue = nil
+                }
+            }
+        )
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -378,6 +423,24 @@ struct SettingsView: View {
                                             set: { SettingsStore.shared.saveTranscriptionHistory = $0 }
                                         )
                                     )
+
+                                    Divider().padding(.vertical, 8)
+
+                                    self.optionToggleRow(
+                                        title: "Share Anonymous Analytics",
+                                        description: "Send anonymous usage and performance metrics to help improve FluidVoice. Never includes transcription text or prompts.",
+                                        isOn: self.analyticsToggleBinding
+                                    )
+
+                                    HStack {
+                                        Button("What we collect") {
+                                            self.showAnalyticsPrivacy = true
+                                        }
+                                        .buttonStyle(.link)
+
+                                        Spacer()
+                                    }
+                                    .padding(.top, 6)
                                 }
                                 .padding(12)
                                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -702,6 +765,28 @@ struct SettingsView: View {
             }
             .padding(16)
         }
+        .sheet(isPresented: self.$showAnalyticsPrivacy) {
+            AnalyticsPrivacyView()
+                .frame(minWidth: 520, minHeight: 520)
+                .appTheme(self.theme)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: self.analyticsConfirmationBinding) {
+            AnalyticsConfirmationView(
+                onConfirm: {
+                    if let pending = pendingAnalyticsValue {
+                        self.shareAnonymousAnalytics = pending
+                        self.applyAnalyticsConsentChange(pending)
+                    }
+                    self.pendingAnalyticsValue = nil
+                    self.showAreYouSureToStopAnalytics = false
+                },
+                onCancel: {
+                    self.pendingAnalyticsValue = nil
+                    self.showAreYouSureToStopAnalytics = false
+                }
+            )
+        }
         .onAppear {
             Task { @MainActor in
                 // Ensure the shared audio startup gate is scheduled. Safe to call repeatedly.
@@ -755,6 +840,12 @@ struct SettingsView: View {
         .onChange(of: self.visualizerNoiseThreshold) { _, newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
         }
+    }
+
+    private func applyAnalyticsConsentChange(_ enabled: Bool) {
+        SettingsStore.shared.shareAnonymousAnalytics = enabled
+        AnalyticsService.shared.setEnabled(enabled)
+        AnalyticsService.shared.capture(.analyticsConsentChanged, properties: ["enabled": enabled])
     }
 
     // MARK: - Helper Views
@@ -1042,5 +1133,74 @@ struct FlowLayout: Layout {
         }
 
         return (CGSize(width: maxWidth, height: y + rowHeight), positions)
+    }
+}
+
+// MARK: - Analytics modal confirmation
+
+struct AnalyticsConfirmationView: View {
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    @Environment(\.theme) private var theme
+
+    private var contactInfoText: AttributedString {
+        var text = AttributedString(
+            "If you have any concerns we would love to hear about it, please email alticdev@gmail.com or file an issue in our GitHub."
+        )
+
+        if let emailRange = text.range(of: "alticdev@gmail.com") {
+            text[emailRange].link = URL(string: "mailto:alticdev@gmail.com")
+            text[emailRange].foregroundColor = self.theme.palette.accent
+        }
+
+        if let githubRange = text.range(of: "GitHub") {
+            text[githubRange].link = URL(string: "https://github.com/altic-dev/FluidVoice")
+            text[githubRange].foregroundColor = self.theme.palette.accent
+        }
+
+        return text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Are you sure you want to stop sharing anonymous analytics?")
+                .font(.headline)
+
+            Text("By sharing anonymous usage data, you help us build the features you care about most. We never collect personal information (Audio, Transcription text etc), ever. Your support simply helps us make FluidVoice better for you.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(self.theme.palette.accent.opacity(0.3), lineWidth: 1)
+                )
+
+            Text(self.contactInfoText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Divider()
+
+            HStack {
+                Spacer()
+
+                Button("Cancel") {
+                    self.onCancel()
+                }
+
+                Button("Yes") {
+                    self.onConfirm()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }

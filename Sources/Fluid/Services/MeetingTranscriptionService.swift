@@ -57,6 +57,26 @@ final class MeetingTranscriptionService: ObservableObject {
         }
     }
 
+    private func errorCategory(for error: Error) -> String {
+        guard let transcriptionError = error as? TranscriptionError else {
+            return "unknownError"
+        }
+        return self.errorCategory(for: transcriptionError)
+    }
+
+    private func errorCategory(for error: TranscriptionError) -> String {
+        switch error {
+        case .modelLoadFailed:
+            return "modelLoadFailed"
+        case .audioConversionFailed:
+            return "audioConversionFailed"
+        case .transcriptionFailed:
+            return "transcriptionFailed"
+        case .fileNotSupported:
+            return "fileNotSupported"
+        }
+    }
+
     /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
     func initializeModels() async throws {
         guard !self.asrService.isAsrReady else { return }
@@ -142,6 +162,16 @@ final class MeetingTranscriptionService: ObservableObject {
                 fileName: fileURL.lastPathComponent
             )
 
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": true,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "audio_duration_bucket": AnalyticsBuckets.bucketSeconds(duration),
+                    "processing_time_bucket": AnalyticsBuckets.bucketSeconds(processingTime),
+                ]
+            )
+
             self.result = result
             return result
             #else
@@ -151,10 +181,26 @@ final class MeetingTranscriptionService: ObservableObject {
 
         } catch let error as TranscriptionError {
             self.error = error.localizedDescription
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": false,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "category": errorCategory(for: error),
+                ]
+            )
             throw error
         } catch {
             let wrappedError = TranscriptionError.transcriptionFailed(error.localizedDescription)
             self.error = wrappedError.localizedDescription
+            AnalyticsService.shared.capture(
+                .meetingTranscriptionCompleted,
+                properties: [
+                    "success": false,
+                    "file_type": fileURL.pathExtension.lowercased(),
+                    "category": self.errorCategory(for: wrappedError),
+                ]
+            )
             throw wrappedError
         }
     }

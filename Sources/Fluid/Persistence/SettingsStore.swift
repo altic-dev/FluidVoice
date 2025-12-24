@@ -26,6 +26,7 @@ final class SettingsStore: ObservableObject {
         static let providerAPIKeys = "ProviderAPIKeys"
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
+        static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
         static let hotkeyShortcutKey = "HotkeyShortcutKey"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
@@ -145,6 +146,20 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.enableAIProcessing)
+        }
+    }
+
+    /// Anonymous analytics toggle (default: ON). Uses default-true semantics so existing installs
+    /// upgrading to a version that includes analytics do not silently default to OFF.
+    var shareAnonymousAnalytics: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.shareAnonymousAnalytics)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.shareAnonymousAnalytics)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
         }
     }
 

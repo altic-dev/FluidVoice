@@ -25,6 +25,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize app settings (dock visibility, etc.)
         SettingsStore.shared.initializeAppSettings()
 
+        AnalyticsService.shared.bootstrap()
+
+        let isFirstOpen = AnalyticsIdentityStore.shared.ensureFirstOpenRecorded()
+        if isFirstOpen {
+            AnalyticsService.shared.capture(.appFirstOpen)
+        }
+        AnalyticsService.shared.capture(
+            .appOpen,
+            properties: ["accessibility_trusted": AXIsProcessTrusted()]
+        )
+
         // Check for updates automatically if enabled (initial check on launch)
         self.checkForUpdatesAutomatically()
 

@@ -46,6 +46,15 @@
       }
     },
     {
+      "identity" : "posthog-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PostHog/posthog-ios.git",
+      "state" : {
+        "revision" : "cfbae6be113616156e6840dbfb61d59593ea1db5",
+        "version" : "3.36.2"
+      }
+    },
+    {
       "identity" : "promisekit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/mxcl/PromiseKit.git",
