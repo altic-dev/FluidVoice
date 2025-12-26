@@ -205,3 +205,9 @@ create_dmg_only.sh
 **.m4a
 # Scratch directory
 scratch/
+openspec/
+AGENTS.md
+.opencode/
+.rambles
+.tend-stack
+docs/plans/
