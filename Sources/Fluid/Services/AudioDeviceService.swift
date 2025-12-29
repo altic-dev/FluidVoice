@@ -41,14 +41,17 @@ enum AudioDevice {
 
         let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
         var deviceIDs = [AudioObjectID](repeating: 0, count: count)
-        status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &dataSize,
-            &deviceIDs
-        )
+        status = deviceIDs.withUnsafeMutableBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return kAudioHardwareUnspecifiedError }
+            return AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                0,
+                nil,
+                &dataSize,
+                baseAddress
+            )
+        }
         if status != noErr {
             return []
         }
@@ -100,6 +103,11 @@ enum AudioDevice {
     /// Get input device by UID without affecting system settings
     static func getInputDevice(byUID uid: String) -> Device? {
         return self.listInputDevices().first { $0.uid == uid }
+    }
+
+    /// Get output device by UID without affecting system settings
+    static func getOutputDevice(byUID uid: String) -> Device? {
+        return self.listOutputDevices().first { $0.uid == uid }
     }
 
     /// Get device AudioObjectID from UID
@@ -156,22 +164,13 @@ enum AudioDevice {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(devId, &address, 0, nil, &dataSize)
-        if status != noErr || dataSize == 0 {
-            return nil
-        }
-
-        let rawPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<Int8>.alignment)
-        defer { rawPtr.deallocate() }
-
-        status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, rawPtr)
-        if status != noErr {
-            return nil
-        }
-
-        let cfStr = rawPtr.load(as: CFString.self)
-        return cfStr as String
+        // Use Unmanaged to safely bridge the CFTypeRef-style output parameter.
+        // CoreAudio returns a +1 retained CFString - use takeRetainedValue() to transfer ownership
+        var value: Unmanaged<CFString>?
+        var dataSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, &value)
+        guard status == noErr else { return nil }
+        return value?.takeRetainedValue() as String?
     }
 
     private static func hasChannels(_ devId: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
@@ -187,7 +186,7 @@ enum AudioDevice {
             return false
         }
 
-        let rawPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<Int8>.alignment)
+        let rawPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { rawPtr.deallocate() }
 
         status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, rawPtr)
@@ -214,6 +213,9 @@ final class AudioHardwareObserver: ObservableObject {
     @Published private(set) var changeTick: UInt64 = 0
 
     private var installed: Bool = false
+    private var devicesListenerToken: AudioObjectPropertyListenerBlock?
+    private var defaultInputListenerToken: AudioObjectPropertyListenerBlock?
+    private var defaultOutputListenerToken: AudioObjectPropertyListenerBlock?
 
     init() {
         // IMPORTANT: Do NOT call register() here!
@@ -253,22 +255,78 @@ final class AudioHardwareObserver: ObservableObject {
         let queue = DispatchQueue.main
         let sys = AudioObjectID(kAudioObjectSystemObject)
 
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDevices, queue) { [weak self] _, _ in
+        let devicesToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.changeTick &+= 1
         }
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultIn, queue) { [weak self] _, _ in
+        let defaultInToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.changeTick &+= 1
         }
-        _ = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultOut, queue) { [weak self] _, _ in
+        let defaultOutToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.changeTick &+= 1
         }
 
+        let devicesStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDevices, queue, devicesToken)
+        let defaultInStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultIn, queue, defaultInToken)
+        let defaultOutStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultOut, queue, defaultOutToken)
+
+        guard devicesStatus == noErr, defaultInStatus == noErr, defaultOutStatus == noErr else {
+            // Best-effort cleanup for any partial installs.
+            if devicesStatus == noErr {
+                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, devicesToken)
+            }
+            if defaultInStatus == noErr {
+                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, defaultInToken)
+            }
+            if defaultOutStatus == noErr {
+                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, defaultOutToken)
+            }
+            self.devicesListenerToken = nil
+            self.defaultInputListenerToken = nil
+            self.defaultOutputListenerToken = nil
+            self.installed = false
+            return
+        }
+
+        self.devicesListenerToken = devicesToken
+        self.defaultInputListenerToken = defaultInToken
+        self.defaultOutputListenerToken = defaultOutToken
         self.installed = true
     }
 
     private func unregister() {
         guard self.installed else { return }
-        // Intentionally omitted: removing blocks is optional; listeners end with object lifetime.
+        var addrDevices = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var addrDefaultIn = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var addrDefaultOut = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let queue = DispatchQueue.main
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+
+        if let token = self.devicesListenerToken {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, token)
+        }
+        if let token = self.defaultInputListenerToken {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, token)
+        }
+        if let token = self.defaultOutputListenerToken {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, token)
+        }
+
+        self.devicesListenerToken = nil
+        self.defaultInputListenerToken = nil
+        self.defaultOutputListenerToken = nil
         self.installed = false
     }
 }

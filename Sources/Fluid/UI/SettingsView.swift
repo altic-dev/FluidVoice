@@ -530,6 +530,18 @@ struct SettingsView: View {
                             .controlSize(.small)
                         }
 
+                        // Info note about device syncing
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.body)
+                            Text("Audio devices are synced with macOS System Settings.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 4)
+
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 Text("Input Device")
@@ -541,28 +553,37 @@ struct SettingsView: View {
                                         Text("Loading...").tag("")
                                     } else {
                                         ForEach(self.inputDevices, id: \.uid) { dev in
-                                            Text(dev.name).tag(dev.uid)
+                                            // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
+                                            let isSystemDefault = !self.cachedDefaultInputName.isEmpty && dev.name == self.cachedDefaultInputName
+                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
                                         }
                                     }
                                 }
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
-                                .onChange(of: self.selectedInputUID) { _, newUID in
+                                .disabled(self.asr.isRunning) // Disable device changes during recording
+                                .onChange(of: self.selectedInputUID) { oldUID, newUID in
                                     guard !newUID.isEmpty else { return }
+
+                                    // Prevent device changes during active recording
+                                    if self.asr.isRunning {
+                                        DebugLogger.shared.warning("Cannot change input device during recording", source: "SettingsView")
+                                        // Revert to previous value
+                                        self.selectedInputUID = oldUID
+                                        return
+                                    }
+
                                     SettingsStore.shared.preferredInputDeviceUID = newUID
                                     // Only change system default if sync is enabled
                                     if SettingsStore.shared.syncAudioDevicesWithSystem {
                                         _ = AudioDevice.setDefaultInputDevice(uid: newUID)
                                     }
-                                    if self.asr.isRunning {
-                                        Task {
-                                            await self.asr.stopWithoutTranscription()
-                                            self.startRecording()
-                                        }
-                                    }
                                 }
                                 // Sync selection when devices load or change
                                 .onChange(of: self.inputDevices) { _, newDevices in
+                                    // Update cached default device name when device list changes
+                                    self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+
                                     // If selection is empty or not found in new list, select first available
                                     if !newDevices.isEmpty {
                                         let currentValid = newDevices.contains { $0.uid == self.selectedInputUID }
@@ -593,14 +614,26 @@ struct SettingsView: View {
                                         Text("Loading...").tag("")
                                     } else {
                                         ForEach(self.outputDevices, id: \.uid) { dev in
-                                            Text(dev.name).tag(dev.uid)
+                                            // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
+                                            let isSystemDefault = !self.cachedDefaultOutputName.isEmpty && dev.name == self.cachedDefaultOutputName
+                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
                                         }
                                     }
                                 }
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
-                                .onChange(of: self.selectedOutputUID) { _, newUID in
+                                .disabled(self.asr.isRunning) // Disable device changes during recording
+                                .onChange(of: self.selectedOutputUID) { oldUID, newUID in
                                     guard !newUID.isEmpty else { return }
+
+                                    // Prevent device changes during active recording
+                                    if self.asr.isRunning {
+                                        DebugLogger.shared.warning("Cannot change output device during recording", source: "SettingsView")
+                                        // Revert to previous value
+                                        self.selectedOutputUID = oldUID
+                                        return
+                                    }
+
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
                                     // Only change system default if sync is enabled
                                     if SettingsStore.shared.syncAudioDevicesWithSystem {
@@ -609,6 +642,9 @@ struct SettingsView: View {
                                 }
                                 // Sync selection when devices load or change
                                 .onChange(of: self.outputDevices) { _, newDevices in
+                                    // Update cached default device name when device list changes
+                                    self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+
                                     if !newDevices.isEmpty {
                                         let currentValid = newDevices.contains { $0.uid == self.selectedOutputUID }
                                         if !currentValid {
@@ -640,33 +676,10 @@ struct SettingsView: View {
                                 }
                             }
 
-                            Divider().padding(.vertical, 4)
-
-                            self.optionToggleRow(
-                                title: "Sync with System Settings",
-                                description: "When enabled, FV and macOS share the same audio devices (bidirectional sync).",
-                                isOn: Binding(
-                                    get: { SettingsStore.shared.syncAudioDevicesWithSystem },
-                                    set: { newValue in
-                                        SettingsStore.shared.syncAudioDevicesWithSystem = newValue
-
-                                        // When sync is toggled ON, adopt system's current devices as the source of truth
-                                        if newValue {
-                                            if let sysInputUID = AudioDevice.getDefaultInputDevice()?.uid {
-                                                self.selectedInputUID = sysInputUID
-                                                SettingsStore.shared.preferredInputDeviceUID = sysInputUID
-                                            }
-                                            if let sysOutputUID = AudioDevice.getDefaultOutputDevice()?.uid {
-                                                self.selectedOutputUID = sysOutputUID
-                                                SettingsStore.shared.preferredOutputDeviceUID = sysOutputUID
-                                            }
-                                            DebugLogger.shared.info("Sync enabled: adopted system audio devices", source: "SettingsView")
-                                        } else {
-                                            DebugLogger.shared.info("Sync disabled: FV will use independent audio device selection", source: "SettingsView")
-                                        }
-                                    }
-                                )
-                            )
+                            // REMOVED: Sync mode toggle
+                            // Independent mode doesn't work for aggregate devices (Bluetooth, etc.)
+                            // due to CoreAudio limitation (OSStatus -10851)
+                            // Always use sync mode for reliability across all device types
                         }
                     }
                     .padding(16)

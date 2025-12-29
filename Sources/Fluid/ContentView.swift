@@ -127,18 +127,20 @@ struct ContentView: View {
 
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        let splitView = AnyView(
-            NavigationSplitView {
+        let layout = AnyView(
+            NavigationSplitView(columnVisibility: self.$columnVisibility) {
                 self.sidebarView
                     .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
             } detail: {
                 self.detailView
             }
+            .navigationSplitViewStyle(.balanced)
         )
 
-        let tracked = splitView.withMouseTracking(self.mouseTracker)
+        let tracked = layout.withMouseTracking(self.mouseTracker)
         let env = tracked.environmentObject(self.mouseTracker)
         let nav = env.onChange(of: self.menuBarManager.requestedNavigationDestination) { _, destination in
             self.handleMenuBarNavigation(destination)
@@ -744,7 +746,6 @@ struct ContentView: View {
             self.detailContent
                 .transition(.opacity)
         }
-        .toolbar(.hidden, for: .automatic)
     }
 
     private var detailContent: AnyView {

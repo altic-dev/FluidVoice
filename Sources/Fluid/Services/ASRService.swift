@@ -247,7 +247,6 @@ final class ASRService: ObservableObject {
     var asrManager: Any? { nil }
     #endif
 
-    private var isRecordingWholeSession: Bool = false
     // Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
     // during long sessions where reallocation occurs frequently.
     private let audioBuffer = ThreadSafeAudioBuffer()
@@ -265,12 +264,18 @@ final class ASRService: ObservableObject {
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> { self.audioLevelSubject.eraseToAnyPublisher() }
     private var lastAudioLevelSentAt: TimeInterval = 0
 
-    // Audio smoothing properties - lighter smoothing for real-time response
-    private var audioLevelHistory: [CGFloat] = []
-    private var smoothedLevel: CGFloat = 0.0
-    private let historySize = 2 // Reduced for faster response
-    private let silenceThreshold: CGFloat = 0.04 // Reasonable default
-    private let noiseGateThreshold: CGFloat = 0.06
+    /// Handles AVAudioEngine tap processing off the @MainActor to avoid touching main-actor state
+    /// from CoreAudio's realtime callback thread.
+    private lazy var audioCapturePipeline: AudioCapturePipeline = .init(
+        audioBuffer: self.audioBuffer,
+        onLevel: { [weak self] level in
+            // Keep Combine sends on the main queue.
+            DispatchQueue.main.async { [weak self] in
+                self?.audioLevelSubject.send(level)
+            }
+        }
+    )
+
     init() {
         // CRITICAL FIX: Do NOT call any framework-triggering APIs here!
         // This includes:
@@ -294,6 +299,10 @@ final class ASRService: ObservableObject {
         self.micPermissionGranted = (self.micStatus == .authorized)
 
         self.registerDefaultDeviceChangeListener()
+        self.registerDeviceListChangeListener()
+
+        // Initialize device list cache
+        self.cacheCurrentDeviceList(AudioDevice.listInputDevices())
 
         // Check if models exist on disk and auto-load if present
         // This is done in a Task to support async model detection (e.g., AppleSpeechAnalyzerProvider)
@@ -385,9 +394,18 @@ final class ASRService: ObservableObject {
     /// If audio session configuration fails, the method will silently fail
     /// and `isRunning` will remain `false`. Check the debug logs for details.
     func start() {
-        guard self.micStatus == .authorized else { return }
-        guard self.isRunning == false else { return }
+        DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
+        guard self.micStatus == .authorized else {
+            DebugLogger.shared.error("❌ START() blocked - mic not authorized", source: "ASRService")
+            return
+        }
+        guard self.isRunning == false else {
+            DebugLogger.shared.warning("⚠️ START() blocked - already running", source: "ASRService")
+            return
+        }
+
+        DebugLogger.shared.debug("🧹 Clearing buffers and state", source: "ASRService")
         self.finalText.removeAll()
         self.audioBuffer.clear(keepingCapacity: true) // specific optimization for restart
         self.partialTranscription.removeAll()
@@ -395,18 +413,62 @@ final class ASRService: ObservableObject {
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
         self.skipNextChunk = false
-        self.isRecordingWholeSession = true
+        self.audioCapturePipeline.setRecordingEnabled(true)
+        DebugLogger.shared.debug("✅ Buffers cleared", source: "ASRService")
 
         do {
+            DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
             try self.configureSession()
+            DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
+
+            DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
             try self.startEngine()
+            DebugLogger.shared.debug("✅ startEngine() completed", source: "ASRService")
+
+            DebugLogger.shared.debug("🎧 Setting up engine tap...", source: "ASRService")
             self.setupEngineTap()
+            DebugLogger.shared.debug("✅ Engine tap setup complete", source: "ASRService")
+
             self.isRunning = true
+            DebugLogger.shared.info("✅ isRunning set to TRUE", source: "ASRService")
+
+            // Start monitoring the currently bound device for disconnection
+            if let currentDevice = getCurrentlyBoundInputDevice() {
+                DebugLogger.shared.debug("👀 Starting device monitoring for: \(currentDevice.name)", source: "ASRService")
+                self.startMonitoringDevice(currentDevice.id)
+            } else {
+                DebugLogger.shared.debug("ℹ️ No device to monitor", source: "ASRService")
+            }
+
+            DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
             self.startStreamingTranscription()
+            DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
         } catch {
-            // TODO: Add proper error handling and user notification
-            // For now, errors are logged but the UI doesn't show them
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
+
+            // Provide user-friendly error feedback
+            let errorMessage: String
+            if let nsError = error as NSError?, nsError.domain == "ASRService" {
+                if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    // Extract useful info from AVFoundation error
+                    if underlyingError.domain == AVFoundationErrorDomain || underlyingError.domain == NSOSStatusErrorDomain {
+                        errorMessage = "Failed to start audio recording. The audio device may be in use by another application or unavailable. Please check your audio settings and try again."
+                    } else {
+                        errorMessage = "Failed to start audio recording: \(underlyingError.localizedDescription)"
+                    }
+                } else {
+                    errorMessage = "Failed to start audio recording after multiple attempts. Please check your audio device and try again."
+                }
+            } else {
+                errorMessage = "Failed to start audio recording: \(error.localizedDescription)"
+            }
+
+            // Post notification for UI to display
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ASRServiceStartFailed"),
+                object: nil,
+                userInfo: ["errorMessage": errorMessage]
+            )
         }
     }
 
@@ -438,21 +500,48 @@ final class ASRService: ObservableObject {
     /// - Transcription process fails
     /// Check debug logs for detailed error information.
     func stop() async -> String {
-        guard self.isRunning else { return "" }
+        DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
 
-        DebugLogger.shared.debug("stop(): cancelling streaming and preparing final transcription", source: "ASRService")
+        guard self.isRunning else {
+            DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
+            return ""
+        }
+
+        DebugLogger.shared.debug("📍 Preparing final transcription", source: "ASRService")
 
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
+        DebugLogger.shared.debug("🚫 Setting isRunning = false...", source: "ASRService")
         self.isRunning = false
+        DebugLogger.shared.debug("🚫 Setting audioCapturePipeline recording = false...", source: "ASRService")
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        DebugLogger.shared.debug("✅ isRunning and capture pipeline disabled", source: "ASRService")
+
+        // Stop monitoring device to prevent callbacks after stop
+        DebugLogger.shared.debug("👁️ Stopping device monitoring...", source: "ASRService")
+        self.stopMonitoringDevice()
+        DebugLogger.shared.debug("✅ Device monitoring stopped", source: "ASRService")
 
         // Stop the audio engine to stop new audio from coming in
+        DebugLogger.shared.debug("🎧 Removing engine tap...", source: "ASRService")
         self.removeEngineTap()
+        DebugLogger.shared.debug("✅ Engine tap removed", source: "ASRService")
+
+        DebugLogger.shared.debug("🛑 Calling engine.stop()...", source: "ASRService")
         self.engine.stop()
-        self.engine.reset() // Reset engine state to fully release Bluetooth mic
+        DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
+
+        // Recreate the engine instance instead of calling reset() to prevent format corruption
+        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
+        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
+        self.engineStorage = nil // Explicitly release old engine
+        // New engine will be lazily created on next access via computed property
+        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
+        DebugLogger.shared.debug("⏳ Awaiting stopStreamingTimerAndAwait()...", source: "ASRService")
         await self.stopStreamingTimerAndAwait()
+        DebugLogger.shared.debug("✅ stopStreamingTimerAndAwait() completed", source: "ASRService")
 
         self.isProcessingChunk = false
         self.skipNextChunk = false
@@ -462,10 +551,12 @@ final class ASRService: ObservableObject {
         // Thread-safe copy of recorded audio
         let pcm = self.audioBuffer.getAll()
         self.audioBuffer.clear()
-        self.isRecordingWholeSession = false
 
         do {
+            DebugLogger.shared.debug("🔍 Calling ensureAsrReady()...", source: "ASRService")
             try await self.ensureAsrReady()
+            DebugLogger.shared.debug("✅ ensureAsrReady() completed", source: "ASRService")
+
             guard self.transcriptionProvider.isReady else {
                 DebugLogger.shared.error("Transcription provider is not ready", source: "ASRService")
                 return ""
@@ -473,9 +564,14 @@ final class ASRService: ObservableObject {
 
             DebugLogger.shared.debug("Starting transcription with \(pcm.count) samples (\(Float(pcm.count) / 16_000.0) seconds)", source: "ASRService")
             DebugLogger.shared.debug("stop(): starting full transcription (samples: \(pcm.count)) using \(self.transcriptionProvider.name)", source: "ASRService")
+            DebugLogger.shared.debug("📝 Starting transcription executor...", source: "ASRService")
             let result = try await transcriptionExecutor.run { [provider = self.transcriptionProvider] in
-                try await provider.transcribe(pcm)
+                DebugLogger.shared.debug("📝 Inside transcription executor closure", source: "ASRService")
+                let transcriptionResult = try await provider.transcribe(pcm)
+                DebugLogger.shared.debug("📝 Transcription provider returned", source: "ASRService")
+                return transcriptionResult
             }
+            DebugLogger.shared.debug("✅ Transcription executor completed", source: "ASRService")
             DebugLogger.shared.debug("stop(): full transcription finished", source: "ASRService")
             DebugLogger.shared.debug(
                 "Transcription completed: '\(result.text)' (confidence: \(result.confidence))",
@@ -504,12 +600,25 @@ final class ASRService: ObservableObject {
     func stopWithoutTranscription() async {
         guard self.isRunning else { return }
 
+        DebugLogger.shared.info("🛑 Stopping recording - releasing audio devices", source: "ASRService")
+
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
         self.isRunning = false
+        self.audioCapturePipeline.setRecordingEnabled(false)
+
+        // Stop monitoring device
+        self.stopMonitoringDevice()
 
         self.removeEngineTap()
+        DebugLogger.shared.debug("Engine tap removed", source: "ASRService")
+
         self.engine.stop()
-        self.engine.reset() // Reset engine state to fully release Bluetooth mic
+        DebugLogger.shared.debug("Engine stopped", source: "ASRService")
+
+        // Recreate engine instance to release resources (same as stop())
+        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
+        self.engineStorage = nil
+        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -517,7 +626,6 @@ final class ASRService: ObservableObject {
 
         // NOW it's safe to clear the buffer
         self.audioBuffer.clear()
-        self.isRecordingWholeSession = false
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
         self.lastProcessedSampleCount = 0
@@ -526,45 +634,196 @@ final class ASRService: ObservableObject {
     }
 
     private func configureSession() throws {
-        if self.engine.isRunning {
-            self.engine.stop()
-        }
-        self.engine.reset()
-        // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
-        _ = self.engine.inputNode
+        DebugLogger.shared.debug("🔧 configureSession() - ENTERED", source: "ASRService")
 
-        // If we're running in "independent" mode, bind the engine to the preferred input device
-        // instead of inheriting macOS' current system-default input.
-        self.bindPreferredInputDeviceIfNeeded()
+        if self.engine.isRunning {
+            DebugLogger.shared.debug("⚠️ Engine is running, stopping before configuration", source: "ASRService")
+            self.engine.stop()
+            DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
+        }
+
+        // No need to call engine.reset() here - we created a fresh engine in stop()
+        // Accessing the engine property will either return the existing fresh engine,
+        // or create a new one if this is the first start
+        DebugLogger.shared.debug("ℹ️ Using fresh engine instance (created lazily)", source: "ASRService")
+
+        // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
+        DebugLogger.shared.debug("📍 Forcing input node instantiation...", source: "ASRService")
+        _ = self.engine.inputNode
+        DebugLogger.shared.debug("Input node instantiated", source: "ASRService")
+
+        // Force output node instantiation for output device binding
+        DebugLogger.shared.debug("📍 Forcing output node instantiation...", source: "ASRService")
+        _ = self.engine.outputNode
+        DebugLogger.shared.debug("✅ Output node instantiated", source: "ASRService")
+
+        // NOTE: Device binding occurs in startEngine() BEFORE engine.prepare()
+        // Per CoreAudio docs, device must be set before AudioUnit initialization (prepare)
+        // Since sync mode is always ON, binding actually no-ops and uses system defaults
+
+        DebugLogger.shared.debug("✅ configureSession() - COMPLETED", source: "ASRService")
     }
 
     /// In independent mode, attempt to bind AVAudioEngine's input to the user's preferred input device.
     /// In sync-with-system mode, we intentionally do nothing so the engine follows macOS defaults.
-    private func bindPreferredInputDeviceIfNeeded() {
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else { return }
-        guard let preferredUID = SettingsStore.shared.preferredInputDeviceUID, preferredUID.isEmpty == false else { return }
+    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
+    @discardableResult
+    private func bindPreferredInputDeviceIfNeeded() -> Bool {
+        DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
+
+        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
+            DebugLogger.shared.info("Sync mode enabled - using system default input device", source: "ASRService")
+            return true
+        }
+
+        guard let preferredUID = SettingsStore.shared.preferredInputDeviceUID, preferredUID.isEmpty == false else {
+            DebugLogger.shared.info("No preferred input device set - using system default", source: "ASRService")
+            return true
+        }
+
+        DebugLogger.shared.debug("Attempting to bind to preferred input device (uid: \(preferredUID))", source: "ASRService")
 
         guard let device = AudioDevice.getInputDevice(byUID: preferredUID) else {
             DebugLogger.shared.warning(
                 "Preferred input device not found (uid: \(preferredUID)). Falling back to system default input.",
                 source: "ASRService"
             )
-            return
+            // Try to use system default as fallback
+            return self.tryBindToSystemDefaultInput()
         }
+
+        DebugLogger.shared.debug("Found preferred input device: '\(device.name)' (id: \(device.id))", source: "ASRService")
 
         let ok = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
         if ok == false {
             DebugLogger.shared.warning(
-                "Failed to bind engine input to preferred device '\(device.name)' (uid: \(device.uid)). Using system default input.",
+                "Failed to bind engine input to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default input.",
+                source: "ASRService"
+            )
+            // Try to use system default as fallback
+            return self.tryBindToSystemDefaultInput()
+        }
+
+        DebugLogger.shared.info("✅ Successfully bound input to '\(device.name)'", source: "ASRService")
+        return true
+    }
+
+    /// In independent mode, attempt to bind AVAudioEngine's output to the user's preferred output device.
+    /// In sync-with-system mode, we intentionally do nothing so the engine follows macOS defaults.
+    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
+    @discardableResult
+    private func bindPreferredOutputDeviceIfNeeded() -> Bool {
+        DebugLogger.shared.debug("bindPreferredOutputDeviceIfNeeded() - Starting output device binding", source: "ASRService")
+
+        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
+            DebugLogger.shared.info("Sync mode enabled - using system default output device", source: "ASRService")
+            return true
+        }
+
+        guard let preferredUID = SettingsStore.shared.preferredOutputDeviceUID, preferredUID.isEmpty == false else {
+            DebugLogger.shared.info("No preferred output device set - using system default", source: "ASRService")
+            return true
+        }
+
+        DebugLogger.shared.debug("Attempting to bind to preferred output device (uid: \(preferredUID))", source: "ASRService")
+
+        guard let device = AudioDevice.getOutputDevice(byUID: preferredUID) else {
+            DebugLogger.shared.warning(
+                "Preferred output device not found (uid: \(preferredUID)). Falling back to system default output.",
+                source: "ASRService"
+            )
+            // Try to use system default as fallback
+            return self.tryBindToSystemDefaultOutput()
+        }
+
+        DebugLogger.shared.debug("Found preferred output device: '\(device.name)' (id: \(device.id))", source: "ASRService")
+
+        let ok = self.setEngineOutputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
+        if ok == false {
+            DebugLogger.shared.warning(
+                "Failed to bind engine output to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default output.",
+                source: "ASRService"
+            )
+            // Try to use system default as fallback
+            return self.tryBindToSystemDefaultOutput()
+        }
+
+        DebugLogger.shared.info("✅ Successfully bound output to '\(device.name)'", source: "ASRService")
+        return true
+    }
+
+    /// Attempts to bind to the system default input device as a fallback.
+    /// Returns true if binding succeeded, false otherwise.
+    private func tryBindToSystemDefaultInput() -> Bool {
+        guard let defaultDevice = AudioDevice.getDefaultInputDevice() else {
+            DebugLogger.shared.error(
+                "No system default input device available. Cannot start audio capture.",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.info(
+            "Attempting to bind to system default input: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
+            source: "ASRService"
+        )
+
+        let ok = self.setEngineInputDevice(
+            deviceID: defaultDevice.id,
+            deviceUID: defaultDevice.uid,
+            deviceName: defaultDevice.name
+        )
+
+        if !ok {
+            DebugLogger.shared.error(
+                "Failed to bind to system default input device '\(defaultDevice.name)'. Audio capture cannot proceed.",
                 source: "ASRService"
             )
         }
+
+        return ok
+    }
+
+    /// Attempts to bind to the system default output device as a fallback.
+    /// Returns true if binding succeeded, false otherwise.
+    private func tryBindToSystemDefaultOutput() -> Bool {
+        DebugLogger.shared.debug("tryBindToSystemDefaultOutput() - Starting", source: "ASRService")
+
+        guard let defaultDevice = AudioDevice.getDefaultOutputDevice() else {
+            DebugLogger.shared.error(
+                "No system default output device available. Cannot bind output.",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.info(
+            "Attempting to bind to system default output: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
+            source: "ASRService"
+        )
+
+        let ok = self.setEngineOutputDevice(
+            deviceID: defaultDevice.id,
+            deviceUID: defaultDevice.uid,
+            deviceName: defaultDevice.name
+        )
+
+        if !ok {
+            DebugLogger.shared.error(
+                "Failed to bind to system default output device '\(defaultDevice.name)'. Audio playback may not work correctly.",
+                source: "ASRService"
+            )
+        }
+
+        return ok
     }
 
     /// Selects a specific CoreAudio device for AVAudioEngine's input node without changing system defaults.
     /// This uses the AUHAL AudioUnit backing `engine.inputNode` on macOS.
     @discardableResult
     private func setEngineInputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
+        DebugLogger.shared.debug("setEngineInputDevice() - Binding input to device ID: \(deviceID)", source: "ASRService")
+
         let inputNode = self.engine.inputNode
 
         // `AVAudioInputNode` is backed by an AudioUnit on macOS. Setting this property selects
@@ -588,35 +847,215 @@ final class ASRService: ObservableObject {
         )
 
         if status != noErr {
+            // OSStatus -10851 (kAudioUnitErr_InvalidPropertyValue) occurs for aggregate devices (Bluetooth, etc.)
+            // This is expected for certain device types - not a fatal error
+            if status == -10_851 {
+                DebugLogger.shared.warning(
+                    "Cannot bind INPUT to '\(deviceName)' - likely an aggregate device (OSStatus: \(status)). Will use system default.",
+                    source: "ASRService"
+                )
+            } else {
+                DebugLogger.shared.error(
+                    "AudioUnitSetProperty(CurrentDevice) failed for INPUT '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with OSStatus: \(status)",
+                    source: "ASRService"
+                )
+            }
+            return false
+        }
+
+        DebugLogger.shared.info("✅ Bound ASR input to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
+        return true
+    }
+
+    /// Selects a specific CoreAudio device for AVAudioEngine's output node without changing system defaults.
+    /// This uses the AUHAL AudioUnit backing `engine.outputNode` on macOS.
+    @discardableResult
+    private func setEngineOutputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
+        DebugLogger.shared.debug("setEngineOutputDevice() - Binding output to device ID: \(deviceID)", source: "ASRService")
+
+        let outputNode = self.engine.outputNode
+
+        // `AVAudioOutputNode` is backed by an AudioUnit on macOS. Setting this property selects
+        // which physical device the node outputs to.
+        guard let audioUnit = outputNode.audioUnit else {
             DebugLogger.shared.error(
-                "AudioUnitSetProperty(CurrentDevice) failed for '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with status \(status)",
+                "Unable to access AudioUnit for AVAudioEngine.outputNode; cannot bind to '\(deviceName)' (uid: \(deviceUID))",
                 source: "ASRService"
             )
             return false
         }
 
-        DebugLogger.shared.info("Bound ASR input to '\(deviceName)' (uid: \(deviceUID))", source: "ASRService")
+        var mutableDeviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioObjectID>.size)
+        )
+
+        if status != noErr {
+            // OSStatus -10851 (kAudioUnitErr_InvalidPropertyValue) occurs for aggregate devices (Bluetooth, etc.)
+            // This is expected for certain device types - not a fatal error
+            if status == -10_851 {
+                DebugLogger.shared.warning(
+                    "Cannot bind OUTPUT to '\(deviceName)' - likely an aggregate device (OSStatus: \(status)). Will use system default.",
+                    source: "ASRService"
+                )
+            } else {
+                DebugLogger.shared.error(
+                    "AudioUnitSetProperty(CurrentDevice) failed for OUTPUT '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with OSStatus: \(status)",
+                    source: "ASRService"
+                )
+            }
+            return false
+        }
+
+        DebugLogger.shared.info("✅ Bound ASR output to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
         return true
     }
 
+    /// Explicitly unbinds the input device from AVAudioEngine's AudioUnit
+    /// This is CRITICAL for releasing Bluetooth devices so macOS can switch back to high-quality A2DP mode
+    private func unbindInputDevice() {
+        DebugLogger.shared.debug("unbindInputDevice() - Releasing input device binding to restore Bluetooth quality", source: "ASRService")
+
+        guard let audioUnit = self.engine.inputNode.audioUnit else {
+            DebugLogger.shared.warning("No AudioUnit for input node - cannot unbind device", source: "ASRService")
+            return
+        }
+
+        // Set device to kAudioObjectUnknown (0) to explicitly release the device binding
+        var unknownDevice = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &unknownDevice,
+            UInt32(MemoryLayout<AudioObjectID>.size)
+        )
+
+        if status == noErr {
+            DebugLogger.shared.info("✅ Input device unbound - Bluetooth can now return to high-quality mode", source: "ASRService")
+        } else {
+            DebugLogger.shared.error("❌ Failed to unbind input device: OSStatus \(status)", source: "ASRService")
+        }
+    }
+
+    /// Explicitly unbinds the output device from AVAudioEngine's AudioUnit
+    /// This ensures complete release of audio device resources
+    private func unbindOutputDevice() {
+        DebugLogger.shared.debug("unbindOutputDevice() - Releasing output device binding", source: "ASRService")
+
+        guard let audioUnit = self.engine.outputNode.audioUnit else {
+            DebugLogger.shared.warning("No AudioUnit for output node - cannot unbind device", source: "ASRService")
+            return
+        }
+
+        // Set device to kAudioObjectUnknown (0) to explicitly release the device binding
+        var unknownDevice = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &unknownDevice,
+            UInt32(MemoryLayout<AudioObjectID>.size)
+        )
+
+        if status == noErr {
+            DebugLogger.shared.info("✅ Output device unbound - Audio device fully released", source: "ASRService")
+        } else {
+            DebugLogger.shared.error("❌ Failed to unbind output device: OSStatus \(status)", source: "ASRService")
+        }
+    }
+
     private func startEngine() throws {
-        self.engine.reset()
+        DebugLogger.shared.debug("🚀 startEngine() - ENTERED", source: "ASRService")
         var attempts = 0
+        var lastError: Error?
+
         while attempts < 3 {
             do {
+                // CRITICAL: Bind devices BEFORE prepare() - must be set before AudioUnit initialization
+                // Note: This may fail for aggregate devices (Bluetooth, etc.) with OSStatus -10851
+                // In that case, we fall back to system defaults (same as sync mode)
+                DebugLogger.shared.debug("🎚️ Binding input device (before prepare)...", source: "ASRService")
+                let inputBindOk = self.bindPreferredInputDeviceIfNeeded()
+                DebugLogger.shared.debug("✅ Input device binding result: \(inputBindOk)", source: "ASRService")
+
+                DebugLogger.shared.debug("🔊 Binding output device (before prepare)...", source: "ASRService")
+                let outputBindOk = self.bindPreferredOutputDeviceIfNeeded()
+                DebugLogger.shared.debug("✅ Output device binding result: \(outputBindOk)", source: "ASRService")
+
+                // If binding failed (e.g., aggregate device), engine will use system defaults
+                if !inputBindOk || !outputBindOk {
+                    DebugLogger.shared.info(
+                        "⚠️ Device binding failed (likely aggregate device). Engine will use system default devices.",
+                        source: "ASRService"
+                    )
+                }
+
+                // Prepare the engine to allocate resources and establish format SYNCHRONOUSLY
+                // This ensures the audio graph is fully initialized before we proceed
+                DebugLogger.shared.debug("📋 Preparing engine (allocating resources)...", source: "ASRService")
+                self.engine.prepare()
+                DebugLogger.shared.debug("✅ Engine prepared", source: "ASRService")
+
+                // Log engine state before attempting to start
+                let inputNode = self.engine.inputNode
+                let inputFormat = inputNode.inputFormat(forBus: 0)
+                DebugLogger.shared.debug(
+                    "(startEngine(): before engine.start attempt \(attempts + 1)) " +
+                        "Engine IO device = \(inputNode.outputFormat(forBus: 0).sampleRate)Hz, " +
+                        "Input format = \(inputFormat.sampleRate)Hz \(inputFormat.channelCount)ch",
+                    source: "ASRService"
+                )
+
                 try self.engine.start()
+                DebugLogger.shared.info("AVAudioEngine started successfully on attempt \(attempts + 1)", source: "ASRService")
                 return
             } catch {
+                lastError = error
                 attempts += 1
-                Thread.sleep(forTimeInterval: 0.1)
-                self.engine.reset()
-                // After a reset, the underlying AUHAL unit may revert to system-default input.
-                // Re-create the input node and re-bind the preferred device (independent mode).
-                _ = self.engine.inputNode
-                self.bindPreferredInputDeviceIfNeeded()
+
+                // Log the actual error from AVFoundation
+                DebugLogger.shared.error(
+                    "AVAudioEngine start failed (attempt \(attempts)/3): \(error.localizedDescription) " +
+                        "[Domain: \((error as NSError).domain), Code: \((error as NSError).code)]",
+                    source: "ASRService"
+                )
+
+                // If this isn't the last attempt, recreate engine and reconfigure
+                if attempts < 3 {
+                    DebugLogger.shared.debug("⚠️ Start failed, recreating engine for retry...", source: "ASRService")
+                    self.engineStorage = nil // Deallocate failed engine
+                    // Need to reconfigure the new engine
+                    try? self.configureSession()
+                    DebugLogger.shared.debug("✅ Engine recreated and reconfigured, will retry", source: "ASRService")
+                }
             }
         }
-        throw NSError(domain: "ASRService", code: -1)
+
+        // All retries failed - throw the actual error with context
+        let errorMessage = "Failed to start AVAudioEngine after 3 attempts. Last error: \(lastError?.localizedDescription ?? "unknown")"
+        DebugLogger.shared.error(errorMessage, source: "ASRService")
+
+        // If we have a last error, wrap it with more context; otherwise create a new error
+        if let lastError = lastError {
+            throw NSError(
+                domain: "ASRService",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: errorMessage,
+                    NSUnderlyingErrorKey: lastError,
+                ]
+            )
+        } else {
+            throw NSError(domain: "ASRService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
     }
 
     private func removeEngineTap() {
@@ -624,12 +1063,32 @@ final class ASRService: ObservableObject {
     }
 
     private func setupEngineTap() {
+        DebugLogger.shared.debug("🎧 setupEngineTap() - ENTERED", source: "ASRService")
         let input = self.engine.inputNode
         let inFormat = input.inputFormat(forBus: 0)
-        self.inputFormat = inFormat
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
-            self?.processInputBuffer(buffer: buffer)
+
+        // Validate format before installing tap (VoiceInk approach)
+        // This prevents hanging if the format is invalid (0Hz/0ch)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
+            DebugLogger.shared.error(
+                "❌ INVALID INPUT FORMAT: \(inFormat.sampleRate)Hz \(inFormat.channelCount)ch - Cannot install tap!",
+                source: "ASRService"
+            )
+            fatalError("AVAudioEngine input format is invalid. This should never happen with fresh engine instance.")
         }
+
+        DebugLogger.shared.debug(
+            "✅ Valid input format: \(inFormat.sampleRate)Hz \(inFormat.channelCount)ch",
+            source: "ASRService"
+        )
+
+        self.inputFormat = inFormat
+        let pipeline = self.audioCapturePipeline
+        DebugLogger.shared.debug("🎧 Installing tap on bus 0...", source: "ASRService")
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
+            pipeline.handle(buffer: buffer)
+        }
+        DebugLogger.shared.debug("✅ setupEngineTap() - COMPLETED", source: "ASRService")
     }
 
     private func handleDefaultInputChanged() {
@@ -644,6 +1103,8 @@ final class ASRService: ObservableObject {
         if self.isRunning {
             self.removeEngineTap()
             self.engine.stop()
+            // Recreate engine for system device change
+            self.engineStorage = nil
             do {
                 try self.configureSession()
                 try self.startEngine()
@@ -655,6 +1116,7 @@ final class ASRService: ObservableObject {
     }
 
     private var defaultInputListenerInstalled = false
+    private var defaultInputListenerToken: AudioObjectPropertyListenerBlock?
     private func registerDefaultDeviceChangeListener() {
         guard self.defaultInputListenerInstalled == false else { return }
         var address = AudioObjectPropertyAddress(
@@ -662,122 +1124,314 @@ final class ASRService: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main) { [weak self] _, _ in
+        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.handleDefaultInputChanged()
         }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.main,
+            token
+        )
         if status == noErr { self.defaultInputListenerInstalled = true }
+        if status == noErr {
+            self.defaultInputListenerToken = token
+        } else {
+            self.defaultInputListenerToken = nil
+        }
     }
 
-    private func processInputBuffer(buffer: AVAudioPCMBuffer) {
-        guard self.isRecordingWholeSession else {
-            DispatchQueue.main.async { self.audioLevelSubject.send(0.0) }
+    // MARK: - Device Monitoring (Bluetooth Auto-Switch & Disconnect Handling)
+
+    private var deviceListListenerInstalled = false
+    private var deviceListListenerToken: AudioObjectPropertyListenerBlock?
+    private var monitoredDeviceID: AudioObjectID?
+    private var monitoredDeviceIsAliveListenerToken: AudioObjectPropertyListenerBlock?
+
+    /// Registers a listener for device list changes (additions/removals)
+    /// This enables auto-switching to newly connected devices (especially Bluetooth)
+    private func registerDeviceListChangeListener() {
+        guard self.deviceListListenerInstalled == false else { return }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleDeviceListChanged()
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.main,
+            token
+        )
+
+        if status == noErr {
+            self.deviceListListenerInstalled = true
+            self.deviceListListenerToken = token
+            DebugLogger.shared.debug("Device list change listener registered", source: "ASRService")
+        } else {
+            self.deviceListListenerToken = nil
+            DebugLogger.shared.error("Failed to register device list listener: \(status)", source: "ASRService")
+        }
+    }
+
+    /// Monitors a specific device for availability (DeviceIsAlive property)
+    /// Used to detect when preferred device disconnects
+    private func startMonitoringDevice(_ deviceID: AudioObjectID) {
+        // Unregister previous device if any
+        self.stopMonitoringDevice()
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleDeviceAvailabilityChanged(deviceID: deviceID)
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            deviceID,
+            &address,
+            DispatchQueue.main,
+            token
+        )
+
+        if status == noErr {
+            self.monitoredDeviceID = deviceID
+            self.monitoredDeviceIsAliveListenerToken = token
+            DebugLogger.shared.debug("Started monitoring device ID: \(deviceID)", source: "ASRService")
+        } else {
+            self.monitoredDeviceID = nil
+            self.monitoredDeviceIsAliveListenerToken = nil
+            DebugLogger.shared.error("Failed to monitor device \(deviceID): \(status)", source: "ASRService")
+        }
+    }
+
+    /// Stops monitoring the currently monitored device
+    private func stopMonitoringDevice() {
+        guard let deviceID = self.monitoredDeviceID else { return }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        if let token = self.monitoredDeviceIsAliveListenerToken {
+            _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+        }
+        self.monitoredDeviceID = nil
+        self.monitoredDeviceIsAliveListenerToken = nil
+        DebugLogger.shared.debug("Stopped monitoring device ID: \(deviceID)", source: "ASRService")
+    }
+
+    /// Handles device list changes (new device connected or device removed)
+    private func handleDeviceListChanged() {
+        DebugLogger.shared.info("🔄 Device list changed - checking for new/removed devices", source: "ASRService")
+
+        // Get current device list
+        let currentDevices = AudioDevice.listInputDevices()
+        DebugLogger.shared.debug("Current input devices: \(currentDevices.map { $0.name }.joined(separator: ", "))", source: "ASRService")
+
+        // Check if preferred device is now available (for auto-switch)
+        if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
+           let preferredDevice = currentDevices.first(where: { $0.uid == preferredUID })
+        {
+            // If we're currently using a fallback (system default), switch to preferred device
+            let systemDefault = AudioDevice.getDefaultInputDevice()
+            if let currentDevice = getCurrentlyBoundInputDevice(),
+               currentDevice.uid != preferredUID,
+               currentDevice.uid == systemDefault?.uid
+            {
+                DebugLogger.shared.info(
+                    "🔌 Preferred device '\(preferredDevice.name)' reconnected. Auto-switching...",
+                    source: "ASRService"
+                )
+
+                // If recording, restart with new device
+                if self.isRunning {
+                    DebugLogger.shared.info("Recording in progress - restarting engine with preferred device", source: "ASRService")
+                    self.restartEngineWithDevice(preferredDevice)
+                } else {
+                    // Just update the binding for next recording
+                    DebugLogger.shared.info("Not recording - updating binding for next session", source: "ASRService")
+                    _ = self.setEngineInputDevice(
+                        deviceID: preferredDevice.id,
+                        deviceUID: preferredDevice.uid,
+                        deviceName: preferredDevice.name
+                    )
+                }
+            }
+        }
+
+        // Check for newly connected Bluetooth devices (auto-switch)
+        for device in currentDevices {
+            if device.name.localizedCaseInsensitiveContains("airpods") ||
+                device.name.localizedCaseInsensitiveContains("bluetooth")
+            {
+                // Check if this is a newly appeared device
+                let wasAvailable = self.checkDeviceWasAvailable(device.uid)
+                if !wasAvailable {
+                    DebugLogger.shared.info(
+                        "🎧 New Bluetooth device detected: '\(device.name)'. Auto-switching...",
+                        source: "ASRService"
+                    )
+
+                    // Update preferred device setting
+                    SettingsStore.shared.preferredInputDeviceUID = device.uid
+                    DebugLogger.shared.debug("Updated preferred input device to: \(device.uid)", source: "ASRService")
+
+                    // If recording, restart with new device
+                    if self.isRunning {
+                        DebugLogger.shared.info("Recording in progress - restarting engine with new Bluetooth device", source: "ASRService")
+                        self.restartEngineWithDevice(device)
+                    } else {
+                        DebugLogger.shared.info("Not recording - Bluetooth device will be used on next recording", source: "ASRService")
+                    }
+                }
+            }
+        }
+
+        // Cache device list for next comparison
+        self.cacheCurrentDeviceList(currentDevices)
+    }
+
+    /// Handles device availability changes (device disconnected or reconnected)
+    private func handleDeviceAvailabilityChanged(deviceID: AudioObjectID) {
+        DebugLogger.shared.info("⚠️ Device availability changed for ID: \(deviceID)", source: "ASRService")
+
+        // Check if device is still alive
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var isAlive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &isAlive)
+
+        DebugLogger.shared.debug("Device \(deviceID) alive status query: status=\(status), isAlive=\(isAlive)", source: "ASRService")
+
+        if status == noErr, isAlive == 0 {
+            // Device disconnected
+            DebugLogger.shared.warning("❌ Monitored device (ID: \(deviceID)) DISCONNECTED", source: "ASRService")
+
+            if self.isRunning {
+                // Cancel recording if device disconnects during recording
+                DebugLogger.shared.error(
+                    "🛑 Recording CANCELLED: Audio device disconnected during recording",
+                    source: "ASRService"
+                )
+
+                Task { @MainActor in
+                    await self.stopWithoutTranscription()
+
+                    // Notify user
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("ASRServiceDeviceDisconnected"),
+                        object: nil,
+                        userInfo: ["errorMessage": "Recording cancelled: Audio device disconnected"]
+                    )
+                }
+            } else {
+                DebugLogger.shared.info("Not recording - device disconnect handled gracefully", source: "ASRService")
+                // Just stop monitoring - don't try to set engine device when engine may not exist
+                self.stopMonitoringDevice()
+                DebugLogger.shared.info("✅ Stopped monitoring disconnected device", source: "ASRService")
+            }
+        } else if status == noErr, isAlive != 0 {
+            DebugLogger.shared.info("✅ Device (ID: \(deviceID)) is still alive", source: "ASRService")
+        }
+    }
+
+    /// Restarts the engine with a new device (used for hot-swapping)
+    private func restartEngineWithDevice(_ device: AudioDevice.Device) {
+        guard self.isRunning else {
+            DebugLogger.shared.warning("restartEngineWithDevice() called but not recording", source: "ASRService")
             return
         }
 
-        let mono16k = self.toMono16k(floatBuffer: buffer)
-        if mono16k.isEmpty == false {
-            // Thread-safe append
-            self.audioBuffer.append(mono16k)
+        DebugLogger.shared.info("🔄 HOT-SWAPPING device to: '\(device.name)' (uid: \(device.uid))", source: "ASRService")
 
-            // Publish audio level for visualization
-            let audioLevel = self.calculateAudioLevel(mono16k)
-            DispatchQueue.main.async { self.audioLevelSubject.send(audioLevel) }
-        }
-    }
+        // Note: This will cause a brief interruption in recording
+        // The user requested to cancel recording on device change, but we're allowing
+        // auto-switch for convenience. If issues arise, we can make this stricter.
 
-    private func calculateAudioLevel(_ samples: [Float]) -> CGFloat {
-        guard samples.isEmpty == false else { return 0.0 }
+        DebugLogger.shared.debug("Removing engine tap...", source: "ASRService")
+        self.removeEngineTap()
 
-        // Calculate RMS
-        var sum: Float = 0.0
-        vDSP_svesq(samples, 1, &sum, vDSP_Length(samples.count))
-        let rms = sqrt(sum / Float(samples.count))
+        DebugLogger.shared.debug("Stopping engine...", source: "ASRService")
+        self.engine.stop()
 
-        // Apply noise gate at RMS level
-        if rms < 0.002 {
-            return self.applySmoothingAndThreshold(0.0)
-        }
+        do {
+            // Recreate engine for hot-swap instead of reset
+            DebugLogger.shared.debug("Recreating engine for device switch...", source: "ASRService")
+            self.engineStorage = nil
+            _ = self.engine.inputNode // Create fresh engine with new node
+            _ = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
 
-        // Convert to dB with better scaling
-        let dbLevel = 20 * log10(max(rms, 1e-10))
-        let normalizedLevel = max(0, min(1, (dbLevel + 55) / 55))
+            DebugLogger.shared.debug("Starting engine with new device...", source: "ASRService")
+            try self.startEngine()
 
-        return self.applySmoothingAndThreshold(CGFloat(normalizedLevel))
-    }
+            DebugLogger.shared.debug("Setting up engine tap...", source: "ASRService")
+            self.setupEngineTap()
 
-    private func applySmoothingAndThreshold(_ newLevel: CGFloat) -> CGFloat {
-        // Minimal smoothing for real-time response
-        self.audioLevelHistory.append(newLevel)
-        if self.audioLevelHistory.count > self.historySize {
-            self.audioLevelHistory.removeFirst()
-        }
+            // Start monitoring the new device
+            self.startMonitoringDevice(device.id)
 
-        // Light smoothing - mostly use current value
-        let average = self.audioLevelHistory.reduce(0, +) / CGFloat(self.audioLevelHistory.count)
-        let smoothingFactor: CGFloat = 0.7 // Much more responsive
-        self.smoothedLevel = (smoothingFactor * newLevel) + ((1 - smoothingFactor) * average)
+            DebugLogger.shared.info("✅ HOT-SWAP successful - now recording with '\(device.name)'", source: "ASRService")
+        } catch {
+            DebugLogger.shared.error("❌ HOT-SWAP FAILED: \(error)", source: "ASRService")
 
-        // Simple threshold - just cut off below silence level
-        if self.smoothedLevel < self.silenceThreshold {
-            return 0.0
-        }
-
-        return self.smoothedLevel
-    }
-
-    private func toMono16k(floatBuffer: AVAudioPCMBuffer) -> [Float] {
-        if let format = floatBuffer.format as AVAudioFormat?,
-           format.sampleRate == 16_000.0,
-           format.commonFormat == .pcmFormatFloat32,
-           format.channelCount == 1,
-           let channelData = floatBuffer.floatChannelData
-        {
-            let frameCount = Int(floatBuffer.frameLength)
-            let ptr = channelData[0]
-            return Array(UnsafeBufferPointer(start: ptr, count: frameCount))
-        }
-        let mono = self.downmixToMono(floatBuffer)
-        return self.resampleTo16k(mono, sourceSampleRate: floatBuffer.format.sampleRate)
-    }
-
-    private func downmixToMono(_ buffer: AVAudioPCMBuffer) -> [Float] {
-        guard let channelData = buffer.floatChannelData else { return [] }
-        let frameCount = Int(buffer.frameLength)
-        let channels = Int(buffer.format.channelCount)
-        if channels == 1 {
-            return Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
-        }
-        var mono = [Float](repeating: 0, count: frameCount)
-        for c in 0..<channels {
-            let src = channelData[c]
-            vDSP_vadd(src, 1, mono, 1, &mono, 1, vDSP_Length(frameCount))
-        }
-        var div = Float(channels)
-        vDSP_vsdiv(mono, 1, &div, &mono, 1, vDSP_Length(frameCount))
-        return mono
-    }
-
-    private func resampleTo16k(_ samples: [Float], sourceSampleRate: Double) -> [Float] {
-        guard samples.isEmpty == false else { return [] }
-        if sourceSampleRate == 16_000.0 { return samples }
-        let ratio = 16_000.0 / sourceSampleRate
-        let outCount = Int(Double(samples.count) * ratio)
-        var output = [Float](repeating: 0, count: max(outCount, 0))
-        if output.isEmpty { return [] }
-        for i in 0..<outCount {
-            let srcPos = Double(i) / ratio
-            let idx = Int(srcPos)
-            let frac = Float(srcPos - Double(idx))
-            if idx + 1 < samples.count {
-                let a = samples[idx]
-                let b = samples[idx + 1]
-                output[i] = a + (b - a) * frac
-            } else if idx < samples.count {
-                output[i] = samples[idx]
+            // Cancel recording on failure
+            Task { @MainActor in
+                await self.stopWithoutTranscription()
             }
         }
-        return output
     }
+
+    /// Gets the currently bound input device (if determinable)
+    private func getCurrentlyBoundInputDevice() -> AudioDevice.Device? {
+        // Check if engine exists before accessing inputNode
+        guard self.engineStorage != nil else { return nil }
+        guard let audioUnit = self.engine.inputNode.audioUnit else { return nil }
+
+        var deviceID = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            &size
+        )
+
+        if status == noErr, deviceID != 0 {
+            return AudioDevice.listInputDevices().first { $0.id == deviceID }
+        }
+
+        return nil
+    }
+
+    // Device caching for change detection
+    private var cachedDeviceUIDs: Set<String> = []
+
+    private func checkDeviceWasAvailable(_ uid: String) -> Bool {
+        return self.cachedDeviceUIDs.contains(uid)
+    }
+
+    private func cacheCurrentDeviceList(_ devices: [AudioDevice.Device]) {
+        self.cachedDeviceUIDs = Set(devices.map { $0.uid })
+    }
+
+    // Audio tap processing is handled by AudioCapturePipeline (thread-safe).
 
     /// Ensures that ASR models are downloaded and ready for transcription.
     ///
@@ -982,11 +1636,32 @@ final class ASRService: ObservableObject {
 
     @MainActor
     private func runStreamingLoop() async {
+        DebugLogger.shared.debug("🔄 runStreamingLoop() - ENTERED", source: "ASRService")
+        var loopCount = 0
+        var lastBufferCount = 0
+
         while !Task.isCancelled {
+            DebugLogger.shared.debug("🔄 runStreamingLoop() - calling processStreamingChunk()", source: "ASRService")
             await self.processStreamingChunk()
+            DebugLogger.shared.debug("🔄 runStreamingLoop() - processStreamingChunk() returned", source: "ASRService")
 
             if Task.isCancelled || self.isRunning == false {
                 break
+            }
+
+            // Health check: detect if audio is not being captured
+            loopCount += 1
+            if loopCount >= 3 { // After 3 loops (~6 seconds with 2s interval)
+                let currentBufferCount = self.audioBuffer.count
+                if currentBufferCount == lastBufferCount, currentBufferCount < 16_000 {
+                    DebugLogger.shared.warning(
+                        "Audio buffer not growing after \(loopCount * 2) seconds (count: \(currentBufferCount)). " +
+                            "Audio capture may have failed. Check if engine is running and tap is installed.",
+                        source: "ASRService"
+                    )
+                }
+                lastBufferCount = currentBufferCount
+                loopCount = 0
             }
 
             do {
@@ -1019,11 +1694,27 @@ final class ASRService: ObservableObject {
 
         // Thread-safe count check
         let currentSampleCount = self.audioBuffer.count
-        let minSamples = 8000 // 0.5 second minimum for faster initial feedback
-        guard currentSampleCount >= minSamples else { return }
+        // Most ASR models require at least 1 second of 16kHz audio (16,000 samples) to transcribe
+        let minSamples = 16_000 // 1 second minimum required by transcription providers
+        guard currentSampleCount >= minSamples else {
+            // Only log once per recording session to avoid spam
+            if currentSampleCount > 0, self.lastProcessedSampleCount == 0 {
+                DebugLogger.shared.debug(
+                    "Waiting for more audio data (\(currentSampleCount)/\(minSamples) samples)",
+                    source: "ASRService"
+                )
+            }
+            return
+        }
 
         // Thread-safe copy of the data
         let chunk = self.audioBuffer.getPrefix(currentSampleCount)
+
+        // Validate chunk is not empty (defensive check)
+        guard !chunk.isEmpty else {
+            DebugLogger.shared.warning("Audio buffer returned empty chunk despite count > 0. Skipping transcription.", source: "ASRService")
+            return
+        }
 
         self.isProcessingChunk = true
         defer { isProcessingChunk = false }
@@ -1184,5 +1875,154 @@ final class ASRService: ObservableObject {
         }
 
         return result
+    }
+}
+
+// MARK: - Audio capture pipeline
+
+//
+// AVAudioEngine's tap runs on a realtime audio thread. ASRService is @MainActor, so we must NOT
+// touch its state directly inside the tap callback. This pipeline keeps all tap-side state
+// thread-safe and only calls back with derived values (audio level + captured samples).
+
+private final class AudioCapturePipeline {
+    private let audioBuffer: ThreadSafeAudioBuffer
+    private let onLevel: (CGFloat) -> Void
+
+    private let lock = NSLock()
+    private var recordingEnabled: Bool = false
+
+    // Smoothing state (kept off ASRService/@MainActor)
+    private var levelHistory: [CGFloat] = []
+    private var smoothedLevel: CGFloat = 0.0
+    private let historySize: Int = 2
+    private let silenceThreshold: CGFloat = 0.04
+
+    init(audioBuffer: ThreadSafeAudioBuffer, onLevel: @escaping (CGFloat) -> Void) {
+        self.audioBuffer = audioBuffer
+        self.onLevel = onLevel
+    }
+
+    func setRecordingEnabled(_ enabled: Bool) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.recordingEnabled = enabled
+        if enabled == false {
+            self.levelHistory.removeAll(keepingCapacity: true)
+            self.smoothedLevel = 0.0
+        }
+    }
+
+    func handle(buffer: AVAudioPCMBuffer) {
+        self.lock.lock()
+        let enabled = self.recordingEnabled
+        self.lock.unlock()
+
+        guard enabled else {
+            self.onLevel(0.0)
+            return
+        }
+
+        let mono16k = Self.toMono16k(floatBuffer: buffer)
+        guard mono16k.isEmpty == false else {
+            self.onLevel(0.0)
+            return
+        }
+
+        self.audioBuffer.append(mono16k)
+        let level = self.calculateAudioLevel(mono16k)
+        self.onLevel(level)
+    }
+
+    private func calculateAudioLevel(_ samples: [Float]) -> CGFloat {
+        guard samples.isEmpty == false else { return 0.0 }
+
+        // RMS
+        var sum: Float = 0.0
+        vDSP_svesq(samples, 1, &sum, vDSP_Length(samples.count))
+        let rms = sqrt(sum / Float(samples.count))
+
+        // Noise gate
+        if rms < 0.002 {
+            return self.applySmoothingAndThreshold(0.0)
+        }
+
+        // dB -> normalized [0, 1]
+        let dbLevel = 20 * log10(max(rms, 1e-10))
+        let normalizedLevel = max(0, min(1, (dbLevel + 55) / 55))
+        return self.applySmoothingAndThreshold(CGFloat(normalizedLevel))
+    }
+
+    private func applySmoothingAndThreshold(_ newLevel: CGFloat) -> CGFloat {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
+        self.levelHistory.append(newLevel)
+        if self.levelHistory.count > self.historySize {
+            self.levelHistory.removeFirst()
+        }
+
+        let average = self.levelHistory.reduce(0, +) / CGFloat(self.levelHistory.count)
+        let smoothingFactor: CGFloat = 0.7
+        self.smoothedLevel = (smoothingFactor * newLevel) + ((1 - smoothingFactor) * average)
+
+        if self.smoothedLevel < self.silenceThreshold {
+            return 0.0
+        }
+
+        return self.smoothedLevel
+    }
+
+    private static func toMono16k(floatBuffer: AVAudioPCMBuffer) -> [Float] {
+        if let format = floatBuffer.format as AVAudioFormat?,
+           format.sampleRate == 16_000.0,
+           format.commonFormat == .pcmFormatFloat32,
+           format.channelCount == 1,
+           let channelData = floatBuffer.floatChannelData
+        {
+            let frameCount = Int(floatBuffer.frameLength)
+            return Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+        }
+        let mono = self.downmixToMono(floatBuffer)
+        return self.resampleTo16k(mono, sourceSampleRate: floatBuffer.format.sampleRate)
+    }
+
+    private static func downmixToMono(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let channelData = buffer.floatChannelData else { return [] }
+        let frameCount = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        if channels == 1 {
+            return Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+        }
+        var mono = [Float](repeating: 0, count: frameCount)
+        for c in 0..<channels {
+            let src = channelData[c]
+            vDSP_vadd(src, 1, mono, 1, &mono, 1, vDSP_Length(frameCount))
+        }
+        var div = Float(channels)
+        vDSP_vsdiv(mono, 1, &div, &mono, 1, vDSP_Length(frameCount))
+        return mono
+    }
+
+    private static func resampleTo16k(_ samples: [Float], sourceSampleRate: Double) -> [Float] {
+        guard samples.isEmpty == false else { return [] }
+        if sourceSampleRate == 16_000.0 { return samples }
+        let ratio = 16_000.0 / sourceSampleRate
+        let outCount = Int(Double(samples.count) * ratio)
+        var output = [Float](repeating: 0, count: max(outCount, 0))
+        if output.isEmpty { return [] }
+        for i in 0..<outCount {
+            let srcPos = Double(i) / ratio
+            let idx = Int(srcPos)
+            let frac = Float(srcPos - Double(idx))
+            if idx + 1 < samples.count {
+                let a = samples[idx]
+                let b = samples[idx + 1]
+                output[i] = a + (b - a) * frac
+            } else if idx < samples.count {
+                output[i] = samples[idx]
+            }
+        }
+        return output
     }
 }

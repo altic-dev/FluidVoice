@@ -312,15 +312,16 @@ final class SettingsStore: ObservableObject {
     }
 
     /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
-    /// When disabled (default), FluidVoice manages its own device selection independently.
+    /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
     var syncAudioDevicesWithSystem: Bool {
         get {
-            let value = self.defaults.object(forKey: Keys.syncAudioDevicesWithSystem)
-            return value as? Bool ?? false // Default to false (decoupled from system)
+            // Always return true - independent mode doesn't work for Bluetooth/aggregate devices
+            return true
         }
         set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.syncAudioDevicesWithSystem)
+            // No-op: sync mode is always enabled
+            // Kept for backward compatibility but value is ignored
+            _ = newValue
         }
     }
 
