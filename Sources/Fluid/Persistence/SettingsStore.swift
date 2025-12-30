@@ -80,6 +80,11 @@ final class SettingsStore: ObservableObject {
 
         // Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+
+        // Overlay Position
+        static let overlayPosition = "OverlayPosition"
+        static let overlayBottomOffset = "OverlayBottomOffset"
+        static let overlaySize = "OverlaySize"
     }
 
     // MARK: - Model Reasoning Configuration
@@ -330,7 +335,94 @@ final class SettingsStore: ObservableObject {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
             return value == 0.0 ? 0.4 : value // Default to 0.4 if not set
         }
-        set { self.defaults.set(newValue, forKey: Keys.visualizerNoiseThreshold) }
+        set {
+            // Clamp between 0.0 and 0.95 to avoid division by zero issues in visualizers
+            let clamped = max(min(newValue, 0.95), 0.0)
+            self.defaults.set(clamped, forKey: Keys.visualizerNoiseThreshold)
+        }
+    }
+
+    // MARK: - Overlay Position
+
+    /// Size options for the recording overlay
+    enum OverlaySize: String, CaseIterable {
+        case small
+        case medium
+        case large
+
+        var displayName: String {
+            switch self {
+            case .small: return "Small"
+            case .medium: return "Medium"
+            case .large: return "Large"
+            }
+        }
+    }
+
+    /// Position options for the recording overlay
+    enum OverlayPosition: String, CaseIterable {
+        case top // Top of screen (notch area or floating)
+        case bottom // Bottom of screen
+
+        var displayName: String {
+            switch self {
+            case .top: return "Top of Screen"
+            case .bottom: return "Bottom of Screen"
+            }
+        }
+    }
+
+    /// Where the recording overlay appears (default: top)
+    var overlayPosition: OverlayPosition {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlayPosition),
+                  let position = OverlayPosition(rawValue: raw)
+            else {
+                return .top // Default to top (current behavior)
+            }
+            return position
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlayPosition)
+        }
+    }
+
+    /// Vertical offset for the bottom overlay (distance from bottom of screen/dock)
+    var overlayBottomOffset: Double {
+        get {
+            let value = self.defaults.double(forKey: Keys.overlayBottomOffset)
+            return value == 0.0 ? 80.0 : value // Default to 80.0
+        }
+        set {
+            objectWillChange.send()
+            // Clamp between a safe range (20px to 1000px)
+            // Even though slider is 20-500, we clamp for safety
+            let clamped = max(min(newValue, 1000.0), 10.0)
+            self.defaults.set(clamped, forKey: Keys.overlayBottomOffset)
+
+            // Post notification for live update if overlay is visible
+            NotificationCenter.default.post(name: NSNotification.Name("OverlayOffsetChanged"), object: nil)
+        }
+    }
+
+    /// The size of the recording overlay (default: medium)
+    var overlaySize: OverlaySize {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlaySize),
+                  let size = OverlaySize(rawValue: raw)
+            else {
+                return .medium // Default to medium
+            }
+            return size
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlaySize)
+
+            // Post notification for live update if overlay is visible
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
     }
 
     // MARK: - Preferences Settings

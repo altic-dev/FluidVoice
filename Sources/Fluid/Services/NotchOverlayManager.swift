@@ -51,6 +51,9 @@ final class NotchOverlayManager {
     // Track if expanded command output is showing
     private(set) var isCommandOutputExpanded: Bool = false
 
+    // Track if bottom overlay is visible
+    private(set) var isBottomOverlayVisible: Bool = false
+
     // Callbacks for command output interaction
     var onCommandOutputDismiss: (() -> Void)?
     var onCommandFollowUp: ((String) async -> Void)?
@@ -99,7 +102,11 @@ final class NotchOverlayManager {
                     self.hideExpandedCommandOutput()
                     self.onCommandOutputDismiss?()
                 }
-                // Also hide regular notch if visible
+                // Hide bottom overlay if visible
+                else if self.isBottomOverlayVisible {
+                    self.hide()
+                }
+                // Hide regular notch if visible
                 else if self.state == .visible {
                     self.hide()
                 }
@@ -162,6 +169,41 @@ final class NotchOverlayManager {
         // Store for potential re-show during processing
         self.lastAudioPublisher = audioLevelPublisher
 
+        // Start monitoring active app changes (updates icon in real-time)
+        ActiveAppMonitor.shared.startMonitoring()
+
+        // Route to bottom overlay if user preference is set
+        if SettingsStore.shared.overlayPosition == .bottom {
+            self.showBottomOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode)
+            return
+        }
+
+        // Otherwise show notch overlay (original behavior)
+        self.showNotchOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode)
+    }
+
+    /// Show bottom overlay (alternative to notch)
+    private func showBottomOverlay(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        // Hide any existing notch first
+        if self.notch != nil {
+            Task { await self.performCleanup() }
+        }
+
+        self.lastAudioPublisher = audioLevelPublisher
+        self.currentMode = mode
+
+        BottomOverlayWindowController.shared.show(audioPublisher: audioLevelPublisher, mode: mode)
+        self.isBottomOverlayVisible = true
+    }
+
+    /// Show notch overlay (original behavior)
+    private func showNotchOverlay(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        // Hide bottom overlay if it was visible
+        if self.isBottomOverlayVisible {
+            BottomOverlayWindowController.shared.hide()
+            self.isBottomOverlayVisible = false
+        }
+
         // Increment generation for this operation
         self.generation &+= 1
         let currentGeneration = self.generation
@@ -176,7 +218,7 @@ final class NotchOverlayManager {
         // Create notch with SwiftUI views
         let newNotch = DynamicNotch(
             hoverBehavior: [.keepVisible, .hapticFeedback],
-            style: .notch(topCornerRadius: 12, bottomCornerRadius: 18)
+            style: .auto
         ) {
             NotchExpandedView(audioPublisher: audioLevelPublisher)
         } compactLeading: {
@@ -197,6 +239,15 @@ final class NotchOverlayManager {
     }
 
     func hide() {
+        // Stop monitoring active app changes
+        ActiveAppMonitor.shared.stopMonitoring()
+
+        // Hide bottom overlay if visible
+        if self.isBottomOverlayVisible {
+            BottomOverlayWindowController.shared.hide()
+            self.isBottomOverlayVisible = false
+        }
+
         // Cancel any pending retry operations
         self.pendingRetryTask?.cancel()
         self.pendingRetryTask = nil
@@ -258,6 +309,12 @@ final class NotchOverlayManager {
             return
         }
 
+        // If bottom overlay is visible, update its processing state
+        if self.isBottomOverlayVisible {
+            BottomOverlayWindowController.shared.setProcessing(processing)
+            return
+        }
+
         if processing {
             // If notch isn't visible, re-show it for processing state
             if self.state == .idle || self.state == .hiding {
@@ -301,7 +358,7 @@ final class NotchOverlayManager {
 
         let newNotch = DynamicNotch(
             hoverBehavior: [], // No keepVisible - allows closing with X/Escape even when cursor is on notch
-            style: .notch(topCornerRadius: 12, bottomCornerRadius: 16)
+            style: .auto
         ) {
             NotchCommandOutputExpandedView(
                 audioPublisher: publisher,

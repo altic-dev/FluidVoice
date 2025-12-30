@@ -13,6 +13,7 @@ struct SettingsView: View {
     @EnvironmentObject var appServices: AppServices
     private var asr: ASRService { self.appServices.asr }
     @Environment(\.theme) private var theme
+    @ObservedObject private var settings = SettingsStore.shared
     @Binding var appear: Bool
     @Binding var visualizerNoiseThreshold: Double
     @Binding var selectedInputUID: String
@@ -547,7 +548,7 @@ struct SettingsView: View {
                                 Text("Input Device")
                                     .font(.body)
                                 Spacer()
-                                Picker("Input Device", selection: self.$selectedInputUID) {
+                                Picker("", selection: self.$selectedInputUID) {
                                     // Handle empty state gracefully
                                     if self.inputDevices.isEmpty {
                                         Text("Loading...").tag("")
@@ -608,7 +609,7 @@ struct SettingsView: View {
                                 Text("Output Device")
                                     .font(.body)
                                 Spacer()
-                                Picker("Output Device", selection: self.$selectedOutputUID) {
+                                Picker("", selection: self.$selectedOutputUID) {
                                     // Handle empty state gracefully
                                     if self.outputDevices.isEmpty {
                                         Text("Loading...").tag("")
@@ -730,6 +731,89 @@ struct SettingsView: View {
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.tertiary)
                                     .frame(width: 36)
+                            }
+
+                            Divider().padding(.vertical, 8)
+
+                            // Overlay Position
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Overlay Position")
+                                        .font(.body)
+                                    Text("Where the recording indicator appears on screen")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: self.$settings.overlayPosition) {
+                                    ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
+                                        Text(position.displayName).tag(position)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 170, alignment: .trailing)
+                            }
+
+                            // Bottom overlay specific settings (only show when bottom is selected)
+                            if self.settings.overlayPosition == .bottom {
+                                Divider().padding(.vertical, 4)
+
+                                // Overlay Size
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Overlay Size")
+                                            .font(.body)
+                                        Text("How large the recording indicator appears")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Picker("", selection: self.$settings.overlaySize) {
+                                        ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
+                                            Text(size.displayName).tag(size)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 170, alignment: .trailing)
+                                }
+
+                                // Bottom Offset
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Bottom Offset")
+                                            .font(.body)
+                                        Text("Distance from bottom of screen")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    HStack(spacing: 6) {
+                                        Slider(value: self.$settings.overlayBottomOffset, in: 20...500)
+                                            .frame(width: 110)
+                                            .controlSize(.small)
+
+                                        Text("\(Int(self.settings.overlayBottomOffset)) px")
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 54, alignment: .trailing)
+                                    }
+                                    .frame(width: 170, alignment: .trailing)
+                                }
+                            }
+
+                            if self.asr.isRunning {
+                                Text("Settings are disabled during active recording")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .italic()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.top, 4)
                             }
                         }
                     }

@@ -18,6 +18,9 @@ class NotchContentState: ObservableObject {
     @Published var mode: OverlayMode = .dictation
     @Published var isProcessing: Bool = false // AI processing state
 
+    // Icon of the target app (where text will be typed)
+    @Published var targetAppIcon: NSImage?
+
     // Cached transcription lines to avoid recomputing on every render
     @Published private(set) var cachedLine1: String = ""
     @Published private(set) var cachedLine2: String = ""
@@ -100,6 +103,10 @@ class NotchContentState: ObservableObject {
 
     @Published var isRecordingInExpandedMode: Bool = false
     @Published var expandedModeAudioLevel: CGFloat = 0 // Audio level for waveform in expanded mode
+
+    // MARK: - Bottom Overlay Audio Level
+
+    @Published var bottomOverlayAudioLevel: CGFloat = 0 // Audio level for bottom overlay waveform
 
     /// Set recording state (for waveform visibility in expanded view)
     func setRecordingInExpandedMode(_ recording: Bool) {
@@ -258,6 +265,15 @@ struct NotchExpandedView: View {
         VStack(spacing: 4) {
             // Visualization + Mode label row
             HStack(spacing: 6) {
+                // Target app icon (the app where text will be typed)
+                if let appIcon = self.contentState.targetAppIcon {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 16, height: 16)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+
                 NotchWaveformView(
                     audioPublisher: self.audioPublisher,
                     color: self.modeColor
