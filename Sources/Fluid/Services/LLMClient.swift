@@ -191,9 +191,7 @@ final class LLMClient {
         }
 
         // Add streaming flag
-        if config.streaming {
-            body["stream"] = true
-        }
+        body["stream"] = config.streaming
 
         // Add extra parameters in layers:
         // 1. Model-specific parameters (from ThinkingParserFactory)
@@ -262,9 +260,7 @@ final class LLMClient {
         DebugLogger.shared.debug("LLMClient: Non-streaming response received (\(data.count) bytes)", source: "LLMClient")
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let choice = choices.first,
-              let message = choice["message"] as? [String: Any]
+              let message = json["message"] as? [String: Any]
         else {
             throw LLMError.invalidResponse
         }
@@ -296,6 +292,9 @@ final class LLMClient {
         var contentBuffer: [String] = []
         var tagDetectionBuffer = ""
 
+        // Track if we've seen separate thinking fields (for runtime detection)
+        var hasSeenSeparateThinkingField = false
+
         // Tool call accumulation
         var toolCallId: String?
         var toolCallName: String?
@@ -304,21 +303,26 @@ final class LLMClient {
         // Process SSE lines
         for try await rawLine in bytes.lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.hasPrefix("data:") else { continue }
+            DebugLogger.shared.debug("LLMClient: Line: \(line)", source: "LLMClient")
+            var jsonString = ""
+            if line.hasPrefix("data:") {
+                jsonString = String(line.dropFirst(5))
+                if jsonString.hasPrefix(" ") {
+                    jsonString = String(jsonString.dropFirst(1))
+                }
 
-            var jsonString = String(line.dropFirst(5))
-            if jsonString.hasPrefix(" ") {
-                jsonString = String(jsonString.dropFirst(1))
+                if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                    continue
+                }
             }
-
-            if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
-                continue
+            // This means the data comes in different format i.e. local ollama
+            else {
+                jsonString = line
             }
 
             guard let jsonData = jsonString.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let delta = choices.first?["delta"] as? [String: Any]
+                  let delta = json["message"] as? [String: Any]
             else {
                 continue
             }
@@ -330,13 +334,16 @@ final class LLMClient {
                 DebugLogger.shared.debug("LLMClient: Full Delta: \(deltaString)", source: "LLMClient")
             }
 
-            // Handle separate reasoning fields (OpenAI 'reasoning', 'reasoning_content', DeepSeek, etc.)
+            // Handle separate reasoning fields (OpenAI 'reasoning', 'reasoning_content', DeepSeek, Qwen, etc.)
             let reasoningField = delta["reasoning_content"] as? String ??
                 delta["reasoning"] as? String ??
                 delta["thought"] as? String ??
                 delta["thinking"] as? String
 
             if let reasoning = reasoningField {
+                // Mark that this stream uses separate thinking fields
+                hasSeenSeparateThinkingField = true
+                
                 if state == .initial {
                     state = .inThinking
                     config.onThinkingStart?()
@@ -356,6 +363,16 @@ final class LLMClient {
                     // For safety with tag-based parsers, we let the parser decide unless it's a known separate-field model.
                 }
 
+                // CRITICAL FIX: For models using separate thinking fields (detected at runtime),
+                // if we were in thinking mode and now receive content WITHOUT a reasoning field,
+                // this signals the transition from thinking to content.
+                if hasSeenSeparateThinkingField && state == .inThinking && reasoningField == nil {
+                    // Transition from thinking to content for separate-field models
+                    state = .inContent
+                    config.onThinkingEnd?()
+                    DebugLogger.shared.debug("LLMClient: Detected field-based transition from thinking to content", source: "LLMClient")
+                }
+
                 // Debug: Log first few chunks and any chunk containing think tags
                 let containsThinkTag = content.contains("<think") || content.contains("</think") || content.contains("<thinking") || content.contains("</thinking")
                 if thinkingBuffer.count + contentBuffer.count < 8 || containsThinkTag {
@@ -364,12 +381,22 @@ final class LLMClient {
                     DebugLogger.shared.debug("LLMClient: Chunk '\(escaped)'\(marker)", source: "LLMClient")
                 }
 
+                // For separate-field models already in content state, bypass parser and route directly
                 let previousState = state
-                let (newState, thinkChunk, contentChunk) = parser.processChunk(
-                    content,
-                    currentState: state,
-                    tagBuffer: &tagDetectionBuffer
-                )
+                let (newState, thinkChunk, contentChunk): (ThinkingParserState, String, String)
+                
+                if hasSeenSeparateThinkingField && state == .inContent {
+                    // Direct routing for separate-field models in content phase
+                    newState = .inContent
+                    (_, thinkChunk, contentChunk) = ("", "", content)
+                } else {
+                    // Use parser for tag-based detection or hybrid models
+                    (newState, thinkChunk, contentChunk) = parser.processChunk(
+                        content,
+                        currentState: state,
+                        tagBuffer: &tagDetectionBuffer
+                    )
+                }
 
                 // Handle state transitions for callbacks
                 if previousState != .inThinking && newState == .inThinking {
@@ -428,6 +455,10 @@ final class LLMClient {
 
         // Use parser's finalize to get final clean thinking and content
         let (thinkingText, contentText) = parser.finalize(thinkingBuffer: thinkingBuffer, contentBuffer: contentBuffer, finalState: state)
+
+        // Debug logs of final strings:
+        // DebugLogger.shared.debug("LLMClient: THINKING: \(thinkingText)", source: "LLMClient")
+        // DebugLogger.shared.debug("LLMClient: CONTEXT: \(contentText)", source: "LLMClient")
 
         DebugLogger.shared.debug("LLMClient: Streaming complete. Thinking: \(thinkingText.count) chars, Content: \(contentText.count) chars", source: "LLMClient")
 
