@@ -30,7 +30,6 @@ struct SettingsView: View {
     @Binding var commandModeShortcutEnabled: Bool
     @Binding var rewriteShortcutEnabled: Bool
     @Binding var hotkeyManagerInitialized: Bool
-    @Binding var pressAndHoldModeEnabled: Bool
     @Binding var enableStreamingPreview: Bool
     @Binding var copyToClipboard: Bool
 

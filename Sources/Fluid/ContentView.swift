@@ -91,7 +91,6 @@ struct ContentView: View {
     @State private var openAIBaseURL: String = "https://api.openai.com/v1"
 
     @State private var enableDebugLogs: Bool = SettingsStore.shared.enableDebugLogs
-    @State private var pressAndHoldModeEnabled: Bool = SettingsStore.shared.pressAndHoldMode
     @State private var enableStreamingPreview: Bool = SettingsStore.shared.enableStreamingPreview
     @State private var copyToClipboard: Bool = SettingsStore.shared.copyTranscriptionToClipboard
 
@@ -918,7 +917,6 @@ struct ContentView: View {
             commandModeShortcutEnabled: self.$isCommandModeShortcutEnabled,
             rewriteShortcutEnabled: self.$isRewriteModeShortcutEnabled,
             hotkeyManagerInitialized: self.$hotkeyManagerInitialized,
-            pressAndHoldModeEnabled: self.$pressAndHoldModeEnabled,
             enableStreamingPreview: self.$enableStreamingPreview,
             copyToClipboard: self.$copyToClipboard,
             hotkeyManager: self.hotkeyManager,
@@ -1881,7 +1879,7 @@ struct ContentView: View {
 
         self.hotkeyManagerInitialized = self.hotkeyManager?.validateEventTapHealth() ?? false
 
-        self.hotkeyManager?.enablePressAndHoldMode(self.pressAndHoldModeEnabled)
+        self.hotkeyManager?.setHotkeyMode(SettingsStore.shared.hotkeyMode)
 
         // Set cancel callback for Escape key handling (closes mode views, resets recording state)
         // Returns true if it handled something (so GlobalHotkeyManager knows to consume the event)

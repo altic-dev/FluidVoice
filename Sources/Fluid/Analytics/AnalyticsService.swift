@@ -82,7 +82,7 @@ final class AnalyticsService {
             // Low-cardinality settings snapshot
             "ai_processing_enabled": settings.enableAIProcessing,
             "streaming_preview_enabled": settings.enableStreamingPreview,
-            "press_and_hold_mode": settings.pressAndHoldMode,
+            "hotkey_mode": settings.hotkeyMode.rawValue,
             "copy_to_clipboard_enabled": settings.copyTranscriptionToClipboard,
         ]
     }
