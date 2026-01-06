@@ -16,10 +16,24 @@ final class GlobalHotkeyManager: NSObject {
     private var commandModeCallback: (() async -> Void)?
     private var rewriteModeCallback: (() async -> Void)?
     private var cancelCallback: (() -> Bool)? // Returns true if handled
-    private var pressAndHoldMode: Bool = SettingsStore.shared.pressAndHoldMode
     private var isKeyPressed = false
     private var isCommandModeKeyPressed = false
     private var isRewriteKeyPressed = false
+
+    // Hotkey activation mode (toggle, hold, or automatic)
+    private var hotkeyMode: SettingsStore.HotkeyMode = SettingsStore.shared.hotkeyMode
+
+    // Dual-mode hotkey support: tracks key press timing to distinguish tap vs hold
+    // Tap (< threshold): toggle mode - recording continues after release
+    // Hold (>= threshold): push-to-talk mode - recording stops on release
+    private let tapThresholdSeconds: TimeInterval = 0.4 // 400ms threshold
+    private var keyDownTime: Date?
+    private var commandModeKeyDownTime: Date?
+    private var rewriteKeyDownTime: Date?
+    // Track if recording was already running when key was pressed (for tap-to-stop)
+    private var wasRecordingBeforeKeyDown = false
+    private var wasRecordingBeforeCommandModeKeyDown = false
+    private var wasRecordingBeforeRewriteKeyDown = false
 
     // Busy flag to prevent race conditions during stop processing
     private var isProcessingStop = false
@@ -274,21 +288,29 @@ final class GlobalHotkeyManager: NSObject {
 
             // Check command mode hotkey first
             if self.commandModeShortcutEnabled, self.matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                if self.pressAndHoldMode {
-                    // Press and hold: start on keyDown, stop on keyUp
-                    if !self.isCommandModeKeyPressed {
-                        self.isCommandModeKeyPressed = true
-                        DebugLogger.shared.info("Command mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                        self.triggerCommandMode()
-                    }
-                } else {
-                    // Toggle mode: press to start, press again to stop
+                switch self.hotkeyMode {
+                case .toggle:
+                    // Toggle mode: tap to start/stop
                     if self.asrService.isRunning {
-                        DebugLogger.shared.info("Command mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
                         self.stopRecordingIfNeeded()
                     } else {
-                        DebugLogger.shared.info("Command mode shortcut triggered - starting", source: "GlobalHotkeyManager")
                         self.triggerCommandMode()
+                    }
+                case .hold:
+                    // Hold mode: start on keyDown
+                    if !self.isCommandModeKeyPressed {
+                        self.isCommandModeKeyPressed = true
+                        self.triggerCommandMode()
+                    }
+                case .automatic:
+                    // Automatic mode: detect tap vs hold
+                    if !self.isCommandModeKeyPressed {
+                        self.isCommandModeKeyPressed = true
+                        self.commandModeKeyDownTime = Date()
+                        self.wasRecordingBeforeCommandModeKeyDown = self.asrService.isRunning
+                        if !self.wasRecordingBeforeCommandModeKeyDown {
+                            self.triggerCommandMode()
+                        }
                     }
                 }
                 return nil
@@ -297,21 +319,29 @@ final class GlobalHotkeyManager: NSObject {
             // Check dedicated rewrite mode hotkey
             if self.rewriteModeShortcutEnabled {
                 if self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                    if self.pressAndHoldMode {
-                        // Press and hold: start on keyDown, stop on keyUp
-                        if !self.isRewriteKeyPressed {
-                            self.isRewriteKeyPressed = true
-                            DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                            self.triggerRewriteMode()
-                        }
-                    } else {
-                        // Toggle mode: press to start, press again to stop
+                    switch self.hotkeyMode {
+                    case .toggle:
+                        // Toggle mode: tap to start/stop
                         if self.asrService.isRunning {
-                            DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - stopping", source: "GlobalHotkeyManager")
                             self.stopRecordingIfNeeded()
                         } else {
-                            DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
                             self.triggerRewriteMode()
+                        }
+                    case .hold:
+                        // Hold mode: start on keyDown
+                        if !self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = true
+                            self.triggerRewriteMode()
+                        }
+                    case .automatic:
+                        // Automatic mode: detect tap vs hold
+                        if !self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = true
+                            self.rewriteKeyDownTime = Date()
+                            self.wasRecordingBeforeRewriteKeyDown = self.asrService.isRunning
+                            if !self.wasRecordingBeforeRewriteKeyDown {
+                                self.triggerRewriteMode()
+                            }
                         }
                     }
                     return nil
@@ -320,38 +350,126 @@ final class GlobalHotkeyManager: NSObject {
 
             // Then check transcription hotkey
             if self.matchesShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                if self.pressAndHoldMode {
+                switch self.hotkeyMode {
+                case .toggle:
+                    // Toggle mode: tap to start/stop
+                    self.toggleRecording()
+                case .hold:
+                    // Hold mode: start on keyDown, stop on keyUp
                     if !self.isKeyPressed {
                         self.isKeyPressed = true
                         self.startRecordingIfNeeded()
                     }
-                } else {
-                    self.toggleRecording()
+                case .automatic:
+                    // Automatic mode: detect tap vs hold
+                    if !self.isKeyPressed {
+                        self.isKeyPressed = true
+                        self.keyDownTime = Date()
+                        self.wasRecordingBeforeKeyDown = self.asrService.isRunning
+                        if !self.wasRecordingBeforeKeyDown {
+                            self.startRecordingIfNeeded()
+                        }
+                    }
                 }
                 return nil
             }
 
         case .keyUp:
-            // Command mode key up (press and hold mode)
-            if self.commandModeShortcutEnabled, self.pressAndHoldMode, self.isCommandModeKeyPressed, self.matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                self.isCommandModeKeyPressed = false
-                DebugLogger.shared.info("Command mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
-                self.stopRecordingIfNeeded()
+            // Command mode key up
+            if self.commandModeShortcutEnabled, self.isCommandModeKeyPressed, self.matchesCommandModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                switch self.hotkeyMode {
+                case .toggle:
+                    // Toggle mode: keyUp is ignored
+                    self.isCommandModeKeyPressed = false
+                case .hold:
+                    // Hold mode: stop on keyUp
+                    self.isCommandModeKeyPressed = false
+                    self.stopRecordingIfNeeded()
+                case .automatic:
+                    // Automatic mode: detect tap vs hold
+                    let pressDuration = Date().timeIntervalSince(self.commandModeKeyDownTime ?? Date())
+                    self.isCommandModeKeyPressed = false
+                    self.commandModeKeyDownTime = nil
+
+                    if pressDuration < self.tapThresholdSeconds {
+                        if self.wasRecordingBeforeCommandModeKeyDown {
+                            DebugLogger.shared.info("Command mode tap (\(String(format: "%.2f", pressDuration))s) - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            DebugLogger.shared.info("Command mode tap (\(String(format: "%.2f", pressDuration))s) - continues", source: "GlobalHotkeyManager")
+                        }
+                    } else {
+                        DebugLogger.shared.info("Command mode hold (\(String(format: "%.2f", pressDuration))s) - stopping", source: "GlobalHotkeyManager")
+                        self.stopRecordingIfNeeded()
+                    }
+                    self.wasRecordingBeforeCommandModeKeyDown = false
+                }
                 return nil
             }
 
-            // Rewrite mode key up (press and hold mode)
-            if self.rewriteModeShortcutEnabled, self.pressAndHoldMode, self.isRewriteKeyPressed, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                self.isRewriteKeyPressed = false
-                DebugLogger.shared.info("Rewrite mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
-                self.stopRecordingIfNeeded()
+            // Rewrite mode key up
+            if self.rewriteModeShortcutEnabled, self.isRewriteKeyPressed, self.matchesRewriteModeShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                switch self.hotkeyMode {
+                case .toggle:
+                    // Toggle mode: keyUp is ignored
+                    self.isRewriteKeyPressed = false
+                case .hold:
+                    // Hold mode: stop on keyUp
+                    self.isRewriteKeyPressed = false
+                    self.stopRecordingIfNeeded()
+                case .automatic:
+                    // Automatic mode: detect tap vs hold
+                    let pressDuration = Date().timeIntervalSince(self.rewriteKeyDownTime ?? Date())
+                    self.isRewriteKeyPressed = false
+                    self.rewriteKeyDownTime = nil
+
+                    if pressDuration < self.tapThresholdSeconds {
+                        if self.wasRecordingBeforeRewriteKeyDown {
+                            DebugLogger.shared.info("Rewrite mode tap (\(String(format: "%.2f", pressDuration))s) - stopping", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            DebugLogger.shared.info("Rewrite mode tap (\(String(format: "%.2f", pressDuration))s) - continues", source: "GlobalHotkeyManager")
+                        }
+                    } else {
+                        DebugLogger.shared.info("Rewrite mode hold (\(String(format: "%.2f", pressDuration))s) - stopping", source: "GlobalHotkeyManager")
+                        self.stopRecordingIfNeeded()
+                    }
+                    self.wasRecordingBeforeRewriteKeyDown = false
+                }
                 return nil
             }
 
             // Transcription key up
-            if self.pressAndHoldMode, self.isKeyPressed, self.matchesShortcut(keyCode: keyCode, modifiers: eventModifiers) {
-                self.isKeyPressed = false
-                self.stopRecordingIfNeeded()
+            if self.isKeyPressed, self.matchesShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                switch self.hotkeyMode {
+                case .toggle:
+                    // Toggle mode: keyUp is ignored (toggle happens on keyDown)
+                    self.isKeyPressed = false
+                case .hold:
+                    // Hold mode: stop on keyUp
+                    self.isKeyPressed = false
+                    self.stopRecordingIfNeeded()
+                case .automatic:
+                    // Automatic mode: detect tap vs hold
+                    let pressDuration = Date().timeIntervalSince(self.keyDownTime ?? Date())
+                    self.isKeyPressed = false
+                    self.keyDownTime = nil
+
+                    if pressDuration < self.tapThresholdSeconds {
+                        // TAP detected: toggle behavior
+                        if self.wasRecordingBeforeKeyDown {
+                            DebugLogger.shared.info("Tap (\(String(format: "%.2f", pressDuration))s) - stopping (was running)", source: "GlobalHotkeyManager")
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            DebugLogger.shared.info("Tap (\(String(format: "%.2f", pressDuration))s) - recording continues", source: "GlobalHotkeyManager")
+                        }
+                    } else {
+                        // HOLD detected: stop on release
+                        DebugLogger.shared.info("Hold (\(String(format: "%.2f", pressDuration))s) - stopping", source: "GlobalHotkeyManager")
+                        self.stopRecordingIfNeeded()
+                    }
+                    self.wasRecordingBeforeKeyDown = false
+                }
                 return nil
             }
 
@@ -364,28 +482,49 @@ final class GlobalHotkeyManager: NSObject {
 
             // Check command mode shortcut (if it's a modifier-only shortcut)
             if self.commandModeShortcutEnabled, self.commandModeShortcut.modifierFlags.isEmpty, keyCode == self.commandModeShortcut.keyCode {
-                if isModifierPressed {
-                    if self.pressAndHoldMode {
-                        if !self.isCommandModeKeyPressed {
-                            self.isCommandModeKeyPressed = true
-                            DebugLogger.shared.info("Command mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                            self.triggerCommandMode()
-                        }
-                    } else {
-                        // Toggle mode
+                switch self.hotkeyMode {
+                case .toggle:
+                    if isModifierPressed {
                         if self.asrService.isRunning {
-                            DebugLogger.shared.info("Command mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
                             self.stopRecordingIfNeeded()
                         } else {
-                            DebugLogger.shared.info("Command mode modifier pressed - starting", source: "GlobalHotkeyManager")
                             self.triggerCommandMode()
                         }
                     }
-                } else if self.pressAndHoldMode, self.isCommandModeKeyPressed {
-                    // Key released in press-and-hold mode
-                    self.isCommandModeKeyPressed = false
-                    DebugLogger.shared.info("Command mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
-                    self.stopRecordingIfNeeded()
+                case .hold:
+                    if isModifierPressed {
+                        if !self.isCommandModeKeyPressed {
+                            self.isCommandModeKeyPressed = true
+                            self.triggerCommandMode()
+                        }
+                    } else if self.isCommandModeKeyPressed {
+                        self.isCommandModeKeyPressed = false
+                        self.stopRecordingIfNeeded()
+                    }
+                case .automatic:
+                    if isModifierPressed {
+                        if !self.isCommandModeKeyPressed {
+                            self.isCommandModeKeyPressed = true
+                            self.commandModeKeyDownTime = Date()
+                            self.wasRecordingBeforeCommandModeKeyDown = self.asrService.isRunning
+                            if !self.wasRecordingBeforeCommandModeKeyDown {
+                                self.triggerCommandMode()
+                            }
+                        }
+                    } else if self.isCommandModeKeyPressed {
+                        let pressDuration = Date().timeIntervalSince(self.commandModeKeyDownTime ?? Date())
+                        self.isCommandModeKeyPressed = false
+                        self.commandModeKeyDownTime = nil
+
+                        if pressDuration < self.tapThresholdSeconds {
+                            if self.wasRecordingBeforeCommandModeKeyDown {
+                                self.stopRecordingIfNeeded()
+                            }
+                        } else {
+                            self.stopRecordingIfNeeded()
+                        }
+                        self.wasRecordingBeforeCommandModeKeyDown = false
+                    }
                 }
                 return nil
             }
@@ -402,28 +541,49 @@ final class GlobalHotkeyManager: NSObject {
                     keyCode == 63 // Function key
 
                 if isModifierKey, keyCode == self.rewriteModeShortcut.keyCode {
-                    if isModifierPressed {
-                        if self.pressAndHoldMode {
-                            if !self.isRewriteKeyPressed {
-                                self.isRewriteKeyPressed = true
-                                DebugLogger.shared.info("Rewrite mode modifier pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                                self.triggerRewriteMode()
-                            }
-                        } else {
-                            // Toggle mode
+                    switch self.hotkeyMode {
+                    case .toggle:
+                        if isModifierPressed {
                             if self.asrService.isRunning {
-                                DebugLogger.shared.info("Rewrite mode modifier pressed while recording - stopping", source: "GlobalHotkeyManager")
                                 self.stopRecordingIfNeeded()
                             } else {
-                                DebugLogger.shared.info("Rewrite mode modifier pressed - starting", source: "GlobalHotkeyManager")
                                 self.triggerRewriteMode()
                             }
                         }
-                    } else if self.pressAndHoldMode, self.isRewriteKeyPressed {
-                        // Key released in press-and-hold mode
-                        self.isRewriteKeyPressed = false
-                        DebugLogger.shared.info("Rewrite mode modifier released (hold mode) - stopping", source: "GlobalHotkeyManager")
-                        self.stopRecordingIfNeeded()
+                    case .hold:
+                        if isModifierPressed {
+                            if !self.isRewriteKeyPressed {
+                                self.isRewriteKeyPressed = true
+                                self.triggerRewriteMode()
+                            }
+                        } else if self.isRewriteKeyPressed {
+                            self.isRewriteKeyPressed = false
+                            self.stopRecordingIfNeeded()
+                        }
+                    case .automatic:
+                        if isModifierPressed {
+                            if !self.isRewriteKeyPressed {
+                                self.isRewriteKeyPressed = true
+                                self.rewriteKeyDownTime = Date()
+                                self.wasRecordingBeforeRewriteKeyDown = self.asrService.isRunning
+                                if !self.wasRecordingBeforeRewriteKeyDown {
+                                    self.triggerRewriteMode()
+                                }
+                            }
+                        } else if self.isRewriteKeyPressed {
+                            let pressDuration = Date().timeIntervalSince(self.rewriteKeyDownTime ?? Date())
+                            self.isRewriteKeyPressed = false
+                            self.rewriteKeyDownTime = nil
+
+                            if pressDuration < self.tapThresholdSeconds {
+                                if self.wasRecordingBeforeRewriteKeyDown {
+                                    self.stopRecordingIfNeeded()
+                                }
+                            } else {
+                                self.stopRecordingIfNeeded()
+                            }
+                            self.wasRecordingBeforeRewriteKeyDown = false
+                        }
                     }
                     return nil
                 }
@@ -433,7 +593,12 @@ final class GlobalHotkeyManager: NSObject {
             guard self.shortcut.modifierFlags.isEmpty else { break }
 
             if keyCode == self.shortcut.keyCode {
-                if self.pressAndHoldMode {
+                switch self.hotkeyMode {
+                case .toggle:
+                    if isModifierPressed {
+                        self.toggleRecording()
+                    }
+                case .hold:
                     if isModifierPressed {
                         if !self.isKeyPressed {
                             self.isKeyPressed = true
@@ -443,8 +608,30 @@ final class GlobalHotkeyManager: NSObject {
                         self.isKeyPressed = false
                         self.stopRecordingIfNeeded()
                     }
-                } else if isModifierPressed {
-                    self.toggleRecording()
+                case .automatic:
+                    if isModifierPressed {
+                        if !self.isKeyPressed {
+                            self.isKeyPressed = true
+                            self.keyDownTime = Date()
+                            self.wasRecordingBeforeKeyDown = self.asrService.isRunning
+                            if !self.wasRecordingBeforeKeyDown {
+                                self.startRecordingIfNeeded()
+                            }
+                        }
+                    } else if self.isKeyPressed {
+                        let pressDuration = Date().timeIntervalSince(self.keyDownTime ?? Date())
+                        self.isKeyPressed = false
+                        self.keyDownTime = nil
+
+                        if pressDuration < self.tapThresholdSeconds {
+                            if self.wasRecordingBeforeKeyDown {
+                                self.stopRecordingIfNeeded()
+                            }
+                        } else {
+                            self.stopRecordingIfNeeded()
+                        }
+                        self.wasRecordingBeforeKeyDown = false
+                    }
                 }
                 return nil
             }
@@ -472,14 +659,22 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
+    /// Sets the hotkey activation mode
+    func setHotkeyMode(_ mode: SettingsStore.HotkeyMode) {
+        self.hotkeyMode = mode
+        // Reset key states when mode changes
+        self.isKeyPressed = false
+        self.isCommandModeKeyPressed = false
+        self.isRewriteKeyPressed = false
+        self.keyDownTime = nil
+        self.commandModeKeyDownTime = nil
+        self.rewriteKeyDownTime = nil
+        DebugLogger.shared.info("Hotkey mode set to: \(mode.displayName)", source: "GlobalHotkeyManager")
+    }
+
+    /// Legacy function for API compatibility - use setHotkeyMode instead
     func enablePressAndHoldMode(_ enable: Bool) {
-        self.pressAndHoldMode = enable
-        if !enable, self.isKeyPressed {
-            self.isKeyPressed = false
-            self.stopRecordingIfNeeded()
-        } else if enable {
-            self.isKeyPressed = false
-        }
+        self.setHotkeyMode(enable ? .hold : .toggle)
     }
 
     private func toggleRecording() {

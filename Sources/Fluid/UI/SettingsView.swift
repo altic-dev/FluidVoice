@@ -381,15 +381,33 @@ struct SettingsView: View {
                                 // MARK: - Options Section
 
                                 VStack(spacing: 0) {
-                                    self.optionToggleRow(
-                                        title: "Press and Hold Mode",
-                                        description: "The shortcut only records while you hold it down, giving you quick push-to-talk style control.",
-                                        isOn: self.$pressAndHoldModeEnabled
-                                    )
-                                    .onChange(of: self.pressAndHoldModeEnabled) { _, newValue in
-                                        SettingsStore.shared.pressAndHoldMode = newValue
-                                        self.hotkeyManager?.enablePressAndHoldMode(newValue)
+                                    // Hotkey activation mode picker
+                                    HStack(alignment: .center) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Activation Mode")
+                                                .font(.body)
+                                            Text(SettingsStore.shared.hotkeyMode.description)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        Picker("", selection: Binding(
+                                            get: { SettingsStore.shared.hotkeyMode },
+                                            set: { newMode in
+                                                SettingsStore.shared.hotkeyMode = newMode
+                                                self.hotkeyManager?.setHotkeyMode(newMode)
+                                            }
+                                        )) {
+                                            ForEach(SettingsStore.HotkeyMode.allCases) { mode in
+                                                Text(mode.displayName).tag(mode)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+                                        .frame(width: 160)
                                     }
+                                    .padding(.vertical, 4)
 
                                     Divider().padding(.vertical, 8)
 
