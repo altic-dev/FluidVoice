@@ -34,7 +34,8 @@ final class SettingsStore: ObservableObject {
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
-        static let pressAndHoldMode = "PressAndHoldMode"
+        static let pressAndHoldMode = "PressAndHoldMode" // Legacy, migrated to hotkeyMode
+        static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
@@ -283,9 +284,59 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Hotkey activation mode options
+    enum HotkeyMode: String, CaseIterable, Identifiable {
+        case toggle = "toggle"
+        case hold = "hold"
+        case automatic = "automatic"
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .toggle: return "Toggle"
+            case .hold: return "Hold"
+            case .automatic: return "Automatic (Both)"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .toggle: return "Tap to start, tap again to stop"
+            case .hold: return "Hold to record, release to stop"
+            case .automatic: return "Tap to toggle, hold for push-to-talk"
+            }
+        }
+    }
+
+    /// Legacy property - use hotkeyMode instead
     var pressAndHoldMode: Bool {
         get { self.defaults.bool(forKey: Keys.pressAndHoldMode) }
         set { self.defaults.set(newValue, forKey: Keys.pressAndHoldMode) }
+    }
+
+    /// The selected hotkey activation mode
+    var hotkeyMode: HotkeyMode {
+        get {
+            // Check for new setting first
+            if let rawValue = defaults.string(forKey: Keys.hotkeyMode),
+               let mode = HotkeyMode(rawValue: rawValue)
+            {
+                return mode
+            }
+            // Migrate from legacy pressAndHoldMode
+            if defaults.object(forKey: Keys.pressAndHoldMode) != nil {
+                return defaults.bool(forKey: Keys.pressAndHoldMode) ? .hold : .toggle
+            }
+            // Default to toggle (preserves existing behavior for upgrades)
+            return .toggle
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.hotkeyMode)
+            // Keep legacy in sync for any code that still reads it
+            self.defaults.set(newValue == .hold, forKey: Keys.pressAndHoldMode)
+        }
     }
 
     var enableStreamingPreview: Bool {
