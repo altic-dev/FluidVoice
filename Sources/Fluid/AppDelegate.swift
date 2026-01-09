@@ -15,6 +15,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateCheckTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Track last non-Fluid frontmost app so overlays don't break text insertion targeting.
+        LastActiveNonFluidAppTracker.shared.start()
+
         // Initialize AppUpdater for automatic updates
         // Repository: https://github.com/altic-dev/Fluid-oss
         self.updater = AppUpdater(owner: "altic-dev", repo: "Fluid-oss")

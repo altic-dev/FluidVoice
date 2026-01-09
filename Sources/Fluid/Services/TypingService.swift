@@ -61,47 +61,34 @@ final class TypingService {
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         // Get frontmost app info
-        if let frontApp = NSWorkspace.shared.frontmostApplication {
-            self.log("[TypingService] Target app: \(frontApp.localizedName ?? "Unknown") (\(frontApp.bundleIdentifier ?? "Unknown"))")
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        if let frontApp {
+            self.log("[TypingService] Frontmost app: \(frontApp.localizedName ?? "Unknown") (\(frontApp.bundleIdentifier ?? "Unknown")) PID=\(frontApp.processIdentifier)")
         } else {
             self.log("[TypingService] WARNING: Could not get frontmost application")
-        }
-
-        // Determine the actual focused element + owning PID (more reliable than "frontmost app" for floating launchers)
-        let focusInfo = self.getSystemFocusedElementAndPID()
-        if let focusedPID = focusInfo?.pid {
-            self.log("[TypingService] Focused AX element PID: \(focusedPID)")
-        } else {
-            self.log("[TypingService] WARNING: Could not determine focused AX element PID")
-        }
-
-        if let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            self.log("[TypingService] Frontmost PID: \(frontPID)")
         }
 
         // Check if we have permission to create events
         self.log("[TypingService] Accessibility trusted: \(AXIsProcessTrusted())")
 
-        // Primary: Try Accessibility insertion into the actual focused element (best for floating/launcher UIs)
-        self.log("[TypingService] Trying Accessibility focused-element insertion")
-        if self.insertTextViaAccessibility(text) {
-            self.log("[TypingService] SUCCESS: Accessibility insertion completed")
-            return
+        // Primary (previous behavior): target the frontmost app's PID.
+        // If overlays make FluidVoice frontmost, fall back to the last non-Fluid frontmost app.
+        var targetPID: pid_t? = frontApp?.processIdentifier
+        if let frontApp,
+           frontApp.bundleIdentifier == Bundle.main.bundleIdentifier
+        {
+            targetPID = LastActiveNonFluidAppTracker.shared.lastNonFluidPID
+            self.log("[TypingService] Frontmost is FluidVoice; using last non-Fluid PID \(targetPID.map(String.init) ?? "nil")")
         }
 
-        // Secondary: Try CGEvent unicode insertion, targeting the focused PID when available
-        if let focusedPID = focusInfo?.pid {
-            self.log("[TypingService] Trying CGEvent insertion targeting focused PID \(focusedPID)")
-            if self.insertTextBulkInstant(text, targetPID: focusedPID) {
-                self.log("[TypingService] SUCCESS: CGEvent focused-PID insertion completed")
+        if let targetPID {
+            self.log("[TypingService] Trying CGEvent insertion targeting PID \(targetPID)")
+            if self.insertTextBulkInstant(text, targetPID: targetPID) {
+                self.log("[TypingService] SUCCESS: CGEvent insertion completed")
                 return
             }
         } else {
-            self.log("[TypingService] No focused PID available, trying HID CGEvent insertion")
-            if self.insertTextBulkHIDInstant(text) {
-                self.log("[TypingService] SUCCESS: CGEvent HID insertion completed")
-                return
-            }
+            self.log("[TypingService] WARNING: No target PID available for CGEvent insertion")
         }
 
         // Fallback: Use clipboard-based insertion (more reliable)
@@ -153,28 +140,6 @@ final class TypingService {
         return true
     }
 
-    private func insertTextBulkHIDInstant(_ text: String) -> Bool {
-        self.log("[TypingService] Starting INSTANT bulk CGEvent insertion via HID (NO PID)")
-
-        let utf16Array = Array(text.utf16)
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-        else {
-            self.log("[TypingService] ERROR: Failed to create HID bulk CGEvents")
-            return false
-        }
-
-        keyDown.keyboardSetUnicodeString(stringLength: utf16Array.count, unicodeString: utf16Array)
-        keyUp.keyboardSetUnicodeString(stringLength: utf16Array.count, unicodeString: utf16Array)
-
-        keyDown.post(tap: .cghidEventTap)
-        usleep(2000)
-        keyUp.post(tap: .cghidEventTap)
-
-        self.log("[TypingService] Posted bulk CGEvents via HID tap")
-        return true
-    }
-
     /// Clipboard-based text insertion as fallback
     /// More reliable but slightly slower - copies text to clipboard then pastes
     private func insertTextViaClipboard(_ text: String) -> Bool {
@@ -219,285 +184,6 @@ final class TypingService {
         }
 
         return true
-    }
-
-    private func insertTextViaAccessibility(_ text: String) -> Bool {
-        self.log("[TypingService] Starting Accessibility API insertion")
-
-        // Try multiple strategies to find text input element
-
-        // Strategy 1: Get focused element directly (system-wide)
-        self.log("[TypingService] Strategy 1: Getting focused UI element...")
-        if let textElement = getFocusedTextElement() {
-            self.log("[TypingService] Found focused text element")
-            if self.tryAllTextInsertionMethods(textElement, text) {
-                return true
-            }
-        }
-
-        // Strategy 2: Traverse frontmost app UI hierarchy to find text elements
-        self.log("[TypingService] Strategy 2: Traversing app UI hierarchy...")
-        if let textElement = findTextElementInFrontmostApp() {
-            self.log("[TypingService] Found text element in app hierarchy")
-            if self.tryAllTextInsertionMethods(textElement, text) {
-                return true
-            }
-        }
-
-        // Strategy 3: Find element with keyboard focus
-        self.log("[TypingService] Strategy 3: Looking for keyboard focus...")
-        if let textElement = findKeyboardFocusedElement() {
-            self.log("[TypingService] Found keyboard focused element")
-            if self.tryAllTextInsertionMethods(textElement, text) {
-                return true
-            }
-        }
-
-        self.log("[TypingService] All Accessibility API strategies failed")
-        return false
-    }
-
-    private func getFocusedTextElement() -> AXUIElement? {
-        let systemWideElement = AXUIElementCreateSystemWide()
-        var focusedElement: CFTypeRef?
-
-        let result = AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
-
-        if result == .success, let focusedElement {
-            guard CFGetTypeID(focusedElement) == AXUIElementGetTypeID() else { return nil }
-            let axElement = unsafeBitCast(focusedElement, to: AXUIElement.self)
-            if let role = getElementAttribute(axElement, kAXRoleAttribute as CFString) {
-                self.log("[TypingService] Found focused element with role: \(role)")
-                return axElement
-            }
-        } else {
-            self.log("[TypingService] Could not get focused UI element - result: \(result.rawValue)")
-        }
-
-        return nil
-    }
-
-    private func findTextElementInFrontmostApp() -> AXUIElement? {
-        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
-            self.log("[TypingService] Could not get frontmost app")
-            return nil
-        }
-
-        let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
-        return self.findTextElementRecursively(appElement, depth: 0, maxDepth: 8)
-    }
-
-    private func findTextElementRecursively(_ element: AXUIElement, depth: Int, maxDepth: Int) -> AXUIElement? {
-        if depth > maxDepth { return nil }
-
-        // Check if this element is a text input element
-        if let role = getElementAttribute(element, kAXRoleAttribute as CFString) {
-            let textRoles = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXStaticText"]
-            if textRoles.contains(role) {
-                self.log("[TypingService] Found text element at depth \(depth) with role: \(role)")
-                return element
-            }
-        }
-
-        // Get children and search recursively
-        var children: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
-
-        if result == .success, let childrenArray = children as? [AXUIElement] {
-            for child in childrenArray.prefix(10) { // Limit to first 10 children per level
-                if let found = findTextElementRecursively(child, depth: depth + 1, maxDepth: maxDepth) {
-                    return found
-                }
-            }
-        }
-
-        return nil
-    }
-
-    private func findKeyboardFocusedElement() -> AXUIElement? {
-        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else { return nil }
-
-        let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
-        var focusedElement: CFTypeRef?
-
-        let result = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
-
-        if result == .success, let focusedElement {
-            guard CFGetTypeID(focusedElement) == AXUIElementGetTypeID() else { return nil }
-            let axElement = unsafeBitCast(focusedElement, to: AXUIElement.self)
-            if let role = getElementAttribute(axElement, kAXRoleAttribute as CFString) {
-                self.log("[TypingService] Found app-level focused element with role: \(role)")
-                return axElement
-            }
-        }
-
-        return nil
-    }
-
-    private func tryAllTextInsertionMethods(_ element: AXUIElement, _ text: String) -> Bool {
-        // Get element info for debugging
-        if let role = getElementAttribute(element, kAXRoleAttribute as CFString) {
-            self.log("[TypingService] Trying insertion on element with role: \(role)")
-
-            if let title = getElementAttribute(element, kAXTitleAttribute as CFString) {
-                self.log("[TypingService] Element title: \(title)")
-            }
-        }
-
-        self.log("[TypingService] Trying approach 0: Insert at cursor via kAXSelectedTextRangeAttribute + kAXValueAttribute")
-        if self.insertTextAtCursorUsingSelectedRange(element, text) {
-            return true
-        }
-
-        // Try multiple approaches for text insertion
-        self.log("[TypingService] Trying approach 1: Direct kAXValueAttribute")
-        if self.setTextViaValue(element, text) {
-            return true
-        }
-
-        self.log("[TypingService] Trying approach 2: kAXSelectedTextAttribute (replace selection)")
-        if self.setTextViaSelection(element, text) {
-            return true
-        }
-
-        self.log("[TypingService] Trying approach 3: Insert text at insertion point")
-        if self.insertTextAtInsertionPoint(element, text) {
-            return true
-        }
-
-        return false
-    }
-
-    private func getElementAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        if result == .success, let stringValue = value as? String {
-            return stringValue
-        }
-        return nil
-    }
-
-    private func getSystemFocusedElementAndPID() -> (element: AXUIElement, pid: pid_t)? {
-        let systemWideElement = AXUIElementCreateSystemWide()
-        var focusedElementRef: CFTypeRef?
-
-        let result = AXUIElementCopyAttributeValue(systemWideElement, kAXFocusedUIElementAttribute as CFString, &focusedElementRef)
-        guard result == .success, let focusedElementRef else { return nil }
-        guard CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID() else { return nil }
-
-        let element = unsafeBitCast(focusedElementRef, to: AXUIElement.self)
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        guard pid > 0 else { return nil }
-        return (element: element, pid: pid)
-    }
-
-    private func getElementStringValue(_ element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
-        guard result == .success, let str = value as? String else { return nil }
-        return str
-    }
-
-    private func getSelectedTextRange(_ element: AXUIElement) -> CFRange? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value)
-        guard result == .success, let axValue = value else { return nil }
-        guard CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
-
-        var range = CFRange()
-        let ok = AXValueGetValue(unsafeBitCast(axValue, to: AXValue.self), .cfRange, &range)
-        return ok ? range : nil
-    }
-
-    private func insertTextAtCursorUsingSelectedRange(_ element: AXUIElement, _ text: String) -> Bool {
-        guard let currentValue = self.getElementStringValue(element) else {
-            self.log("[TypingService] Cursor insert failed: could not read kAXValueAttribute")
-            return false
-        }
-        guard var range = self.getSelectedTextRange(element) else {
-            self.log("[TypingService] Cursor insert failed: could not read kAXSelectedTextRangeAttribute")
-            return false
-        }
-
-        // CFRange is in UTF16 units. Use NSString to apply NSRange safely.
-        let currentNSString = currentValue as NSString
-        let maxLen = currentNSString.length
-
-        let safeLoc = max(0, min(range.location, maxLen))
-        let safeLen = max(0, min(range.length, maxLen - safeLoc))
-        range = CFRange(location: safeLoc, length: safeLen)
-
-        let mutable = NSMutableString(string: currentValue)
-        mutable.replaceCharacters(in: NSRange(location: range.location, length: range.length), with: text)
-        let newValue = mutable as String
-
-        let setResult = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFString)
-        guard setResult == .success else {
-            self.log("[TypingService] Cursor insert failed: setting kAXValueAttribute error \(setResult.rawValue)")
-            return false
-        }
-
-        // Move caret to just after inserted text (best-effort)
-        let insertedLen = (text as NSString).length
-        var newRange = CFRange(location: range.location + insertedLen, length: 0)
-        if let axRange = AXValueCreate(.cfRange, &newRange) {
-            _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
-        }
-
-        self.log("[TypingService] SUCCESS: Inserted text using selected range + value")
-        return true
-    }
-
-    // Why is it working now? And why is it not working now?
-    private func setTextViaValue(_ element: AXUIElement, _ text: String) -> Bool {
-        let cfText = text as CFString
-        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, cfText)
-
-        if result == .success {
-            self.log("[TypingService] SUCCESS: Set text via kAXValueAttribute")
-            return true
-        } else {
-            self.log("[TypingService] FAILED: kAXValueAttribute - error: \(result.rawValue)")
-            return false
-        }
-    }
-
-    private func setTextViaSelection(_ element: AXUIElement, _ text: String) -> Bool {
-        // First, select all existing text
-        let selectAllResult = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, "" as CFString)
-        self.log("[TypingService] Select all result: \(selectAllResult.rawValue)")
-
-        // Then replace the selection with our text
-        let cfText = text as CFString
-        let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, cfText)
-
-        if result == .success {
-            self.log("[TypingService] SUCCESS: Set text via kAXSelectedTextAttribute")
-            return true
-        } else {
-            self.log("[TypingService] FAILED: kAXSelectedTextAttribute - error: \(result.rawValue)")
-            return false
-        }
-    }
-
-    private func insertTextAtInsertionPoint(_ element: AXUIElement, _ text: String) -> Bool {
-        // Try to get the insertion point
-        var insertionPoint: CFTypeRef?
-        let getResult = AXUIElementCopyAttributeValue(element, kAXInsertionPointLineNumberAttribute as CFString, &insertionPoint)
-        self.log("[TypingService] Get insertion point result: \(getResult.rawValue)")
-
-        // Try to insert text using parameterized attribute
-        let cfText = text as CFString
-        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, cfText)
-
-        if result == .success {
-            self.log("[TypingService] SUCCESS: Inserted text at insertion point")
-            return true
-        } else {
-            self.log("[TypingService] FAILED: Insertion point method - error: \(result.rawValue)")
-            return false
-        }
     }
 
     private func insertTextBulk(_ text: String) -> Bool {
