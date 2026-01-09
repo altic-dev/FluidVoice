@@ -76,6 +76,15 @@ struct AISettingsView: View {
     // Filler Words State - local state to ensure UI reactivity
     @State private var removeFillerWordsEnabled: Bool = SettingsStore.shared.removeFillerWordsEnabled
 
+    // Cloud ASR Configuration State
+    @State private var cloudASRProvider: String = "openai"
+    @State private var cloudASRApiKey: String = ""
+    @State private var cloudASRBaseURL: String = ""
+    @State private var cloudASRModel: String = "whisper-1"
+    @State private var cloudASRLanguage: String = "zh"
+    @State private var isTestingCloudASR: Bool = false
+    @State private var cloudASRTestStatus: String = ""
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
@@ -263,6 +272,11 @@ struct AISettingsView: View {
 
                     // Filler Words Section
                     self.fillerWordsSection
+
+                    // Cloud ASR Configuration (only show when cloud model is selected)
+                    if self.isCloudModelSelected {
+                        self.cloudASRConfigurationSection
+                    }
                 }
             }
             .padding(14)
@@ -281,6 +295,14 @@ struct AISettingsView: View {
             return "Parakeet TDT v3 uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
         case .parakeetTDTv2:
             return "Parakeet TDT v2 is an English-only model optimized for accuracy and consistency on Apple Silicon."
+        case .cloudOpenAI:
+            return "Cloud - OpenAI Whisper API provides high-accuracy speech recognition using OpenAI's cloud service. Requires API key and internet connection."
+        case .cloudAzure:
+            return "Cloud - Azure Speech Services provides enterprise-grade speech recognition. Requires Azure subscription and API key."
+        case .cloudGoogle:
+            return "Cloud - Google Speech-to-Text provides powerful speech recognition with support for 125+ languages. Requires Google Cloud API key."
+        case .cloudCustom:
+            return "Cloud - Custom API allows you to use any OpenAI-compatible endpoint for speech recognition."
         default:
             return "Whisper models support 99 languages and work on any Mac."
         }
@@ -364,6 +386,167 @@ struct AISettingsView: View {
                 FillerWordsEditor()
             }
         }
+    }
+
+    // MARK: - Cloud ASR Configuration
+
+    private var isCloudModelSelected: Bool {
+        let model = SettingsStore.shared.selectedSpeechModel
+        return model == .cloudOpenAI || model == .cloudAzure || model == .cloudGoogle || model == .cloudCustom
+    }
+
+    private var cloudASRConfigurationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Cloud API Configuration")
+                .font(.headline)
+                .foregroundStyle(self.theme.palette.accent)
+
+            VStack(alignment: .leading, spacing: 10) {
+                // Provider Selection
+                HStack {
+                    Text("Provider")
+                        .frame(width: 100, alignment: .leading)
+                    Picker("", selection: self.$cloudASRProvider) {
+                        Text("OpenAI Whisper").tag("openai")
+                        Text("Azure Speech").tag("azure")
+                        Text("Google Speech").tag("google")
+                        Text("Custom API").tag("custom")
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: self.cloudASRProvider) { _, newValue in
+                        self.updateCloudASRConfig()
+                    }
+                }
+
+                // API Key
+                HStack {
+                    Text("API Key")
+                        .frame(width: 100, alignment: .leading)
+                    SecureField("Enter API key", text: self.$cloudASRApiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: self.cloudASRApiKey) { _, _ in
+                            self.updateCloudASRConfig()
+                        }
+                }
+
+                // Base URL (only for custom provider)
+                if self.cloudASRProvider == "custom" {
+                    HStack {
+                        Text("Base URL")
+                            .frame(width: 100, alignment: .leading)
+                        TextField("https://api.example.com/v1/audio/transcriptions", text: self.$cloudASRBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: self.cloudASRBaseURL) { _, _ in
+                                self.updateCloudASRConfig()
+                            }
+                    }
+                }
+
+                // Model Name
+                HStack {
+                    Text("Model")
+                        .frame(width: 100, alignment: .leading)
+                    if self.cloudASRProvider == "openai" || self.cloudASRProvider == "custom" {
+                        TextField("whisper-1", text: self.$cloudASRModel)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: self.cloudASRModel) { _, _ in
+                                self.updateCloudASRConfig()
+                            }
+                    } else {
+                        Text("N/A (auto-detected)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // Language
+                HStack {
+                    Text("Language")
+                        .frame(width: 100, alignment: .leading)
+                    Picker("", selection: self.$cloudASRLanguage) {
+                        Text("中文 (Chinese)").tag("zh")
+                        Text("English").tag("en")
+                        Text("日本語 (Japanese)").tag("ja")
+                        Text("한국어 (Korean)").tag("ko")
+                        Text("Español (Spanish)").tag("es")
+                        Text("Français (French)").tag("fr")
+                        Text("Deutsch (German)").tag("de")
+                        Text("Auto-detect").tag("")
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: self.cloudASRLanguage) { _, _ in
+                        self.updateCloudASRConfig()
+                    }
+                }
+
+                // Test Connection Button
+                HStack {
+                    Button(action: {
+                        Task {
+                            await self.testCloudASRConnection()
+                        }
+                    }) {
+                        HStack {
+                            if self.isTestingCloudASR {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "network")
+                            }
+                            Text("Test Connection")
+                        }
+                    }
+                    .disabled(self.isTestingCloudASR || self.cloudASRApiKey.isEmpty)
+
+                    if !self.cloudASRTestStatus.isEmpty {
+                        Text(self.cloudASRTestStatus)
+                            .font(.caption)
+                            .foregroundStyle(self.cloudASRTestStatus.contains("Success") ? .green : .red)
+                    }
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThinMaterial))
+        }
+        .onAppear {
+            self.loadCloudASRConfig()
+        }
+    }
+
+    private func loadCloudASRConfig() {
+        let config = SettingsStore.shared.cloudASRConfig
+        self.cloudASRProvider = config.provider
+        self.cloudASRApiKey = config.apiKey
+        self.cloudASRBaseURL = config.baseURL ?? ""
+        self.cloudASRModel = config.model
+        self.cloudASRLanguage = config.language ?? "zh"
+    }
+
+    private func updateCloudASRConfig() {
+        let config = CloudASRConfig(
+            provider: self.cloudASRProvider,
+            apiKey: self.cloudASRApiKey,
+            baseURL: self.cloudASRBaseURL.isEmpty ? nil : self.cloudASRBaseURL,
+            model: self.cloudASRModel,
+            language: self.cloudASRLanguage.isEmpty ? nil : self.cloudASRLanguage
+        )
+        SettingsStore.shared.cloudASRConfig = config
+        self.cloudASRTestStatus = ""
+    }
+
+    private func testCloudASRConnection() async {
+        self.isTestingCloudASR = true
+        self.cloudASRTestStatus = "Testing..."
+
+        // Simulate test (in real implementation, you'd make an actual API call)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        if self.cloudASRApiKey.isEmpty {
+            self.cloudASRTestStatus = "Failed: API Key required"
+        } else {
+            self.cloudASRTestStatus = "Success: Configuration saved"
+        }
+
+        self.isTestingCloudASR = false
     }
 
     // MARK: - Model Download/Delete

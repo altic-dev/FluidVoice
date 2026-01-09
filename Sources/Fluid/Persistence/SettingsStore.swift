@@ -84,6 +84,13 @@ final class SettingsStore: ObservableObject {
         // Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
 
+        // Cloud ASR Configuration
+        static let cloudASRProvider = "CloudASRProvider"
+        static let cloudASRApiKey = "CloudASRApiKey"
+        static let cloudASRBaseURL = "CloudASRBaseURL"
+        static let cloudASRModel = "CloudASRModel"
+        static let cloudASRLanguage = "CloudASRLanguage"
+
         // Overlay Position
         static let overlayPosition = "OverlayPosition"
         static let overlayBottomOffset = "OverlayBottomOffset"
@@ -1117,6 +1124,13 @@ final class SettingsStore: ObservableObject {
         case whisperLargeTurbo = "whisper-large-turbo"
         case whisperLarge = "whisper-large"
 
+        // MARK: - Cloud API Models
+
+        case cloudOpenAI = "cloud-openai"
+        case cloudAzure = "cloud-azure"
+        case cloudGoogle = "cloud-google"
+        case cloudCustom = "cloud-custom"
+
         var id: String { rawValue }
 
         // MARK: - Display Properties
@@ -1133,6 +1147,10 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo"
             case .whisperLarge: return "Whisper Large"
+            case .cloudOpenAI: return "Cloud - OpenAI Whisper"
+            case .cloudAzure: return "Cloud - Azure Speech"
+            case .cloudGoogle: return "Cloud - Google Speech"
+            case .cloudCustom: return "Cloud - Custom API"
             }
         }
 
@@ -1144,6 +1162,8 @@ final class SettingsStore: ObservableObject {
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "99 Languages"
+            case .cloudOpenAI, .cloudAzure, .cloudGoogle, .cloudCustom:
+                return "Multilingual (Cloud)"
             }
         }
 
@@ -1159,6 +1179,8 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "~1.5 GB"
             case .whisperLargeTurbo: return "~1.6 GB"
             case .whisperLarge: return "~2.9 GB"
+            case .cloudOpenAI, .cloudAzure, .cloudGoogle, .cloudCustom:
+                return "Cloud (No Download)"
             }
         }
 
@@ -1171,7 +1193,7 @@ final class SettingsStore: ObservableObject {
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .appleSpeech, .appleSpeechAnalyzer: return false
+            case .parakeetTDT, .parakeetTDTv2, .appleSpeech, .appleSpeechAnalyzer, .cloudOpenAI, .cloudAzure, .cloudGoogle, .cloudCustom: return false
             default: return true
             }
         }
@@ -1382,5 +1404,34 @@ final class SettingsStore: ObservableObject {
         DebugLogger.shared.info("Migrated speech model settings: \(oldProvider)/\(oldWhisperSize) -> \(newModel.rawValue)", source: "SettingsStore")
 
         return newModel
+    }
+
+    // MARK: - Cloud ASR Configuration
+
+    var cloudASRConfig: CloudASRConfig {
+        get {
+            let provider = defaults.string(forKey: Keys.cloudASRProvider) ?? "openai"
+            let apiKey = (try? keychain.fetchKey(for: "cloud-asr-api-key")) ?? ""
+            let baseURL = defaults.string(forKey: Keys.cloudASRBaseURL)
+            let model = defaults.string(forKey: Keys.cloudASRModel) ?? "whisper-1"
+            let language = defaults.string(forKey: Keys.cloudASRLanguage)
+
+            return CloudASRConfig(
+                provider: provider,
+                apiKey: apiKey,
+                baseURL: baseURL,
+                model: model,
+                language: language
+            )
+        }
+        set {
+            defaults.set(newValue.provider, forKey: Keys.cloudASRProvider)
+            if !newValue.apiKey.isEmpty {
+                try? keychain.storeKey(newValue.apiKey, for: "cloud-asr-api-key")
+            }
+            defaults.set(newValue.baseURL, forKey: Keys.cloudASRBaseURL)
+            defaults.set(newValue.model, forKey: Keys.cloudASRModel)
+            defaults.set(newValue.language, forKey: Keys.cloudASRLanguage)
+        }
     }
 }
