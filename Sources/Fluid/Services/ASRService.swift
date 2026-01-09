@@ -110,6 +110,7 @@ final class ASRService: ObservableObject {
     private var fluidAudioProvider: FluidAudioProvider?
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
+    private var cloudASRProvider: CloudASRProvider?
     /// Stored as Any? because @available cannot be applied to stored properties
     private var _appleSpeechAnalyzerProvider: Any?
 
@@ -135,6 +136,8 @@ final class ASRService: ObservableObject {
             return self.getAppleSpeechProvider()
         case .parakeetTDT, .parakeetTDTv2:
             return self.getFluidAudioProvider()
+        case .cloudOpenAI, .cloudAzure, .cloudGoogle, .cloudCustom:
+            return self.getCloudASRProvider()
         default:
             return self.getWhisperProvider()
         }
@@ -178,6 +181,16 @@ final class ASRService: ObservableObject {
         let provider = AppleSpeechAnalyzerProvider()
         self._appleSpeechAnalyzerProvider = provider
         DebugLogger.shared.info("ASRService: Created AppleSpeechAnalyzer provider", source: "ASRService")
+        return provider
+    }
+
+    private func getCloudASRProvider() -> CloudASRProvider {
+        if let existing = cloudASRProvider {
+            return existing
+        }
+        let provider = CloudASRProvider()
+        self.cloudASRProvider = provider
+        DebugLogger.shared.info("ASRService: Created CloudASR provider", source: "ASRService")
         return provider
     }
 
