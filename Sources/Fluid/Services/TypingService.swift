@@ -53,7 +53,7 @@ final class TypingService {
 
             self.log("[TypingService] Starting async text insertion process")
             // Longer delay to ensure target app is ready and focused
-            usleep(200_000)  // 200ms delay - more reliable for app switching
+            usleep(200_000) // 200ms delay - more reliable for app switching
             self.log("[TypingService] Delay completed, calling insertTextInstantly")
             self.insertTextInstantly(text)
         }
@@ -91,7 +91,7 @@ final class TypingService {
         // If overlays make FluidVoice frontmost, fall back to the last non-Fluid frontmost app.
         var targetPID: pid_t? = frontApp?.processIdentifier
         if let frontApp,
-            frontApp.bundleIdentifier == Bundle.main.bundleIdentifier
+           frontApp.bundleIdentifier == Bundle.main.bundleIdentifier
         {
             targetPID = LastActiveNonFluidAppTracker.shared.lastNonFluidPID
             self.log(
@@ -193,7 +193,7 @@ final class TypingService {
         )
 
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-            let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
             self.log("[TypingService] ERROR: Failed to create bulk CGEvents")
             return false
@@ -216,7 +216,7 @@ final class TypingService {
 
         let utf16Array = Array(text.utf16)
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-            let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
             self.log("[TypingService] ERROR: Failed to create HID-tap CGEvents")
             return false
@@ -246,8 +246,8 @@ final class TypingService {
         pasteboard.setString(text, forType: .string)
 
         // Simulate Cmd+V
-        guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: true),  // 9 = 'V'
-            let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: false)
+        guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: true), // 9 = 'V'
+              let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: false)
         else {
             self.log("[TypingService] ERROR: Failed to create Cmd+V events")
             // Restore clipboard
@@ -262,13 +262,13 @@ final class TypingService {
         cmdVUp.flags = .maskCommand
 
         cmdVDown.post(tap: .cghidEventTap)
-        usleep(10_000)  // 10ms delay
+        usleep(10_000) // 10ms delay
         cmdVUp.post(tap: .cghidEventTap)
 
         self.log("[TypingService] Cmd+V sent via clipboard insertion")
 
         // Brief delay then restore clipboard
-        usleep(100_000)  // 100ms delay for paste to complete
+        usleep(100_000) // 100ms delay for paste to complete
         if let prev = previousContent {
             pasteboard.clearContents()
             pasteboard.setString(prev, forType: .string)
@@ -296,7 +296,7 @@ final class TypingService {
         self.log("[TypingService] Splitting text into \(words.count) words for bulk insertion")
 
         for (index, word) in words.enumerated() {
-            let wordToType = word + (index < words.count - 1 ? " " : "")  // Add space except for last word
+            let wordToType = word + (index < words.count - 1 ? " " : "") // Add space except for last word
 
             if !self.insertWordViaCGEvent(wordToType, targetPID: targetPID) {
                 self.log(
@@ -321,7 +321,7 @@ final class TypingService {
 
         // Create keyboard event for this word
         guard let keyDownEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-            let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+              let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
             self.log("[TypingService] ERROR: Failed to create CGEvents for word: '\(word)'")
             return false
@@ -329,13 +329,15 @@ final class TypingService {
 
         // Set the unicode string for both events
         keyDownEvent.keyboardSetUnicodeString(
-            stringLength: utf16Array.count, unicodeString: utf16Array)
+            stringLength: utf16Array.count, unicodeString: utf16Array
+        )
         keyUpEvent.keyboardSetUnicodeString(
-            stringLength: utf16Array.count, unicodeString: utf16Array)
+            stringLength: utf16Array.count, unicodeString: utf16Array
+        )
 
         // Post events to specific PID
         keyDownEvent.postToPid(targetPID)
-        usleep(2000)  // 2ms delay between keyDown and keyUp
+        usleep(2000) // 2ms delay between keyDown and keyUp
         keyUpEvent.postToPid(targetPID)
 
         return true
@@ -347,7 +349,7 @@ final class TypingService {
 
         // Create keyboard events for this character
         guard let keyDownEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-            let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+              let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
         else {
             self.log("[TypingService] ERROR: Failed to create CGEvents for character: \(char)")
             return
@@ -355,13 +357,15 @@ final class TypingService {
 
         // Set the unicode string for both events
         keyDownEvent.keyboardSetUnicodeString(
-            stringLength: utf16Array.count, unicodeString: utf16Array)
+            stringLength: utf16Array.count, unicodeString: utf16Array
+        )
         keyUpEvent.keyboardSetUnicodeString(
-            stringLength: utf16Array.count, unicodeString: utf16Array)
+            stringLength: utf16Array.count, unicodeString: utf16Array
+        )
 
         // Post the events
         keyDownEvent.post(tap: .cghidEventTap)
-        usleep(2000)  // Short delay between key down and up (2ms)
+        usleep(2000) // Short delay between key down and up (2ms)
         keyUpEvent.post(tap: .cghidEventTap)
     }
 }

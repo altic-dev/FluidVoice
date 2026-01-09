@@ -77,7 +77,7 @@ enum AccessibilityTextInsertion {
 
         // Best-effort cursor restore: set selection to end of inserted text.
         let insertionEnd = selectionRange.location + (text as NSString).length
-        _ = setSelectedTextRange(
+        _ = self.setSelectedTextRange(
             NSRange(location: insertionEnd, length: 0),
             on: element
         )
@@ -125,4 +125,3 @@ enum AccessibilityTextInsertion {
         return result == .success
     }
 }
-

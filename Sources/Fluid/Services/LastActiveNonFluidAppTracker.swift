@@ -59,4 +59,3 @@ final class LastActiveNonFluidAppTracker: ObservableObject {
         self.lastNonFluidApp = app
     }
 }
-
