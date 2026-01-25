@@ -657,6 +657,16 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.error("Error domain: \(nsError.domain), code: \(nsError.code)", source: "ASRService")
             DebugLogger.shared.error("Error userInfo: \(nsError.userInfo)", source: "ASRService")
 
+            // Clear loading state if this was the first transcription attempt
+            // This ensures the UI doesn't show a perpetual loading state on error
+            if !self.hasCompletedFirstTranscription {
+                self.hasCompletedFirstTranscription = true
+                DispatchQueue.main.async {
+                    self.isLoadingModel = false
+                    DebugLogger.shared.info("⚠️ First transcription failed - clearing loading state", source: "ASRService")
+                }
+            }
+
             // Note: We intentionally do NOT show an error popup here.
             // Common errors like "audio too short" are expected during normal use
             // (e.g., accidental hotkey press) and would disrupt the user's workflow.
