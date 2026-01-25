@@ -568,7 +568,7 @@ struct CommandModeView: View {
         if self.asr.isRunning {
             Task { await self.asr.stop() }
         } else {
-            self.asr.start()
+            Task { await self.asr.start() }
         }
     }
 

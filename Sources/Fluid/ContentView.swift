@@ -1651,7 +1651,9 @@ struct ContentView: View {
         let info = self.getCurrentAppInfo()
         self.recordingAppInfo = info
         DebugLogger.shared.debug("Captured recording app context: app=\(info.name), bundleId=\(info.bundleId), title=\(info.windowTitle)", source: "ContentView")
-        self.asr.start()
+        Task {
+            await self.asr.start()
+        }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
         Task {
@@ -1886,7 +1888,9 @@ struct ContentView: View {
                     "Starting voice recording for command",
                     source: "ContentView"
                 )
-                self.asr.start()
+                Task {
+                    await self.asr.start()
+                }
             },
             rewriteModeCallback: {
                 // Try to capture text first while still in the other app
@@ -1914,7 +1918,9 @@ struct ContentView: View {
 
                 // Start recording immediately for the rewrite instruction (or text to improve)
                 DebugLogger.shared.info("Starting voice recording for rewrite/write mode", source: "ContentView")
-                self.asr.start()
+                Task {
+                    await self.asr.start()
+                }
             }
         )
 

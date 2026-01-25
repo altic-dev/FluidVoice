@@ -503,7 +503,7 @@ final class GlobalHotkeyManager: NSObject {
                 if let callback = self.startRecordingCallback {
                     await callback()
                 } else {
-                    self.asrService.start()
+                    await self.asrService.start()
                 }
             }
         }
@@ -528,7 +528,7 @@ final class GlobalHotkeyManager: NSObject {
                 if let callback = self.startRecordingCallback {
                     await callback()
                 } else {
-                    self.asrService.start()
+                    await self.asrService.start()
                 }
             }
         }
