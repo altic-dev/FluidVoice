@@ -163,6 +163,9 @@ final class MeetingTranscriptionService: ObservableObject {
             let fileFormat = audioFile.processingFormat
             let totalFrames = AVAudioFrameCount(audioFile.length)
             let fileSampleRate = fileFormat.sampleRate
+            guard fileSampleRate > 0 else {
+                throw TranscriptionError.audioConversionFailed("Invalid audio file: sample rate is 0")
+            }
             let resampleRatio = sampleRate / fileSampleRate
 
             // Calculate chunk size in source file frames
