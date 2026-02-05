@@ -134,6 +134,7 @@ final class ASRService: ObservableObject {
     private var fluidAudioProvider: FluidAudioProvider?
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
+    private var voxtralMLXProvider: VoxtralMLXProvider?
     /// Stored as Any? because @available cannot be applied to stored properties
     private var _appleSpeechAnalyzerProvider: Any?
 
@@ -159,6 +160,8 @@ final class ASRService: ObservableObject {
             return self.getAppleSpeechProvider()
         case .parakeetTDT, .parakeetTDTv2:
             return self.getFluidAudioProvider()
+        case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+            return self.getVoxtralMLXProvider()
         default:
             return self.getWhisperProvider()
         }
@@ -181,6 +184,16 @@ final class ASRService: ObservableObject {
         let provider = WhisperProvider()
         self.whisperProvider = provider
         DebugLogger.shared.info("ASRService: Created Whisper provider", source: "ASRService")
+        return provider
+    }
+
+    private func getVoxtralMLXProvider() -> VoxtralMLXProvider {
+        if let existing = voxtralMLXProvider {
+            return existing
+        }
+        let provider = VoxtralMLXProvider()
+        self.voxtralMLXProvider = provider
+        DebugLogger.shared.info("ASRService: Created VoxtralMLX provider", source: "ASRService")
         return provider
     }
 
@@ -231,6 +244,10 @@ final class ASRService: ObservableObject {
         case .parakeetTDT, .parakeetTDTv2:
             // Create a new provider configured for the specific model
             let provider = FluidAudioProvider(modelOverride: model)
+            return provider
+        case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+            // Voxtral MLX provider for Apple Silicon
+            let provider = VoxtralMLXProvider(modelOverride: model)
             return provider
         default:
             // Whisper models - create provider with specific model override
@@ -304,6 +321,7 @@ final class ASRService: ObservableObject {
         self.fluidAudioProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
+        self.voxtralMLXProvider = nil
         self._appleSpeechAnalyzerProvider = nil
 
         // CRITICAL FIX: Check if the NEW model's files exist on disk

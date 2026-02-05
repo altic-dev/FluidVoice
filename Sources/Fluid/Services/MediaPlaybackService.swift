@@ -1,5 +1,6 @@
 import Foundation
-#if arch(arm64)
+
+#if canImport(MediaRemoteAdapter) && arch(arm64)
 import MediaRemoteAdapter
 #endif
 
@@ -12,7 +13,7 @@ import MediaRemoteAdapter
 final class MediaPlaybackService {
     static let shared = MediaPlaybackService()
 
-    #if arch(arm64)
+    #if canImport(MediaRemoteAdapter) && arch(arm64)
     private let mediaController = MediaController()
     #endif
 
@@ -20,7 +21,7 @@ final class MediaPlaybackService {
 
     // MARK: - Public API
 
-    #if arch(arm64)
+    #if canImport(MediaRemoteAdapter) && arch(arm64)
     /// Pauses system media playback if something is currently playing.
     ///
     /// - Returns: `true` if we successfully paused playback, `false` if nothing was playing

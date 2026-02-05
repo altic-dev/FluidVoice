@@ -1520,6 +1520,11 @@ final class SettingsStore: ObservableObject {
         case whisperLargeTurbo = "whisper-large-turbo" // temporarily disabled in UI
         case whisperLarge = "whisper-large"
 
+        // MARK: - Voxtral MLX Models (Apple Silicon Only)
+        case voxtralMini = "voxtral-mini"
+        case voxtralMini8bit = "voxtral-mini-8bit"
+        case voxtralMini4bit = "voxtral-mini-4bit"
+
         var id: String { rawValue }
 
         // MARK: - Display Properties
@@ -1536,6 +1541,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo (Disabled)"
             case .whisperLarge: return "Whisper Large"
+            case .voxtralMini: return "Voxtral Mini 3B"
+            case .voxtralMini8bit: return "Voxtral Mini 3B (8-bit)"
+            case .voxtralMini4bit: return "Voxtral Mini 3B (4-bit)"
             }
         }
 
@@ -1547,6 +1555,8 @@ final class SettingsStore: ObservableObject {
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "99 Languages"
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+                return "13 Languages (incl. German)"
             }
         }
 
@@ -1562,12 +1572,23 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "~1.5 GB"
             case .whisperLargeTurbo: return "~1.6 GB"
             case .whisperLarge: return "~2.9 GB"
+            case .voxtralMini: return "~6 GB"
+            case .voxtralMini8bit: return "~3.5 GB"
+            case .voxtralMini4bit: return "~2 GB"
             }
         }
 
         var requiresAppleSilicon: Bool {
             switch self {
             case .parakeetTDT, .parakeetTDTv2: return true
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit: return true
+            default: return false
+            }
+        }
+
+        var isVoxtralModel: Bool {
+            switch self {
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit: return true
             default: return false
             }
         }
@@ -1575,6 +1596,7 @@ final class SettingsStore: ObservableObject {
         var isWhisperModel: Bool {
             switch self {
             case .parakeetTDT, .parakeetTDTv2, .appleSpeech, .appleSpeechAnalyzer: return false
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit: return false
             default: return true
             }
         }
@@ -1657,6 +1679,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Medium Quality"
             case .whisperLargeTurbo: return "Higher Quality but Faster"
             case .whisperLarge: return "Maximum Accuracy"
+            case .voxtralMini: return "Voxtral - Full Precision"
+            case .voxtralMini8bit: return "Voxtral - Fast & Accurate"
+            case .voxtralMini4bit: return "Voxtral - Ultra Fast"
             }
         }
 
@@ -1683,6 +1708,12 @@ final class SettingsStore: ObservableObject {
                 return "Near-maximum accuracy with optimized speed."
             case .whisperLarge:
                 return "Best possible accuracy. Large download and memory usage."
+            case .voxtralMini:
+                return "Mistral's Voxtral model. Full precision, 13 languages."
+            case .voxtralMini8bit:
+                return "Voxtral quantized to 8-bit. Best speed/quality balance."
+            case .voxtralMini4bit:
+                return "Voxtral quantized to 4-bit. Fastest, smallest footprint."
             }
         }
 
@@ -1705,6 +1736,12 @@ final class SettingsStore: ObservableObject {
                 return 8.0
             case .whisperLarge:
                 return 10.0 // Large model needs ~6-8GB working memory + model size
+            case .voxtralMini:
+                return 15.0 // Full precision ~6GB model + working memory
+            case .voxtralMini8bit:
+                return 10.0 // 8-bit ~3.5GB model + working memory
+            case .voxtralMini4bit:
+                return 8.0 // 4-bit ~2GB model + working memory
             }
         }
 
@@ -1735,6 +1772,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 2
             case .whisperLargeTurbo: return 3
             case .whisperLarge: return 1
+            case .voxtralMini: return 3
+            case .voxtralMini8bit: return 4
+            case .voxtralMini4bit: return 5
             }
         }
 
@@ -1751,6 +1791,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 4
             case .whisperLargeTurbo: return 5
             case .whisperLarge: return 5
+            case .voxtralMini: return 5
+            case .voxtralMini8bit: return 4
+            case .voxtralMini4bit: return 4
             }
         }
 
@@ -1767,6 +1810,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.40
             case .whisperLargeTurbo: return 0.65
             case .whisperLarge: return 0.20
+            case .voxtralMini: return 0.50
+            case .voxtralMini8bit: return 0.75
+            case .voxtralMini4bit: return 0.90
             }
         }
 
@@ -1783,6 +1829,9 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.80
             case .whisperLargeTurbo: return 0.95
             case .whisperLarge: return 1.00
+            case .voxtralMini: return 0.92
+            case .voxtralMini8bit: return 0.88
+            case .voxtralMini4bit: return 0.85
             }
         }
 
@@ -1822,6 +1871,7 @@ final class SettingsStore: ObservableObject {
             case nvidia = "NVIDIA"
             case apple = "Apple"
             case openai = "OpenAI"
+            case voxtral = "Voxtral"
         }
 
         /// Which provider this model belongs to
@@ -1833,6 +1883,8 @@ final class SettingsStore: ObservableObject {
                 return .apple
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return .openai
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+                return .voxtral
             }
         }
 
@@ -1883,6 +1935,8 @@ final class SettingsStore: ObservableObject {
                 return "Apple"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "OpenAI"
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+                return "Voxtral"
             }
         }
 
@@ -1903,6 +1957,8 @@ final class SettingsStore: ObservableObject {
                 return "#A2AAAD" // Apple Gray
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "#10A37F" // OpenAI Teal
+            case .voxtralMini, .voxtralMini8bit, .voxtralMini4bit:
+                return "#FF4A00" // Voxtral/Mistral-ish orange
             }
         }
     }
