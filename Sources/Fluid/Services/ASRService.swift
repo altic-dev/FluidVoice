@@ -2220,26 +2220,33 @@ final class ASRService: ObservableObject {
         return result
     }
 
-    // MARK: - GAAV Mode Formatting
+    // MARK: - Text Formatting
 
-    /// Applies GAAV mode formatting: removes first letter capitalization and trailing period.
-    /// This is useful for search queries, form fields, or casual text input.
-    ///
-    /// Feature requested by maxgaav – thank you for the suggestion!
-    static func applyGAAVFormatting(_ text: String) -> String {
-        guard SettingsStore.shared.gaavModeEnabled else { return text }
+    /// Applies user-configured text formatting options:
+    /// - Uppercase first letter: capitalizes the first character
+    /// - Keep trailing period: keeps or removes the period at the end
+    /// - Insert trailing space: adds a space after the transcription
+    static func applyTranscriptionFormatting(_ text: String) -> String {
         guard !text.isEmpty else { return text }
 
         var result = text
+        let settings = SettingsStore.shared
 
-        // Remove trailing period (if present)
-        if result.hasSuffix(".") {
+        // Lowercase the first character (if uppercase setting is disabled)
+        if !settings.uppercaseFirstLetter,
+           let first = result.first, first.isUppercase
+        {
+            result = first.lowercased() + result.dropFirst()
+        }
+
+        // Remove trailing period (if keep period setting is disabled and one exists)
+        if !settings.keepTrailingPeriod && result.hasSuffix(".") {
             result.removeLast()
         }
 
-        // Lowercase the first character (if it's uppercase)
-        if let first = result.first, first.isUppercase {
-            result = first.lowercased() + result.dropFirst()
+        // Add trailing space (if setting enabled, result is non-empty, and doesn't already end with space)
+        if settings.insertTrailingSpace && !result.isEmpty && !result.hasSuffix(" ") {
+            result += " "
         }
 
         return result

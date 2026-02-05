@@ -17,6 +17,7 @@ final class SettingsStore: ObservableObject {
         self.migrateProviderAPIKeysIfNeeded()
         self.scrubSavedProviderAPIKeys()
         self.migrateDictationPromptProfilesIfNeeded()
+        self.migrateGAAVModeIfNeeded()
     }
 
     // Keys
@@ -82,7 +83,13 @@ final class SettingsStore: ObservableObject {
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
 
         // GAAV Mode (removes capitalization and trailing punctuation)
+        // Legacy key - kept for migration purposes
         static let gaavModeEnabled = "GAAVModeEnabled"
+
+        // Text Formatting Options (replaces GAAV Mode)
+        static let uppercaseFirstLetter = "UppercaseFirstLetter"
+        static let keepTrailingPeriod = "KeepTrailingPeriod"
+        static let insertTrailingSpace = "InsertTrailingSpace"
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
@@ -1253,6 +1260,26 @@ final class SettingsStore: ObservableObject {
         DebugLogger.shared.info("Migrated legacy custom dictation prompt to a prompt profile", source: "SettingsStore")
     }
 
+    private func migrateGAAVModeIfNeeded() {
+        // Migration path from legacy GAAV mode to separate text formatting settings.
+        // If user had GAAV mode enabled, disable both uppercase and period (inverted logic).
+        guard let legacyValue = defaults.object(forKey: Keys.gaavModeEnabled) as? Bool,
+              legacyValue == true else {
+            // No migration needed - either never set or was false
+            return
+        }
+
+        // Migrate: GAAV enabled → disable uppercase and period (inverted from old behavior)
+        self.uppercaseFirstLetter = false
+        self.keepTrailingPeriod = false
+        // Note: insertTrailingSpace stays false (new feature, not part of original GAAV)
+
+        // Remove legacy key to prevent re-migration
+        defaults.removeObject(forKey: Keys.gaavModeEnabled)
+
+        DebugLogger.shared.info("Migrated GAAV mode to separate text formatting settings", source: "SettingsStore")
+    }
+
     private func scrubSavedProviderAPIKeys() {
         guard let data = defaults.data(forKey: Keys.savedProviders),
               var decoded = try? JSONDecoder().decode([SavedProvider].self, from: data) else { return }
@@ -1429,16 +1456,32 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    // MARK: - GAAV Mode
+    // MARK: - Text Formatting Options
 
-    /// GAAV Mode: Removes first letter capitalization and trailing period from transcriptions.
-    /// Useful for search queries, form fields, or casual text input where sentence formatting is unwanted.
-    /// Feature requested by maxgaav – thank you for the suggestion!
-    var gaavModeEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.gaavModeEnabled) as? Bool ?? false }
+    /// Keep the first letter capitalized in transcriptions.
+    var uppercaseFirstLetter: Bool {
+        get { self.defaults.object(forKey: Keys.uppercaseFirstLetter) as? Bool ?? true }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.gaavModeEnabled)
+            self.defaults.set(newValue, forKey: Keys.uppercaseFirstLetter)
+        }
+    }
+
+    /// Keep the period at the end of transcriptions.
+    var keepTrailingPeriod: Bool {
+        get { self.defaults.object(forKey: Keys.keepTrailingPeriod) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.keepTrailingPeriod)
+        }
+    }
+
+    /// Insert a space after the transcription for easier continuation.
+    var insertTrailingSpace: Bool {
+        get { self.defaults.object(forKey: Keys.insertTrailingSpace) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.insertTrailingSpace)
         }
     }
 

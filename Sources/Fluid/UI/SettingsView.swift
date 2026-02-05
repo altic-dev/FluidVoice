@@ -510,16 +510,6 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
-                                        title: "GAAV Mode",
-                                        description: "Remove first letter capitalization and trailing period. Useful for search queries, form fields, or casual text.\nFeature requested by MaxGaav.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.gaavModeEnabled },
-                                            set: { SettingsStore.shared.gaavModeEnabled = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
                                         title: "Pause Media During Transcription",
                                         description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
                                         isOn: Binding(
@@ -528,6 +518,48 @@ struct SettingsView: View {
                                         )
                                     )
                                     Divider().opacity(0.2)
+
+                                    // MARK: - Text Formatting Section
+
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Text Formatting")
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.bottom, 4)
+
+                                        self.optionToggleRow(
+                                            title: "Uppercase First Letter",
+                                            description: "Keep the first letter capitalized in transcriptions.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.uppercaseFirstLetter },
+                                                set: { SettingsStore.shared.uppercaseFirstLetter = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Keep Trailing Period",
+                                            description: "Keep the period at the end of transcriptions.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.keepTrailingPeriod },
+                                                set: { SettingsStore.shared.keepTrailingPeriod = $0 }
+                                            )
+                                        )
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
+                                            title: "Add Trailing Space",
+                                            description: "Insert a space after the transcription for easier continuation.",
+                                            isOn: Binding(
+                                                get: { SettingsStore.shared.insertTrailingSpace },
+                                                set: { SettingsStore.shared.insertTrailingSpace = $0 }
+                                            )
+                                        )
+                                    }
+                                    .padding(.top, 4)
+
+                                    Divider().opacity(0.2)
+                                        .padding(.vertical, 8)
 
                                     self.optionToggleRow(
                                         title: "Share Anonymous Analytics",

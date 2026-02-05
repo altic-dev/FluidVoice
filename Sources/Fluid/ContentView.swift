@@ -1523,7 +1523,7 @@ struct ContentView: View {
             }
 
             let result = await self.processTextWithAI(transcribedText, overrideSystemPrompt: promptTest.draftPromptText)
-            let finalText = ASRService.applyGAAVFormatting(result)
+            let finalText = ASRService.applyTranscriptionFormatting(result)
             promptTest.lastOutputText = finalText
             return
         }
@@ -1579,9 +1579,9 @@ struct ContentView: View {
             self.menuBarManager.setProcessing(false)
         }
 
-        // Apply GAAV formatting as the FINAL step (after AI post-processing)
-        // This ensures the user's preference for no capitalization/period is respected
-        finalText = ASRService.applyGAAVFormatting(finalText)
+        // Apply text formatting as the FINAL step (after AI post-processing)
+        // This ensures the user's formatting preferences are respected
+        finalText = ASRService.applyTranscriptionFormatting(finalText)
 
         DebugLogger.shared.info("Transcription finalized (chars: \(finalText.count))", source: "ContentView")
 
