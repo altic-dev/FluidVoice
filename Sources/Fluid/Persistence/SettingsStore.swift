@@ -47,6 +47,8 @@ final class SettingsStore: ObservableObject {
         static let accentColorOption = "AccentColorOption"
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"
         static let transcriptionStartSound = "TranscriptionStartSound"
+        static let transcriptionSoundVolume = "TranscriptionSoundVolume"
+        static let transcriptionSoundIndependentVolume = "TranscriptionSoundIndependentVolume"
         static let pressAndHoldMode = "PressAndHoldMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
@@ -791,6 +793,29 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.enableTranscriptionSounds)
+        }
+    }
+
+    var transcriptionSoundVolume: Float {
+        get {
+            let value = self.defaults.object(forKey: Keys.transcriptionSoundVolume)
+            return (value as? Float) ?? 1.0
+        }
+        set {
+            objectWillChange.send()
+            let clamped = max(0.0, min(1.0, newValue))
+            self.defaults.set(clamped, forKey: Keys.transcriptionSoundVolume)
+        }
+    }
+
+    var transcriptionSoundIndependentVolume: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.transcriptionSoundIndependentVolume)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.transcriptionSoundIndependentVolume)
         }
     }
 
