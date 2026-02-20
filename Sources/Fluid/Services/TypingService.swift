@@ -114,8 +114,18 @@ final class TypingService {
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         // Preferred: target a specific PID when provided (e.g., the app that was focused when recording started).
+        // Use clipboard paste (Cmd+V via postToPid) as the primary method — it works universally across
+        // native apps, Electron-based editors (VS Code, Slack), web views, and terminals.
+        // Unicode key-event posting (insertTextBulkInstant) silently fails for many of these because those
+        // apps don't process CGEvent.keyboardSetUnicodeString events through their text input system.
         if let preferredTargetPID, preferredTargetPID > 0 {
-            self.log("[TypingService] Trying CGEvent insertion targeting preferred PID \(preferredTargetPID)")
+            self.log("[TypingService] Trying clipboard-to-PID insertion targeting preferred PID \(preferredTargetPID)")
+            if self.insertTextViaClipboardToPid(text, targetPID: preferredTargetPID) {
+                self.log("[TypingService] SUCCESS: Clipboard-to-PID insertion completed")
+                return
+            }
+            // Fallback: unicode events to preferred PID (for apps where Cmd+V is intercepted or disabled)
+            self.log("[TypingService] Clipboard-to-PID failed, trying CGEvent insertion targeting preferred PID \(preferredTargetPID)")
             if self.insertTextBulkInstant(text, targetPID: preferredTargetPID) {
                 self.log("[TypingService] SUCCESS: CGEvent preferred-PID insertion completed")
                 return
@@ -188,6 +198,55 @@ final class TypingService {
             usleep(1000)
         }
         self.log("[TypingService] Character-by-character typing completed")
+    }
+
+    /// Clipboard-paste insertion targeted at a specific PID.
+    /// Puts text in the clipboard, sends Cmd+V directly to the target process via postToPid,
+    /// then restores the previous clipboard contents. This is the most universal insertion method
+    /// because Cmd+V is handled by virtually all apps (native, Electron, web views, terminals).
+    private func insertTextViaClipboardToPid(_ text: String, targetPID: pid_t) -> Bool {
+        self.log("[TypingService] Starting clipboard-to-PID insertion to PID \(targetPID)")
+
+        guard targetPID > 0 else {
+            self.log("[TypingService] ERROR: Invalid target PID \(targetPID)")
+            return false
+        }
+
+        let pasteboard = NSPasteboard.general
+        let previousContent = pasteboard.string(forType: .string)
+
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+
+        guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: true),
+              let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: 9, keyDown: false)
+        else {
+            self.log("[TypingService] ERROR: Failed to create Cmd+V events for PID insertion")
+            if let prev = previousContent {
+                pasteboard.clearContents()
+                pasteboard.setString(prev, forType: .string)
+            }
+            return false
+        }
+
+        cmdVDown.flags = .maskCommand
+        cmdVUp.flags = .maskCommand
+
+        cmdVDown.postToPid(targetPID)
+        usleep(10_000) // 10ms between key-down and key-up
+        cmdVUp.postToPid(targetPID)
+
+        self.log("[TypingService] Cmd+V posted to PID \(targetPID)")
+
+        // Wait for paste to complete before restoring clipboard
+        usleep(150_000) // 150ms
+        if let prev = previousContent {
+            pasteboard.clearContents()
+            pasteboard.setString(prev, forType: .string)
+            self.log("[TypingService] Restored previous clipboard content")
+        }
+
+        return true
     }
 
     private func insertTextBulkInstant(_ text: String, targetPID: pid_t) -> Bool {
