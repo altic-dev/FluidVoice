@@ -208,6 +208,7 @@ create_dmg_only.sh
 # Scratch directory
 scratch/
 
+install/
 assets/
 .swiftpm/
 scripts/

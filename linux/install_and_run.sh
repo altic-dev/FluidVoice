@@ -1,63 +1,88 @@
 #!/bin/bash
-set -e
 
-# Default storage location
-DEFAULT_STORAGE="$HOME/.local/share/fluidvoice"
+# Ensure we have a target directory
+if [ -z "$1" ]; then
+    echo "Usage: $0 <target_installation_directory>"
+    echo "Example: $0 /media/your_username/external_drive/fluidvoice"
+    exit 1
+fi
 
-echo "============================================"
-echo " FluidVoice Linux - Universal Setup"
-echo "============================================"
+TARGET_DIR=$(readlink -f "$1")
 
-read -p "Choose installation directory [Default: $DEFAULT_STORAGE]: " USER_STORAGE
-STORAGE_ROOT="${USER_STORAGE:-$DEFAULT_STORAGE}"
-VENV_DIR="$STORAGE_ROOT/venv"
-CACHE_DIR="$STORAGE_ROOT/cache"
-TMP_DIR="$STORAGE_ROOT/tmp"
+# --- ROOT DRIVE CHECK ---
+# Check if the target directory is on the root partition (/)
+ROOT_DEV=$(df / | tail -1 | awk '{print $1}')
+TARGET_DEV=$(df "$1" 2>/dev/null | tail -1 | awk '{print $1}' || df $(dirname "$1") | tail -1 | awk '{print $1}')
 
-echo "Installing to: $STORAGE_ROOT"
+if [ "$ROOT_DEV" == "$TARGET_DEV" ]; then
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "WARNING: $TARGET_DIR is on your ROOT partition ($ROOT_DEV)!"
+    echo "Your root drive is nearly full. Please provide a path to"
+    echo "an EXTERNAL drive (usually under /media/your_username/)."
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    read -p "Do you REALLY want to continue? (y/N) " confirm
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
 
-# Ensure directories exist
-mkdir -p "$STORAGE_ROOT" "$TMP_DIR" "$CACHE_DIR"
+mkdir -p "$TARGET_DIR"
 
-# Set environment variables for the current session
-export FLUIDVOICE_DATA_DIR="$STORAGE_ROOT"
+# Define paths within the target directory
+VENV_DIR="$TARGET_DIR/venv"
+CACHE_DIR="$TARGET_DIR/cache"
+TMP_DIR="$TARGET_DIR/tmp"
+
+# Export variables for the script process
+export FLUIDVOICE_DATA_DIR="$TARGET_DIR"
+export HF_HOME="$CACHE_DIR/huggingface"
+export TORCH_HOME="$CACHE_DIR/torch"
+export NEMO_CACHE_DIR="$CACHE_DIR/nemo"
 export PIP_CACHE_DIR="$CACHE_DIR/pip"
 export TMPDIR="$TMP_DIR"
 
-# Install system dependencies
-if command -v apt-get &> /dev/null; then
-    echo "[1/4] Installing system dependencies..."
-    sudo apt-get update
-    sudo apt-get install -y python3-venv python3-pip python3-dev libportaudio2 libportaudiocpp0 portaudio19-dev build-essential ffmpeg libsndfile1 python3-tk > /dev/null
-fi
+mkdir -p "$HF_HOME" "$TORCH_HOME" "$NEMO_CACHE_DIR" "$PIP_CACHE_DIR" "$TMPDIR"
 
-# Setup Venv
-echo "[2/4] Setting up virtual environment..."
+echo "Installing system dependencies..."
+sudo apt-get update && sudo apt-get install -y \
+    python3-venv python3-dev libasound2-dev libportaudio2 python3-tk ffmpeg
+
+# Create virtual environment
 if [ ! -d "$VENV_DIR" ]; then
+    echo "Creating virtual environment..."
     python3 -m venv "$VENV_DIR"
 fi
-source "$VENV_DIR/bin/activate"
 
-# Install dependencies
-echo "[3/4] Installing Python dependencies (this may take a few minutes)..."
-pip install --upgrade pip
+echo "Installing Python dependencies (STRICTLY using $TARGET_DIR for build/cache)..."
+# Force pip to use our TMPDIR and NO global cache
+"$VENV_DIR/bin/pip" install --upgrade pip
 
-# Detect if CUDA is available (basic check)
-if command -v nvidia-smi &> /dev/null; then
-    echo "NVIDIA GPU detected. Installing CUDA-optimized Torch..."
-    pip install --no-input --cache-dir "$CACHE_DIR/pip" "torch==2.5.1+cu121" "torchaudio==2.5.1+cu121" --index-url https://download.pytorch.org/whl/cu121
-else
-    echo "No NVIDIA GPU detected. Installing CPU version of Torch..."
-    pip install --no-input --cache-dir "$CACHE_DIR/pip" torch torchaudio
-fi
+# We use --no-cache-dir and --build to ensure NOTHING touches /root/.cache or /tmp
+# Note: --build is deprecated in newer pip, we use TMPDIR instead which is respected
+"$VENV_DIR/bin/pip" install --no-cache-dir \
+    numpy \
+    sounddevice \
+    soundfile \
+    keyboard \
+    torch \
+    torchvision \
+    torchaudio \
+    Cython \
+    "nemo_toolkit[asr]"
 
-pip install --no-input --cache-dir "$CACHE_DIR/pip" "nemo_toolkit[asr]>=2.0.0" sounddevice soundfile numpy keyboard
+echo "Installation complete!"
+echo "Starting FluidVoice in the background..."
 
-echo "[4/4] Setup complete!"
-echo "Starting FluidVoice..."
+# Use sudo -E to preserve all our redirected paths (TMPDIR, HF_HOME, etc.)
+nohup sudo -E FLUIDVOICE_DATA_DIR="$TARGET_DIR" \
+               HF_HOME="$HF_HOME" \
+               TORCH_HOME="$TORCH_HOME" \
+               NEMO_CACHE_DIR="$NEMO_CACHE_DIR" \
+               TMPDIR="$TMP_DIR" \
+               "$VENV_DIR/bin/python3" app.py > "$TARGET_DIR/fluidvoice.log" 2>&1 &
 
-# Verify binary link
-python -c "import torch; import torchaudio; print('System Status: OK')"
-
-# Run with sudo to capture Alt key globally
-sudo -E FLUIDVOICE_DATA_DIR="$STORAGE_ROOT" "$VENV_DIR/bin/python" app.py
+echo "------------------------------------------------"
+echo " FluidVoice is now RUNNING in the background."
+echo " Logs: tail -f $TARGET_DIR/fluidvoice.log"
+echo " Stop: ./stop.sh"
+echo "------------------------------------------------"
