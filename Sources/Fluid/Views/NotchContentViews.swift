@@ -124,6 +124,7 @@ class NotchContentState: ObservableObject {
     // MARK: - Bottom Overlay Audio Level
 
     @Published var bottomOverlayAudioLevel: CGFloat = 0 // Audio level for bottom overlay waveform
+    @Published var bottomOverlayPresented: Bool = false // Drives SwiftUI appear/disappear animation
 
     /// Called when the user requests a live mode switch from the prompt picker tabs.
     var onPromptModeSwitchRequested: ((SettingsStore.PromptMode) -> Void)?

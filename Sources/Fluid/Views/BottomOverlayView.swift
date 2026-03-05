@@ -78,18 +78,23 @@ final class BottomOverlayWindowController {
             self.createWindow()
         }
 
+        guard let window = self.window, let hostingView = window.contentView as? NSHostingView<BottomOverlayView> else { return }
+
+        // Force a layout pass so fittingSize is accurate before we show
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+        hostingView.frame = NSRect(origin: .zero, size: fittingSize)
+        window.setContentSize(fittingSize)
+
         // Position at bottom center of main screen
         self.positionWindow()
 
-        // Show with animation
-        self.window?.alphaValue = 0
-        self.window?.orderFrontRegardless()
+        // Show window instantly — SwiftUI handles the visual appear animation
+        window.alphaValue = 1
+        window.orderFrontRegardless()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            self.window?.animator().alphaValue = 1
-        }
+        // Signal SwiftUI view to animate in
+        NotchContentState.shared.bottomOverlayPresented = true
     }
 
     func hide() {
@@ -108,14 +113,19 @@ final class BottomOverlayWindowController {
         NotchContentState.shared.bottomOverlayAudioLevel = 0
         NotchContentState.shared.targetAppIcon = nil
 
-        guard let window = window else { return }
+        guard let window = window else {
+            NotchContentState.shared.bottomOverlayPresented = false
+            return
+        }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            window.orderOut(nil)
+        // Signal SwiftUI to animate out, then hide window after animation
+        NotchContentState.shared.bottomOverlayPresented = false
+
+        // Brief delay for SwiftUI exit animation, then hide window
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self else { return }
+            self.window?.alphaValue = 0
+            self.window?.orderOut(nil)
         }
     }
 
@@ -1089,7 +1099,6 @@ private struct BottomOverlayModeMenuView: View {
     let maxWidth: CGFloat
     let onHoverChanged: (Bool) -> Void
     let onDismissRequested: () -> Void
-
     @State private var hoveredRowID: String?
 
     private var normalizedOverlayMode: OverlayMode {
@@ -1500,13 +1509,6 @@ private struct PromptSelectorAnchorReader: NSViewRepresentable {
             self.cleanup()
         }
 
-        func cleanup() {
-            for observer in self.windowObservers {
-                NotificationCenter.default.removeObserver(observer)
-            }
-            self.windowObservers.removeAll()
-        }
-
         private func installWindowObservers() {
             self.cleanup()
             guard let window = self.window else { return }
@@ -1527,6 +1529,13 @@ private struct PromptSelectorAnchorReader: NSViewRepresentable {
                     self?.reportFrame()
                 }
             )
+        }
+
+        private func cleanup() {
+            for observer in self.windowObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            self.windowObservers.removeAll()
         }
 
         func reportFrame(force: Bool = false) {
@@ -1579,6 +1588,7 @@ struct BottomOverlayView: View {
     @State private var promptSelectorWindow: NSWindow?
     @State private var actionsSelectorFrameInScreen: CGRect = .zero
     @State private var actionsSelectorWindow: NSWindow?
+    @State private var isPresented = false
 
     struct LayoutConstants {
         let hPadding: CGFloat
@@ -2065,6 +2075,28 @@ struct BottomOverlayView: View {
                 disabled: actionsDisabled
             )
         )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            self.isHoveringActionsChip = hovering && !actionsDisabled
+            self.handleActionsSelectorHover(hovering)
+        }
+        .onTapGesture {
+            guard self.layout.showsTopControls, !actionsDisabled else { return }
+            self.closePromptMenu()
+            self.closeModeMenu()
+            BottomOverlayActionsMenuController.shared.updateAnchor(
+                selectorFrameInScreen: self.actionsSelectorFrameInScreen,
+                parentWindow: self.actionsSelectorWindow,
+                maxWidth: self.promptSelectorMaxWidth,
+                menuGap: self.promptMenuGap
+            )
+            BottomOverlayActionsMenuController.shared.toggleFromTap()
+        }
+        .help(
+            self.historyStore.entries.isEmpty
+                ? "No saved dictation history available"
+                : "Reprocess the latest dictation using current AI settings"
+        )
     }
 
     private var aiToggleChip: some View {
@@ -2446,6 +2478,25 @@ struct BottomOverlayView: View {
         .animation(.easeInOut(duration: 0.15), value: self.hasTranscription)
         .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
         .animation(.easeInOut(duration: 0.2), value: self.contentState.isProcessing)
+        // -- Appear / disappear animation (GPU-accelerated, no window movement) --
+        .scaleEffect(self.isPresented ? 1 : 0.92)
+        .opacity(self.isPresented ? 1 : 0)
+        .offset(y: self.isPresented ? 0 : 8)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: self.isPresented)
+        // Outer padding so border/rounded corners are not clipped by window edge
+        .padding(4)
+        .onChange(of: self.contentState.bottomOverlayPresented) { _, presented in
+            self.isPresented = presented
+        }
+        .onAppear {
+            // Animate in on first appearance if already signaled
+            if self.contentState.bottomOverlayPresented {
+                // Slight delay so SwiftUI has rendered the initial state (scale 0.92, opacity 0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    self.isPresented = true
+                }
+            }
+        }
     }
 }
 
