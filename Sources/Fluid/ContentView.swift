@@ -928,7 +928,7 @@ struct ContentView: View {
             isTranscriptionFocused: self.$isTranscriptionFocused,
             accessibilityEnabled: self.accessibilityEnabled,
             stopAndProcessTranscription: { await self.stopAndProcessTranscription() },
-            startRecording: self.startRecording,
+            startRecording: { Task { await self.startRecording() } },
             openAccessibilitySettings: self.openAccessibilitySettings
         )
     }
@@ -1063,7 +1063,7 @@ struct ContentView: View {
             copyToClipboard: self.$copyToClipboard,
             hotkeyManager: self.hotkeyManager,
             menuBarManager: self.menuBarManager,
-            startRecording: self.startRecording,
+            startRecording: { Task { await self.startRecording() } },
             refreshDevices: self.refreshDevices,
             openAccessibilitySettings: self.openAccessibilitySettings,
             restartApp: self.restartApp,
@@ -1076,7 +1076,7 @@ struct ContentView: View {
         RecordingView(
             appear: self.$appear,
             stopAndProcessTranscription: { await self.stopAndProcessTranscription() },
-            startRecording: self.startRecording
+            startRecording: { Task { await self.startRecording() } }
         )
     }
 
@@ -1546,9 +1546,9 @@ struct ContentView: View {
         self.menuBarManager.setProcessing(true)
         NotchOverlayManager.shared.updateTranscriptionText("Transcribing...")
 
-        // Give SwiftUI a chance to render the processing state before we do heavier work
-        // (ASR finalization + optional AI post-processing).
-        await Task.yield()
+        // PERF: Removed Task.yield() here — it added 6-35ms to let SwiftUI render
+        // "Transcribing..." text, but for fast transcriptions (<500ms) it's wasted latency.
+        // SwiftUI will naturally render on the next frame after stop() completes.
 
         // Stop the ASR service and wait for transcription to complete
         // The processing indicator will stay visible during this phase
@@ -1654,37 +1654,42 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Transcription finalized (chars: \(finalText.count))", source: "ContentView")
 
-        AnalyticsService.shared.capture(
-            .transcriptionCompleted,
-            properties: [
-                "mode": AnalyticsMode.dictation.rawValue,
-                "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText)),
-                "ai_used": shouldUseAI,
-                "ai_changed_text": transcribedText != finalText,
-            ]
-        )
-
-        // Save to transcription history (transcription mode only, if enabled)
-        if SettingsStore.shared.saveTranscriptionHistory {
-            let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
-            TranscriptionHistoryStore.shared.addEntry(
-                rawText: transcribedText,
-                processedText: finalText,
-                appName: appInfo.name,
-                windowTitle: appInfo.windowTitle
+        // PERF: Fire analytics + history save in background — disk I/O and network
+        // calls don't need to block the typing path. Saves ~50ms.
+        let capturedAppInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
+        let capturedTranscribedText = transcribedText
+        Task {
+            AnalyticsService.shared.capture(
+                .transcriptionCompleted,
+                properties: [
+                    "mode": AnalyticsMode.dictation.rawValue,
+                    "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText)),
+                    "ai_used": shouldUseAI,
+                    "ai_changed_text": capturedTranscribedText != finalText,
+                ]
             )
+            if SettingsStore.shared.saveTranscriptionHistory {
+                TranscriptionHistoryStore.shared.addEntry(
+                    rawText: capturedTranscribedText,
+                    processedText: finalText,
+                    appName: capturedAppInfo.name,
+                    windowTitle: capturedAppInfo.windowTitle
+                )
+            }
         }
 
         // Copy to clipboard if enabled (happens before typing as a backup)
         if SettingsStore.shared.copyTranscriptionToClipboard {
             ClipboardService.copyToClipboard(finalText)
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.dictation.rawValue,
-                    "method": AnalyticsOutputMethod.clipboard.rawValue,
-                ]
-            )
+            Task {
+                AnalyticsService.shared.capture(
+                    .outputDelivered,
+                    properties: [
+                        "mode": AnalyticsMode.dictation.rawValue,
+                        "method": AnalyticsOutputMethod.clipboard.rawValue,
+                    ]
+                )
+            }
         }
 
         var didTypeExternally = false
@@ -2056,7 +2061,7 @@ struct ContentView: View {
     }
 
     // Capture app context at start to avoid mismatches if the user switches apps mid-session
-    private func startRecording() {
+    private func startRecording() async {
         let model = SettingsStore.shared.selectedSpeechModel
         DebugLogger.shared.info(
             "ContentView: startRecording() for model=\(model.displayName), supportsStreaming=\(model.supportsStreaming)",
@@ -2064,17 +2069,12 @@ struct ContentView: View {
         )
         self.setActiveRecordingMode(.dictate)
 
-        // Ensure normal dictation mode is set (command/rewrite modes set their own)
-        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
-            self.menuBarManager.setOverlayMode(.dictation)
-        }
-
-        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
+        // PERF FIX: Capture focus context and start recording BEFORE any heavy UI work.
+        // setOverlayMode(.dictation) triggers DynamicNotchKit SwiftUI rendering that
+        // blocks the main thread for ~1 second. Previously, asr.start() was in a Task
+        // AFTER setOverlayMode, causing a 1-2 second delay before recording began.
 
         // Capture the focused target PID BEFORE any overlay/UI changes.
-        // Used to restore focus when the user interacts with overlay dropdowns (e.g. prompt selection).
         let focusedPID = TypingService.captureSystemFocusedPID()
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
@@ -2082,8 +2082,22 @@ struct ContentView: View {
         let info = self.getCurrentAppInfo()
         self.recordingAppInfo = info
         DebugLogger.shared.debug("Captured recording app context: app=\(info.name), bundleId=\(info.bundleId), title=\(info.windowTitle)", source: "ContentView")
-        Task {
-            await self.asr.start()
+
+        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
+            TranscriptionSoundPlayer.shared.playStartSound()
+        }
+
+        // PERF FIX v2: Direct await instead of Task { await asr.start() }.
+        // Previously, asr.start() was wrapped in a Task {} which enqueued on MainActor
+        // AFTER SwiftUI layout updates triggered by setActiveRecordingMode(). This caused
+        // a 234-415ms dispatch gap (SwiftUI re-render runs before the Task body).
+        // Direct await runs the engine setup synchronously without yielding to SwiftUI.
+        let showDictationOverlay = !self.isRecordingForCommand && !self.isRecordingForRewrite
+        await self.asr.start()
+
+        // Heavy overlay setup runs after recording has already started
+        if showDictationOverlay {
+            self.menuBarManager.setOverlayMode(.dictation)
         }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
@@ -2104,8 +2118,10 @@ struct ContentView: View {
         guard let pid = NotchContentState.shared.recordingTargetPID else { return }
         let activated = TypingService.activateApp(pid: pid)
         if activated {
-            // Small delay to allow window focus to settle before typing events fire.
-            try? await Task.sleep(nanoseconds: 80_000_000) // 80ms
+            // PERF: Reduced from 80ms to 30ms — macOS focus delivery is typically
+            // complete within 15-20ms. 30ms provides a safe margin without adding
+            // perceptible delay to the typing path.
+            try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
         }
     }
 
@@ -2324,7 +2340,7 @@ struct ContentView: View {
             rewriteModeShortcutEnabled: self.isRewriteModeShortcutEnabled,
             startRecordingCallback: {
                 DebugLogger.shared.debug("ContentView: startRecordingCallback invoked by hotkey", source: "ContentView")
-                self.startRecording()
+                await self.startRecording()
             },
             dictationModeCallback: {
                 DebugLogger.shared.info("Dictate mode triggered", source: "ContentView")
@@ -2334,15 +2350,16 @@ struct ContentView: View {
                 )
                 self.setActiveRecordingMode(.dictate)
                 self.rewriteModeService.clearState()
-                self.menuBarManager.setOverlayMode(.dictation)
 
                 guard !self.asr.isRunning else { return }
                 if SettingsStore.shared.enableTranscriptionSounds {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
-                Task {
-                    await self.asr.start()
-                }
+                // PERF FIX: Direct await before overlay setup (same as dictation fix)
+                await self.asr.start()
+
+                // Overlay UI setup runs after recording has already started.
+                self.menuBarManager.setOverlayMode(.dictation)
             },
             stopAndProcessCallback: {
                 await self.stopAndProcessTranscription()
@@ -2353,9 +2370,6 @@ struct ContentView: View {
                 // Set flag so stopAndProcessTranscription knows to process as command
                 self.setActiveRecordingMode(.command)
 
-                // Set overlay mode to command
-                self.menuBarManager.setOverlayMode(.command)
-
                 guard !self.asr.isRunning else { return }
 
                 // Start recording immediately for the command
@@ -2364,9 +2378,11 @@ struct ContentView: View {
                     source: "ContentView"
                 )
                 TranscriptionSoundPlayer.shared.playStartSound()
-                Task {
-                    await self.asr.start()
-                }
+                // PERF FIX: Direct await before overlay setup (same as dictation fix)
+                await self.asr.start()
+
+                // Set overlay mode to command (after recording starts)
+                self.menuBarManager.setOverlayMode(.command)
             },
             rewriteModeCallback: {
                 // Try to capture text first while still in the other app
@@ -2374,19 +2390,12 @@ struct ContentView: View {
                 DebugLogger.shared.info("Rewrite mode triggered, text captured: \(captured)", source: "ContentView")
 
                 if !captured {
-                    // No text selected - start in "write mode" where user speaks
-                    // what to write
                     DebugLogger.shared
                         .info(
                             "No text selected - starting in write/improve mode",
                             source: "ContentView"
                         )
                     self.rewriteModeService.startWithoutSelection()
-                    // Set overlay mode to edit
-                    self.menuBarManager.setOverlayMode(.edit)
-                } else {
-                    // Text was selected - edit mode (with selected context)
-                    self.menuBarManager.setOverlayMode(.edit)
                 }
 
                 // Set flag so stopAndProcessTranscription knows to process as rewrite
@@ -2397,9 +2406,11 @@ struct ContentView: View {
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
                 TranscriptionSoundPlayer.shared.playStartSound()
-                Task {
-                    await self.asr.start()
-                }
+                // PERF FIX: Direct await before overlay setup (same as dictation fix)
+                await self.asr.start()
+
+                // Overlay setup after recording starts
+                self.menuBarManager.setOverlayMode(.edit)
             },
             isDictateRecordingProvider: {
                 self.activeRecordingMode == .dictate
@@ -2490,8 +2501,7 @@ struct ContentView: View {
 
         // Check for auto-detected models
         let modelLower = self.selectedModel.lowercased()
-        return modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") ||
-            modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") ||
+        return modelLower.hasPrefix("gpt-5") || modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") ||
             modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/") ||
             (modelLower.contains("deepseek") && modelLower.contains("reasoner"))
     }

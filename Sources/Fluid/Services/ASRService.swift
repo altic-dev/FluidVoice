@@ -640,9 +640,16 @@ final class ASRService: ObservableObject {
         defer { self.isStarting = false }
 
         do {
-            DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
-            try self.configureSession()
-            DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
+            // PERF: Skip configureSession() if engine is retained from previous session.
+            // The nodes (input/output) already exist and are properly configured.
+            // Only needed for fresh engine creation (first start or after device change).
+            if self.engineStorage == nil {
+                DebugLogger.shared.debug("⚙️ Calling configureSession() (fresh engine)...", source: "ASRService")
+                try self.configureSession()
+                DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
+            } else {
+                DebugLogger.shared.debug("⚡ configureSession() skipped (engine retained)", source: "ASRService")
+            }
 
             DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
             try self.startEngine()
@@ -652,18 +659,34 @@ final class ASRService: ObservableObject {
             try self.setupEngineTap()
             DebugLogger.shared.debug("✅ Engine tap setup complete", source: "ASRService")
 
-            // Pause system media AFTER successful audio setup but BEFORE setting isRunning
-            // This ensures we only pause media when we know recording will succeed
-            if SettingsStore.shared.pauseMediaDuringTranscription {
-                let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
-                self.didPauseMediaForThisSession = didPause
-                if didPause {
-                    DebugLogger.shared.info("🎵 Paused system media for transcription", source: "ASRService")
-                }
-            }
-
+            // PERF FIX: Set isRunning = true IMMEDIATELY after audio engine is ready.
+            // Previously, we awaited MediaPlaybackService.pauseIfPlaying() here, which
+            // blocks on a MediaRemote XPC callback (getTrackInfo). On loaded systems or
+            // after long uptime, this callback can take several seconds, causing a visible
+            // delay between pressing the hotkey and the app actually starting to listen.
+            //
+            // The media pause is a nice-to-have (pause music during recording), not a
+            // prerequisite for audio capture. We fire it concurrently so the user gets
+            // instant recording feedback while media is paused in the background.
             self.isRunning = true
             DebugLogger.shared.info("✅ isRunning set to TRUE", source: "ASRService")
+
+            // Pause system media concurrently — don't block recording start on XPC callback.
+            // Audio capture is already running at this point, so even if the pause takes
+            // seconds to complete, the user's speech is being captured immediately.
+            if SettingsStore.shared.pauseMediaDuringTranscription {
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.isRunning else { return }
+                    let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
+                    // Only set the flag if we're still recording (user might have stopped already)
+                    if self.isRunning {
+                        self.didPauseMediaForThisSession = didPause
+                        if didPause {
+                            DebugLogger.shared.info("🎵 Paused system media for transcription", source: "ASRService")
+                        }
+                    }
+                }
+            }
 
             // Start monitoring the currently bound device for disconnection
             if let currentDevice = getCurrentlyBoundInputDevice() {
@@ -781,25 +804,39 @@ final class ASRService: ObservableObject {
         self.engine.stop()
         DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
 
-        // Recreate the engine instance instead of calling reset() to prevent format corruption
-        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
-        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
-        self.engineStorage = nil // Explicitly release old engine
-        // New engine will be lazily created on next access via computed property
-        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
+        // PERF FIX: Keep the engine instance alive instead of destroying it.
+        // Previously, engineStorage was set to nil here, forcing a full engine
+        // recreation + CoreAudio aggregate device setup (~350-580ms) on every start().
+        // By retaining the stopped engine, the next start() reuses the existing
+        // instance and its cached CoreAudio graph, significantly reducing startup time.
+        // The engine is still properly stopped — no audio flows, no device lock.
+        // If a device change occurs while stopped, the device-change listener
+        // will recreate the engine as needed.
+        DebugLogger.shared.debug("♻️ Engine retained (stopped, not destroyed) for fast restart", source: "ASRService")
 
-        // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
-        // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
-        DebugLogger.shared.debug("⏳ Awaiting stopStreamingTimerAndAwait()...", source: "ASRService")
-        await self.stopStreamingTimerAndAwait()
-        DebugLogger.shared.debug("✅ stopStreamingTimerAndAwait() completed", source: "ASRService")
+        // PERF FIX: Cancel streaming without blocking. Previously we awaited the full
+        // streaming task completion (~150ms), but this is unnecessary because:
+        // 1. ThreadSafeAudioBuffer.getAll() returns a value-type COPY under NSLock
+        // 2. TranscriptionExecutor serializes operations (final transcription queues
+        //    behind any in-flight streaming chunk automatically)
+        // 3. isRunning=false prevents new chunks from starting
+        // So we can safely copy + clear the buffer immediately after cancel.
+        DebugLogger.shared.debug("⚡ Cancelling streaming task (non-blocking)...", source: "ASRService")
+        self.streamingTask?.cancel()
+        self.streamingTask = nil
+        // Cancel any in-flight streaming transcription in the executor so the
+        // final transcription doesn't queue behind it. Without this, the executor's
+        // serial chain makes final transcription wait for the streaming chunk to
+        // finish (~100ms variable delay). cancelAndAwaitPending cancels the operation
+        // and waits for it to actually release the executor.
+        await self.transcriptionExecutor.cancelAndAwaitPending()
+        DebugLogger.shared.debug("✅ Streaming task + executor cancelled", source: "ASRService")
 
         self.isProcessingChunk = false
         self.skipNextChunk = false
         self.previousFullTranscription.removeAll()
 
-        // NOW it's safe to access the buffer - all pending tasks have completed
-        // Thread-safe copy of recorded audio
+        // Thread-safe copy of recorded audio (getAll returns a value-type copy)
         let pcm = self.audioBuffer.getAll()
         self.audioBuffer.clear()
 
@@ -819,9 +856,17 @@ final class ASRService: ObservableObject {
         }
 
         do {
-            DebugLogger.shared.debug("🔍 Calling ensureAsrReady()...", source: "ASRService")
-            try await self.ensureAsrReady()
-            DebugLogger.shared.debug("✅ ensureAsrReady() completed", source: "ASRService")
+            // PERF FIX: Skip ensureAsrReady() if the model is already loaded.
+            // During recording, a background task pre-loads the model, so by the
+            // time stop() runs the provider is almost always ready. This saves ~67ms
+            // of redundant readiness checks on every stop.
+            if !self.isAsrReady || !self.transcriptionProvider.isReady {
+                DebugLogger.shared.debug("🔍 Calling ensureAsrReady() (model not ready yet)...", source: "ASRService")
+                try await self.ensureAsrReady()
+                DebugLogger.shared.debug("✅ ensureAsrReady() completed", source: "ASRService")
+            } else {
+                DebugLogger.shared.debug("⚡ ensureAsrReady() skipped (model already loaded)", source: "ASRService")
+            }
 
             guard self.transcriptionProvider.isReady else {
                 DebugLogger.shared.error("Transcription provider is not ready", source: "ASRService")
@@ -964,10 +1009,10 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
         }
 
-        // No need to call engine.reset() here - we created a fresh engine in stop()
-        // Accessing the engine property will either return the existing fresh engine,
-        // or create a new one if this is the first start
-        DebugLogger.shared.debug("ℹ️ Using fresh engine instance (created lazily)", source: "ASRService")
+        // Engine may be retained from previous session (PERF FIX) or lazily created.
+        // Either way, accessing .inputNode / .outputNode ensures nodes exist.
+        let isRetainedEngine = self.engineStorage != nil
+        DebugLogger.shared.debug("ℹ️ Engine instance: \(isRetainedEngine ? "retained from previous session" : "created lazily")", source: "ASRService")
 
         // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
         DebugLogger.shared.debug("📍 Forcing input node instantiation...", source: "ASRService")

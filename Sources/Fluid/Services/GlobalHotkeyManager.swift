@@ -517,22 +517,14 @@ final class GlobalHotkeyManager: NSObject {
                     self.otherKeyPressedDuringModifier = false
                     self.modifierPressStartTime = Date()
 
-                    if self.pressAndHoldMode {
+                     if self.pressAndHoldMode {
                         if !self.isCommandModeKeyPressed {
                             self.isCommandModeKeyPressed = true
-                            // Delay start by 150ms to detect if this is a key combo
+                            // PERF: Zero-delay start — begin recording immediately on modifier keydown.
                             self.pendingHoldModeStart?.cancel()
                             self.pendingHoldModeType = .commandMode
-                            self.pendingHoldModeStart = Task { @MainActor [weak self] in
-                                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-                                guard let self = self, !Task.isCancelled else { return }
-                                guard self.isCommandModeKeyPressed, !self.otherKeyPressedDuringModifier else {
-                                    DebugLogger.shared.debug("Command mode hold start cancelled - key combo detected", source: "GlobalHotkeyManager")
-                                    return
-                                }
-                                DebugLogger.shared.info("Command mode modifier held (hold mode) - starting after delay", source: "GlobalHotkeyManager")
-                                self.triggerCommandMode()
-                            }
+                            DebugLogger.shared.info("Command mode modifier held (hold mode) - starting immediately", source: "GlobalHotkeyManager")
+                            self.triggerCommandMode()
                         }
                     }
                     // Toggle mode: do NOT trigger yet, wait for release
@@ -599,19 +591,11 @@ final class GlobalHotkeyManager: NSObject {
                         if self.pressAndHoldMode {
                             if !self.isRewriteKeyPressed {
                                 self.isRewriteKeyPressed = true
-                                // Delay start by 150ms to detect if this is a key combo
+                                // PERF: Zero-delay start — begin recording immediately on modifier keydown.
                                 self.pendingHoldModeStart?.cancel()
                                 self.pendingHoldModeType = .rewriteMode
-                                self.pendingHoldModeStart = Task { @MainActor [weak self] in
-                                    try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-                                    guard let self = self, !Task.isCancelled else { return }
-                                    guard self.isRewriteKeyPressed, !self.otherKeyPressedDuringModifier else {
-                                        DebugLogger.shared.debug("Rewrite mode hold start cancelled - key combo detected", source: "GlobalHotkeyManager")
-                                        return
-                                    }
-                                    DebugLogger.shared.info("Rewrite mode modifier held (hold mode) - starting after delay", source: "GlobalHotkeyManager")
-                                    self.triggerRewriteMode()
-                                }
+                                DebugLogger.shared.info("Rewrite mode modifier held (hold mode) - starting immediately", source: "GlobalHotkeyManager")
+                                self.triggerRewriteMode()
                             }
                         }
                         // Toggle mode: do NOT trigger yet, wait for release
@@ -668,22 +652,14 @@ final class GlobalHotkeyManager: NSObject {
                     self.otherKeyPressedDuringModifier = false
                     self.modifierPressStartTime = Date()
 
-                    if self.pressAndHoldMode {
+                     if self.pressAndHoldMode {
                         if !self.isKeyPressed {
                             self.isKeyPressed = true
-                            // Delay start by 150ms to detect if this is a key combo
+                            // PERF: Zero-delay start — begin recording immediately on modifier keydown.
                             self.pendingHoldModeStart?.cancel()
                             self.pendingHoldModeType = .transcription
-                            self.pendingHoldModeStart = Task { @MainActor [weak self] in
-                                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-                                guard let self = self, !Task.isCancelled else { return }
-                                guard self.isKeyPressed, !self.otherKeyPressedDuringModifier else {
-                                    DebugLogger.shared.debug("Transcription hold start cancelled - key combo detected", source: "GlobalHotkeyManager")
-                                    return
-                                }
-                                DebugLogger.shared.info("Transcription modifier held (hold mode) - starting after delay", source: "GlobalHotkeyManager")
-                                self.startRecordingIfNeeded()
-                            }
+                            DebugLogger.shared.info("Transcription modifier held (hold mode) - starting immediately", source: "GlobalHotkeyManager")
+                            self.startRecordingIfNeeded()
                         }
                     }
                     // Toggle mode: do NOT trigger yet, wait for release
