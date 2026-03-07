@@ -568,6 +568,7 @@ struct SettingsView: View {
                                             self.isRecordingShortcut = true
                                         }
                                     )
+                                    self.globeKeyHint(for: self.hotkeyShortcut)
                                     Divider().opacity(0.2).padding(.vertical, 4)
 
                                     self.shortcutRow(
@@ -583,6 +584,7 @@ struct SettingsView: View {
                                             self.isRecordingCommandModeShortcut = true
                                         }
                                     )
+                                    self.globeKeyHint(for: self.commandModeShortcut)
                                     Divider().opacity(0.2).padding(.vertical, 4)
 
                                     self.shortcutRow(
@@ -598,6 +600,7 @@ struct SettingsView: View {
                                             self.isRecordingRewriteShortcut = true
                                         }
                                     )
+                                    self.globeKeyHint(for: self.rewriteShortcut)
                                 }
                                 .padding(12)
                                 .background(
@@ -1439,6 +1442,16 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12))
         )
+    }
+
+    @ViewBuilder
+    private func globeKeyHint(for shortcut: HotkeyShortcut) -> some View {
+        if GlobeKeyManager.isGlobeKey(shortcut) {
+            Text("Globe key system action will be disabled while this shortcut is active.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 28)
+        }
     }
 
     @ViewBuilder

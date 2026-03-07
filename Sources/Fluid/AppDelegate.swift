@@ -55,6 +55,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         DebugLogger.shared.info("Application will terminate", source: "AppDelegate")
+        // Restore Globe key system setting before quitting
+        GlobeKeyManager.shared.restoreSystemGlobeAction()
         // Clean up the update check timer
         self.updateCheckTimer?.invalidate()
         self.updateCheckTimer = nil

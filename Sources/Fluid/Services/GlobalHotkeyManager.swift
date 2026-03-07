@@ -30,6 +30,8 @@ final class GlobalHotkeyManager: NSObject {
     private nonisolated(unsafe) var state = HotkeyState()
     private nonisolated(unsafe) var eventTap: CFMachPort?
     private nonisolated(unsafe) var runLoopSource: CFRunLoopSource?
+    private nonisolated(unsafe) var eventTapThread: Thread?
+    private nonisolated(unsafe) var eventTapRunLoop: CFRunLoop?
     private let asrService: ASRService
     private var shortcut: HotkeyShortcut
     private var commandModeShortcut: HotkeyShortcut
@@ -132,6 +134,14 @@ final class GlobalHotkeyManager: NSObject {
         self.isRewriteRecordingProvider = isRewriteRecordingProvider
         super.init()
 
+        // If any shortcut uses the Globe key, suppress the system action (Emoji Picker)
+        if GlobeKeyManager.isGlobeKey(shortcut)
+            || (commandModeShortcutEnabled && GlobeKeyManager.isGlobeKey(commandModeShortcut))
+            || (rewriteModeShortcutEnabled && GlobeKeyManager.isGlobeKey(rewriteModeShortcut))
+        {
+            GlobeKeyManager.shared.suppressSystemGlobeAction()
+        }
+
         self.initializeWithDelay()
     }
 
@@ -156,12 +166,16 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updateShortcut(_ newShortcut: HotkeyShortcut) {
+        let oldShortcut = self.shortcut
         self.shortcut = newShortcut
+        self.updateGlobeKeyOverride(oldShortcut: oldShortcut, newShortcut: newShortcut)
         DebugLogger.shared.info("Updated transcription hotkey", source: "GlobalHotkeyManager")
     }
 
     func updateCommandModeShortcut(_ newShortcut: HotkeyShortcut) {
+        let oldShortcut = self.commandModeShortcut
         self.commandModeShortcut = newShortcut
+        self.updateGlobeKeyOverride(oldShortcut: oldShortcut, newShortcut: newShortcut)
         DebugLogger.shared.info("Updated command mode hotkey", source: "GlobalHotkeyManager")
     }
 
@@ -170,7 +184,9 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updateRewriteModeShortcut(_ newShortcut: HotkeyShortcut) {
+        let oldShortcut = self.rewriteModeShortcut
         self.rewriteModeShortcut = newShortcut
+        self.updateGlobeKeyOverride(oldShortcut: oldShortcut, newShortcut: newShortcut)
         DebugLogger.shared.info("Updated rewrite mode hotkey", source: "GlobalHotkeyManager")
     }
 
@@ -264,8 +280,24 @@ final class GlobalHotkeyManager: NSObject {
             return false
         }
 
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        // Run the event tap on a dedicated high-priority thread so events are
+        // processed immediately, before macOS can trigger system actions (e.g.
+        // the Emoji Picker for the Globe key).
+        let tapReady = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            guard let self else { tapReady.signal(); return }
+            let runLoop = CFRunLoopGetCurrent()
+            self.eventTapRunLoop = runLoop
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            tapReady.signal()
+            CFRunLoopRun()
+        }
+        thread.name = "com.fluidvoice.eventTap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        self.eventTapThread = thread
+        tapReady.wait()
 
         if !self.isEventTapEnabled() {
             DebugLogger.shared.error("Event tap could not be enabled", source: "GlobalHotkeyManager")
@@ -273,7 +305,7 @@ final class GlobalHotkeyManager: NSObject {
             return false
         }
 
-        DebugLogger.shared.info("Event tap successfully created and enabled", source: "GlobalHotkeyManager")
+        DebugLogger.shared.info("Event tap successfully created and enabled on dedicated thread", source: "GlobalHotkeyManager")
         return true
     }
 
@@ -282,12 +314,15 @@ final class GlobalHotkeyManager: NSObject {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
 
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        if let runLoop = eventTapRunLoop, let source = runLoopSource {
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            CFRunLoopStop(runLoop)
         }
 
         self.eventTap = nil
         self.runLoopSource = nil
+        self.eventTapRunLoop = nil
+        self.eventTapThread = nil
     }
 
     private func handleKeyEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -323,6 +358,13 @@ final class GlobalHotkeyManager: NSObject {
         if flags.contains(.maskAlternate) { eventModifiers.insert(.option) }
         if flags.contains(.maskControl) { eventModifiers.insert(.control) }
         if flags.contains(.maskShift) { eventModifiers.insert(.shift) }
+
+        // macOS generates a synthetic keyDown/keyUp for the "Globe function key" after
+        // the Globe key's flagsChanged event. This is what triggers the Emoji Picker.
+        // Consume it when any shortcut uses the Globe key.
+        if keyCode == GlobeKeyManager.globeSyntheticKeyCode, self.anyShortcutUsesGlobeKey() {
+            return nil
+        }
 
         switch type {
         case .keyDown:
@@ -890,6 +932,27 @@ final class GlobalHotkeyManager: NSObject {
             await callback()
         } else {
             await self.asrService.stopWithoutTranscription()
+        }
+    }
+
+    // MARK: - Globe Key Override
+
+    /// Returns true if any active shortcut uses the Globe key.
+    private func anyShortcutUsesGlobeKey() -> Bool {
+        if GlobeKeyManager.isGlobeKey(self.shortcut) { return true }
+        if self.commandModeShortcutEnabled, GlobeKeyManager.isGlobeKey(self.commandModeShortcut) { return true }
+        if self.rewriteModeShortcutEnabled, GlobeKeyManager.isGlobeKey(self.rewriteModeShortcut) { return true }
+        return false
+    }
+
+    /// Called when a shortcut changes. Enables or disables the Globe key system override as needed.
+    private func updateGlobeKeyOverride(oldShortcut: HotkeyShortcut, newShortcut: HotkeyShortcut) {
+        let wasGlobe = GlobeKeyManager.isGlobeKey(oldShortcut)
+        let isGlobe = GlobeKeyManager.isGlobeKey(newShortcut)
+        if isGlobe, !wasGlobe {
+            GlobeKeyManager.shared.suppressSystemGlobeAction()
+        } else if wasGlobe, !isGlobe, !self.anyShortcutUsesGlobeKey() {
+            GlobeKeyManager.shared.restoreSystemGlobeAction()
         }
     }
 
