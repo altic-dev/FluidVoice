@@ -195,6 +195,7 @@ final class GlobalHotkeyManager: NSObject {
         if !enabled {
             self.isCommandModeKeyPressed = false
         }
+        self.recomputeGlobeKeyOverride()
         DebugLogger.shared.info(
             "Command mode shortcut \(enabled ? "enabled" : "disabled")",
             source: "GlobalHotkeyManager"
@@ -206,6 +207,7 @@ final class GlobalHotkeyManager: NSObject {
         if !enabled {
             self.isRewriteKeyPressed = false
         }
+        self.recomputeGlobeKeyOverride()
         DebugLogger.shared.info(
             "Rewrite mode shortcut \(enabled ? "enabled" : "disabled")",
             source: "GlobalHotkeyManager"
@@ -952,6 +954,15 @@ final class GlobalHotkeyManager: NSObject {
         if isGlobe, !wasGlobe {
             GlobeKeyManager.shared.suppressSystemGlobeAction()
         } else if wasGlobe, !isGlobe, !self.anyShortcutUsesGlobeKey() {
+            GlobeKeyManager.shared.restoreSystemGlobeAction()
+        }
+    }
+
+    /// Re-evaluate whether the Globe key override should be active (e.g. after enabling/disabling a mode).
+    private func recomputeGlobeKeyOverride() {
+        if self.anyShortcutUsesGlobeKey() {
+            GlobeKeyManager.shared.suppressSystemGlobeAction()
+        } else {
             GlobeKeyManager.shared.restoreSystemGlobeAction()
         }
     }
