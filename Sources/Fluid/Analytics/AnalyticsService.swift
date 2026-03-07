@@ -232,7 +232,7 @@ private actor AnalyticsCore {
         // Detached task ensures we never block the actor while URLSession does its work.
         Task.detached(priority: .background) {
             let session = URLSession.shared
-            _ = try? await session.data(for: request)
+            _ = try? await session.compatData(for: request)
         }
     }
 }

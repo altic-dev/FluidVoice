@@ -8,7 +8,7 @@ struct VoiceEngineSettingsView: View {
     var body: some View {
         self.speechRecognitionCard
             .onAppear { self.viewModel.onAppear() }
-            .onChange(of: self.settings.selectedSpeechModel) { _, newValue in
+            .onChange(of: self.settings.selectedSpeechModel) { newValue in
                 self.viewModel.handleSelectedSpeechModelChange(newValue)
             }
     }

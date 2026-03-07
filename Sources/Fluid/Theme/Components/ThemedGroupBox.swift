@@ -25,7 +25,7 @@ struct ThemedGroupBox<Label: View, Content: View>: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 self.label
                     .font(.headline)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundColor(self.theme.palette.secondaryText)
                     .padding(.top, self.theme.metrics.spacing.md)
                     .padding(.horizontal, self.theme.metrics.spacing.md)
 

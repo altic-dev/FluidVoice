@@ -657,7 +657,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         // Make the request
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.compatData(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 let statusCode = httpResponse.statusCode

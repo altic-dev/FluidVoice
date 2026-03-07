@@ -82,11 +82,15 @@ Universal support (runs on Intel & Apple Silicon). Supports 99 languages.
 
 ## Requirements
 
-- macOS 14.0 (Sonoma) or later
+- macOS 11.0 (Big Sur) or later
 - Apple Silicon Mac (M1, M2, M3, M4)
-- Intel Macs are supported from 1.5.1 builds using Whisper models!
+- Intel Macs are supported using Whisper models!
 - Microphone access
 - Accessibility permissions for typing
+
+> **Note**: This is a community fork targeting macOS Big Sur (11.7.x) compatibility.
+> Some features may have reduced visual fidelity on older macOS versions (e.g., no Material blur effects, no notch overlay on pre-notch Macs).
+> Streaming SSE responses are buffered on macOS 11 (true streaming requires macOS 12+).
 
 
 ## Join our small community to help us grow and give feedback :) ( Or just hang?!)   

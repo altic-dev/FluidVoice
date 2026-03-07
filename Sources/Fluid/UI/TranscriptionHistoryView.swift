@@ -57,16 +57,18 @@ struct TranscriptionHistoryView: View {
                 self.selectedEntryID = self.filteredEntries.first?.id
             }
         }
-        .alert("Clear All History", isPresented: self.$showClearConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear All", role: .destructive) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    self.historyStore.clearAllHistory()
-                    self.selectedEntryID = nil
-                }
-            }
-        } message: {
-            Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries. This action cannot be undone.")
+        .alert(isPresented: self.$showClearConfirmation) {
+            Alert(
+                title: Text("Clear All History"),
+                message: Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries. This action cannot be undone."),
+                primaryButton: .destructive(Text("Clear All")) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        self.historyStore.clearAllHistory()
+                        self.selectedEntryID = nil
+                    }
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 
@@ -76,7 +78,7 @@ struct TranscriptionHistoryView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             TextField("Search transcriptions...", text: self.$searchQuery)
                 .textFieldStyle(.plain)
@@ -88,7 +90,7 @@ struct TranscriptionHistoryView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -128,13 +130,13 @@ struct TranscriptionHistoryView: View {
                 HStack(spacing: 6) {
                     Text(entry.appName.isEmpty ? "Unknown App" : entry.appName)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isSelected ? .white : .secondary)
+                        .foregroundColor(isSelected ? .white : .secondary)
                         .lineLimit(1)
 
                     if entry.wasAIProcessed {
                         Text("AI")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(isSelected ? .white.opacity(0.8) : self.theme.palette.accent)
+                            .foregroundColor(isSelected ? .white.opacity(0.8) : self.theme.palette.accent)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(
@@ -147,13 +149,13 @@ struct TranscriptionHistoryView: View {
 
                     Text(entry.relativeTimeString)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(isSelected ? .white.opacity(0.7) : Color.secondary.opacity(0.6))
+                        .foregroundColor(isSelected ? .white.opacity(0.7) : Color.secondary.opacity(0.6))
                 }
 
                 // Preview text
                 Text(entry.previewText)
                     .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? .white.opacity(0.9) : .primary)
+                    .foregroundColor(isSelected ? .white.opacity(0.9) : .primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
             }
@@ -186,7 +188,7 @@ struct TranscriptionHistoryView: View {
 
             Divider()
 
-            Button(role: .destructive) {
+            Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     self.historyStore.deleteEntry(id: entry.id)
                     if self.selectedEntryID == entry.id {
@@ -207,18 +209,18 @@ struct TranscriptionHistoryView: View {
 
             Image(systemName: self.searchQuery.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass")
                 .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
 
             VStack(spacing: 4) {
                 Text(self.searchQuery.isEmpty ? "No History Yet" : "No Results")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
 
                 Text(self.searchQuery.isEmpty
                     ? "Your transcriptions will appear here"
                     : "Try a different search term")
                     .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
 
@@ -239,7 +241,7 @@ struct TranscriptionHistoryView: View {
                 // Stats
                 Text("\(self.historyStore.entries.count) entries")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
 
                 Spacer()
 
@@ -250,7 +252,7 @@ struct TranscriptionHistoryView: View {
                     } label: {
                         Text("Clear All")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
                     .opacity(0.8)
@@ -282,13 +284,13 @@ struct TranscriptionHistoryView: View {
                             Label("Copy", systemImage: "doc.on.doc")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        
+                        
                     }
 
                     Text(entry.fullDateString)
                         .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 Divider()
@@ -322,7 +324,7 @@ struct TranscriptionHistoryView: View {
                 // Delete Button
                 HStack {
                     Spacer()
-                    Button(role: .destructive) {
+                    Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             let nextEntry = self.filteredEntries.first(where: { $0.id != entry.id })
                             self.historyStore.deleteEntry(id: entry.id)
@@ -332,9 +334,9 @@ struct TranscriptionHistoryView: View {
                         Label("Delete Entry", systemImage: "trash")
                             .font(.system(size: 12, weight: .medium))
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .controlSize(.small)
+                    
+                    .accentColor(.red)
+                    
                 }
             }
             .padding(24)
@@ -352,14 +354,14 @@ struct TranscriptionHistoryView: View {
             HStack(spacing: 8) {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
                     .tracking(0.5)
 
                 if let badge = badge {
                     Text(badge)
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
@@ -371,8 +373,8 @@ struct TranscriptionHistoryView: View {
 
             Text(content)
                 .font(.system(size: 14, design: .default))
-                .foregroundStyle(isSecondary ? .secondary : .primary)
-                .textSelection(.enabled)
+                .foregroundColor(isSecondary ? .secondary : .primary)
+                
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 10)
@@ -386,7 +388,7 @@ struct TranscriptionHistoryView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Details")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
                 .textCase(.uppercase)
                 .tracking(0.5)
 
@@ -406,17 +408,17 @@ struct TranscriptionHistoryView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
 
                 Text(value)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                     .lineLimit(1)
             }
 
@@ -433,19 +435,21 @@ struct TranscriptionHistoryView: View {
         VStack(spacing: 16) {
             Image(systemName: "text.quote")
                 .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
 
             Text("Select a transcription")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
     }
 }
 
-#Preview {
-    TranscriptionHistoryView()
-        .frame(width: 800, height: 600)
-        .environment(\.theme, AppTheme.dark)
+struct TranscriptionHistoryView_Previews: PreviewProvider {
+    static var previews: some View {
+        TranscriptionHistoryView()
+            .frame(width: 800, height: 600)
+            .environment(\.theme, AppTheme.dark)
+    }
 }

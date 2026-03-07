@@ -12,13 +12,13 @@ struct AnalyticsPrivacyView: View {
                         .font(.system(size: 18, weight: .semibold))
                     Text("What FluidVoice collects when analytics is enabled")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 Spacer()
 
                 Button("Done") { self.dismiss() }
-                    .buttonStyle(.bordered)
+                    
             }
 
             Divider().opacity(0.4)
@@ -59,7 +59,7 @@ struct AnalyticsPrivacyView: View {
     private var contactInfoView: some View {
         Text(self.contactInfoText)
             .font(.system(size: 13))
-            .foregroundStyle(.primary)
+            .foregroundColor(.primary)
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 8)
@@ -92,17 +92,17 @@ struct AnalyticsPrivacyView: View {
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(self.theme.palette.accent)
+            .foregroundColor(self.theme.palette.accent)
             .padding(.top, 4)
     }
 
     private func bullet(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text("•")
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             Text(text)
                 .font(.system(size: 13))
-                .foregroundStyle(.primary)
+                .foregroundColor(.primary)
             Spacer(minLength: 0)
         }
     }

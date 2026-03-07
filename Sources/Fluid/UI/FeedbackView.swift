@@ -31,13 +31,13 @@ struct FeedbackView: View {
                     HStack {
                         Image(systemName: "envelope.fill")
                             .font(.system(size: 32))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
                         VStack(alignment: .leading) {
                             Text("Send Feedback")
                                 .font(.system(size: 28, weight: .bold))
                             Text("Help us improve FluidVoice")
                                 .font(.system(size: 16))
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -49,16 +49,16 @@ struct FeedbackView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "heart.fill")
                                 .font(.system(size: 28))
-                                .foregroundStyle(.pink)
+                                .foregroundColor(.pink)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("We'd love to hear from you!")
                                     .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(self.theme.palette.primaryText)
+                                    .foregroundColor(self.theme.palette.primaryText)
 
                                 Text("Your feedback helps us make FluidVoice even better")
                                     .font(.system(size: 14))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .foregroundColor(self.theme.palette.secondaryText)
                             }
                         }
 
@@ -68,16 +68,16 @@ struct FeedbackView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "star.fill")
                                 .font(.system(size: 24))
-                                .foregroundStyle(.yellow)
+                                .foregroundColor(.yellow)
 
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Loving FluidVoice?")
                                     .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(self.theme.palette.primaryText)
+                                    .foregroundColor(self.theme.palette.primaryText)
 
                                 Text("Give us a star on GitHub! It helps others discover the project and motivates us to keep improving.")
                                     .font(.system(size: 13))
-                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .foregroundColor(self.theme.palette.secondaryText)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
 
@@ -91,7 +91,7 @@ struct FeedbackView: View {
                                             .fontWeight(.semibold)
                                     }
                                     .font(.system(size: 14))
-                                    .foregroundStyle(.white)
+                                    .foregroundColor(.white)
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 10)
                                     .background(
@@ -136,13 +136,13 @@ struct FeedbackView: View {
                                     .fill(self.theme.palette.contentBackground)
                                     .overlay(RoundedRectangle(cornerRadius: 8)
                                         .strokeBorder(self.theme.palette.cardBorder.opacity(0.45), lineWidth: 1.2)))
-                                .scrollContentBackground(.hidden)
+                                
                                 .overlay(
                                     Group {
                                         if self.feedbackText.isEmpty {
                                             Text("Share your thoughts, report bugs, or suggest features...")
                                                 .font(.subheadline)
-                                                .foregroundStyle(.secondary)
+                                                .foregroundColor(.secondary)
                                                 .padding(.leading, 4)
                                         }
                                     }
@@ -192,20 +192,24 @@ struct FeedbackView: View {
         .onAppear {
             self.appear = true
         }
-        .alert("Feedback Sent", isPresented: self.$showFeedbackConfirmation) {
-            Button("OK") {}
-        } message: {
-            Text("Thank you for helping us improve FluidVoice.")
+        .alert(isPresented: self.$showFeedbackConfirmation) {
+            Alert(
+                title: Text("Feedback Sent"),
+                message: Text("Thank you for helping us improve FluidVoice."),
+                dismissButton: .default(Text("OK"))
+            )
         }
-        .alert("Feedback Failed", isPresented: self.$showFeedbackError) {
-            Button("Try Again") {
-                Task {
-                    await self.sendFeedback()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(self.feedbackErrorMessage)
+        .alert(isPresented: self.$showFeedbackError) {
+            Alert(
+                title: Text("Feedback Failed"),
+                message: Text(self.feedbackErrorMessage),
+                primaryButton: .default(Text("Try Again")) {
+                    Task {
+                        await self.sendFeedback()
+                    }
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 
@@ -249,7 +253,7 @@ struct FeedbackView: View {
             feedbackContent += "App Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")\n"
             feedbackContent += "Build: \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")\n"
             feedbackContent += "macOS Version: \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
-            feedbackContent += "Date: \(Date().formatted())\n\n"
+            feedbackContent += "Date: \(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short))\n\n"
 
             // Add recent log entries
             let logFileURL = FileLogger.shared.currentLogFileURL()
@@ -284,7 +288,7 @@ struct FeedbackView: View {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: data)
 
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await URLSession.shared.compatData(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
                 let success = (200...299).contains(httpResponse.statusCode)
@@ -309,6 +313,8 @@ struct FeedbackView: View {
     }
 }
 
-#Preview {
-    FeedbackView()
+struct FeedbackView_Previews: PreviewProvider {
+    static var previews: some View {
+        FeedbackView()
+    }
 }

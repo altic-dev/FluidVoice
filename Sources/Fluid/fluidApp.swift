@@ -22,14 +22,13 @@ struct FluidApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        WindowGroup {
             ContentView()
                 .environmentObject(self.menuBarManager)
                 .environmentObject(self.appServices)
                 .appTheme(AppTheme.dark(accent: self.settings.accentColor))
                 .preferredColorScheme(.dark)
+                .frame(minWidth: 800, idealWidth: 1000, minHeight: 500, idealHeight: 700)
         }
-        .defaultSize(width: 1000, height: 700)
-        .windowResizability(.contentSize)
     }
 }

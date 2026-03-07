@@ -247,7 +247,7 @@ struct ShimmerText: View {
 
             Text(self.text)
                 .font(self.font)
-                .foregroundStyle(
+                .foregroundColor(
                     LinearGradient(
                         colors: [
                             self.color.opacity(0.35),
@@ -455,7 +455,7 @@ struct NotchExpandedView: View {
                 } else {
                     Text(self.modeLabel)
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(self.modeColor)
+                        .foregroundColor(self.modeColor)
                         .opacity(0.9)
                         .onHover { hovering in
                             self.handlePromptHover(hovering)
@@ -469,14 +469,14 @@ struct NotchExpandedView: View {
                     HStack(spacing: 6) {
                         Text("Prompt:")
                             .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundColor(.white.opacity(0.5))
                         Text(self.selectedPromptLabel)
                             .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .foregroundColor(.white.opacity(0.75))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.45))
+                            .foregroundColor(.white.opacity(0.45))
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
@@ -506,7 +506,7 @@ struct NotchExpandedView: View {
                         ScrollView(.vertical, showsIndicators: false) {
                             Text(previewText)
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
+                                .foregroundColor(.white.opacity(0.75))
                                 .multilineTextAlignment(.leading)
                                 .lineLimit(nil)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -521,7 +521,7 @@ struct NotchExpandedView: View {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
                         }
-                        .onChange(of: previewText) { _, _ in
+                        .onChange(of: previewText) { _ in
                             DispatchQueue.main.async {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
@@ -541,7 +541,7 @@ struct NotchExpandedView: View {
                 NotchOverlayManager.shared.onNotchClicked?()
             }
         }
-        .onChange(of: self.contentState.mode) { _, _ in
+        .onChange(of: self.contentState.mode) { _ in
             if !self.isPromptSelectableMode {
                 self.showPromptHoverMenu = false
             }
@@ -602,12 +602,12 @@ struct NotchWaveformView: View {
                     .shadow(color: self.color.opacity(self.currentGlowIntensity * 0.5), radius: self.currentOuterGlowRadius, x: 0, y: 0)
             }
         }
-        .onChange(of: self.data.audioLevel) { _, level in
+        .onChange(of: self.data.audioLevel) { level in
             if !self.contentState.isProcessing {
                 self.updateBars(level: level)
             }
         }
-        .onChange(of: self.contentState.isProcessing) { _, processing in
+        .onChange(of: self.contentState.isProcessing) { processing in
             if processing {
                 self.setFlatProcessingBars()
             } else {
@@ -675,7 +675,7 @@ struct NotchCompactLeadingView: View {
     var body: some View {
         Image(systemName: "waveform")
             .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(self.contentState.mode.notchColor)
+            .foregroundColor(self.contentState.mode.notchColor)
             .scaleEffect(self.isPulsing ? 1.1 : 1.0)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: self.isPulsing)
             .onAppear { self.isPulsing = true }
@@ -712,7 +712,7 @@ struct NotchCommandOutputExpandedView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @Environment(\.theme) private var theme
     @State private var inputText: String = ""
-    @FocusState private var isInputFocused: Bool
+    @State private var isInputFocused: Bool = false
     @State private var scrollProxy: ScrollViewProxy?
     @State private var isHoveringNewChat = false
     @State private var isHoveringRecent = false
@@ -802,13 +802,13 @@ struct NotchCommandOutputExpandedView: View {
                 if self.contentState.isRecordingInExpandedMode {
                     Text("Listening...")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(self.commandRed)
+                        .foregroundColor(self.commandRed)
                 } else if self.contentState.isCommandProcessing {
                     ShimmerText(text: "Working...", color: self.commandRed)
                 } else {
                     Text("Command")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(self.commandRed.opacity(0.7))
+                        .foregroundColor(self.commandRed.opacity(0.7))
                 }
             }
 
@@ -824,7 +824,7 @@ struct NotchCommandOutputExpandedView: View {
                             .frame(width: 22, height: 22)
                         Image(systemName: "plus")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(self.contentState.isCommandProcessing ? .white.opacity(0.3) : self.commandRed.opacity(0.85))
+                            .foregroundColor(self.contentState.isCommandProcessing ? .white.opacity(0.3) : self.commandRed.opacity(0.85))
                     }
                 }
                 .buttonStyle(.plain)
@@ -839,7 +839,7 @@ struct NotchCommandOutputExpandedView: View {
                     let currentID = ChatHistoryStore.shared.currentChatID
                     if recentChats.isEmpty {
                         Text("No recent chats")
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     } else {
                         ForEach(recentChats) { chat in
                             Button(action: {
@@ -857,7 +857,7 @@ struct NotchCommandOutputExpandedView: View {
                                     Spacer()
                                     Text(chat.relativeTimeString)
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                             .disabled(self.contentState.isCommandProcessing)
@@ -870,7 +870,7 @@ struct NotchCommandOutputExpandedView: View {
                             .frame(width: 22, height: 22)
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(self.commandRed.opacity(0.85))
+                            .foregroundColor(self.commandRed.opacity(0.85))
                     }
                 }
                 .menuIndicator(.hidden)
@@ -888,7 +888,7 @@ struct NotchCommandOutputExpandedView: View {
                             .frame(width: 22, height: 22)
                         Image(systemName: "trash")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(self.contentState.isCommandProcessing ? .white.opacity(0.3) : self.commandRed.opacity(0.85))
+                            .foregroundColor(self.contentState.isCommandProcessing ? .white.opacity(0.3) : self.commandRed.opacity(0.85))
                     }
                 }
                 .buttonStyle(.plain)
@@ -911,7 +911,7 @@ struct NotchCommandOutputExpandedView: View {
                             .frame(width: 22, height: 22)
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(self.commandRed.opacity(0.85))
+                            .foregroundColor(self.commandRed.opacity(0.85))
                     }
                 }
                 .buttonStyle(.plain)
@@ -938,7 +938,7 @@ struct NotchCommandOutputExpandedView: View {
                         ScrollView(.vertical, showsIndicators: false) {
                             Text(previewText)
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
+                                .foregroundColor(.white.opacity(0.75))
                                 .multilineTextAlignment(.leading)
                                 .lineLimit(nil)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -952,7 +952,7 @@ struct NotchCommandOutputExpandedView: View {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
                         }
-                        .onChange(of: previewText) { _, _ in
+                        .onChange(of: previewText) { _ in
                             DispatchQueue.main.async {
                                 proxy.scrollTo("bottom", anchor: .bottom)
                             }
@@ -1002,14 +1002,14 @@ struct NotchCommandOutputExpandedView: View {
                 // Always scroll to bottom when view appears
                 self.scrollToBottom(proxy, animated: false)
             }
-            .onChange(of: self.contentState.commandConversationHistory.count) { _, _ in
+            .onChange(of: self.contentState.commandConversationHistory.count) { _ in
                 self.scrollToBottom(proxy, animated: true)
             }
-            .onChange(of: self.contentState.commandStreamingText) { _, _ in
+            .onChange(of: self.contentState.commandStreamingText) { _ in
                 // Disable animation for streaming text to prevent scroll bar jitter
                 self.scrollToBottom(proxy, animated: false)
             }
-            .onChange(of: self.contentState.isCommandProcessing) { _, _ in
+            .onChange(of: self.contentState.isCommandProcessing) { _ in
                 // Scroll when processing state changes
                 self.scrollToBottom(proxy, animated: true)
             }
@@ -1037,24 +1037,24 @@ struct NotchCommandOutputExpandedView: View {
                 Spacer()
                 Text(message.content)
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundColor(.white.opacity(0.9))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(self.commandRed.opacity(0.25))
                     .cornerRadius(8)
                     .frame(maxWidth: 280, alignment: .trailing)
-                    .textSelection(.enabled)
+                    
 
             case .assistant:
                 Text(message.content)
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundColor(.white.opacity(0.85))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(Color.white.opacity(0.08))
                     .cornerRadius(8)
                     .frame(maxWidth: 320, alignment: .leading)
-                    .textSelection(.enabled)
+                    
                 Spacer()
 
             case .status:
@@ -1064,7 +1064,7 @@ struct NotchCommandOutputExpandedView: View {
                         .frame(width: 4, height: 4)
                     Text(message.content)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundColor(.white.opacity(0.5))
                 }
                 .padding(.vertical, 2)
                 Spacer()
@@ -1076,7 +1076,7 @@ struct NotchCommandOutputExpandedView: View {
         HStack(alignment: .top) {
             Text(self.contentState.commandStreamingText)
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundColor(.white.opacity(0.85))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Color.white.opacity(0.08))
@@ -1115,20 +1115,17 @@ struct NotchCommandOutputExpandedView: View {
             TextField("Ask follow-up...", text: self.$inputText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
-                .foregroundStyle(.white)
+                .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Color.white.opacity(0.08))
                 .cornerRadius(8)
-                .focused(self.$isInputFocused)
-                .onSubmit {
-                    self.submitFollowUp()
-                }
+                // Note: .focused() requires macOS 12+, omitted for Big Sur compatibility
 
             Button(action: self.submitFollowUp) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(self.inputText.isEmpty ? .white.opacity(0.3) : self.commandRed)
+                    .foregroundColor(self.inputText.isEmpty ? .white.opacity(0.3) : self.commandRed)
             }
             .buttonStyle(.plain)
             .disabled(self.inputText.isEmpty || self.contentState.isCommandProcessing)
@@ -1173,7 +1170,7 @@ struct ExpandedModeWaveformView: View {
                     .shadow(color: self.color.opacity(0.4), radius: 2, x: 0, y: 0)
             }
         }
-        .onChange(of: self.contentState.expandedModeAudioLevel) { _, level in
+        .onChange(of: self.contentState.expandedModeAudioLevel) { level in
             self.updateBars(level: level)
         }
         .onAppear {

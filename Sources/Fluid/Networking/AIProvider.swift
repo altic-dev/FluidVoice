@@ -120,7 +120,7 @@ final class OpenAICompatibleProvider: AIProvider {
         request.httpBody = jsonData
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.compatData(for: request)
 
             #if DEBUG
             DebugLogger.shared.debug("AI Request to: \(request.url?.absoluteString ?? "unknown")", source: "AIProvider")

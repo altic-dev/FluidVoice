@@ -24,7 +24,7 @@ struct RewriteModeView: View {
             HStack {
                 Image(systemName: "pencil.and.outline")
                     .font(.title2)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
                 Text("Edit Mode")
                     .font(.title2)
                     .fontWeight(.bold)
@@ -33,7 +33,7 @@ struct RewriteModeView: View {
 
                 Button(action: { self.onClose?() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -43,10 +43,10 @@ struct RewriteModeView: View {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle")
                     .font(.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundColor(self.theme.palette.secondaryText)
                 Text("Edit Mode is powered by Custom Prompts.")
                     .font(.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundColor(self.theme.palette.secondaryText)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal)
@@ -67,7 +67,7 @@ struct RewriteModeView: View {
                                 Text("Original Text")
                                     .font(.caption)
                                     .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                 Spacer()
                                 if !self.service.rewrittenText.isEmpty {
                                     Button(self.showOriginal ? "Hide" : "Show") {
@@ -84,24 +84,24 @@ struct RewriteModeView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(self.theme.palette.cardBackground)
                                     .cornerRadius(8)
-                                    .textSelection(.enabled)
+                                    
                             }
                         }
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "text.bubble")
                                 .font(.system(size: 48))
-                                .foregroundStyle(self.theme.palette.accent)
+                                .foregroundColor(self.theme.palette.accent)
                             Text("Edit Mode")
                                 .font(.title2)
                                 .fontWeight(.bold)
                             Text("Ask the AI to write anything for you - emails, replies, summaries, answers, and more.")
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
 
                             Text("Or select text first to rewrite existing content.")
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
                                 .padding(.top, 4)
                         }
@@ -115,20 +115,20 @@ struct RewriteModeView: View {
                             Text("Rewritten Text")
                                 .font(.caption)
                                 .fontWeight(.bold)
-                                .foregroundStyle(self.theme.palette.accent)
+                                .foregroundColor(self.theme.palette.accent)
 
                             Text(self.service.rewrittenText)
                                 .padding()
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(self.theme.palette.accent.opacity(0.1))
                                 .cornerRadius(8)
-                                .textSelection(.enabled)
+                                
 
                             HStack {
                                 Button("Try Again") {
                                     self.service.rewrittenText = ""
                                 }
-                                .buttonStyle(.bordered)
+                                
 
                                 Spacer()
 
@@ -136,8 +136,8 @@ struct RewriteModeView: View {
                                     self.service.acceptRewrite()
                                     self.onClose?()
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
+                                
+                                .accentColor(self.theme.palette.accent)
                             }
                             .padding(.top, 8)
                         }
@@ -149,7 +149,7 @@ struct RewriteModeView: View {
                        service.rewrittenText.isEmpty
                     {
                         Text(lastMsg.content) // Error message usually
-                            .foregroundStyle(.red)
+                            .foregroundColor(.red)
                             .padding()
                             .background(Color.red.opacity(0.1))
                             .cornerRadius(8)
@@ -211,7 +211,6 @@ struct RewriteModeView: View {
                     text: self.$inputText
                 )
                 .textFieldStyle(.roundedBorder)
-                .onSubmit(self.submitRequest)
 
                 Button(action: self.submitRequest) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -224,13 +223,13 @@ struct RewriteModeView: View {
                 Button(action: self.toggleRecording) {
                     Image(systemName: self.asr.isRunning ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(self.asr.isRunning ? Color.red : self.theme.palette.accent)
+                        .foregroundColor(self.asr.isRunning ? Color.red : self.theme.palette.accent)
                 }
                 .buttonStyle(.plain)
 
                 if self.service.isProcessing {
                     ProgressView()
-                        .controlSize(.small)
+                        
                 }
             }
             .padding()
@@ -243,7 +242,7 @@ struct RewriteModeView: View {
                     .padding(.bottom, 8)
             }
         }
-        .onChange(of: self.asr.finalText) { _, newText in
+        .onChange(of: self.asr.finalText) { newText in
             if !newText.isEmpty {
                 self.inputText = newText
             }
@@ -333,7 +332,7 @@ struct RewriteModeView: View {
                     Image(systemName: self.showHowTo ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                .foregroundStyle(self.isHoveringHowTo ? .primary : .secondary)
+                .foregroundColor(self.isHoveringHowTo ? .primary : .secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(self.isHoveringHowTo ? Color.primary.opacity(0.05) : Color.clear)
@@ -351,7 +350,7 @@ struct RewriteModeView: View {
                         Text("Create New Text")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         HStack(spacing: 4) {
                             Text("Press")
@@ -366,7 +365,7 @@ struct RewriteModeView: View {
                             Text("and speak what you want to write.")
                                 .font(.caption)
                         }
-                        .foregroundStyle(.primary.opacity(0.8))
+                        .foregroundColor(.primary.opacity(0.8))
 
                         self.howToItem("\"Write an email asking for time off\"")
                         self.howToItem("\"Draft a thank you note\"")
@@ -377,7 +376,7 @@ struct RewriteModeView: View {
                         Text("Edit Selected Text")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         HStack(spacing: 4) {
                             Text("Select text first, then press")
@@ -392,7 +391,7 @@ struct RewriteModeView: View {
                             Text("and speak your instruction.")
                                 .font(.caption)
                         }
-                        .foregroundStyle(.primary.opacity(0.8))
+                        .foregroundColor(.primary.opacity(0.8))
 
                         self.howToItem("\"Make this more formal\"")
                         self.howToItem("\"Fix grammar and spelling\"")
@@ -410,10 +409,10 @@ struct RewriteModeView: View {
     private func howToItem(_ text: String) -> some View {
         HStack(spacing: 6) {
             Text("•")
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
+                .foregroundColor(.primary.opacity(0.8))
         }
     }
 
@@ -430,7 +429,7 @@ struct RewriteModeView: View {
 
                     Image(systemName: self.isThinkingExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
-                        .foregroundStyle(.secondary.opacity(0.6))
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -442,8 +441,8 @@ struct RewriteModeView: View {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(self.service.streamingThinkingText)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                        .foregroundColor(.secondary)
+                        
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 10)
@@ -454,7 +453,7 @@ struct RewriteModeView: View {
                 if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(100)) + (self.service.streamingThinkingText.count > 100 ? "..." : ""))
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                        .foregroundColor(.secondary.opacity(0.7))
                         .lineLimit(2)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)

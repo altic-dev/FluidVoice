@@ -67,10 +67,10 @@ struct LiquidBar: View {
             HStack(spacing: 4) {
                 Image(systemName: self.icon)
                     .font(.system(size: 10))
-                    .foregroundStyle(self.color)
+                    .foregroundColor(self.color)
                 Text(self.label)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             // Liquid Container (Capsule Glass)
@@ -137,14 +137,14 @@ struct LiquidBar: View {
             // Percentage (shows target, not animated)
             Text("\(Int(self.fillPercent * 100))%")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(self.fillPercent > 0 ? self.color : .secondary)
+                .foregroundColor(self.fillPercent > 0 ? self.color : .secondary)
                 .contentTransition(.numericText())
         }
         .onAppear {
             // Initialize to target on first appear
             self.animatedFill = self.fillPercent
         }
-        .onChange(of: self.fillPercent) { _, newValue in
+        .onChange(of: self.fillPercent) { newValue in
             // Animate liquid level change with a gentle "sloshing" feel
             withAnimation(.interpolatingSpring(stiffness: 140, damping: 18)) {
                 self.animatedFill = newValue

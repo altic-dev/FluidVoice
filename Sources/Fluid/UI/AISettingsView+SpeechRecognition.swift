@@ -20,7 +20,7 @@ extension VoiceEngineSettingsView {
                 HStack(spacing: 10) {
                     Image(systemName: "waveform")
                         .font(.title2)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accent)
                     Text("Voice Engine")
                         .font(.title3)
                         .fontWeight(.semibold)
@@ -43,10 +43,10 @@ extension VoiceEngineSettingsView {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                     Text("Click a row to preview. Press Activate to load the model.")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                     Spacer()
                     Menu {
                         ForEach(SpeechProviderFilter.allCases) { option in
@@ -62,7 +62,7 @@ extension VoiceEngineSettingsView {
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
-                        .foregroundStyle(.primary)
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(
@@ -86,7 +86,7 @@ extension VoiceEngineSettingsView {
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
-                        .foregroundStyle(.primary)
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(
@@ -106,7 +106,7 @@ extension VoiceEngineSettingsView {
                         Text("Active Model")
                             .font(.callout)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                         self.speechModelCard(for: activeModel)
                     }
 
@@ -116,7 +116,7 @@ extension VoiceEngineSettingsView {
                         Text("Other Models")
                             .font(.callout)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                         VStack(spacing: 8) {
                             ForEach(otherModels) { model in
                                 self.speechModelCard(for: model)
@@ -156,7 +156,7 @@ extension VoiceEngineSettingsView {
                         HStack {
                             Text(model.humanReadableName)
                                 .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(self.theme.palette.primaryText)
+                                .foregroundColor(self.theme.palette.primaryText)
 
                             if let badge = model.badgeText {
                                 Text(badge)
@@ -165,7 +165,7 @@ extension VoiceEngineSettingsView {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(badge == "FluidVoice Pick" ? .cyan.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == "FluidVoice Pick" ? .cyan : .orange)
+                                    .foregroundColor(badge == "FluidVoice Pick" ? .cyan : .orange)
                             }
 
                             Spacer()
@@ -173,14 +173,14 @@ extension VoiceEngineSettingsView {
 
                         Text(model.cardDescription)
                             .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                             .lineLimit(2)
                     }
 
                     HStack(spacing: 8) {
                         Label(model.downloadSize, systemImage: "internaldrive")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         if model.requiresAppleSilicon {
                             Text("Apple Silicon")
@@ -188,15 +188,15 @@ extension VoiceEngineSettingsView {
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(self.theme.palette.accent.opacity(0.2)))
-                                .foregroundStyle(self.theme.palette.accent)
+                                .foregroundColor(self.theme.palette.accent)
                         }
 
                         Text(model.languageSupport)
                             .font(.caption2)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(.quaternary))
-                            .foregroundStyle(.secondary)
+                            .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                            .foregroundColor(.secondary)
 
                         Spacer()
                     }
@@ -206,10 +206,10 @@ extension VoiceEngineSettingsView {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                             Text(memoryWarning)
                                 .font(.caption2)
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -250,11 +250,11 @@ extension VoiceEngineSettingsView {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.caption)
-                        .foregroundStyle(Color.fluidGreen)
+                        .foregroundColor(Color.fluidGreen)
 
                     Text("Custom Words supported on Parakeet. Teach names, product terms, and uncommon words for better accuracy.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .lineLimit(3)
 
                     Spacer(minLength: 8)
@@ -262,9 +262,9 @@ extension VoiceEngineSettingsView {
                     Button("Open Custom Dictionary") {
                         NotificationCenter.default.post(name: .openCustomDictionaryFromVoiceEngine, object: nil)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.fluidGreen)
-                    .controlSize(.small)
+                    
+                    .accentColor(Color.fluidGreen)
+                    
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -300,34 +300,34 @@ extension VoiceEngineSettingsView {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.humanReadableName)
                     .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? self.theme.palette.primaryText : .secondary)
+                    .foregroundColor(isSelected ? self.theme.palette.primaryText : .secondary)
                 Text(model.displayName)
                     .font(.caption)
-                    .foregroundStyle(.secondary.opacity(0.7))
+                    .foregroundColor(.secondary.opacity(0.7))
 
                 HStack(spacing: 10) {
                     HStack(spacing: 4) {
                         Image(systemName: "bolt.fill")
                             .font(.system(size: 10))
-                            .foregroundStyle(.yellow)
+                            .foregroundColor(.yellow)
                         Text("Speed \(Int(model.speedPercent * 100))%")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
 
                     HStack(spacing: 4) {
                         Image(systemName: "target")
                             .font(.system(size: 10))
-                            .foregroundStyle(Color.fluidGreen)
+                            .foregroundColor(Color.fluidGreen)
                         Text("Acc \(Int(model.accuracyPercent * 100))%")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
 
                     if isSelected && !isActive {
                         Text("Previewing")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
@@ -342,7 +342,7 @@ extension VoiceEngineSettingsView {
                         .frame(width: 90)
                     Text("\(Int(self.viewModel.downloadProgress * 100))%")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
             } else if (self.viewModel.asr.isDownloadingModel || self.viewModel.asr.isLoadingModel) && isActive && !self.viewModel.asr.isAsrReady {
                 // Active model is loading/downloading (for Activate flow)
@@ -353,13 +353,13 @@ extension VoiceEngineSettingsView {
                             .frame(width: 90)
                         Text("\(Int(progress * 100))%")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     } else {
                         ProgressView()
-                            .controlSize(.mini)
+                            
                         Text(self.viewModel.asr.isLoadingModel ? "Loading…" : "Downloading…")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
             } else if model.isInstalled {
@@ -372,14 +372,14 @@ extension VoiceEngineSettingsView {
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                             .background(Capsule().fill(isLoading ? .orange.opacity(0.25) : Color.fluidGreen.opacity(0.25)))
-                            .foregroundStyle(isLoading ? .orange : Color.fluidGreen)
+                            .foregroundColor(isLoading ? .orange : Color.fluidGreen)
                     } else {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(Color.fluidGreen)
+                        
+                        
+                        .accentColor(Color.fluidGreen)
                         .fontWeight(.semibold)
                         .shadow(color: Color.fluidGreen.opacity(0.35), radius: 4, x: 0, y: 1)
                         .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
@@ -392,7 +392,7 @@ extension VoiceEngineSettingsView {
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 15))
-                                    .foregroundStyle(.red.opacity(0.7))
+                                    .foregroundColor(.red.opacity(0.7))
                             }
                             .buttonStyle(.plain)
                             .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
@@ -405,16 +405,16 @@ extension VoiceEngineSettingsView {
                 ZStack(alignment: .trailing) {
                     Text("Not downloaded")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .opacity(isSelected ? 0 : 1)
 
                     Button("Download") {
                         self.viewModel.previewSpeechModel = model
                         self.viewModel.downloadSpeechModel(model)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.blue)
+                    
+                    
+                    .accentColor(.blue)
                     .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
                     .offset(x: isSelected ? 0 : 16)
                     .opacity(isSelected ? 1 : 0)
@@ -449,14 +449,14 @@ extension VoiceEngineSettingsView {
         HStack(spacing: 12) {
             if (self.viewModel.asr.isDownloadingModel || self.viewModel.asr.isLoadingModel) && !self.viewModel.asr.isAsrReady {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
                     Text(self.viewModel.asr.isLoadingModel ? "Loading model…" : "Downloading…")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
             } else if self.viewModel.asr.isAsrReady {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.fluidGreen).font(.caption)
-                Text("Ready").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "checkmark.circle.fill").foregroundColor(Color.fluidGreen).font(.caption)
+                Text("Ready").font(.caption).foregroundColor(.secondary)
 
                 Button(action: { Task { await self.viewModel.deleteModels() } }) {
                     HStack(spacing: 4) {
@@ -464,12 +464,12 @@ extension VoiceEngineSettingsView {
                         Text("Delete")
                     }
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundColor(.red)
                 }
                 .buttonStyle(.plain)
             } else if self.viewModel.asr.modelsExistOnDisk {
-                Image(systemName: "doc.fill").foregroundStyle(self.theme.palette.accent).font(.caption)
-                Text("Cached").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "doc.fill").foregroundColor(self.theme.palette.accent).font(.caption)
+                Text("Cached").font(.caption).foregroundColor(.secondary)
 
                 Button(action: { Task { await self.viewModel.deleteModels() } }) {
                     HStack(spacing: 4) {
@@ -477,7 +477,7 @@ extension VoiceEngineSettingsView {
                         Text("Delete")
                     }
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundColor(.red)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -488,9 +488,9 @@ extension VoiceEngineSettingsView {
                     }
                     .font(.caption)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.blue)
+                
+                
+                .accentColor(.blue)
             }
         }
         .padding(.horizontal, 12)
@@ -507,13 +507,13 @@ extension VoiceEngineSettingsView {
                     Text("Remove Filler Words").font(.body)
                     Text("Automatically remove filler sounds like 'um', 'uh', 'er' from transcriptions")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
                 Spacer()
                 Toggle("", isOn: self.$viewModel.removeFillerWordsEnabled)
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .onChange(of: self.viewModel.removeFillerWordsEnabled) { _, newValue in
+                    .onChange(of: self.viewModel.removeFillerWordsEnabled) { newValue in
                         self.settings.removeFillerWordsEnabled = newValue
                     }
             }
@@ -538,7 +538,7 @@ extension VoiceEngineSettingsView {
             if model.usesAppleLogo {
                 Image(systemName: "apple.logo")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
             } else if let imageName {
                 Image(imageName)
                     .resizable()
@@ -548,7 +548,7 @@ extension VoiceEngineSettingsView {
             } else {
                 Text(String(model.brandName.prefix(2)).uppercased())
                     .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundColor(.white)
             }
         }
         .frame(width: 28, height: 28)

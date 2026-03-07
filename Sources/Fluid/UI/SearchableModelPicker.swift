@@ -57,11 +57,11 @@ struct SearchableModelPicker: View {
                     Text(self.selectedModel.isEmpty ? "Select Model" : self.selectedModel)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .foregroundStyle(self.selectedModel.isEmpty ? .secondary : .primary)
+                        .foregroundColor(self.selectedModel.isEmpty ? .secondary : .primary)
                     Spacer(minLength: 6)
                     Image(systemName: "chevron.down")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .frame(width: 20, height: 20)
                         .background(
                             Circle()
@@ -77,7 +77,7 @@ struct SearchableModelPicker: View {
                 .padding(.vertical, 5)
                 .frame(height: self.controlHeight)
                 .contentShape(Rectangle())
-                .background(self.theme.materials.card, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous))
+                .background(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous).fill(self.theme.materials.card))
                 .background(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
                         .fill(self.theme.palette.cardBackground)
@@ -101,7 +101,7 @@ struct SearchableModelPicker: View {
                     // Search field
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                         TextField("Search models...", text: self.$searchText)
                             .textFieldStyle(.plain)
                     }
@@ -122,13 +122,13 @@ struct SearchableModelPicker: View {
                             VStack(spacing: 8) {
                                 Image(systemName: "tray")
                                     .font(.title2)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                 Text("No models")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                 Text("Click refresh to fetch from API")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundColor(.secondary)
                             }
                             .frame(height: 100)
                             .frame(maxWidth: .infinity)
@@ -138,7 +138,7 @@ struct SearchableModelPicker: View {
                                     if self.filteredModels.isEmpty {
                                         Text("No models match '\(self.searchText)'")
                                             .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                             .padding()
                                             .frame(maxWidth: .infinity, alignment: .center)
                                     } else {
@@ -154,7 +154,7 @@ struct SearchableModelPicker: View {
                                                     Spacer()
                                                     if model == self.selectedModel {
                                                         Image(systemName: "checkmark")
-                                                            .foregroundStyle(self.theme.palette.accent)
+                                                            .foregroundColor(self.theme.palette.accent)
                                                     }
                                                 }
                                                 .padding(.horizontal, 10)
@@ -173,7 +173,7 @@ struct SearchableModelPicker: View {
                                 Divider()
                                 Text("\(self.filteredModels.count - 100) more (use search)")
                                     .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                     .padding(6)
                             }
                         }
@@ -225,12 +225,14 @@ struct SearchableModelPicker: View {
     }
 }
 
-#Preview {
-    SearchableModelPicker(
-        models: ["gpt-4.1", "gpt-4o", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet"],
-        selectedModel: .constant("gpt-4.1"),
-        onRefresh: { try? await Task.sleep(nanoseconds: 1_000_000_000) },
-        isRefreshing: false
-    )
-    .padding()
+struct SearchableModelPicker_Previews: PreviewProvider {
+    static var previews: some View {
+        SearchableModelPicker(
+            models: ["gpt-4.1", "gpt-4o", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet"],
+            selectedModel: .constant("gpt-4.1"),
+            onRefresh: { try? await Task.sleep(nanoseconds: 1_000_000_000) },
+            isRefreshing: false
+        )
+        .padding()
+    }
 }

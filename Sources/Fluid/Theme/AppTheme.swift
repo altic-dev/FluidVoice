@@ -72,11 +72,11 @@ struct AppTheme {
     }
 
     struct Materials {
-        let window: Material
-        let sidebar: Material
-        let card: Material
-        let elevatedCard: Material
-        let toolbar: Material
+        let window: Color
+        let sidebar: Color
+        let card: Color
+        let elevatedCard: Color
+        let toolbar: Color
     }
 
     let palette: Palette
@@ -110,11 +110,11 @@ struct AppTheme {
                 elevatedCardShadow: .subtle(color: .black, opacity: 0.80)
             ),
             materials: Materials(
-                window: .thinMaterial,
-                sidebar: .ultraThinMaterial,
-                card: .thinMaterial,
-                elevatedCard: .regularMaterial,
-                toolbar: .ultraThinMaterial
+                window: Color(white: 0.08, opacity: 0.85),
+                sidebar: Color(white: 0.06, opacity: 0.80),
+                card: Color(white: 0.10, opacity: 0.85),
+                elevatedCard: Color(white: 0.12, opacity: 0.90),
+                toolbar: Color(white: 0.06, opacity: 0.80)
             )
         )
     }

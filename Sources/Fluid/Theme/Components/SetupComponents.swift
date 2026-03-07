@@ -43,27 +43,27 @@ struct SetupStepView: View {
 
                     if self.status == .completed {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(self.statusColor)
+                            .foregroundColor(self.statusColor)
                             .font(.body.weight(.semibold))
                     } else if self.status == .inProgress {
                         ProgressView()
-                            .controlSize(.small)
-                            .tint(self.statusColor)
+                            
+                            .accentColor(self.statusColor)
                     } else {
                         Text("\(self.step)")
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(self.statusColor)
+                            .foregroundColor(self.statusColor)
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.title)
                         .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .foregroundColor(.primary)
 
                     Text(self.description)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
 
@@ -73,10 +73,10 @@ struct SetupStepView: View {
                 if self.status == .completed {
                     Label("Done", systemImage: "checkmark")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.fluidGreen, in: Capsule())
+                        .background(Capsule().fill(Color.fluidGreen))
                 } else if self.showActionButton {
                     HStack(spacing: 3) {
                         Text(self.actionButtonTitle)
@@ -84,10 +84,10 @@ struct SetupStepView: View {
                         Image(systemName: "arrow.right")
                             .font(.caption2.weight(.bold))
                     }
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(self.theme.palette.accent.opacity(0.12), in: Capsule())
+                    .background(Capsule().fill(self.theme.palette.accent.opacity(0.12)))
                 }
             }
             .padding(10)
@@ -138,7 +138,7 @@ struct InstructionStep: View {
 
                 Text("\(self.number)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -147,7 +147,7 @@ struct InstructionStep: View {
 
                 Text(self.description)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .lineLimit(2)
             }
         }

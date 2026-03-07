@@ -1,5 +1,129 @@
 import Foundation
 
+// MARK: - URLSession Compatibility for macOS 11
+
+/// Wraps URLSession's completion-handler APIs into async versions for macOS 11 compatibility.
+/// On macOS 12+, delegates to the native async APIs.
+extension URLSession {
+    func compatData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if #available(macOS 12.0, *) {
+            return try await self.data(for: request)
+        } else {
+            return try await withCheckedThrowingContinuation { continuation in
+                let task = self.dataTask(with: request) { data, response, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else if let data = data, let response = response {
+                        continuation.resume(returning: (data, response))
+                    } else {
+                        continuation.resume(throwing: URLError(.unknown))
+                    }
+                }
+                task.resume()
+            }
+        }
+    }
+
+    /// Streams response data line-by-line for SSE processing. On macOS 12+, uses native bytes API.
+    /// On macOS 11, downloads full response then yields lines.
+    func compatStreamLines(for request: URLRequest) async throws -> (AsyncLineSequence, URLResponse) {
+        if #available(macOS 12.0, *) {
+            let (bytes, response) = try await self.bytes(for: request)
+            return (AsyncLineSequence(nativeLines: bytes.lines, nativeBytes: bytes), response)
+        } else {
+            let (data, response) = try await self.compatData(for: request)
+            let text = String(data: data, encoding: .utf8) ?? ""
+            let lines = text.components(separatedBy: "\n")
+            return (AsyncLineSequence(bufferedLines: lines), response)
+        }
+    }
+}
+
+/// A wrapper that provides async line iteration, compatible with macOS 11+.
+struct AsyncLineSequence: AsyncSequence {
+    typealias Element = String
+
+    private enum Source {
+        case buffered([String])
+        case native(Any, Any) // URLSession.AsyncBytes.AsyncLineSequence, URLSession.AsyncBytes
+    }
+
+    private let source: Source
+
+    init(bufferedLines: [String]) {
+        self.source = .buffered(bufferedLines)
+    }
+
+    @available(macOS 12.0, *)
+    init(nativeLines: URLSession.AsyncBytes.AsyncLineSequence, nativeBytes: URLSession.AsyncBytes) {
+        self.source = .native(nativeLines, nativeBytes)
+    }
+
+    /// Collect all bytes (used for error body reading)
+    func collectAllData() async throws -> Data {
+        if #available(macOS 12.0, *), case let .native(_, bytesAny) = source {
+            let bytes = bytesAny as! URLSession.AsyncBytes
+            var data = Data()
+            for try await byte in bytes {
+                data.append(byte)
+            }
+            return data
+        } else if case let .buffered(lines) = source {
+            return lines.joined(separator: "\n").data(using: .utf8) ?? Data()
+        }
+        return Data()
+    }
+
+    func makeAsyncIterator() -> AsyncIterator {
+        switch source {
+        case let .buffered(lines):
+            return AsyncIterator(bufferedLines: lines)
+        case let .native(linesAny, _):
+            if #available(macOS 12.0, *) {
+                let lines = linesAny as! URLSession.AsyncBytes.AsyncLineSequence
+                return AsyncIterator(nativeLines: lines)
+            } else {
+                return AsyncIterator(bufferedLines: [])
+            }
+        }
+    }
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        private enum IteratorSource {
+            case buffered(Array<String>.Iterator)
+            case native(Any) // URLSession.AsyncBytes.AsyncLineSequence.AsyncIterator
+        }
+
+        private var source: IteratorSource
+
+        init(bufferedLines: [String]) {
+            self.source = .buffered(bufferedLines.makeIterator())
+        }
+
+        @available(macOS 12.0, *)
+        init(nativeLines: URLSession.AsyncBytes.AsyncLineSequence) {
+            self.source = .native(nativeLines.makeAsyncIterator())
+        }
+
+        mutating func next() async throws -> String? {
+            switch source {
+            case var .buffered(iterator):
+                let result = iterator.next()
+                self.source = .buffered(iterator)
+                return result
+            case var .native(iteratorAny):
+                if #available(macOS 12.0, *) {
+                    var nativeIterator = iteratorAny as! URLSession.AsyncBytes.AsyncLineSequence.AsyncIterator
+                    let result = try await nativeIterator.next()
+                    self.source = .native(nativeIterator)
+                    return result
+                }
+                return nil
+            }
+        }
+    }
+}
+
 // MARK: - Error Types
 
 enum LLMError: Error, LocalizedError {
@@ -282,7 +406,7 @@ final class LLMClient {
     private func processNonStreaming(request: URLRequest) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await self.session.compatData(for: request)
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -306,14 +430,11 @@ final class LLMClient {
     private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (lineSequence, response) = try await self.session.compatStreamLines(for: request)
 
         // Check for HTTP errors
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
+            let errorData = try await lineSequence.collectAllData()
             let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
             throw LLMError.httpError(http.statusCode, errText)
         }
@@ -333,7 +454,7 @@ final class LLMClient {
         var toolCallArguments = ""
 
         // Process SSE lines
-        for try await rawLine in bytes.lines {
+        for try await rawLine in lineSequence {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("data:") else { continue }
 

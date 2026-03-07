@@ -51,7 +51,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.historyStore.formattedTimeSaved(typingWPM: self.settings.userTypingWPM))
                     .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
 
                 Button {
                     self.editingWPM = "\(self.settings.userTypingWPM)"
@@ -63,7 +63,7 @@ struct StatsView: View {
                         Image(systemName: "pencil")
                             .font(.system(size: 9))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -86,18 +86,18 @@ struct StatsView: View {
 
                 Text("words per minute")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             Text("Average typing: 40 WPM\nProfessional: 65-75 WPM")
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
 
             HStack {
                 Button("Cancel") {
                     self.showWPMEditor = false
                 }
-                .buttonStyle(.bordered)
+                
 
                 Button("Save") {
                     if let wpm = Int(editingWPM), wpm > 0 {
@@ -105,7 +105,7 @@ struct StatsView: View {
                     }
                     self.showWPMEditor = false
                 }
-                .buttonStyle(.borderedProminent)
+                
             }
         }
         .padding(16)
@@ -119,17 +119,17 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.historyStore.totalWords))
                     .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
 
                 let today = self.historyStore.wordsToday
                 if today > 0 {
                     Text("+\(self.formatNumber(today)) today")
                         .font(.system(size: 11))
-                        .foregroundStyle(self.theme.palette.success)
+                        .foregroundColor(self.theme.palette.success)
                 } else {
                     Text("Start dictating")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -143,16 +143,16 @@ struct StatsView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(self.historyStore.currentStreak)")
                         .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(self.historyStore.currentStreak > 0 ? self.theme.palette.warning : .primary)
+                        .foregroundColor(self.historyStore.currentStreak > 0 ? self.theme.palette.warning : .primary)
 
                     Text(self.historyStore.currentStreak == 1 ? "day" : "days")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 Text("Best: \(self.historyStore.bestStreak) days")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -164,11 +164,11 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(self.historyStore.entries.count)")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
 
                 Text("Avg: \(self.historyStore.averageWordsPerTranscription) words each")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -181,7 +181,7 @@ struct StatsView: View {
                 HStack {
                     Label("ACTIVITY", systemImage: "chart.bar.fill")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     Spacer()
 
@@ -203,10 +203,10 @@ struct StatsView: View {
                         VStack(spacing: 8) {
                             Image(systemName: "chart.bar")
                                 .font(.system(size: 24))
-                                .foregroundStyle(.tertiary)
+                                .foregroundColor(.secondary)
                             Text("No activity yet")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                         }
                         .padding(.vertical, 30)
                         Spacer()
@@ -227,7 +227,7 @@ struct StatsView: View {
                                 if self.chartDays == 7 {
                                     Text(self.dayLabel(item.date))
                                         .font(.system(size: 9, weight: .medium))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                         }
@@ -242,11 +242,11 @@ struct StatsView: View {
 
                         Text("\(self.formatNumber(totalPeriod)) words")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
 
                         Text("across \(activeDays) active days")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Spacer()
                     }
@@ -263,13 +263,13 @@ struct StatsView: View {
                 HStack {
                     Label("MILESTONES", systemImage: "flag.fill")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     Spacer()
 
                     Text("\(self.historyStore.totalMilestonesAchieved)/\(self.historyStore.totalMilestonesPossible)")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accent)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -299,18 +299,18 @@ struct StatsView: View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
                 .frame(width: 80, alignment: .leading)
 
             ForEach(Array(milestones.enumerated()), id: \.offset) { _, milestone in
                 HStack(spacing: 3) {
                     Image(systemName: milestone.achieved ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 10))
-                        .foregroundStyle(milestone.achieved ? self.theme.palette.success : Color.secondary.opacity(0.4))
+                        .foregroundColor(milestone.achieved ? self.theme.palette.success : Color.secondary.opacity(0.4))
 
                     Text(milestone.label)
                         .font(.system(size: 10, weight: milestone.achieved ? .semibold : .regular))
-                        .foregroundStyle(milestone.achieved ? .primary : .secondary)
+                        .foregroundColor(milestone.achieved ? .primary : .secondary)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -331,7 +331,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("INSIGHTS", systemImage: "lightbulb.fill")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
 
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
@@ -377,17 +377,17 @@ struct StatsView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
 
                 Text(value.isEmpty ? fallback : value)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundColor(.primary)
                     .lineLimit(1)
             }
 
@@ -395,7 +395,7 @@ struct StatsView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8)
-            .fill(.quaternary.opacity(0.3)))
+            .fill(Color.secondary.opacity(0.3)))
     }
 
     // MARK: - Personal Records Card
@@ -405,7 +405,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("PERSONAL RECORDS", systemImage: "trophy.fill")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
 
                 HStack(spacing: 12) {
                     self.recordItem(
@@ -431,11 +431,11 @@ struct StatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             Text(value)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
+                .foregroundColor(.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -460,7 +460,7 @@ struct StatsView: View {
             } label: {
                 Label("Reset All Stats", systemImage: "trash")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
             .opacity(self.historyStore.entries.isEmpty ? 0.3 : 0.7)
@@ -469,13 +469,15 @@ struct StatsView: View {
             Spacer()
         }
         .padding(.top, 8)
-        .alert("Reset All Stats", isPresented: self.$showResetConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset Everything", role: .destructive) {
-                self.historyStore.clearAllHistory()
-            }
-        } message: {
-            Text("This will permanently delete all \(self.historyStore.entries.count) transcriptions and reset all statistics. This action cannot be undone.")
+        .alert(isPresented: self.$showResetConfirmation) {
+            Alert(
+                title: Text("Reset All Stats"),
+                message: Text("This will permanently delete all \(self.historyStore.entries.count) transcriptions and reset all statistics. This action cannot be undone."),
+                primaryButton: .destructive(Text("Reset Everything")) {
+                    self.historyStore.clearAllHistory()
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 
@@ -506,7 +508,7 @@ private struct StatCard<Content: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label(self.title, systemImage: self.icon)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
 
                 self.content
             }
@@ -515,8 +517,10 @@ private struct StatCard<Content: View>: View {
     }
 }
 
-#Preview {
-    StatsView()
-        .frame(width: 600, height: 800)
-        .environment(\.theme, AppTheme.dark)
+struct StatsView_Previews: PreviewProvider {
+    static var previews: some View {
+        StatsView()
+            .frame(width: 600, height: 800)
+            .environment(\.theme, AppTheme.dark)
+    }
 }

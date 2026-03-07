@@ -199,41 +199,43 @@ struct FluidIconAdvanced: View {
 }
 
 // Preview for development
-#Preview("Fluid Icon Variants") {
-    VStack(spacing: 20) {
-        Text("Standard Geometric F")
-            .font(.headline)
+struct FluidIcon_Previews: PreviewProvider {
+    static var previews: some View {
+        VStack(spacing: 20) {
+            Text("Standard Geometric F")
+                .font(.headline)
 
-        HStack(spacing: 20) {
-            FluidIcon(size: 24, color: .white)
-                .background(Color.black.opacity(0.3))
+            HStack(spacing: 20) {
+                FluidIcon(size: 24, color: .white)
+                    .background(Color.black.opacity(0.3))
 
-            FluidIcon(size: 32, color: .blue)
+                FluidIcon(size: 32, color: .blue)
 
-            FluidIcon(size: 48, color: .primary)
+                FluidIcon(size: 48, color: .primary)
+            }
+
+            Text("Advanced Angular F")
+                .font(.headline)
+
+            HStack(spacing: 20) {
+                FluidIconAdvanced(size: 24, color: .white)
+                    .background(Color.black.opacity(0.3))
+
+                FluidIconAdvanced(size: 32, color: .blue)
+
+                FluidIconAdvanced(size: 48, color: .primary)
+            }
+
+            HStack(spacing: 20) {
+                FluidIconFilled(size: 32, backgroundColor: .blue)
+                FluidIconFilled(size: 40, backgroundColor: .purple)
+                FluidIconFilled(size: 48, backgroundColor: Color.fluidGreen)
+            }
+
+            // Large version for app icon
+            FluidIconFilled(size: 80, backgroundColor: .black, cornerRadius: 16)
         }
-
-        Text("Advanced Angular F")
-            .font(.headline)
-
-        HStack(spacing: 20) {
-            FluidIconAdvanced(size: 24, color: .white)
-                .background(Color.black.opacity(0.3))
-
-            FluidIconAdvanced(size: 32, color: .blue)
-
-            FluidIconAdvanced(size: 48, color: .primary)
-        }
-
-        HStack(spacing: 20) {
-            FluidIconFilled(size: 32, backgroundColor: .blue)
-            FluidIconFilled(size: 40, backgroundColor: .purple)
-            FluidIconFilled(size: 48, backgroundColor: Color.fluidGreen)
-        }
-
-        // Large version for app icon
-        FluidIconFilled(size: 80, backgroundColor: .black, cornerRadius: 16)
+        .padding()
+        .background(Color.gray.opacity(0.1))
     }
-    .padding()
-    .background(Color.gray.opacity(0.1))
 }

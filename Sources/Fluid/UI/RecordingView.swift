@@ -26,7 +26,7 @@ struct RecordingView: View {
                         HStack {
                             Image(systemName: "waveform.circle.fill")
                                 .font(.system(size: 32))
-                                .foregroundStyle(.white)
+                                .foregroundColor(.white)
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Voice Dictation")
@@ -34,7 +34,7 @@ struct RecordingView: View {
                                     .fontWeight(.bold)
                                 Text("AI-powered speech recognition")
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             }
 
                             Spacer()
@@ -50,7 +50,7 @@ struct RecordingView: View {
 
                                 Text(self.asr.isRunning ? "Recording..." : self.asr.isAsrReady ? "Ready to record" : "Model not ready")
                                     .font(.subheadline)
-                                    .foregroundStyle(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
+                                    .foregroundColor(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
                             }
 
                             // Recording Control (Single Toggle Button)

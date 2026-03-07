@@ -37,7 +37,7 @@ struct MeetingTranscriptionView: View {
             VStack(spacing: 8) {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundStyle(Color.fluidGreen.gradient)
+                    .foregroundColor(Color.fluidGreen)
 
                 Text("Meeting Transcription")
                     .font(.title2)
@@ -81,19 +81,22 @@ struct MeetingTranscriptionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.windowBackground)
-        .overlay(alignment: .topTrailing) {
-            if self.showingCopyConfirmation {
-                Text("Copied!")
-                    .font(.caption)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.fluidGreen.opacity(0.9))
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                    .padding()
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
+        .overlay(
+            Group {
+                if self.showingCopyConfirmation {
+                    Text("Copied!")
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.fluidGreen.opacity(0.9))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                        .padding()
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            },
+            alignment: .topTrailing
+        )
     }
 
     // MARK: - File Selection Card
@@ -150,7 +153,7 @@ struct MeetingTranscriptionView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
-                .buttonStyle(.borderedProminent)
+                
                 .disabled(self.transcriptionService.isTranscribing)
 
             } else {
@@ -225,7 +228,7 @@ struct MeetingTranscriptionView: View {
 
             HStack {
                 ProgressView()
-                    .controlSize(.small)
+                    
 
                 Text(self.transcriptionService.currentStatus)
                     .font(.subheadline)
@@ -292,7 +295,7 @@ struct MeetingTranscriptionView: View {
             ScrollView {
                 Text(result.text)
                     .font(.body)
-                    .textSelection(.enabled)
+                    
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
@@ -502,7 +505,9 @@ struct TranscriptionDocument: FileDocument {
 
 // MARK: - Preview
 
-#Preview {
-    MeetingTranscriptionView(asrService: ASRService())
-        .frame(width: 700, height: 800)
+struct MeetingTranscriptionView_Previews: PreviewProvider {
+    static var previews: some View {
+        MeetingTranscriptionView(asrService: ASRService())
+            .frame(width: 700, height: 800)
+    }
 }

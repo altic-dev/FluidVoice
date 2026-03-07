@@ -1148,7 +1148,7 @@ private struct BottomOverlayModeMenuView: View {
                 if !shortcut.isEmpty {
                     Text(shortcut)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.7))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.white.opacity(0.08))
@@ -1935,17 +1935,17 @@ struct BottomOverlayView: View {
             if !self.isCompactControls {
                 Text("Mode:")
                     .font(.system(size: self.promptSelectorFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.5))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             Text(self.modeLabel)
                 .font(.system(size: self.promptSelectorFontSize, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundColor(.white.opacity(0.75))
                 .lineLimit(1)
             Image(systemName: "chevron.up")
                 .font(.system(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundColor(.white.opacity(0.45))
         }
         .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 8)
@@ -1986,17 +1986,17 @@ struct BottomOverlayView: View {
             if !self.isCompactControls {
                 Text("Prompt:")
                     .font(.system(size: self.promptSelectorFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.5))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             Text(self.selectedPromptLabel)
                 .font(.system(size: self.promptSelectorFontSize, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundColor(.white.opacity(0.75))
                 .lineLimit(1)
             Image(systemName: "chevron.up")
                 .font(.system(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundColor(.white.opacity(0.45))
         }
         .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 8)
@@ -2050,11 +2050,11 @@ struct BottomOverlayView: View {
         return HStack(spacing: 5) {
             Text("Actions")
                 .font(.system(size: self.promptSelectorFontSize, weight: .medium))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundColor(.white.opacity(0.75))
                 .lineLimit(1)
             Image(systemName: "chevron.up")
                 .font(.system(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundColor(.white.opacity(0.45))
         }
         .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 8)
@@ -2074,20 +2074,20 @@ struct BottomOverlayView: View {
             if self.isCompactControls {
                 Text(isEnabled ? "AI On" : "AI Off")
                     .font(.system(size: self.promptSelectorFontSize, weight: .semibold))
-                    .foregroundStyle(isEnabled ? .white.opacity(0.82) : .white.opacity(0.7))
+                    .foregroundColor(isEnabled ? .white.opacity(0.82) : .white.opacity(0.7))
                     .lineLimit(1)
             } else {
                 Text("AI:")
                     .font(.system(size: self.promptSelectorFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.5))
                     .lineLimit(1)
                 Text(isEnabled ? "On" : "Off")
                     .font(.system(size: self.promptSelectorFontSize, weight: .semibold))
-                    .foregroundStyle(isEnabled ? .white.opacity(0.82) : .white.opacity(0.7))
+                    .foregroundColor(isEnabled ? .white.opacity(0.82) : .white.opacity(0.7))
                     .lineLimit(1)
                 Image(systemName: isEnabled ? "brain.fill" : "brain")
                     .font(.system(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                    .foregroundStyle(isEnabled ? .white.opacity(0.65) : .white.opacity(0.45))
+                    .foregroundColor(isEnabled ? .white.opacity(0.65) : .white.opacity(0.45))
             }
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -2152,7 +2152,7 @@ struct BottomOverlayView: View {
         return HStack(spacing: 0) {
             Image(systemName: "gearshape")
                 .font(.system(size: max(self.promptSelectorFontSize + 1, 10), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundColor(.white.opacity(0.72))
         }
         .padding(.horizontal, 9)
         .padding(.vertical, self.promptSelectorVerticalPadding)
@@ -2211,7 +2211,7 @@ struct BottomOverlayView: View {
                                         ScrollView(.vertical, showsIndicators: false) {
                                             Text(previewText)
                                                 .font(.system(size: self.layout.transFontSize, weight: .medium))
-                                                .foregroundStyle(.white.opacity(0.9))
+                                                .foregroundColor(.white.opacity(0.9))
                                                 .multilineTextAlignment(.leading)
                                                 .lineLimit(nil)
                                                 .fixedSize(horizontal: false, vertical: true)
@@ -2225,7 +2225,7 @@ struct BottomOverlayView: View {
                                                 proxy.scrollTo("bottom", anchor: .bottom)
                                             }
                                         }
-                                        .onChange(of: previewText) { _, _ in
+                                        .onChange(of: previewText) { _ in
                                             DispatchQueue.main.async {
                                                 proxy.scrollTo("bottom", anchor: .bottom)
                                             }
@@ -2252,7 +2252,7 @@ struct BottomOverlayView: View {
                                     if self.settings.overlaySize == .small {
                                         Text(previewText)
                                             .font(.system(size: self.layout.transFontSize, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.9))
+                                            .foregroundColor(.white.opacity(0.9))
                                             .multilineTextAlignment(.leading)
                                             .lineLimit(1)
                                             .truncationMode(.head)
@@ -2263,7 +2263,7 @@ struct BottomOverlayView: View {
                                             ScrollView(.vertical, showsIndicators: false) {
                                                 Text(previewText)
                                                     .font(.system(size: self.layout.transFontSize, weight: .medium))
-                                                    .foregroundStyle(.white.opacity(0.9))
+                                                    .foregroundColor(.white.opacity(0.9))
                                                     .multilineTextAlignment(.leading)
                                                     .lineLimit(nil)
                                                     .fixedSize(horizontal: false, vertical: true)
@@ -2278,7 +2278,7 @@ struct BottomOverlayView: View {
                                                     proxy.scrollTo("bottom", anchor: .bottom)
                                                 }
                                             }
-                                            .onChange(of: previewText) { _, _ in
+                                            .onChange(of: previewText) { _ in
                                                 DispatchQueue.main.async {
                                                     proxy.scrollTo("bottom", anchor: .bottom)
                                                 }
@@ -2314,7 +2314,7 @@ struct BottomOverlayView: View {
                         VStack(spacing: 2) {
                             if showModelLoading {
                                 ProgressView()
-                                    .controlSize(.mini)
+                                    
                             }
                             if let appIcon = appIcon {
                                 Image(nsImage: appIcon)
@@ -2336,7 +2336,7 @@ struct BottomOverlayView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(self.modeLabel)
                             .font(.system(size: self.layout.modeFontSize, weight: .semibold))
-                            .foregroundStyle(self.modeColor)
+                            .foregroundColor(self.modeColor)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
 
@@ -2346,7 +2346,7 @@ struct BottomOverlayView: View {
                         {
                             Text("Loading model…")
                                 .font(.system(size: max(self.layout.modeFontSize - 2, 9), weight: .medium))
-                                .foregroundStyle(.orange.opacity(0.85))
+                                .foregroundColor(.orange.opacity(0.85))
                                 .lineLimit(1)
                         }
                     }
@@ -2383,15 +2383,15 @@ struct BottomOverlayView: View {
             height: self.layout.usesFixedCanvas ? self.layout.overlayHeight : nil,
             alignment: .top
         )
-        .onChange(of: self.settings.overlaySize) { _, _ in
+        .onChange(of: self.settings.overlaySize) { _ in
             BottomOverlayWindowController.shared.refreshSizeForContent()
         }
-        .onChange(of: self.contentState.cachedPreviewText) { _, _ in
+        .onChange(of: self.contentState.cachedPreviewText) { _ in
             if !self.layout.usesFixedCanvas {
                 BottomOverlayWindowController.shared.refreshSizeForContent()
             }
         }
-        .onChange(of: self.contentState.mode) { _, _ in
+        .onChange(of: self.contentState.mode) { _ in
             if !self.isPromptSelectableMode || self.contentState.isProcessing {
                 self.closePromptMenu()
             }
@@ -2411,7 +2411,7 @@ struct BottomOverlayView: View {
                 BottomOverlayWindowController.shared.refreshSizeForContent()
             }
         }
-        .onChange(of: self.contentState.isProcessing) { _, processing in
+        .onChange(of: self.contentState.isProcessing) { processing in
             if processing {
                 self.closePromptMenu()
                 self.closeModeMenu()
@@ -2491,12 +2491,12 @@ struct BottomWaveformView: View {
                     .shadow(color: self.color.opacity(self.currentGlowIntensity), radius: self.currentGlowRadius, x: 0, y: 0)
             }
         }
-        .onChange(of: self.contentState.bottomOverlayAudioLevel) { _, level in
+        .onChange(of: self.contentState.bottomOverlayAudioLevel) { level in
             if !self.contentState.isProcessing {
                 self.updateBars(level: level)
             }
         }
-        .onChange(of: self.contentState.isProcessing) { _, processing in
+        .onChange(of: self.contentState.isProcessing) { processing in
             if processing {
                 self.setFlatProcessingBars()
             } else {
@@ -2504,7 +2504,7 @@ struct BottomWaveformView: View {
                 self.updateBars(level: 0)
             }
         }
-        .onChange(of: self.layout.barCount) { _, newCount in
+        .onChange(of: self.layout.barCount) { newCount in
             self.barHeights = Array(repeating: self.minHeight, count: newCount)
         }
         .onAppear {

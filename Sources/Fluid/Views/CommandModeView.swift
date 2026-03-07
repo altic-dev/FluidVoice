@@ -51,12 +51,12 @@ struct CommandModeView: View {
             // Re-enable notch output when leaving in-app UI
             self.service.enableNotchOutput = true
         }
-        .onChange(of: self.asr.finalText) { _, newText in
+        .onChange(of: self.asr.finalText) { newText in
             if !newText.isEmpty {
                 self.inputText = newText
             }
         }
-        .onChange(of: self.settings.commandModeSelectedProviderID) { _, _ in
+        .onChange(of: self.settings.commandModeSelectedProviderID) { _ in
             self.updateAvailableModels()
         }
         .onExitCommand {
@@ -76,7 +76,7 @@ struct CommandModeView: View {
                 Text("Alpha")
                     .font(.caption2)
                     .fontWeight(.semibold)
-                    .foregroundStyle(.white)
+                    .foregroundColor(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color(red: 1.0, green: 0.35, blue: 0.35)) // Command mode red
@@ -91,7 +91,7 @@ struct CommandModeView: View {
                 Button(action: { self.service.createNewChat() }) {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.bordered)
+                
                 .help("New chat")
                 .disabled(self.service.isProcessing)
 
@@ -100,7 +100,7 @@ struct CommandModeView: View {
                     let recentChats = self.service.getRecentChats()
                     if recentChats.isEmpty {
                         Text("No recent chats")
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     } else {
                         ForEach(recentChats) { chat in
                             Button(action: {
@@ -118,7 +118,7 @@ struct CommandModeView: View {
                                     Spacer()
                                     Text(chat.relativeTimeString)
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                             .disabled(self.service.isProcessing)
@@ -135,7 +135,7 @@ struct CommandModeView: View {
                 Button(action: { self.showingClearConfirmation = true }) {
                     Image(systemName: "trash")
                 }
-                .buttonStyle(.bordered)
+                
                 .help("Delete chat")
                 .disabled(self.service.isProcessing)
             }
@@ -154,15 +154,14 @@ struct CommandModeView: View {
         }
         .padding()
         .background(self.theme.palette.windowBackground)
-        .confirmationDialog(
-            "Delete this chat?",
-            isPresented: self.$showingClearConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                self.service.deleteCurrentChat()
-            }
-            Button("Cancel", role: .cancel) {}
+        .alert(isPresented: self.$showingClearConfirmation) {
+            Alert(
+                title: Text("Delete this chat?"),
+                primaryButton: .destructive(Text("Delete")) {
+                    self.service.deleteCurrentChat()
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 
@@ -185,7 +184,7 @@ struct CommandModeView: View {
                     Image(systemName: self.showHowTo ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                .foregroundStyle(self.isHoveringHowTo ? .primary : .secondary)
+                .foregroundColor(self.isHoveringHowTo ? .primary : .secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(self.isHoveringHowTo ? self.theme.palette.cardBackground.opacity(0.6) : Color.clear)
@@ -203,7 +202,7 @@ struct CommandModeView: View {
                         Text("Getting Started")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         HStack(spacing: 4) {
                             Text("Press")
@@ -218,7 +217,7 @@ struct CommandModeView: View {
                             Text("to open Command Mode, speak your command, then press again to send.")
                                 .font(.caption)
                         }
-                        .foregroundStyle(.primary.opacity(0.8))
+                        .foregroundColor(.primary.opacity(0.8))
                     }
 
                     // Examples
@@ -226,7 +225,7 @@ struct CommandModeView: View {
                         Text("Examples")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         VStack(alignment: .leading, spacing: 4) {
                             self.howToItem("\"List files in my Downloads folder\"")
@@ -240,7 +239,7 @@ struct CommandModeView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                             Text("Caution")
                                 .fontWeight(.semibold)
                         }
@@ -248,7 +247,7 @@ struct CommandModeView: View {
 
                         Text("AI can make mistakes. Avoid dangerous commands like deleting important files. Destructive actions will ask for confirmation.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -262,10 +261,10 @@ struct CommandModeView: View {
     private func howToItem(_ text: String) -> some View {
         HStack(spacing: 6) {
             Text("•")
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
+                .foregroundColor(.primary.opacity(0.8))
         }
     }
 
@@ -314,17 +313,17 @@ struct CommandModeView: View {
                             .stroke(self.theme.palette.cardBorder.opacity(0.45), lineWidth: 1)
                     )
             )
-            .onChange(of: self.service.conversationHistory.count) { _, _ in
+            .onChange(of: self.service.conversationHistory.count) { _ in
                 self.scrollToBottom(proxy)
             }
-            .onChange(of: self.service.isProcessing) { _, isProcessing in
+            .onChange(of: self.service.isProcessing) { isProcessing in
                 // Scroll when processing starts, not on every streaming update
                 if isProcessing {
                     self.scrollToBottom(proxy)
                     self.isThinkingExpanded = false // Collapse thinking for new request
                 }
             }
-            .onChange(of: self.service.currentStep) { _, _ in
+            .onChange(of: self.service.currentStep) { _ in
                 self.scrollToBottom(proxy)
             }
             // Removed: .onChange(of: service.streamingText) - causes scroll on every token, too expensive
@@ -344,7 +343,7 @@ struct CommandModeView: View {
 
                     Image(systemName: self.isThinkingExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
-                        .foregroundStyle(.secondary.opacity(0.6))
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -356,8 +355,8 @@ struct CommandModeView: View {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(self.service.streamingThinkingText)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                        .foregroundColor(.secondary)
+                        
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 10)
@@ -368,7 +367,7 @@ struct CommandModeView: View {
                 if !self.service.streamingThinkingText.isEmpty {
                     Text(String(self.service.streamingThinkingText.prefix(150)) + (self.service.streamingThinkingText.count > 150 ? "..." : ""))
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                        .foregroundColor(.secondary.opacity(0.7))
                         .lineLimit(2)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
@@ -396,7 +395,7 @@ struct CommandModeView: View {
         // Use fixedSize to prevent expensive re-layout on every update
         Text(self.service.streamingText)
             .font(.system(size: 13))
-            .foregroundStyle(.primary.opacity(0.9))
+            .foregroundColor(.primary.opacity(0.9))
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: 520, alignment: .leading)
@@ -440,7 +439,7 @@ struct CommandModeView: View {
 
             HStack {
                 Image(systemName: "exclamationmark.shield.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundColor(.orange)
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Confirm Execution")
@@ -448,7 +447,7 @@ struct CommandModeView: View {
                     if let purpose = pending.purpose {
                         Text(purpose)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
@@ -472,7 +471,7 @@ struct CommandModeView: View {
 
                 Text(pending.command)
                     .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
+                    
                     .padding(10)
             }
             .background(self.theme.palette.contentBackground)
@@ -486,7 +485,7 @@ struct CommandModeView: View {
                 Button(action: { self.service.cancelPendingCommand() }) {
                     Label("Cancel", systemImage: "xmark")
                 }
-                .buttonStyle(.bordered)
+                
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: {
@@ -494,8 +493,8 @@ struct CommandModeView: View {
                 }) {
                     Label("Run Command", systemImage: "play.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                
+                .accentColor(.orange)
                 .keyboardShortcut(.return, modifiers: [])
             }
         }
@@ -539,9 +538,6 @@ struct CommandModeView: View {
             // Input field (flexible)
             TextField("Type a command or ask a question...", text: self.$inputText)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    self.submitCommand()
-                }
 
             Button(action: self.submitCommand) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -554,7 +550,7 @@ struct CommandModeView: View {
             Button(action: self.toggleRecording) {
                 Image(systemName: self.asr.isRunning ? "stop.circle.fill" : "mic.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(self.asr.isRunning ? Color.red : self.theme.palette.accent)
+                    .foregroundColor(self.asr.isRunning ? Color.red : self.theme.palette.accent)
             }
             .buttonStyle(.plain)
         }
@@ -628,7 +624,7 @@ struct CommandShimmerText: View {
     var body: some View {
         Text(self.text)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(
+            .foregroundColor(
                 LinearGradient(
                     colors: [
                         Color.primary.opacity(0.4),
@@ -669,7 +665,7 @@ struct ThinkingShimmerLabel: View {
             // Shimmering "Think" text
             Text("Think")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(
+                .foregroundColor(
                     LinearGradient(
                         stops: [
                             .init(color: Color.primary.opacity(0.35), location: 0),
@@ -751,7 +747,7 @@ struct MessageBubble: View {
             if let tc = message.toolCall, let purpose = tc.purpose {
                 Text(purpose)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             // Main content
@@ -782,17 +778,17 @@ struct MessageBubble: View {
                     }
                     Text("Think")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     Spacer()
 
                     Text("\(thinking.count) chars")
                         .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
+                        .foregroundColor(.secondary)
 
                     Image(systemName: self.isThinkingExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
+                        .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -804,8 +800,8 @@ struct MessageBubble: View {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(thinking)
                         .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                        .foregroundColor(.secondary)
+                        
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .padding(.bottom, 8)
@@ -815,7 +811,7 @@ struct MessageBubble: View {
                 // Preview - first 80 chars
                 Text(String(thinking.prefix(80)) + (thinking.count > 80 ? "..." : ""))
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 6)
@@ -837,14 +833,14 @@ struct MessageBubble: View {
             {
                 Text(self.message.content)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             // Command block - clean and simple
             Text(tc.command)
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
+                .foregroundColor(.primary)
+                
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(self.theme.palette.contentBackground)
@@ -862,14 +858,14 @@ struct MessageBubble: View {
             HStack(spacing: 6) {
                 Text(parsed.success ? "Success" : "Error")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(parsed.success ? .primary : .secondary)
+                    .foregroundColor(parsed.success ? .primary : .secondary)
 
                 Spacer()
 
                 if parsed.executionTime > 0 {
                     Text("\(parsed.executionTime)ms")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundColor(.secondary)
                 }
             }
             .padding(.horizontal, 10)
@@ -885,15 +881,15 @@ struct MessageBubble: View {
                         if !parsed.output.isEmpty {
                             Text(self.markdownAttributedString(from: parsed.output))
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                                .foregroundColor(.secondary)
+                                
                         }
 
                         if let error = parsed.error, !error.isEmpty {
                             Text(error)
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                                .foregroundColor(.secondary)
+                                
                         }
                     }
                     .padding(.horizontal, 10)
@@ -912,7 +908,7 @@ struct MessageBubble: View {
     private var textContentView: some View {
         Text(self.markdownAttributedString(from: self.message.content))
             .font(.system(size: 13))
-            .textSelection(.enabled)
+            
     }
 
     // MARK: - Markdown Rendering

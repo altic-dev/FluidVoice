@@ -233,7 +233,7 @@ final class HuggingFaceModelDownloader {
         let fileURL = self.baseResolveURL.appendingPathComponent(relativePath)
         var req = URLRequest(url: fileURL)
         req.httpMethod = "HEAD"
-        let (_, resp) = try await URLSession.shared.data(for: req)
+        let (_, resp) = try await URLSession.shared.compatData(for: req)
         guard let http = resp as? HTTPURLResponse, http.statusCode < 400 else {
             return 0
         }

@@ -109,7 +109,7 @@ struct SettingsView: View {
                         // Section header
                         Label("App Settings", systemImage: "power")
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
 
                         VStack(spacing: 16) {
                             // Launch at startup
@@ -144,7 +144,7 @@ struct SettingsView: View {
                                             .font(.body)
                                         Text("Pick a preset accent color for the app.")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
 
                                     Spacer()
@@ -192,7 +192,7 @@ struct SettingsView: View {
                                         .font(.body)
                                     Text("Choose which sound plays when recording starts. Select None to disable.")
                                         .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
 
                                 Spacer()
@@ -219,7 +219,7 @@ struct SettingsView: View {
                                             .font(.body)
                                         Text("Check for updates automatically once per hour")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
 
                                     Spacer()
@@ -229,19 +229,19 @@ struct SettingsView: View {
                                         set: { SettingsStore.shared.autoUpdateCheckEnabled = $0 }
                                     ))
                                     .toggleStyle(.switch)
-                                    .tint(self.theme.palette.accent)
+                                    .accentColor(self.theme.palette.accent)
                                     .labelsHidden()
                                 }
 
                                 if let lastCheck = SettingsStore.shared.lastUpdateCheckDate {
-                                    Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
+                                    Text("Last checked: \(DateFormatter.localizedString(from: lastCheck, dateStyle: .medium, timeStyle: .short))")
                                         .font(.caption)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundColor(.secondary)
                                 }
 
                                 Text("Current version: \(self.currentAppVersion)")
                                     .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundColor(.secondary)
                             }
 
                             // Update Buttons
@@ -273,17 +273,17 @@ struct SettingsView: View {
                                         }
                                     }
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
-                                .controlSize(.regular)
+                                
+                                .accentColor(self.theme.palette.accent)
+                                
 
                                 Button("Release Notes") {
                                     if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
                                         NSWorkspace.shared.open(url)
                                     }
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.regular)
+                                
+                                
 
                                 Button(self.rollbackVersion.isEmpty ? "Rollback" : "Rollback to \(self.rollbackVersion)") {
                                     guard !self.isRollingBack else { return }
@@ -334,27 +334,27 @@ struct SettingsView: View {
                                         }
                                     }
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.regular)
+                                
+                                
                                 .disabled(self.rollbackVersion.isEmpty || self.isRollingBack)
                                 .opacity(self.isRollingBack ? 0.7 : 1.0)
 
                                 Button("Get Previous Builds") {
                                     self.openPreviousBuildPicker()
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.regular)
+                                
+                                
                             }
                             .padding(.top, 12)
 
                             if self.rollbackVersion.isEmpty {
                                 Text("No rollback backup found.")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             } else {
                                 Text("Rollback target: \(self.rollbackVersion)")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     }
@@ -366,7 +366,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Microphone Permission", systemImage: "mic.fill")
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
 
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 10) {
@@ -379,12 +379,12 @@ struct SettingsView: View {
                                         self.asr.micStatus == .denied ? "Microphone access denied" :
                                         "Microphone access not determined")
                                         .font(.body)
-                                        .foregroundStyle(self.asr.micStatus == .authorized ? .primary : self.theme.palette.warning)
+                                        .foregroundColor(self.asr.micStatus == .authorized ? .primary : self.theme.palette.warning)
 
                                     if self.asr.micStatus != .authorized {
                                         Text("Microphone access is required for voice recording")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
                                 }
                                 Spacer()
@@ -395,17 +395,17 @@ struct SettingsView: View {
                                     } label: {
                                         Label("Grant Access", systemImage: "mic.fill")
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(self.theme.palette.accent)
-                                    .controlSize(.regular)
+                                    
+                                    .accentColor(self.theme.palette.accent)
+                                    
                                 } else if self.asr.micStatus == .denied {
                                     Button {
                                         self.asr.openSystemSettingsForMic()
                                     } label: {
                                         Label("Open Settings", systemImage: "gear")
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.regular)
+                                    
+                                    
                                 }
                             }
 
@@ -428,7 +428,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Label("Global Hotkey", systemImage: "keyboard")
                                 .font(.headline)
-                                .foregroundStyle(.primary)
+                                .foregroundColor(.primary)
 
                             Spacer()
 
@@ -436,20 +436,20 @@ struct SettingsView: View {
                                 if self.isRecordingShortcut || self.isRecordingCommandModeShortcut || self.isRecordingRewriteShortcut {
                                     Text("Recording…")
                                         .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.orange)
+                                        .foregroundColor(.orange)
                                 } else if self.hotkeyManagerInitialized {
                                     HStack(spacing: 6) {
                                         Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(Color.fluidGreen)
+                                            .foregroundColor(Color.fluidGreen)
                                             .font(.caption)
                                         Text("Active")
                                             .font(.caption.weight(.semibold))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
                                 } else {
                                     Text("Initializing…")
                                         .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                         }
@@ -459,18 +459,18 @@ struct SettingsView: View {
                                 if self.isRecordingShortcut || self.isRecordingCommandModeShortcut || self.isRecordingRewriteShortcut {
                                     HStack(spacing: 8) {
                                         Image(systemName: "hand.point.up.left.fill")
-                                            .foregroundStyle(.orange)
+                                            .foregroundColor(.orange)
                                         Text("Press your new hotkey combination now…")
                                             .font(.caption)
-                                            .foregroundStyle(.orange)
+                                            .foregroundColor(.orange)
                                     }
                                 } else if !self.hotkeyManagerInitialized {
                                     HStack(spacing: 8) {
                                         ProgressView()
-                                            .controlSize(.small)
+                                            
                                         Text("Hotkey initializing…")
                                             .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
                                 }
 
@@ -479,7 +479,7 @@ struct SettingsView: View {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Keyboard Shortcuts")
                                         .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
 
                                     self.shortcutRow(
                                         icon: "mic.fill",
@@ -542,7 +542,7 @@ struct SettingsView: View {
                                         description: "The shortcut only records while you hold it down, giving you quick push-to-talk style control.",
                                         isOn: self.$pressAndHoldModeEnabled
                                     )
-                                    .onChange(of: self.pressAndHoldModeEnabled) { _, newValue in
+                                    .onChange(of: self.pressAndHoldModeEnabled) { newValue in
                                         SettingsStore.shared.pressAndHoldMode = newValue
                                         self.hotkeyManager?.enablePressAndHoldMode(newValue)
                                     }
@@ -553,7 +553,7 @@ struct SettingsView: View {
                                         description: "Display transcription text in real-time in the overlay as you speak.",
                                         isOn: self.$enableStreamingPreview
                                     )
-                                    .onChange(of: self.enableStreamingPreview) { _, newValue in
+                                    .onChange(of: self.enableStreamingPreview) { newValue in
                                         SettingsStore.shared.enableStreamingPreview = newValue
                                     }
                                     Divider().opacity(0.2)
@@ -563,7 +563,7 @@ struct SettingsView: View {
                                         description: "Automatically copy transcribed text to clipboard as a backup.",
                                         isOn: self.$copyToClipboard
                                     )
-                                    .onChange(of: self.copyToClipboard) { _, newValue in
+                                    .onChange(of: self.copyToClipboard) { newValue in
                                         SettingsStore.shared.copyTranscriptionToClipboard = newValue
                                     }
                                     Divider().opacity(0.2)
@@ -637,23 +637,23 @@ struct SettingsView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 6) {
                                             Image(systemName: "exclamationmark.triangle.fill")
-                                                .foregroundStyle(self.theme.palette.warning)
+                                                .foregroundColor(self.theme.palette.warning)
                                             Text("Accessibility permissions required")
                                                 .font(.body)
-                                                .foregroundStyle(self.theme.palette.warning)
+                                                .foregroundColor(self.theme.palette.warning)
                                         }
                                         Text("Required for global hotkey functionality")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
                                     Spacer()
 
                                     Button("Open Accessibility Settings") {
                                         self.openAccessibilitySettings()
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(self.theme.palette.accent)
-                                    .controlSize(.regular)
+                                    
+                                    .accentColor(self.theme.palette.accent)
+                                    
                                 }
 
                                 self.instructionsBox(
@@ -671,14 +671,14 @@ struct SettingsView: View {
                                     Button("Reveal in Finder") {
                                         self.revealAppInFinder()
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                                    
+                                    
 
                                     Button("Open Applications") {
                                         self.openApplicationsFolder()
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                                    
+                                    
                                 }
                             }
                         }
@@ -692,7 +692,7 @@ struct SettingsView: View {
                         HStack {
                             Label("Audio Devices", systemImage: "speaker.wave.2.fill")
                                 .font(.headline)
-                                .foregroundStyle(.primary)
+                                .foregroundColor(.primary)
 
                             Spacer()
 
@@ -704,18 +704,18 @@ struct SettingsView: View {
                             } label: {
                                 Label("Refresh", systemImage: "arrow.clockwise")
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            
+                            
                         }
 
                         // Info note about device syncing
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "info.circle")
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .font(.body)
                             Text("Audio devices are synced with macOS System Settings.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 4)
@@ -758,7 +758,7 @@ struct SettingsView: View {
                                     }
                                 }
                                 // Sync selection when devices load or change
-                                .onChange(of: self.inputDevices) { _, newDevices in
+                                .onChange(of: self.inputDevices) { newDevices in
                                     // Update cached default device name when device list changes
                                     self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
 
@@ -819,7 +819,7 @@ struct SettingsView: View {
                                     }
                                 }
                                 // Sync selection when devices load or change
-                                .onChange(of: self.outputDevices) { _, newDevices in
+                                .onChange(of: self.outputDevices) { newDevices in
                                     // Update cached default device name when device list changes
                                     self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
 
@@ -849,7 +849,7 @@ struct SettingsView: View {
                                     Spacer()
                                     Text("Default: \(self.cachedDefaultInputName) / \(self.cachedDefaultOutputName)")
                                         .font(.caption)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundColor(.secondary)
                                         .lineLimit(1)
                                 }
                             }
@@ -868,7 +868,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Overlay", systemImage: "waveform")
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
 
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
@@ -877,7 +877,7 @@ struct SettingsView: View {
                                         .font(.body)
                                     Text("Control how sensitive the audio visualizer is to sound input")
                                         .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
 
                                 Spacer()
@@ -886,27 +886,27 @@ struct SettingsView: View {
                                     self.visualizerNoiseThreshold = 0.4
                                     SettingsStore.shared.visualizerNoiseThreshold = self.visualizerNoiseThreshold
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                
+                                
                             }
 
                             HStack(spacing: 10) {
                                 Text("More")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                     .frame(width: 36, alignment: .trailing)
 
                                 Slider(value: self.$visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
-                                    .controlSize(.regular)
+                                    
 
                                 Text("Less")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                     .frame(width: 36, alignment: .leading)
 
                                 Text(String(format: "%.2f", self.visualizerNoiseThreshold))
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.tertiary)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
                                     .frame(width: 36)
                             }
 
@@ -919,7 +919,7 @@ struct SettingsView: View {
                                         .font(.body)
                                     Text("Where the recording indicator appears on screen")
                                         .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
 
                                 Spacer()
@@ -942,20 +942,20 @@ struct SettingsView: View {
                                             .font(.body)
                                         Text("How many recent characters appear in the notch/pill preview")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
 
                                     Spacer()
 
                                     Text("\(self.settings.transcriptionPreviewCharLimit) chars")
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.secondary)
                                 }
 
                                 HStack(spacing: 10) {
                                     Text("Less")
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                         .frame(width: 36, alignment: .trailing)
 
                                     Slider(
@@ -966,11 +966,11 @@ struct SettingsView: View {
                                         in: Double(SettingsStore.transcriptionPreviewCharLimitRange.lowerBound)...Double(SettingsStore.transcriptionPreviewCharLimitRange.upperBound),
                                         step: Double(SettingsStore.transcriptionPreviewCharLimitStep)
                                     )
-                                    .controlSize(.regular)
+                                    
 
                                     Text("More")
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                         .frame(width: 36, alignment: .leading)
                                 }
                             }
@@ -986,7 +986,7 @@ struct SettingsView: View {
                                             .font(.body)
                                         Text("How large the recording indicator appears")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
 
                                     Spacer()
@@ -1007,7 +1007,7 @@ struct SettingsView: View {
                                             .font(.body)
                                         Text("Distance from bottom of screen")
                                             .font(.subheadline)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundColor(.secondary)
                                     }
 
                                     Spacer()
@@ -1015,11 +1015,11 @@ struct SettingsView: View {
                                     HStack(spacing: 6) {
                                         Slider(value: self.$settings.overlayBottomOffset, in: 20...500)
                                             .frame(width: 110)
-                                            .controlSize(.small)
+                                            
 
                                         Text("\(Int(self.settings.overlayBottomOffset)) px")
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.secondary)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundColor(.secondary)
                                             .frame(width: 54, alignment: .trailing)
                                     }
                                     .frame(width: 170, alignment: .trailing)
@@ -1029,7 +1029,7 @@ struct SettingsView: View {
                             if self.asr.isRunning {
                                 Text("Settings are disabled during active recording")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                     .italic()
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.top, 4)
@@ -1044,7 +1044,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Debug Settings", systemImage: "ladybug.fill")
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
 
                         VStack(alignment: .leading, spacing: 8) {
                             self.settingsToggleRow(
@@ -1068,15 +1068,15 @@ struct SettingsView: View {
                             } label: {
                                 Label("Reveal Log File", systemImage: "doc.richtext")
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.regular)
+                            
+                            
 
                             Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                             Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                         }
                     }
                     .padding(16)
@@ -1157,7 +1157,7 @@ struct SettingsView: View {
                 self.refreshRollbackState()
             }
         }
-        .onChange(of: self.visualizerNoiseThreshold) { _, newValue in
+        .onChange(of: self.visualizerNoiseThreshold) { newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
         }
     }
@@ -1243,21 +1243,21 @@ struct SettingsView: View {
                         .font(.body)
                     Text(description)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 Spacer()
 
                 Toggle("", isOn: isOn)
                     .toggleStyle(.switch)
-                    .tint(self.theme.palette.accent)
+                    .accentColor(self.theme.palette.accent)
                     .labelsHidden()
             }
 
             if let footnote = footnote {
                 Text(footnote)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -1274,14 +1274,14 @@ struct SettingsView: View {
                     .font(.body)
                 Text(description)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             Spacer()
 
             Toggle("", isOn: isOn)
                 .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
+                .accentColor(self.theme.palette.accent)
                 .labelsHidden()
         }
     }
@@ -1295,11 +1295,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                    .foregroundColor(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
                     .font(.caption)
                 Text(title)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -1307,12 +1307,12 @@ struct SettingsView: View {
                     HStack(alignment: .top, spacing: 8) {
                         Text("\(index + 1).")
                             .font(.caption)
-                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                            .foregroundColor(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
                             .fontWeight(.semibold)
                             .frame(width: 16, alignment: .trailing)
                         Text(.init(step))
                             .font(.caption)
-                            .foregroundStyle(.primary)
+                            .foregroundColor(.primary)
                     }
                 }
             }
@@ -1340,7 +1340,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .foregroundStyle(iconColor)
+                    .foregroundColor(iconColor)
                     .frame(width: 20)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -1348,7 +1348,7 @@ struct SettingsView: View {
                         .font(.body)
                     Text(description)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
 
@@ -1357,7 +1357,7 @@ struct SettingsView: View {
                 if let isEnabled {
                     Toggle("", isOn: isEnabled)
                         .toggleStyle(.switch)
-                        .tint(self.theme.palette.accent)
+                        .accentColor(self.theme.palette.accent)
                         .labelsHidden()
                 }
             }
@@ -1369,18 +1369,18 @@ struct SettingsView: View {
                 if isRecording && enabledValue {
                     Text("Press shortcut...")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.orange)
+                        .foregroundColor(.orange)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(.orange.opacity(0.2)))
                 } else {
                     Text(shortcut.displayString)
-                        .font(.caption.monospaced().weight(.medium))
+                        .font(.system(.caption, design: .monospaced).weight(.medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(.quaternary.opacity(0.5))
+                            .fill(Color.secondary.opacity(0.5))
                             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .stroke(.primary.opacity(0.15), lineWidth: 1)))
                 }
@@ -1388,8 +1388,8 @@ struct SettingsView: View {
                 Button("Change") {
                     onChangePressed()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                
+                
                 .disabled(isRecording || !enabledValue)
             }
         }
@@ -1408,7 +1408,7 @@ struct FillerWordsEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Filler words to remove:")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             // Word chips
             FlowLayout(spacing: 6) {
@@ -1427,7 +1427,7 @@ struct FillerWordsEditor: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.quaternary))
+                        .fill(Color.secondary.opacity(0.2)))
                 }
             }
 
@@ -1436,11 +1436,10 @@ struct FillerWordsEditor: View {
                 TextField("Add word", text: self.$newWord)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 100)
-                    .onSubmit { self.addWord() }
 
                 Button("Add") { self.addWord() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    
+                    
                     .disabled(self.newWord.trimmingCharacters(in: .whitespaces).isEmpty)
 
                 Spacer()
@@ -1449,8 +1448,8 @@ struct FillerWordsEditor: View {
                     self.fillerWords = SettingsStore.defaultFillerWords
                     SettingsStore.shared.fillerWords = self.fillerWords
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                
+                
             }
         }
     }
@@ -1577,7 +1576,7 @@ struct AnalyticsConfirmationView: View {
 
             Text("By sharing anonymous usage data, you help us build the features you care about most. We never collect personal information (Audio, Transcription text etc), ever. Your support simply helps us make FluidVoice better for you.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
@@ -1590,8 +1589,8 @@ struct AnalyticsConfirmationView: View {
 
             Text(self.contactInfoText)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
+                .foregroundColor(.secondary)
+                
 
             Divider()
 
@@ -1605,8 +1604,8 @@ struct AnalyticsConfirmationView: View {
                 Button("Yes") {
                     self.onConfirm()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+                
+                .accentColor(.red)
             }
         }
         .padding(20)

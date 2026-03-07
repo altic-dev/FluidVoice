@@ -19,10 +19,10 @@ extension AIEnhancementSettingsView {
                         HStack(alignment: .firstTextBaseline, spacing: 0) {
                             Text("Prompt Profiles")
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(self.theme.palette.primaryText)
+                                .foregroundColor(self.theme.palette.primaryText)
                             Text(" - Pick one prompt for Dictate and one for Edit Text.")
                                 .font(.system(size: 13))
-                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .foregroundColor(self.theme.palette.secondaryText)
                         }
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -83,7 +83,7 @@ extension AIEnhancementSettingsView {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(title)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(self.theme.palette.primaryText)
+                            .foregroundColor(self.theme.palette.primaryText)
                         if mode.normalized == .edit {
                             Text("Context: Auto")
                                 .font(.caption2)
@@ -93,12 +93,12 @@ extension AIEnhancementSettingsView {
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                                         .fill(tone.opacity(0.12))
                                 )
-                                .foregroundStyle(tone)
+                                .foregroundColor(tone)
                         }
                     }
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .multilineTextAlignment(.leading)
@@ -113,7 +113,7 @@ extension AIEnhancementSettingsView {
             HStack(spacing: 10) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(isSelected ? tone : self.theme.palette.secondaryText.opacity(0.35))
+                    .foregroundColor(isSelected ? tone : self.theme.palette.secondaryText.opacity(0.35))
                     .frame(width: 18, height: 18)
 
                 Menu {
@@ -124,12 +124,12 @@ extension AIEnhancementSettingsView {
                     }
                     if let onDelete {
                         Divider()
-                        Button(role: .destructive, action: { onDelete() }) {
+                        Button( action: { onDelete() }) {
                             Label("Delete Prompt", systemImage: "trash")
                         }
                     } else if let onResetDefault {
                         Divider()
-                        Button("Reset to Built-in Default", role: .destructive) { onResetDefault() }
+                        Button("Reset to Built-in Default")  { onResetDefault() }
                             .disabled(!canResetDefault)
                     }
                 } label: {
@@ -138,7 +138,7 @@ extension AIEnhancementSettingsView {
                         .frame(width: AISettingsLayout.controlHeight, height: AISettingsLayout.controlHeight)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(self.theme.palette.secondaryText)
+                .foregroundColor(self.theme.palette.secondaryText)
             }
         }
         .padding(12)
@@ -174,16 +174,16 @@ extension AIEnhancementSettingsView {
             HStack(spacing: 8) {
                 Image(systemName: self.modeSymbol(mode))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
+                    .foregroundColor(.white.opacity(0.95))
                     .frame(width: 20, height: 20)
                     .background(Circle().fill(tone.opacity(mode.normalized == .dictate ? 0.85 : 0.65)))
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(mode.normalized == .dictate ? "Dictate Mode" : "Edit Text Mode")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.primaryText)
+                        .foregroundColor(self.theme.palette.primaryText)
                     Text(" - \(self.promptSectionDescription(for: mode))")
                         .font(.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundColor(self.theme.palette.secondaryText)
                 }
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -211,7 +211,7 @@ extension AIEnhancementSettingsView {
             if customProfiles.isEmpty {
                 Text("No custom \(self.friendlyModeName(mode).lowercased()) prompts yet.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .padding(.horizontal, 4)
             } else {
                 ForEach(customProfiles) { profile in
@@ -259,7 +259,7 @@ extension AIEnhancementSettingsView {
             HStack(alignment: .center, spacing: 12) {
                 Text("Edit mode model selection (optional)")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundColor(self.theme.palette.secondaryText)
                     .lineLimit(1)
                     .layoutPriority(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -269,10 +269,10 @@ extension AIEnhancementSettingsView {
                 HStack(spacing: 8) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                     Text("No verified providers yet. Verify a provider above to enable Edit Text model selection.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
                 .padding(10)
                 .background(
@@ -290,9 +290,9 @@ extension AIEnhancementSettingsView {
                     Toggle("Sync with AI Enhancement model", isOn: self.editModeLinkedToGlobalBinding)
                         .toggleStyle(.checkbox)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .fixedSize(horizontal: true, vertical: false)
-                        .onChange(of: self.settings.rewriteModeLinkedToGlobal) { _, linked in
+                        .onChange(of: self.settings.rewriteModeLinkedToGlobal) { linked in
                             if linked {
                                 self.syncEditModeToGlobalSelection()
                             } else {
@@ -303,7 +303,7 @@ extension AIEnhancementSettingsView {
                     HStack(alignment: .center, spacing: 10) {
                         Text("Provider")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Picker("", selection: self.editModeProviderBinding) {
                             ForEach(verified) { provider in
@@ -317,7 +317,7 @@ extension AIEnhancementSettingsView {
 
                         Text("Model")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         SearchableModelPicker(
                             models: models,
@@ -528,7 +528,7 @@ extension AIEnhancementSettingsView {
                         : "Prompt text is appended to the hidden base prompt for the selected mode."
                     )
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 }
                 Spacer()
             }
@@ -536,7 +536,7 @@ extension AIEnhancementSettingsView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Mode")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 Picker("Mode", selection: self.$viewModel.draftPromptMode) {
                     ForEach(SettingsStore.PromptMode.visiblePromptModes) { mode in
                         Text(self.friendlyModeName(mode)).tag(mode)
@@ -549,7 +549,7 @@ extension AIEnhancementSettingsView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Name")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 let isDefaultNameLocked = mode.isDefault
                 TextField("Prompt name", text: self.$viewModel.draftPromptName)
                     .textFieldStyle(.roundedBorder)
@@ -559,7 +559,7 @@ extension AIEnhancementSettingsView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Prompt")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 PromptTextView(
                     text: self.$viewModel.draftPromptText,
                     isEditable: true,
@@ -575,7 +575,7 @@ extension AIEnhancementSettingsView {
                                 .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
                         )
                 )
-                .onChange(of: self.viewModel.draftPromptText) { _, newValue in
+                .onChange(of: self.viewModel.draftPromptText) { newValue in
                     guard self.viewModel.draftPromptMode == .dictate else { return }
                     let combined = self.viewModel.combinedDraftPrompt(newValue, mode: self.viewModel.draftPromptMode)
                     self.promptTest.updateDraftPromptText(combined)
@@ -586,11 +586,11 @@ extension AIEnhancementSettingsView {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Selected text is added automatically when text is selected.")
                         .font(.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .foregroundColor(self.theme.palette.secondaryText)
 
                     Text("Context block added automatically:")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     Text(SettingsStore.contextTemplateText())
                         .font(.system(.caption2, design: .monospaced))
@@ -613,7 +613,7 @@ extension AIEnhancementSettingsView {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: "waveform")
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
                         Text("Test")
                             .font(.subheadline)
                             .fontWeight(.semibold)
@@ -643,41 +643,41 @@ extension AIEnhancementSettingsView {
                     if !canTest {
                         Text("Testing is disabled because AI post-processing is not configured.")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     } else if self.promptTest.isActive {
                         Text("Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps).")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
 
                     if self.promptTest.isActive {
                         if self.promptTest.isProcessing {
                             HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
+                                ProgressView()
                                 Text("Processing…")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             }
                         }
 
                         if !self.promptTest.lastError.isEmpty {
                             Text(self.promptTest.lastError)
                                 .font(.caption2)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
+                                .foregroundColor(.red)
+                                
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Raw transcription")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                             TextEditor(text: Binding(
                                 get: { self.promptTest.lastTranscriptionText },
                                 set: { _ in }
                             ))
                             .font(.system(.caption, design: .monospaced))
                             .frame(minHeight: 70)
-                            .scrollContentBackground(.hidden)
+                            
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(self.theme.palette.contentBackground.opacity(0.7))
@@ -691,14 +691,14 @@ extension AIEnhancementSettingsView {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Post-processed output")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                             TextEditor(text: Binding(
                                 get: { self.promptTest.lastOutputText },
                                 set: { _ in }
                             ))
                             .font(.system(.caption, design: .monospaced))
                             .frame(minHeight: 110)
-                            .scrollContentBackground(.hidden)
+                            
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(self.theme.palette.contentBackground.opacity(0.7))
@@ -722,7 +722,7 @@ extension AIEnhancementSettingsView {
             } else if self.promptTest.isActive {
                 Text("Prompt test mode is available only for Dictate prompts.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .onAppear { self.promptTest.deactivate() }
             }
 
@@ -746,16 +746,16 @@ extension AIEnhancementSettingsView {
         .onDisappear {
             self.promptTest.deactivate()
         }
-        .onChange(of: self.viewModel.enableAIProcessing) { _, _ in
+        .onChange(of: self.viewModel.enableAIProcessing) { _ in
             self.autoDisablePromptTestIfNeeded()
         }
-        .onChange(of: self.viewModel.selectedProviderID) { _, _ in
+        .onChange(of: self.viewModel.selectedProviderID) { _ in
             self.autoDisablePromptTestIfNeeded()
         }
-        .onChange(of: self.viewModel.providerAPIKeys) { _, _ in
+        .onChange(of: self.viewModel.providerAPIKeys) { _ in
             self.autoDisablePromptTestIfNeeded()
         }
-        .onChange(of: self.viewModel.savedProviders) { _, _ in
+        .onChange(of: self.viewModel.savedProviders) { _ in
             self.autoDisablePromptTestIfNeeded()
         }
     }

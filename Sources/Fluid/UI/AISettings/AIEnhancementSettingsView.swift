@@ -22,24 +22,25 @@ struct AIEnhancementSettingsView: View {
                     self.expandedProviderID = self.viewModel.selectedProviderID
                 }
             }
-            .onChange(of: self.viewModel.showKeychainPermissionAlert) { _, isPresented in
+            .onChange(of: self.viewModel.showKeychainPermissionAlert) { isPresented in
                 guard isPresented else { return }
                 self.viewModel.presentKeychainAccessAlert(message: self.viewModel.keychainPermissionMessage)
                 self.viewModel.showKeychainPermissionAlert = false
             }
-            .alert("Delete Prompt?", isPresented: self.$viewModel.showingDeletePromptConfirm) {
-                Button("Delete", role: .destructive) {
-                    self.viewModel.deletePendingPrompt()
-                }
-                Button("Cancel", role: .cancel) {
-                    self.viewModel.clearPendingDeletePrompt()
-                }
-            } message: {
-                if self.viewModel.pendingDeletePromptName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("This cannot be undone.")
-                } else {
-                    Text("Delete “\(self.viewModel.pendingDeletePromptName)”? This cannot be undone.")
-                }
+            .alert(isPresented: self.$viewModel.showingDeletePromptConfirm) {
+                let message = self.viewModel.pendingDeletePromptName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? “This cannot be undone.”
+                    : “Delete \”\(self.viewModel.pendingDeletePromptName)\”? This cannot be undone.”
+                return Alert(
+                    title: Text(“Delete Prompt?”),
+                    message: Text(message),
+                    primaryButton: .destructive(Text(“Delete”)) {
+                        self.viewModel.deletePendingPrompt()
+                    },
+                    secondaryButton: .cancel {
+                        self.viewModel.clearPendingDeletePrompt()
+                    }
+                )
             }
     }
 }

@@ -83,7 +83,7 @@ struct CustomDictionaryView: View {
             HStack {
                 Image(systemName: "text.book.closed.fill")
                     .font(.title2)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
                 Text("Custom Dictionary")
                     .font(.title2)
                     .fontWeight(.semibold)
@@ -91,7 +91,7 @@ struct CustomDictionaryView: View {
 
             Text("Improve transcription accuracy with Custom Words for names and product terms, plus Instant Replacement for simple find-and-replace.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -109,7 +109,7 @@ struct CustomDictionaryView: View {
                     HStack {
                         Image(systemName: self.isOfflineSectionExpanded ? "chevron.down" : "chevron.right")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                             .frame(width: 16)
 
                         Text("Instant Replacement")
@@ -121,7 +121,7 @@ struct CustomDictionaryView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(RoundedRectangle(cornerRadius: 4).fill(Color.fluidGreen.opacity(0.2)))
-                            .foregroundStyle(Color.fluidGreen)
+                            .foregroundColor(Color.fluidGreen)
 
                         Spacer()
 
@@ -130,8 +130,8 @@ struct CustomDictionaryView: View {
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(.quaternary))
-                                .foregroundStyle(.secondary)
+                                .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                                .foregroundColor(.secondary)
                         }
 
                         // Add button (only when expanded and has entries)
@@ -141,8 +141,8 @@ struct CustomDictionaryView: View {
                             } label: {
                                 Image(systemName: "plus")
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            
+                            
                         }
                     }
                     .contentShape(Rectangle())
@@ -156,22 +156,22 @@ struct CustomDictionaryView: View {
                     // Description
                     Text("Simple find-and-replace. Works offline with zero latency. Replacements are applied instantly after transcription.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .padding(.bottom, 12)
 
                     // Features
                     HStack(spacing: 12) {
                         Label("No AI needed", systemImage: "cpu")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Label("Zero latency", systemImage: "bolt.fill")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Label("Case insensitive", systemImage: "textformat")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                     .padding(.bottom, 12)
 
@@ -193,11 +193,11 @@ struct CustomDictionaryView: View {
         VStack(spacing: 12) {
             Image(systemName: "plus.circle.dashed")
                 .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
 
             Text("No entries yet")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
 
             Button {
                 self.showAddSheet = true
@@ -207,9 +207,9 @@ struct CustomDictionaryView: View {
                     Text("Add Entry")
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(self.theme.palette.accent)
-            .controlSize(.small)
+            
+            .accentColor(self.theme.palette.accent)
+            
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -243,7 +243,7 @@ struct CustomDictionaryView: View {
                     HStack {
                         Image(systemName: self.isAISectionExpanded ? "chevron.down" : "chevron.right")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                             .frame(width: 16)
 
                         Text("Custom Words (Parakeet)")
@@ -254,14 +254,14 @@ struct CustomDictionaryView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(RoundedRectangle(cornerRadius: 4).fill(self.theme.palette.accent.opacity(0.2)))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
 
                         Text("\(self.boostTerms.count)")
                             .font(.caption2.weight(.medium))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(.quaternary))
-                            .foregroundStyle(.secondary)
+                            .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                            .foregroundColor(.secondary)
 
                         Spacer()
 
@@ -271,8 +271,8 @@ struct CustomDictionaryView: View {
                             } label: {
                                 Image(systemName: "plus")
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            
+                            
                         }
                     }
                     .contentShape(Rectangle())
@@ -286,15 +286,15 @@ struct CustomDictionaryView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Add names, product words, and uncommon terms in a simple form.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Text("Words from Instant Replacement are also used here automatically.")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         Text("Applies when using a Parakeet voice engine.")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         HStack {
                             Toggle(isOn: self.$vocabBoostingEnabled) {
@@ -303,12 +303,12 @@ struct CustomDictionaryView: View {
                                         .font(.subheadline.weight(.medium))
                                     Text("Uses a secondary ML model to improve recognition of custom words. Disable if you experience issues.")
                                         .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             }
                             .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .onChange(of: self.vocabBoostingEnabled) { _, newValue in
+                            
+                            .onChange(of: self.vocabBoostingEnabled) { newValue in
                                 SettingsStore.shared.vocabularyBoostingEnabled = newValue
                             }
                         }
@@ -322,10 +322,10 @@ struct CustomDictionaryView: View {
                             VStack(spacing: 10) {
                                 Image(systemName: "waveform.and.magnifyingglass")
                                     .font(.system(size: 28))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundColor(.secondary)
                                 Text("No custom words yet")
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                 Button {
                                     self.showAddBoostSheet = true
                                 } label: {
@@ -334,9 +334,9 @@ struct CustomDictionaryView: View {
                                         Text("Add Custom Word")
                                     }
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
-                                .controlSize(.small)
+                                
+                                .accentColor(self.theme.palette.accent)
+                                
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
@@ -361,9 +361,9 @@ struct CustomDictionaryView: View {
                                 } label: {
                                     Label("Add Word", systemImage: "plus")
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
-                                .controlSize(.small)
+                                
+                                .accentColor(self.theme.palette.accent)
+                                
 
                                 Spacer()
                             }
@@ -371,10 +371,10 @@ struct CustomDictionaryView: View {
 
                         HStack {
                             Image(systemName: self.boostHasError ? "xmark.circle.fill" : "checkmark.circle.fill")
-                                .foregroundStyle(self.boostHasError ? .red : .secondary)
+                                .foregroundColor(self.boostHasError ? .red : .secondary)
                             Text(self.boostStatusMessage)
                                 .font(.caption)
-                                .foregroundStyle(self.boostHasError ? .red : .secondary)
+                                .foregroundColor(self.boostHasError ? .red : .secondary)
                         }
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -502,7 +502,7 @@ struct BoostTermRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.term.text)
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
             }
 
             Spacer()
@@ -512,8 +512,8 @@ struct BoostTermRow: View {
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(.quaternary))
-                    .foregroundStyle(.secondary)
+                    .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                    .foregroundColor(.secondary)
             }
 
             HStack(spacing: 6) {
@@ -523,21 +523,21 @@ struct BoostTermRow: View {
                     Image(systemName: "pencil")
                         .font(.caption2)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                
+                
 
-                Button(role: .destructive) {
+                Button {
                     self.onDelete()
                 } label: {
                     Image(systemName: "trash")
                         .font(.caption2)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                
+                
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.5)))
     }
 }
 
@@ -575,7 +575,6 @@ struct AddBoostTermSheet: View {
                         .font(.subheadline.weight(.medium))
                     TextField("FluidVoice", text: self.$termText)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { self.saveIfValid() }
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -589,21 +588,21 @@ struct AddBoostTermSheet: View {
                     .pickerStyle(.segmented)
                     Text(self.strength.hint)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 if self.isDuplicate {
                     Text("This term already exists.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundColor(.orange)
                 }
 
                 HStack {
                     Button("Cancel") { self.dismiss() }
-                        .buttonStyle(.bordered)
+                        
                     Spacer()
                     Button("Save") { self.saveIfValid() }
-                        .buttonStyle(.borderedProminent)
+                        
                         .disabled(!self.canSave)
                         .keyboardShortcut(.return, modifiers: [])
                 }
@@ -667,7 +666,6 @@ struct EditBoostTermSheet: View {
                         .font(.subheadline.weight(.medium))
                     TextField("FluidVoice", text: self.$termText)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { self.saveIfValid() }
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -681,21 +679,21 @@ struct EditBoostTermSheet: View {
                     .pickerStyle(.segmented)
                     Text(self.strength.hint)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                 }
 
                 if self.isDuplicate {
                     Text("This term already exists.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundColor(.orange)
                 }
 
                 HStack {
                     Button("Cancel") { self.dismiss() }
-                        .buttonStyle(.bordered)
+                        
                     Spacer()
                     Button("Save") { self.saveIfValid() }
-                        .buttonStyle(.borderedProminent)
+                        
                         .disabled(!self.canSave)
                         .keyboardShortcut(.return, modifiers: [])
                 }
@@ -738,7 +736,7 @@ struct DictionaryEntryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("When heard:")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
 
                 FlowLayout(spacing: 4) {
                     ForEach(self.entry.triggers, id: \.self) { trigger in
@@ -746,7 +744,7 @@ struct DictionaryEntryRow: View {
                             .font(.caption)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary))
+                            .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.2)))
                     }
                 }
             }
@@ -755,17 +753,17 @@ struct DictionaryEntryRow: View {
             // Arrow
             Image(systemName: "arrow.right")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundColor(.secondary)
 
             // Replacement (right side)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Replace with:")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundColor(.secondary)
 
                 Text(self.entry.replacement)
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -777,21 +775,21 @@ struct DictionaryEntryRow: View {
                     Image(systemName: "pencil")
                         .font(.caption2)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                
+                
 
-                Button(role: .destructive) {
+                Button {
                     self.onDelete()
                 } label: {
                     Image(systemName: "trash")
                         .font(.caption2)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                
+                
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.5)))
     }
 }
 
@@ -825,7 +823,7 @@ struct AddDictionaryEntrySheet: View {
                     .font(.headline)
                 Spacer()
                 Button("Cancel") { self.dismiss() }
-                    .buttonStyle(.bordered)
+                    
             }
 
             Divider()
@@ -836,18 +834,17 @@ struct AddDictionaryEntrySheet: View {
                     .font(.subheadline.weight(.medium))
                 Text("Enter words separated by commas. These are what the transcription might hear.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 TextField("fluid voice, fluid boys", text: self.$triggersText)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.saveIfValid() }
 
                 // Duplicate warning
                 if !self.duplicateTriggers.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+                            .foregroundColor(.orange)
                         Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                            .foregroundStyle(.orange)
+                            .foregroundColor(.orange)
                     }
                     .font(.caption)
                 }
@@ -859,10 +856,9 @@ struct AddDictionaryEntrySheet: View {
                     .font(.subheadline.weight(.medium))
                 Text("This is what will appear in the final transcription.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 TextField("FluidVoice", text: self.$replacement)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.saveIfValid() }
             }
 
             Spacer()
@@ -872,7 +868,7 @@ struct AddDictionaryEntrySheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Preview")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     FlowLayout(spacing: 6) {
                         ForEach(self.parseTriggers(), id: \.self) { trigger in
@@ -883,19 +879,19 @@ struct AddDictionaryEntrySheet: View {
                                 .background(
                                     RoundedRectangle(cornerRadius: 4).fill(
                                         self.duplicateTriggers.contains(trigger)
-                                            ? AnyShapeStyle(Color.orange.opacity(0.3))
-                                            : AnyShapeStyle(.quaternary)
+                                            ? Color.orange.opacity(0.3)
+                                            : Color.secondary.opacity(0.2)
                                     )
                                 )
                         }
 
                         Image(systemName: "arrow.right")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundColor(.secondary)
 
                         Text(self.replacement)
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
                     }
                 }
                 .padding(10)
@@ -914,8 +910,8 @@ struct AddDictionaryEntrySheet: View {
             HStack {
                 Spacer()
                 Button("Add Entry") { self.saveIfValid() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(self.theme.palette.accent)
+                    
+                    .accentColor(self.theme.palette.accent)
                     .disabled(!self.canSave)
                     .keyboardShortcut(.return, modifiers: [])
             }
@@ -975,7 +971,7 @@ struct EditDictionaryEntrySheet: View {
                     .font(.headline)
                 Spacer()
                 Button("Cancel") { self.dismiss() }
-                    .buttonStyle(.bordered)
+                    
             }
 
             Divider()
@@ -986,18 +982,17 @@ struct EditDictionaryEntrySheet: View {
                     .font(.subheadline.weight(.medium))
                 Text("Enter words separated by commas. These are what the transcription might hear.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 TextField("fluid voice, fluid boys", text: self.$triggersText)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.saveIfValid() }
 
                 // Duplicate warning
                 if !self.duplicateTriggers.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+                            .foregroundColor(.orange)
                         Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                            .foregroundStyle(.orange)
+                            .foregroundColor(.orange)
                     }
                     .font(.caption)
                 }
@@ -1009,10 +1004,9 @@ struct EditDictionaryEntrySheet: View {
                     .font(.subheadline.weight(.medium))
                 Text("This is what will appear in the final transcription.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                 TextField("FluidVoice", text: self.$replacement)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.saveIfValid() }
             }
 
             Spacer()
@@ -1022,7 +1016,7 @@ struct EditDictionaryEntrySheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Preview")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
 
                     FlowLayout(spacing: 6) {
                         ForEach(self.parseTriggers(), id: \.self) { trigger in
@@ -1033,19 +1027,19 @@ struct EditDictionaryEntrySheet: View {
                                 .background(
                                     RoundedRectangle(cornerRadius: 4).fill(
                                         self.duplicateTriggers.contains(trigger)
-                                            ? AnyShapeStyle(Color.orange.opacity(0.3))
-                                            : AnyShapeStyle(.quaternary)
+                                            ? Color.orange.opacity(0.3)
+                                            : Color.secondary.opacity(0.2)
                                     )
                                 )
                         }
 
                         Image(systemName: "arrow.right")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundColor(.secondary)
 
                         Text(self.replacement)
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
                     }
                 }
                 .padding(10)
@@ -1064,8 +1058,8 @@ struct EditDictionaryEntrySheet: View {
             HStack {
                 Spacer()
                 Button("Save Changes") { self.saveIfValid() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(self.theme.palette.accent)
+                    
+                    .accentColor(self.theme.palette.accent)
                     .disabled(!self.canSave)
                     .keyboardShortcut(.return, modifiers: [])
             }

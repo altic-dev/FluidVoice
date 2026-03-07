@@ -75,7 +75,7 @@ struct SearchableProviderPicker: View {
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.down")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
                     .frame(width: 20, height: 20)
                     .background(
                         Circle()
@@ -105,7 +105,7 @@ struct SearchableProviderPicker: View {
                 // Search field
                 HStack {
                     Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                     TextField("Search providers...", text: self.$searchText)
                         .textFieldStyle(.plain)
                 }
@@ -130,7 +130,7 @@ struct SearchableProviderPicker: View {
                             Text("BUILT-IN")
                                 .font(.caption2)
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .padding(.horizontal, 10)
                                 .padding(.top, 8)
                                 .padding(.bottom, 4)
@@ -151,7 +151,7 @@ struct SearchableProviderPicker: View {
                             Text("CUSTOM")
                                 .font(.caption2)
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .padding(.horizontal, 10)
                                 .padding(.top, 4)
                                 .padding(.bottom, 4)
@@ -164,7 +164,7 @@ struct SearchableProviderPicker: View {
                         if self.filteredProviders.isEmpty {
                             Text("No providers match '\(self.searchText)'")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                                 .padding()
                         }
                     }
@@ -187,7 +187,7 @@ struct SearchableProviderPicker: View {
                 Spacer()
                 if provider.id == self.selectedProviderID {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accent)
                 }
             }
             .padding(.horizontal, 10)
@@ -199,15 +199,17 @@ struct SearchableProviderPicker: View {
     }
 }
 
-#Preview {
-    SearchableProviderPicker(
-        builtInProviders: [
-            ("openai", "OpenAI"),
-            ("groq", "Groq"),
-            ("cerebras", "Cerebras"),
-        ],
-        savedProviders: [],
-        selectedProviderID: .constant("openai")
-    )
-    .padding()
+struct SearchableProviderPicker_Previews: PreviewProvider {
+    static var previews: some View {
+        SearchableProviderPicker(
+            builtInProviders: [
+                ("openai", "OpenAI"),
+                ("groq", "Groq"),
+                ("cerebras", "Cerebras"),
+            ],
+            savedProviders: [],
+            selectedProviderID: .constant("openai")
+        )
+        .padding()
+    }
 }

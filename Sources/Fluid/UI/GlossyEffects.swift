@@ -19,8 +19,8 @@ struct HoverableGlossyCard<Content: View>: View {
         let cardShadow = self.theme.metrics.cardShadow
 
         return self.content
-            .background(self.theme.materials.card, in: shape)
-            .background {
+            .background(shape.fill(self.theme.materials.card))
+            .background(
                 shape
                     .fill(self.theme.palette.cardBackground)
                     .overlay(
@@ -36,7 +36,7 @@ struct HoverableGlossyCard<Content: View>: View {
                         x: cardShadow.x,
                         y: self.isHovered ? cardShadow.y + 1 : cardShadow.y
                     )
-            }
+            )
             .scaleEffect(self.isHovered && !self.excludeInteractiveElements ? 1.02 : 1.0)
             .onHover { hovering in
                 self.isHovered = hovering

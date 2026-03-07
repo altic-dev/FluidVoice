@@ -33,7 +33,7 @@ struct ThemedCard<Content: View>: View {
 
         self.content
             .padding(self.padding ?? 14)
-            .background(configuration.material, in: shape)
+            .background(shape.fill(configuration.material))
             .background(
                 shape
                     .fill(configuration.background)
@@ -72,7 +72,7 @@ private extension ThemedCard {
         let borderOpacity: Double
         let hoverBorderOpacity: Double
         let borderWidth: CGFloat
-        let material: Material
+        let material: Color
         let cornerRadius: CGFloat
         let shadow: AppTheme.Metrics.Shadow
         let hoverShadowBoost: Double

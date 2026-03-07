@@ -256,7 +256,24 @@ final class SimpleUpdater {
         let downloadURL = tempDir.appendingPathComponent(asset.browser_download_url.lastPathComponent)
 
         do {
-            let (tmpFile, _) = try await URLSession.shared.download(from: asset.browser_download_url)
+            let tmpFile: URL
+            if #available(macOS 12.0, *) {
+                let (file, _) = try await URLSession.shared.download(from: asset.browser_download_url)
+                tmpFile = file
+            } else {
+                tmpFile = try await withCheckedThrowingContinuation { continuation in
+                    let task = URLSession.shared.downloadTask(with: asset.browser_download_url) { url, _, error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                        } else if let url = url {
+                            continuation.resume(returning: url)
+                        } else {
+                            continuation.resume(throwing: URLError(.unknown))
+                        }
+                    }
+                    task.resume()
+                }
+            }
             try FileManager.default.moveItem(at: tmpFile, to: downloadURL)
         } catch {
             throw SimpleUpdateError.downloadFailed

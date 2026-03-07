@@ -25,8 +25,8 @@ struct GlassButtonStyle: ButtonStyle {
                 .padding(.horizontal, self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.theme.metrics.spacing.sm)
                 .frame(height: self.height ?? 36)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .background(self.theme.materials.card, in: self.shape)
+                .foregroundColor(self.theme.palette.primaryText)
+                .background(self.shape.fill(self.theme.materials.card))
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
@@ -104,7 +104,7 @@ struct PremiumButtonStyle: ButtonStyle {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
                 .frame(height: self.height)
-                .foregroundStyle(self.isRecording ? Color.white : self.theme.palette.primaryText)
+                .foregroundColor(self.isRecording ? Color.white : self.theme.palette.primaryText)
                 .background(
                     self.shape
                         .fill(self.baseGradient)
@@ -151,8 +151,8 @@ struct SecondaryButtonStyle: ButtonStyle {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .background(self.theme.materials.card, in: self.shape)
+                .foregroundColor(self.theme.palette.primaryText)
+                .background(self.shape.fill(self.theme.materials.card))
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
@@ -213,8 +213,8 @@ struct CompactButtonStyle: ButtonStyle {
                 .fontWeight(.medium)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: 34)
-                .foregroundStyle(foregroundColor)
-                .background(self.theme.materials.card, in: self.shape)
+                .foregroundColor(foregroundColor)
+                .background(self.shape.fill(self.theme.materials.card))
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
@@ -264,7 +264,7 @@ struct AccentButtonStyle: ButtonStyle {
                 .padding(.horizontal, self.compact ? 12 : self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.compact ? 8 : self.theme.metrics.spacing.md)
                 .frame(minHeight: self.compact ? 32 : 36)
-                .foregroundStyle(Color.white)
+                .foregroundColor(Color.white)
                 .background(
                     self.shape
                         .fill(
@@ -318,7 +318,7 @@ struct InlineButtonStyle: ButtonStyle {
                 .fontWeight(.medium)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.vertical, self.theme.metrics.spacing.xs)
-                .foregroundStyle(Color.white)
+                .foregroundColor(Color.white)
                 .background(
                     self.shape
                         .fill(self.theme.palette.accent.opacity(self.isHovered ? 0.9 : 0.8))
@@ -351,13 +351,13 @@ struct GlassToggleStyle: ToggleStyle {
         var body: some View {
             HStack {
                 self.configuration.label
-                    .foregroundStyle(self.theme.palette.primaryText)
+                    .foregroundColor(self.theme.palette.primaryText)
 
                 Spacer()
 
                 Toggle("", isOn: self.configuration.$isOn)
                     .toggleStyle(.switch)
-                    .tint(self.theme.palette.accent)
+                    .accentColor(self.theme.palette.accent)
                     .labelsHidden()
             }
         }
@@ -372,7 +372,7 @@ struct FormRowStyle: ViewModifier {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.ultraThinMaterial.opacity(0.5))
+                .fill(Color(white: 0.15, opacity: 0.5))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(.white.opacity(0.08), lineWidth: 1)))
     }

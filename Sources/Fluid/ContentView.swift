@@ -78,7 +78,7 @@ struct ContentView: View {
     @State private var pendingModifierFlags: NSEvent.ModifierFlags = []
     @State private var pendingModifierKeyCode: UInt16?
     @State private var pendingModifierOnly = false
-    @FocusState private var isTranscriptionFocused: Bool
+    @State private var isTranscriptionFocused: Bool = false
 
     @State private var selectedSidebarItem: SidebarItem?
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
@@ -138,22 +138,18 @@ struct ContentView: View {
 
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-
     var body: some View {
         let layout = AnyView(
-            NavigationSplitView(columnVisibility: self.$columnVisibility) {
+            NavigationView {
                 self.sidebarView
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-            } detail: {
+                    .frame(minWidth: 220, idealWidth: 250, maxWidth: 300)
                 self.detailView
             }
-            .navigationSplitViewStyle(.balanced)
         )
 
         let tracked = layout.withMouseTracking(self.mouseTracker)
         let env = tracked.environmentObject(self.mouseTracker)
-        let nav = env.onChange(of: self.menuBarManager.requestedNavigationDestination) { _, destination in
+        let nav = env.onChange(of: self.menuBarManager.requestedNavigationDestination) { destination in
             self.handleMenuBarNavigation(destination)
         }
 
@@ -493,19 +489,19 @@ struct ContentView: View {
                 return event
             }
         }
-        .onChange(of: self.accessibilityEnabled) { _, enabled in
+        .onChange(of: self.accessibilityEnabled) { enabled in
             if enabled && self.hotkeyManager != nil && !self.hotkeyManagerInitialized {
                 DebugLogger.shared.debug("Accessibility enabled, reinitializing hotkey manager", source: "ContentView")
                 self.hotkeyManager?.reinitialize()
             }
         }
-        .onChange(of: self.selectedModel) { _, newValue in
+        .onChange(of: self.selectedModel) { newValue in
             if newValue != "__ADD_MODEL__" {
                 self.selectedModelByProvider[self.currentProvider] = newValue
                 SettingsStore.shared.selectedModelByProvider = self.selectedModelByProvider
             }
         }
-        .onChange(of: self.selectedProviderID) { _, newValue in
+        .onChange(of: self.selectedProviderID) { newValue in
             SettingsStore.shared.selectedProviderID = newValue
         }
         .onChange(of: self.isCommandModeShortcutEnabled) { newValue in
@@ -559,19 +555,18 @@ struct ContentView: View {
                 .accessibilityLabel("Report an issue")
             }
         }
-        .overlay(alignment: .center) {}
-        .alert(
-            self.asr.errorTitle,
-            isPresented: Binding(
-                get: { self.asr.showError },
-                set: { self.asr.showError = $0 }
+        .overlay(Group {}, alignment: .center)
+        .alert(isPresented: Binding(
+            get: { self.asr.showError },
+            set: { self.asr.showError = $0 }
+        )) {
+            Alert(
+                title: Text(self.asr.errorTitle),
+                message: Text(self.asr.errorMessage),
+                dismissButton: .default(Text("OK"))
             )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(self.asr.errorMessage)
         }
-        .onChange(of: self.audioObserver.changeTick) { _, _ in
+        .onChange(of: self.audioObserver.changeTick) { _ in
             // Hardware change detected → refresh device lists
             self.refreshDevices()
 
@@ -623,7 +618,7 @@ struct ContentView: View {
             self.accessibilityPollingTask?.cancel()
             self.accessibilityPollingTask = nil
         }
-        .onChange(of: self.hotkeyShortcut) { _, newValue in
+        .onChange(of: self.hotkeyShortcut) { newValue in
             DebugLogger.shared.debug("Hotkey shortcut changed to \(newValue.displayString)", source: "ContentView")
             self.hotkeyManager?.updateShortcut(newValue)
 
@@ -636,7 +631,7 @@ struct ContentView: View {
                 )
             }
         }
-        .onChange(of: self.selectedSidebarItem) { _, newValue in
+        .onChange(of: self.selectedSidebarItem) { newValue in
             self.handleModeTransition(from: self.previousSidebarItem, to: newValue)
             self.previousSidebarItem = newValue
         }
@@ -773,7 +768,7 @@ struct ContentView: View {
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .rotationEffect(.degrees(self.aiSettingsExpanded ? 90 : 0))
                 }
                 .contentShape(Rectangle())
@@ -853,15 +848,15 @@ struct ContentView: View {
         .listStyle(.sidebar)
         .animation(nil, value: self.selectedSidebarItem)
         .navigationTitle("FluidVoice")
-        .scrollContentBackground(.hidden)
-        .background {
+        
+        .background(
             ZStack {
                 self.theme.palette.sidebarBackground
                 Rectangle().fill(self.theme.materials.sidebar)
             }
             .ignoresSafeArea()
-        }
-        .tint(self.theme.palette.accent)
+        )
+        .accentColor(self.theme.palette.accent)
     }
 
     private func sidebarRowBackground(for item: SidebarItem) -> some View {
@@ -946,12 +941,12 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.labelFor(status: self.asr.micStatus))
                         .fontWeight(.medium)
-                        .foregroundStyle(self.asr.micStatus == .authorized ? self.theme.palette.primaryText : self.theme.palette.warning)
+                        .foregroundColor(self.asr.micStatus == .authorized ? self.theme.palette.primaryText : self.theme.palette.warning)
 
                     if self.asr.micStatus != .authorized {
                         Text("Microphone access is required for voice recording")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
@@ -1000,12 +995,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
                     .font(.caption)
                 Text("How to enable microphone access:")
                     .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -1029,12 +1024,12 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Text(number + ".")
                 .font(.caption2)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundColor(self.theme.palette.accent)
                 .fontWeight(.semibold)
                 .frame(width: 16)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(.primary)
+                .foregroundColor(.primary)
         }
     }
 

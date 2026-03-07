@@ -38,7 +38,7 @@ struct WelcomeView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "book.fill")
                         .font(.title2)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accent)
                     Text((self.asr.isAsrReady || self.asr.modelsExistOnDisk) ? "Getting Started" : "Welcome to FluidVoice")
                         .font(.title2.weight(.bold))
                 }
@@ -49,7 +49,7 @@ struct WelcomeView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Label("Quick Setup", systemImage: "checkmark.circle.fill")
                             .font(.headline)
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundColor(self.theme.palette.accent)
 
                         VStack(alignment: .leading, spacing: 8) {
                             SetupStepView(
@@ -141,7 +141,7 @@ struct WelcomeView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Label("How to Use", systemImage: "play.fill")
                             .font(.headline)
-                            .foregroundStyle(Color.fluidGreen)
+                            .foregroundColor(Color.fluidGreen)
 
                         VStack(alignment: .leading, spacing: 10) {
                             self.howToStep(number: 1, title: "Start Recording", description: "Press your hotkey (default: Right Option/Alt) or click the button")
@@ -160,7 +160,7 @@ struct WelcomeView: View {
                         HStack(spacing: 8) {
                             Label("Command Mode", systemImage: "terminal.fill")
                                 .font(.headline)
-                                .foregroundStyle(Color(red: 1.0, green: 0.35, blue: 0.35))
+                                .foregroundColor(Color(red: 1.0, green: 0.35, blue: 0.35))
 
                             self.featureBadge("New", color: Color(red: 1.0, green: 0.35, blue: 0.35))
                             self.featureBadge("Alpha", color: Color(red: 1.0, green: 0.35, blue: 0.35).opacity(0.7))
@@ -170,18 +170,18 @@ struct WelcomeView: View {
                             Button("Open") {
                                 self.selectedSidebarItem = .commandMode
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            
+                            
                         }
 
                         Text("Control your Mac with voice commands. Execute terminal commands, open apps, and more.")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Getting Started")
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
 
                             HStack(spacing: 4) {
                                 Text("Press")
@@ -189,13 +189,13 @@ struct WelcomeView: View {
                                 Text("to open, speak your command, then press again to send.")
                             }
                             .font(.caption)
-                            .foregroundStyle(.primary.opacity(0.8))
+                            .foregroundColor(.primary.opacity(0.8))
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Examples")
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                             self.commandModeExample(icon: "folder", text: "\"List files in my Downloads folder\"")
                             self.commandModeExample(icon: "plus.rectangle.on.folder", text: "\"Create a folder called Projects on Desktop\"")
                             self.commandModeExample(icon: "network", text: "\"What's my IP address?\"")
@@ -205,10 +205,10 @@ struct WelcomeView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.orange)
+                                .foregroundColor(.orange)
                             Text("AI can make mistakes. Avoid destructive commands.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(.secondary)
                         }
                     }
                     .padding(16)
@@ -221,7 +221,7 @@ struct WelcomeView: View {
                         HStack(spacing: 8) {
                             Label("Edit Mode", systemImage: "pencil.and.outline")
                                 .font(.headline)
-                                .foregroundStyle(.blue)
+                                .foregroundColor(.blue)
 
                             self.featureBadge("New", color: .blue)
 
@@ -230,19 +230,19 @@ struct WelcomeView: View {
                             Button("Open AI Settings") {
                                 self.selectedSidebarItem = .aiEnhancements
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            
+                            
                         }
 
                         Text("AI-powered editing assistant. Write fresh content or edit selected text with voice.")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
 
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Create New Text")
                                     .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.blue)
+                                    .foregroundColor(.blue)
 
                                 HStack(spacing: 4) {
                                     Text("Press")
@@ -250,7 +250,7 @@ struct WelcomeView: View {
                                     Text("and speak what you want to write.")
                                 }
                                 .font(.caption)
-                                .foregroundStyle(.primary.opacity(0.8))
+                                .foregroundColor(.primary.opacity(0.8))
 
                                 self.writeModeExample(text: "\"Write an email asking for time off\"")
                                 self.writeModeExample(text: "\"Draft a thank you note\"")
@@ -259,7 +259,7 @@ struct WelcomeView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Edit Selected Text")
                                     .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.blue)
+                                    .foregroundColor(.blue)
 
                                 HStack(spacing: 4) {
                                     Text("Select text first, then press")
@@ -267,7 +267,7 @@ struct WelcomeView: View {
                                     Text("and speak your instruction.")
                                 }
                                 .font(.caption)
-                                .foregroundStyle(.primary.opacity(0.8))
+                                .foregroundColor(.primary.opacity(0.8))
 
                                 self.writeModeExample(text: "\"Make this more formal\"")
                                 self.writeModeExample(text: "\"Fix grammar and spelling\"")
@@ -289,7 +289,7 @@ struct WelcomeView: View {
                                         .font(.headline)
                                     Text("Click record, speak, and see your transcription")
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(.secondary)
                                 }
                             } icon: {
                                 Image(systemName: "text.bubble")
@@ -305,12 +305,12 @@ struct WelcomeView: View {
                                         .frame(width: 6, height: 6)
                                     Text("Recording...")
                                         .font(.caption.weight(.medium))
-                                        .foregroundStyle(.red)
+                                        .foregroundColor(.red)
                                 }
                             } else if !self.asr.finalText.isEmpty {
                                 Text("\(self.asr.finalText.count) characters")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             }
 
                             if !self.asr.finalText.isEmpty {
@@ -320,8 +320,8 @@ struct WelcomeView: View {
                                 } label: {
                                     Label("Copy", systemImage: "doc.on.doc")
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                
+                                
                             }
                         }
 
@@ -329,10 +329,10 @@ struct WelcomeView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "text.magnifyingglass")
                                     .font(.caption)
-                                    .foregroundStyle(self.theme.palette.accent)
+                                    .foregroundColor(self.theme.palette.accent)
                                 Text(self.asr.wordBoostStatusText)
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                                     .lineLimit(1)
                             }
                             .padding(.horizontal, 10)
@@ -373,8 +373,8 @@ struct WelcomeView: View {
                                     Button("Clear Results") {
                                         self.asr.finalText = ""
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                                    
+                                    
                                 }
                             }
 
@@ -385,7 +385,7 @@ struct WelcomeView: View {
                                     set: { self.asr.finalText = $0 }
                                 ))
                                 .font(.body)
-                                .focused(self.isTranscriptionFocused)
+                                // Note: .focused() requires macOS 12+, omitted for Big Sur compatibility
                                 .frame(height: 140)
                                 .padding(10)
                                 .background(
@@ -401,28 +401,28 @@ struct WelcomeView: View {
                                                 )
                                         )
                                 )
-                                .scrollContentBackground(.hidden)
+                                
                                 .overlay(
                                     VStack(spacing: 8) {
                                         if self.asr.isRunning {
                                             Image(systemName: "waveform")
                                                 .font(.title2)
-                                                .foregroundStyle(self.theme.palette.accent)
+                                                .foregroundColor(self.theme.palette.accent)
                                             Text("Listening... Speak now!")
                                                 .font(.subheadline.weight(.medium))
-                                                .foregroundStyle(self.theme.palette.accent)
+                                                .foregroundColor(self.theme.palette.accent)
                                             Text("Transcription will appear when you stop recording")
                                                 .font(.caption)
-                                                .foregroundStyle(self.theme.palette.accent.opacity(0.7))
+                                                .foregroundColor(self.theme.palette.accent.opacity(0.7))
                                         } else if self.asr.finalText.isEmpty {
                                             Image(systemName: "text.bubble")
                                                 .font(.title2)
-                                                .foregroundStyle(.secondary.opacity(0.5))
+                                                .foregroundColor(.secondary.opacity(0.5))
                                             Text("Ready to test!")
                                                 .font(.subheadline.weight(.medium))
                                             Text("Click 'Start Recording' or press your hotkey")
                                                 .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                                .foregroundColor(.secondary)
                                         }
                                     }
                                     .allowsHitTesting(false)
@@ -436,15 +436,15 @@ struct WelcomeView: View {
                                         } label: {
                                             Label("Copy Text", systemImage: "doc.on.doc")
                                         }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(self.theme.palette.accent)
-                                        .controlSize(.small)
+                                        
+                                        .accentColor(self.theme.palette.accent)
+                                        
 
                                         Button("Clear & Test Again") {
                                             self.asr.finalText = ""
                                         }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.small)
+                                        
+                                        
 
                                         Spacer()
                                     }
@@ -480,14 +480,14 @@ struct WelcomeView: View {
                     .frame(width: 28, height: 28)
                 Text("\(number)")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundColor(self.theme.palette.accent)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.body.weight(.medium))
                 Text(description)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
             Spacer()
         }
@@ -496,10 +496,10 @@ struct WelcomeView: View {
     private func featureBadge(_ text: String, color: Color) -> some View {
         Text(text)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundColor(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(color, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(color))
     }
 
     private func keyboardBadge(_ text: String) -> some View {
@@ -507,28 +507,28 @@ struct WelcomeView: View {
             .font(.caption.weight(.medium))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(self.theme.palette.cardBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(self.theme.palette.cardBackground.opacity(0.7)))
     }
 
     private func commandModeExample(icon: String, text: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.caption2)
-                .foregroundStyle(.orange.opacity(0.8))
+                .foregroundColor(.orange.opacity(0.8))
                 .frame(width: 14)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
+                .foregroundColor(.primary.opacity(0.8))
         }
     }
 
     private func writeModeExample(text: String) -> some View {
         HStack(spacing: 6) {
             Text("•")
-                .foregroundStyle(.blue.opacity(0.6))
+                .foregroundColor(.blue.opacity(0.6))
             Text(text)
                 .font(.caption)
-                .foregroundStyle(.primary.opacity(0.8))
+                .foregroundColor(.primary.opacity(0.8))
         }
     }
 }
