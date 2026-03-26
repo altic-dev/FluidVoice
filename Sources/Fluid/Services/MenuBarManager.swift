@@ -208,6 +208,21 @@ final class MenuBarManager: ObservableObject {
 
     // MARK: - Public API for overlay management
 
+    /// Show the overlay immediately without waiting for `isRunning` to become true.
+    /// Called at hotkey time so the overlay expand animation runs in parallel with engine startup.
+    func showOverlayEarly(asrService: ASRService) {
+        guard !self.overlayVisible else { return }
+
+        self.pendingHideOperation?.cancel()
+        self.pendingHideOperation = nil
+        self.overlayVisible = true
+
+        NotchOverlayManager.shared.show(
+            audioLevelPublisher: asrService.audioLevelPublisher,
+            mode: self.currentOverlayMode
+        )
+    }
+
     func updateOverlayTranscription(_ text: String) {
         NotchOverlayManager.shared.updateTranscriptionText(text)
     }

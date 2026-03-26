@@ -2475,6 +2475,11 @@ struct ContentView: View {
                 self.menuBarManager.setOverlayMode(.dictation)
 
                 guard !self.asr.isRunning else { return }
+
+                // Show overlay immediately so its expand animation runs in parallel
+                // with the engine startup, instead of waiting for isRunning to flip.
+                self.menuBarManager.showOverlayEarly(asrService: self.asr)
+
                 if SettingsStore.shared.enableTranscriptionSounds {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
@@ -2498,6 +2503,8 @@ struct ContentView: View {
                 self.menuBarManager.setOverlayMode(.command)
 
                 guard !self.asr.isRunning else { return }
+
+                self.menuBarManager.showOverlayEarly(asrService: self.asr)
 
                 // Start recording immediately for the command
                 DebugLogger.shared.info(
@@ -2536,6 +2543,8 @@ struct ContentView: View {
                 self.setActiveRecordingMode(.edit)
 
                 guard !self.asr.isRunning else { return }
+
+                self.menuBarManager.showOverlayEarly(asrService: self.asr)
 
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
