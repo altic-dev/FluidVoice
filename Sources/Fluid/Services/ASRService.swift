@@ -781,12 +781,12 @@ final class ASRService: ObservableObject {
         self.engine.stop()
         DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
 
-        // Recreate the engine instance instead of calling reset() to prevent format corruption
-        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
-        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
-        self.engineStorage = nil // Explicitly release old engine
-        // New engine will be lazily created on next access via computed property
-        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
+        // Keep the engine instance alive (just stopped, not deallocated) so the next
+        // start() skips the expensive inputNode/outputNode instantiation (~200ms).
+        // The old approach destroyed and recreated the engine to "prevent format corruption",
+        // but prepare() + start() re-negotiates the format cleanly, and startEngine() calls
+        // bindPreferredInputDeviceIfNeeded() to handle device changes between recordings.
+        DebugLogger.shared.debug("♻️ Engine stopped but kept alive for fast restart", source: "ASRService")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -964,10 +964,10 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
         }
 
-        // No need to call engine.reset() here - we created a fresh engine in stop()
-        // Accessing the engine property will either return the existing fresh engine,
-        // or create a new one if this is the first start
-        DebugLogger.shared.debug("ℹ️ Using fresh engine instance (created lazily)", source: "ASRService")
+        // The engine is kept alive across recordings (just stopped, not deallocated).
+        // Accessing inputNode/outputNode below is cheap when the engine already exists.
+        // On first launch, this triggers the expensive CoreAudio node creation.
+        DebugLogger.shared.debug("ℹ️ Using existing engine instance (kept alive from previous session)", source: "ASRService")
 
         // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
         DebugLogger.shared.debug("📍 Forcing input node instantiation...", source: "ASRService")
