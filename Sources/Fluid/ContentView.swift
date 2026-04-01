@@ -1600,10 +1600,10 @@ struct ContentView: View {
                 self.logDictationPromptTrace("Model answer (A)", value: response.content)
             }
 
-            return response.content.isEmpty ? "<no content>" : response.content
+            return response.content.isEmpty ? inputText : response.content
         } catch {
-            DebugLogger.shared.error("AI API error: \(error.localizedDescription)", source: "ContentView")
-            return "Error: \(error.localizedDescription)"
+            DebugLogger.shared.error("AI API error: \(error.localizedDescription), falling back to raw transcription", source: "ContentView")
+            return inputText
         }
     }
 
