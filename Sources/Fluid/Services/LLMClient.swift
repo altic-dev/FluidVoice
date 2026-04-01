@@ -163,17 +163,17 @@ final class LLMClient {
                 } else {
                     return try await self.processNonStreaming(request: request)
                 }
-            } catch let error as URLError where self.isRetryableError(error) {
+            } catch {
+                guard self.isRetryable(error) else { throw error }
                 lastError = error
-                DebugLogger.shared.warning("LLMClient: Retry \(attempt)/\(config.maxRetries) due to \(error.code.rawValue)", source: "LLMClient")
                 if attempt < config.maxRetries {
+                    DebugLogger.shared.warning("LLMClient: Attempt \(attempt)/\(config.maxRetries) failed, retrying: \(error.localizedDescription)", source: "LLMClient")
                     // Exponential backoff
                     let delayNs = UInt64(config.retryDelayMs * 1_000_000 * attempt)
                     try? await Task.sleep(nanoseconds: delayNs)
                     continue
                 }
-            } catch {
-                throw error // Non-retryable error
+                DebugLogger.shared.error("LLMClient: All \(config.maxRetries) attempts failed: \(error.localizedDescription)", source: "LLMClient")
             }
         }
 
@@ -584,19 +584,34 @@ final class LLMClient {
 
     // MARK: - Helper Methods
 
-    /// Check if an error is retryable (transient network issues)
-    private func isRetryableError(_ error: URLError) -> Bool {
-        switch error.code {
-        case .notConnectedToInternet,
-             .timedOut,
-             .networkConnectionLost,
-             .cannotFindHost,
-             .cannotConnectToHost,
-             .dnsLookupFailed:
-            return true
-        default:
-            return false
+    /// Check if an error is retryable (transient network or server issues)
+    func isRetryable(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet,
+                 .timedOut,
+                 .networkConnectionLost,
+                 .cannotFindHost,
+                 .cannotConnectToHost,
+                 .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
         }
+        if case let LLMError.httpError(statusCode, _) = error {
+            switch statusCode {
+            case 429,  // Too Many Requests
+                 500,  // Internal Server Error
+                 502,  // Bad Gateway
+                 503,  // Service Unavailable
+                 504:  // Gateway Timeout
+                return true
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     /// Check if a URL is a local/private endpoint
