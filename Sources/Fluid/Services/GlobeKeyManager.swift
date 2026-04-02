@@ -50,8 +50,11 @@ final class GlobeKeyManager {
 
         // Set to 0 = "Do Nothing"
         CFPreferencesSetValue(
-            self.key, 0 as CFNumber, self.domain,
-            kCFPreferencesCurrentUser, kCFPreferencesCurrentHost
+            self.key,
+            0 as CFNumber,
+            self.domain,
+            kCFPreferencesCurrentUser,
+            kCFPreferencesCurrentHost
         )
         CFPreferencesSynchronize(self.domain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
 
@@ -73,8 +76,11 @@ final class GlobeKeyManager {
         let originalValue = UserDefaults.standard.integer(forKey: self.savedOriginalKey)
 
         CFPreferencesSetValue(
-            self.key, originalValue as CFNumber, self.domain,
-            kCFPreferencesCurrentUser, kCFPreferencesCurrentHost
+            self.key,
+            originalValue as CFNumber,
+            self.domain,
+            kCFPreferencesCurrentUser,
+            kCFPreferencesCurrentHost
         )
         CFPreferencesSynchronize(self.domain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
 
@@ -101,6 +107,6 @@ final class GlobeKeyManager {
 
     /// Check whether the given shortcut is the Globe/fn key (keyCode 63 with no modifiers).
     nonisolated static func isGlobeKey(_ shortcut: HotkeyShortcut) -> Bool {
-        return shortcut.keyCode == Self.globeKeyCode && shortcut.modifierFlags.isEmpty
+        return shortcut.keyCode == self.globeKeyCode && shortcut.modifierFlags.isEmpty
     }
 }

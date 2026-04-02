@@ -64,7 +64,7 @@ final class GlobalHotkeyManager: NSObject {
         set { self.state.withLock { self.state.isRewriteKeyPressed = newValue } }
     }
 
-    // Modifier-only shortcut tracking: detect if another key was pressed during modifier hold
+    /// Modifier-only shortcut tracking: detect if another key was pressed during modifier hold
     private nonisolated var modifierOnlyKeyDown: Bool {
         get { self.state.withLock { self.state.modifierOnlyKeyDown } }
         set { self.state.withLock { self.state.modifierOnlyKeyDown = newValue } }
@@ -75,7 +75,7 @@ final class GlobalHotkeyManager: NSObject {
         set { self.state.withLock { self.state.otherKeyPressedDuringModifier = newValue } }
     }
 
-    // Reserved for future tap-vs-hold timing detection (e.g., quick tap to toggle vs long hold)
+    /// Reserved for future tap-vs-hold timing detection (e.g., quick tap to toggle vs long hold)
     private nonisolated var modifierPressStartTime: Date? {
         get { self.state.withLock { self.state.modifierPressStartTime } }
         set { self.state.withLock { self.state.modifierPressStartTime = newValue } }
@@ -86,13 +86,13 @@ final class GlobalHotkeyManager: NSObject {
         set { self.state.withLock { self.state.pendingHoldModeStart = newValue } }
     }
 
-    // Tracks which mode's pending start is active (for cancellation on key combos)
+    /// Tracks which mode's pending start is active (for cancellation on key combos)
     private nonisolated var pendingHoldModeType: HotkeyHoldModeType? {
         get { self.state.withLock { self.state.pendingHoldModeType } }
         set { self.state.withLock { self.state.pendingHoldModeType = newValue } }
     }
 
-    // Busy flag to prevent race conditions during stop processing
+    /// Busy flag to prevent race conditions during stop processing
     private var isProcessingStop = false
 
     private var isInitialized = false
