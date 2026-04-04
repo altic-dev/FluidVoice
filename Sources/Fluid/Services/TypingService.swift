@@ -59,6 +59,31 @@ final class TypingService {
         SettingsStore.shared.textInsertionMode
     }
 
+    private func shouldForceReliablePaste(for text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x2E80...0x2EFF,   // CJK Radicals Supplement
+                 0x2F00...0x2FDF,   // Kangxi Radicals
+                 0x3040...0x309F,   // Hiragana
+                 0x30A0...0x30FF,   // Katakana
+                 0x3100...0x312F,   // Bopomofo
+                 0x3130...0x318F,   // Hangul Compatibility Jamo
+                 0x31A0...0x31BF,   // Bopomofo Extended
+                 0x3400...0x4DBF,   // CJK Unified Ideographs Extension A
+                 0x4E00...0x9FFF,   // CJK Unified Ideographs
+                 0xA960...0xA97F,   // Hangul Jamo Extended-A
+                 0xAC00...0xD7AF,   // Hangul Syllables
+                 0xD7B0...0xD7FF,   // Hangul Jamo Extended-B
+                 0xF900...0xFAFF,   // CJK Compatibility Ideographs
+                 0xFE30...0xFE4F,   // CJK Compatibility Forms
+                 0xFF00...0xFFEF:   // Fullwidth forms
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
     // MARK: - Layout-aware key code lookup
 
     /// Returns the virtual key code that produces `character` under the current keyboard layout.
@@ -262,7 +287,7 @@ final class TypingService {
             }
 
             self.log("[TypingService] Starting async text insertion process")
-            if self.textInsertionMode == .reliablePaste {
+            if self.shouldForceReliablePaste(for: text) || self.textInsertionMode == .reliablePaste {
                 // Reliable Paste still needs a short settle window after focus restoration.
                 usleep(80_000)
             } else {
@@ -279,8 +304,14 @@ final class TypingService {
     private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+        let forceReliablePaste = self.shouldForceReliablePaste(for: text)
+        let effectiveInsertionMode: SettingsStore.TextInsertionMode = forceReliablePaste ? .reliablePaste : self.textInsertionMode
 
-        if self.textInsertionMode == .reliablePaste {
+        if forceReliablePaste {
+            self.log("[TypingService] Detected CJK text; forcing Reliable Paste for IME-safe insertion")
+        }
+
+        if effectiveInsertionMode == .reliablePaste {
             self.log("[TypingService] Reliable Paste mode enabled")
             if self.tryReliablePasteInsertion(text, preferredTargetPID: preferredTargetPID) {
                 self.log("[TypingService] SUCCESS: Reliable Paste mode completed")

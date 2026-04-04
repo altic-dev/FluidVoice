@@ -2493,7 +2493,10 @@ final class SettingsStore: ObservableObject {
 
         /// Default model for the current architecture
         static var defaultModel: SpeechModel {
-            CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
+            if SpeechLocaleResolver.prefersChineseRecognition {
+                return .whisperBase
+            }
+            return CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
         }
 
         // MARK: - UI Card Metadata
@@ -3168,7 +3171,8 @@ extension SettingsStore {
         case polish = "pl"
         case portuguese = "pt"
         case vietnamese = "vi"
-        case mandarinChinese = "zh"
+        case simplifiedChinese = "zh-Hans"
+        case traditionalChinese = "zh-Hant"
 
         var id: String { self.rawValue }
 
@@ -3187,11 +3191,19 @@ extension SettingsStore {
             case .polish: return "Polish"
             case .portuguese: return "Portuguese"
             case .vietnamese: return "Vietnamese"
-            case .mandarinChinese: return "Mandarin Chinese"
+            case .simplifiedChinese: return "Simplified Chinese"
+            case .traditionalChinese: return "Traditional Chinese"
             }
         }
 
-        var tokenString: String { "<|\(self.rawValue)|>" }
+        var tokenString: String {
+            switch self {
+            case .simplifiedChinese, .traditionalChinese:
+                return "<|zh|>"
+            default:
+                return "<|\(self.rawValue)|>"
+            }
+        }
     }
 
     // MARK: - Unified Speech Model Selection
@@ -3218,6 +3230,14 @@ extension SettingsStore {
                 if model.requiresMacOS26, #unavailable(macOS 26.0) {
                     return .whisperBase
                 }
+                if SpeechLocaleResolver.prefersChineseRecognition {
+                    switch model {
+                    case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
+                        return .whisperBase
+                    default:
+                        break
+                    }
+                }
                 return model
             }
 
@@ -3236,6 +3256,9 @@ extension SettingsStore {
                let language = CohereLanguage(rawValue: rawValue)
             {
                 return language
+            }
+            if self.defaults.string(forKey: Keys.selectedCohereLanguage) == "zh" {
+                return .traditionalChinese
             }
             return .english
         }

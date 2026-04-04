@@ -270,7 +270,7 @@ extension VoiceEngineSettingsView {
                 .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
             }
 
-            if model == .cohereTranscribeSixBit {
+            if model == .cohereTranscribeSixBit || model == .appleSpeech || model == .appleSpeechAnalyzer {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .center, spacing: 10) {
                         Image(systemName: "globe")
@@ -281,7 +281,7 @@ extension VoiceEngineSettingsView {
                             Text("Select Language Manually")
                                 .font(.caption)
                                 .fontWeight(.semibold)
-                            Text("Choose the language token injected into Cohere's transcription prompt.")
+                            Text(self.manualLanguageDescription(for: model))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
@@ -289,7 +289,7 @@ extension VoiceEngineSettingsView {
 
                         Spacer(minLength: 8)
 
-                        Picker("Cohere Language", selection: Binding(
+                        Picker("Recognition Language", selection: Binding(
                             get: { self.settings.selectedCohereLanguage },
                             set: { newValue in
                                 guard newValue != self.settings.selectedCohereLanguage else { return }
@@ -350,6 +350,17 @@ extension VoiceEngineSettingsView {
             }
         }
         .padding(.vertical, 6)
+    }
+
+    private func manualLanguageDescription(for model: SettingsStore.SpeechModel) -> String {
+        switch model {
+        case .cohereTranscribeSixBit:
+            return "Choose the language token injected into Cohere's transcription prompt."
+        case .appleSpeech, .appleSpeechAnalyzer:
+            return "Choose the locale used by Apple's on-device speech recognition."
+        default:
+            return "Choose the recognition language."
+        }
     }
 
     func speechModelCard(for model: SettingsStore.SpeechModel) -> some View {

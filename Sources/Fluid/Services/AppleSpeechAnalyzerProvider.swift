@@ -34,31 +34,63 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
 
     init() {}
 
+    private func resolvedRecognitionLocale() async throws -> Locale {
+        let preferredLocale = SpeechLocaleResolver.preferredRecognitionLocale()
+
+        if let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: preferredLocale) {
+            let preferredID = preferredLocale.identifier(.bcp47)
+            let resolvedID = supportedLocale.identifier(.bcp47)
+            if preferredID != resolvedID {
+                DebugLogger.shared.info(
+                    "AppleSpeechAnalyzerProvider: Falling back from locale \(preferredID) to supported locale \(resolvedID)",
+                    source: "AppleSpeechAnalyzerProvider"
+                )
+            }
+            return supportedLocale
+        }
+
+        let supportedLocales = await SpeechTranscriber.supportedLocales
+        if let englishLocale = supportedLocales.first(where: {
+            $0.language.languageCode?.identifier == "en"
+        }) {
+            DebugLogger.shared.warning(
+                "AppleSpeechAnalyzerProvider: Preferred locale \(preferredLocale.identifier(.bcp47)) unsupported, using English fallback \(englishLocale.identifier(.bcp47))",
+                source: "AppleSpeechAnalyzerProvider"
+            )
+            return englishLocale
+        }
+
+        if let firstSupportedLocale = supportedLocales.first {
+            DebugLogger.shared.warning(
+                "AppleSpeechAnalyzerProvider: Preferred locale \(preferredLocale.identifier(.bcp47)) unsupported, using first supported locale \(firstSupportedLocale.identifier(.bcp47))",
+                source: "AppleSpeechAnalyzerProvider"
+            )
+            return firstSupportedLocale
+        }
+
+        throw NSError(
+            domain: "AppleSpeechAnalyzerProvider",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "SpeechAnalyzer is unavailable on this device"]
+        )
+    }
+
     // MARK: - Lifecycle
 
     func prepare(progressHandler: ((Double) -> Void)?) async throws {
+        let recognitionLocale = try await self.resolvedRecognitionLocale()
+
         // 1. Create a transcriber to check locale support and download if needed
         let transcriber = SpeechTranscriber(
-            locale: Locale.current,
+            locale: recognitionLocale,
             transcriptionOptions: [],
             reportingOptions: [],
             attributeOptions: []
         )
 
-        // 2. Check if locale is supported
-        let supportedLocales = await SpeechTranscriber.supportedLocales
-        let currentLocaleID = Locale.current.identifier(.bcp47)
-        let isSupported = supportedLocales.map { $0.identifier(.bcp47) }.contains(currentLocaleID)
+        let currentLocaleID = recognitionLocale.identifier(.bcp47)
 
-        guard isSupported else {
-            throw NSError(
-                domain: "AppleSpeechAnalyzerProvider",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Current locale is not supported by SpeechAnalyzer"]
-            )
-        }
-
-        // 3. Check if model is installed, download if needed
+        // 2. Check if model is installed, download if needed
         let installedLocales = await SpeechTranscriber.installedLocales
         let isInstalled = installedLocales.map { $0.identifier(.bcp47) }.contains(currentLocaleID)
 
@@ -77,7 +109,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
             }
         }
 
-        // 4. Get the best available audio format for conversion
+        // 3. Get the best available audio format for conversion
         self.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
         self.converter = BufferConverter()
 
@@ -121,8 +153,12 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     ///
     /// - Returns: `true` if the current locale's speech model is installed on disk, `false` otherwise.
     func refreshModelsExistOnDiskAsync() async -> Bool {
+        guard let recognitionLocale = try? await self.resolvedRecognitionLocale() else {
+            self._cacheQueue.sync { self._modelsInstalledCache = false }
+            return false
+        }
         let installedLocales = await SpeechTranscriber.installedLocales
-        let currentLocaleID = Locale.current.identifier(.bcp47)
+        let currentLocaleID = recognitionLocale.identifier(.bcp47)
         let isInstalled = installedLocales.map { $0.identifier(.bcp47) }.contains(currentLocaleID)
 
         self._cacheQueue.sync { self._modelsInstalledCache = isInstalled }
@@ -147,10 +183,11 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
         }
 
         DebugLogger.shared.debug("AppleSpeechAnalyzer: Starting transcription with \(samples.count) samples", source: "AppleSpeechAnalyzerProvider")
+        let recognitionLocale = try await self.resolvedRecognitionLocale()
 
         // 1. Create a FRESH transcriber for this transcription
         let freshTranscriber = SpeechTranscriber(
-            locale: Locale.current,
+            locale: recognitionLocale,
             transcriptionOptions: [],
             reportingOptions: [],
             attributeOptions: []

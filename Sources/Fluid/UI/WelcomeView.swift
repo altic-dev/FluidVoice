@@ -648,6 +648,9 @@ struct OnboardingFlowView: View {
     }
 
     private var recommendedOnboardingModel: SettingsStore.SpeechModel {
+        if SpeechLocaleResolver.prefersChineseRecognition {
+            return .whisperBase
+        }
         if CPUArchitecture.isAppleSilicon {
             switch self.preferredLanguageChoice {
             case .englishOnly:
@@ -664,6 +667,9 @@ struct OnboardingFlowView: View {
     }
 
     private var recommendedOnboardingModels: [SettingsStore.SpeechModel] {
+        if SpeechLocaleResolver.prefersChineseRecognition {
+            return [.whisperBase, .whisperSmall].filter { SettingsStore.SpeechModel.availableModels.contains($0) }
+        }
         if CPUArchitecture.isAppleSilicon {
             switch self.preferredLanguageChoice {
             case .englishOnly:
@@ -678,6 +684,9 @@ struct OnboardingFlowView: View {
     }
 
     private var recommendedModelReasonText: String {
+        if SpeechLocaleResolver.prefersChineseRecognition {
+            return "Best if you mainly speak Chinese. Whisper Base gives broad multilingual coverage and works across Apple Silicon and Intel Macs."
+        }
         if CPUArchitecture.isAppleSilicon {
             switch self.preferredLanguageChoice {
             case .englishOnly:

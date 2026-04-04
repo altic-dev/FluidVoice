@@ -23,13 +23,24 @@ final class AppleSpeechProvider: TranscriptionProvider {
     private var recognizer: SFSpeechRecognizer?
 
     init() {
-        // Initialize with user's current locale
-        self.recognizer = SFSpeechRecognizer(locale: Locale.current)
+        // Initialize with the user's preferred speech locale when possible.
+        self.recognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.preferredRecognitionLocale())
+    }
+
+    private func refreshRecognizerIfNeeded() {
+        let preferredLocale = SpeechLocaleResolver.preferredRecognitionLocale()
+        if self.recognizer?.locale.identifier != preferredLocale.identifier {
+            self.recognizer = SFSpeechRecognizer(locale: preferredLocale)
+        } else if self.recognizer == nil {
+            self.recognizer = SFSpeechRecognizer(locale: preferredLocale)
+        }
     }
 
     // MARK: - Lifecycle
 
     func prepare(progressHandler: ((Double) -> Void)?) async throws {
+        self.refreshRecognizerIfNeeded()
+
         // 1. Request Authorization
         let status = await self.requestAuthorization()
 
@@ -70,9 +81,7 @@ final class AppleSpeechProvider: TranscriptionProvider {
         }
 
         // 2. Ensure recognizer exists
-        if self.recognizer == nil {
-            self.recognizer = SFSpeechRecognizer(locale: Locale.current)
-        }
+        self.refreshRecognizerIfNeeded()
         guard let recognizer = self.recognizer else {
             throw NSError(domain: "AppleSpeechProvider", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize SFSpeechRecognizer"])
         }
