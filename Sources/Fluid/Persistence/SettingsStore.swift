@@ -3230,14 +3230,6 @@ extension SettingsStore {
                 if model.requiresMacOS26, #unavailable(macOS 26.0) {
                     return .whisperBase
                 }
-                if SpeechLocaleResolver.prefersChineseRecognition {
-                    switch model {
-                    case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
-                        return .whisperBase
-                    default:
-                        break
-                    }
-                }
                 return model
             }
 

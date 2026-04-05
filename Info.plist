@@ -2,37 +2,37 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
 	<key>CFBundleDisplayName</key>
 	<string>$(PRODUCT_NAME)</string>
-	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-	<key>CFBundleVersion</key>
-		<string>10</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-		<string>1.5.11-beta.3</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<string>1.5.11-beta.3</string>
+	<key>CFBundleVersion</key>
+	<string>10</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
-	<key>NSAccessibilityUsageDescription</key>
-	<string>FluidVoice needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>FluidVoice needs microphone access to record your voice for speech-to-text transcription. Your audio is processed locally and never sent to external servers.</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>FluidVoice needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>FluidVoice needs permission to control system events for managing launch at startup settings.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>FluidVoice needs microphone access to record your voice for speech-to-text transcription. Your audio is processed locally and never sent to external servers.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>FluidVoice uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
 	<key>POSTHOG_API_KEY</key>
 	<string>phc_coNu37345O2bgaAeQMD3tezkg1rDCbDS9Y3pOVvp2VM</string>
 	<key>POSTHOG_HOST</key>
 	<string>https://eu.i.posthog.com</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>FluidVoice uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
 </dict>
 </plist>
