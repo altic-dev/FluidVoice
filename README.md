@@ -118,6 +118,7 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 - Intel Macs are supported from 1.5.1 builds using Whisper models!
 - Microphone access
 - Accessibility permissions for typing
+- Cohere Transcribe and Qwen3 ASR require macOS 15.0 or later
 
 
 ## Join our small community to help us grow and give feedback :) ( Or just hang?!)   
@@ -133,6 +134,20 @@ open Fluid.xcodeproj
 ```
 
 Build and run in Xcode. All dependencies are managed via Swift Package Manager.
+
+### Build Output Location and Launch
+
+If you use the provided scripts, the app bundle is written directly into ./build/
+
+Build and launch examples:
+
+```bash
+./build.sh dev              # Debug build to ./build
+./build.sh release          # Release build to ./build
+./build.sh -l dev           # Build and launch
+./build.sh -i -l release    # Build, install to /Applications, then launch
+open -n "$PWD/build/FluidVoice Debug.app"
+```
 
 ## Contributing
 
@@ -161,7 +176,8 @@ Contributions are welcome! Please create an issue first to discuss any major cha
 
 5. **Build only (no signing):**
    ```bash
-   xcodebuild -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO
+   ./build.sh dev
+   ./build.sh release
    ```
 
 5. **(Optional) Install pre-commit hook** to prevent accidental team ID commits:
