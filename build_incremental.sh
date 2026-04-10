@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# FluidVoice Fast Incremental Build Wrapper
-# Keeps build_dev.sh unchanged; only overrides defaults for local fast loops.
+# MedVoice Fast Incremental Build Wrapper
+# Overrides build_dev defaults for local fast loops.
 #
 # Defaults:
 # - Release configuration
 # - Incremental Swift compilation
 # - Install + launch enabled
+# - Framework embedding handled by build_dev.sh
+# - Optional DMG via CREATE_DMG=1
 #
 # You can override any value:
 #   INSTALL_APP=1 LAUNCH_APP=1 ./build_incremental.sh
