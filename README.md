@@ -1,10 +1,10 @@
-# FluidVoice
+# MedVoice
 
 [![Supported Models](https://img.shields.io/badge/Models-Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20Transcribe%20%7C%20Apple%20Speech%20%7C%20Whisper-blue)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1)
 
 Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
-**Get the latest release from [here](https://github.com/altic-dev/Fluid-oss/releases/latest)**
+**Get the latest release from [here](https://github.com/JonGerrand/MedVoice/releases/latest)**
 
 > [!IMPORTANT]
 > This project is completely free and open source. If you find FluidVoice useful, please star the repository. It helps with visibility and motivates continued development. Your support means a lot.
@@ -14,16 +14,6 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 - Added **[Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1)** for low-latency live English dictation on Apple Silicon
 - Added **Cohere Transcribe** support for higher-accuracy multilingual dictation on Apple Silicon
 - Expanded the voice engine lineup with **Parakeet Flash, Parakeet v3/v2, Cohere, Apple Speech, and Whisper**
-
-## Star History
-
-<a href="https://star-history.com/#altic-dev/Fluid-oss&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=altic-dev/Fluid-oss&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=altic-dev/Fluid-oss&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=altic-dev/Fluid-oss&type=Date" />
-  </picture>
-</a>
 
 ## Demo
 
