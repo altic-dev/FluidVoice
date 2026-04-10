@@ -1,7 +1,7 @@
 # macOS UI Automation Plan (Separate Branch)
 
 ## Goal
-Build reliable automated test coverage for FluidVoice native macOS UI behavior (overlay, prompt picker, mode switching, context behavior), without blocking release stabilization work.
+Build reliable automated test coverage for MedVoice native macOS UI behavior (overlay, prompt picker, mode switching, context behavior), without blocking release stabilization work.
 
 ## Branch Strategy
 - Branch name: `B/macos-ui-automation`
@@ -21,9 +21,9 @@ Build reliable automated test coverage for FluidVoice native macOS UI behavior (
 
 ## Phase 1: Testability Hooks (Accessibility IDs)
 ### Files likely to touch
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/Views/BottomOverlayView.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/Views/NotchContentViews.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/UI/AISettingsView+AdvancedSettings.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/Views/BottomOverlayView.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/Views/NotchContentViews.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/UI/AISettingsView+AdvancedSettings.swift`
 
 ### IDs to add first
 - Prompt chip button
@@ -37,9 +37,9 @@ Build reliable automated test coverage for FluidVoice native macOS UI behavior (
 
 ## Phase 2: UI Smoke Suite (`XCUITest`)
 ### New target/files
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidVoiceUITests/FluidVoiceUITests.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidVoiceUITests/PromptPickerSmokeTests.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidVoiceUITests/ModeSwitchSmokeTests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/MedVoiceUITests/MedVoiceUITests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/MedVoiceUITests/PromptPickerSmokeTests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/MedVoiceUITests/ModeSwitchSmokeTests.swift`
 
 ### Initial smoke tests
 1. Prompt picker tab switch keeps chip/tab/checkmark aligned.
@@ -50,9 +50,9 @@ Build reliable automated test coverage for FluidVoice native macOS UI behavior (
 
 ## Phase 3: Deterministic UI Test Runtime
 ### Files likely to touch
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/FluidApp.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/ContentView.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Sources/Fluid/Services/NotchOverlayManager.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/FluidApp.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/ContentView.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Sources/Fluid/Services/NotchOverlayManager.swift`
 
 ### Additions
 - `--ui-testing` launch argument handling.
@@ -61,9 +61,9 @@ Build reliable automated test coverage for FluidVoice native macOS UI behavior (
 
 ## Phase 4: Logic/Concurrency Guard Tests
 ### Files likely to touch
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidTests/SettingsStorePromptMigrationTests.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidTests/PromptPickerStateSyncTests.swift`
-- `/Users/barathwajanandan/Documents/mac_apps/FluidVoice/Tests/FluidTests/LiveModeSwitchTests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/FluidTests/SettingsStorePromptMigrationTests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/FluidTests/PromptPickerStateSyncTests.swift`
+- `/Users/barathwajanandan/Documents/mac_apps/MedVoice/Tests/FluidTests/LiveModeSwitchTests.swift`
 
 ### Assertions
 - Legacy write/rewrite prompt modes normalize to edit once.
@@ -90,7 +90,7 @@ Build reliable automated test coverage for FluidVoice native macOS UI behavior (
 
 ## Local Run Commands (to finalize when branch starts)
 - Unit tests: `xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS,arch=arm64' -only-testing:FluidTests`
-- UI tests: `xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS,arch=arm64' -only-testing:FluidVoiceUITests`
+- UI tests: `xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS,arch=arm64' -only-testing:MedVoiceUITests`
 
 ## Notes
 - Keep internal compatibility symbols (`rewrite*`) unchanged in this automation branch unless needed for explicit test seams.

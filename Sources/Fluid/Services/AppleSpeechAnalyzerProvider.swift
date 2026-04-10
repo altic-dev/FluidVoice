@@ -30,7 +30,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     /// Thread-safe cache for model installation status.
     /// Protected by `_cacheQueue` for thread-safe access from both sync and async contexts.
     private var _modelsInstalledCache: Bool = false
-    private let _cacheQueue = DispatchQueue(label: "com.fluidvoice.speechanalyzer.cache")
+    private let _cacheQueue = DispatchQueue(label: "com.medvoice.speechanalyzer.cache")
 
     init() {}
 

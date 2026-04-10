@@ -304,7 +304,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Open Main Window
-        let openItem = NSMenuItem(title: "Open Fluid Voice", action: #selector(openMainWindow), keyEquivalent: "")
+        let openItem = NSMenuItem(title: "Open MedVoice", action: #selector(openMainWindow), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
 
@@ -346,7 +346,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Quit
         let quitItem = NSMenuItem(
-            title: "Quit Fluid Voice",
+            title: "Quit MedVoice",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -488,7 +488,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                     msg.messageText = isBeta ? "You’re Up To Date (Beta)" : "You’re Up To Date"
                     msg.informativeText = isBeta
                         ? "You're already running the latest build available in the beta channel."
-                        : "You're already running the latest version of FluidVoice."
+                        : "You're already running the latest version of MedVoice."
                 } else {
                     msg.messageText = "Update Check Failed"
                     msg.informativeText = "Unable to check for updates. Please try again later.\n\nError: \(error.localizedDescription)"
@@ -516,7 +516,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         let confirm = NSAlert()
         confirm.messageText = "Rollback to \(availableVersion)?"
-        confirm.informativeText = "This will restore the backup and relaunch FluidVoice."
+        confirm.informativeText = "This will restore the backup and relaunch MedVoice."
         confirm.alertStyle = .warning
         confirm.addButton(withTitle: "Rollback")
         confirm.addButton(withTitle: "Cancel")
@@ -528,7 +528,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 try await SimpleUpdater.shared.rollbackToLatestBackup()
                 let success = NSAlert()
                 success.messageText = "Rollback Successful"
-                success.informativeText = "Rolled back to \(availableVersion). FluidVoice will relaunch shortly."
+                success.informativeText = "Rolled back to \(availableVersion). MedVoice will relaunch shortly."
                 success.alertStyle = .informational
                 success.addButton(withTitle: "Report Bug")
                 success.addButton(withTitle: "OK")
@@ -627,7 +627,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             guard win.isMiniaturized == false else { return false }
 
             // Prefer our main window title when present (both SwiftUI and our fallback window use this)
-            return win.title == "FluidVoice" || win.title.contains("FluidVoice")
+            return win.title == "MedVoice" || win.title.contains("MedVoice")
         }) {
             self.ensureUsableMainWindow(window)
             window.animationBehavior = .none
@@ -682,7 +682,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "FluidVoice"
+        window.title = "MedVoice"
         window.animationBehavior = .none
         window.minSize = NSSize(width: 800, height: 500)
         window.isReleasedWhenClosed = false

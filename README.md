@@ -7,7 +7,7 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 **Get the latest release from [here](https://github.com/JonGerrand/MedVoice/releases/latest)**
 
 > [!IMPORTANT]
-> This project is completely free and open source. If you find FluidVoice useful, please star the repository. It helps with visibility and motivates continued development. Your support means a lot.
+> This project is completely free and open source. If you find MedVoice useful, please star the repository. It helps with visibility and motivates continued development. Your support means a lot.
 
 ## Latest Update
 
@@ -17,7 +17,7 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
 ## Demo
 
-### Command Mode - Take any action on your mac using FluidVoice  
+### Command Mode - Take any action on your mac using MedVoice  
 
 https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 
@@ -31,9 +31,9 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 ![Command Mode Preview](assets/cmd_mode_ss.png)
 
-### FluidVoice History
+### MedVoice History
 
-![FluidVoice History](assets/history__ss.png)
+![MedVoice History](assets/history__ss.png)
 
 ## New Features (v1.5)   
 - **Overlay with Notch support**
@@ -142,7 +142,7 @@ Contributions are welcome! Please create an issue first to discuss any major cha
    ```
 
 3. **Run from Xcode (one-time signing setup):**
-   - Target: `FluidVoice` → `Signing & Capabilities`
+   - Target: `MedVoice` → `Signing & Capabilities`
    - Enable `Automatically manage signing`
    - Pick your `Team` (Personal Team is fine)
    - This is stored in `xcuserdata/` (gitignored), so it won’t affect your PR
@@ -196,7 +196,7 @@ xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=ma
 
 ## Privacy & Analytics
 
-FluidVoice is designed to be local-first, but it includes optional anonymous analytics, solely to keep track of FV usage and future feature development.
+MedVoice is designed to be local-first, but it includes optional anonymous analytics, solely to keep track of FV usage and future feature development.
 
 ### What this helps with
 - Feature usage patterns (for example dictation, command mode, and write mode)

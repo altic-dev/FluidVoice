@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build FluidVoice
+    name: Build MedVoice
     runs-on: macos-latest
     timeout-minutes: 40
     
@@ -49,14 +49,13 @@ jobs:
     - name: Build Project
       run: |
         set -o pipefail
-        xcodebuild clean build \
-          -project Fluid.xcodeproj \
-          -scheme Fluid \
-          -destination 'platform=macOS,arch=arm64' \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          | xcpretty
+        CONFIGURATION=Release \
+        DESTINATION='platform=macOS,arch=arm64' \
+        CODE_SIGNING_ALLOWED=NO \
+        INSTALL_APP=0 \
+        LAUNCH_APP=0 \
+        CREATE_DMG=0 \
+        ./build.sh full | xcpretty
       continue-on-error: false
       
     - name: Run Tests

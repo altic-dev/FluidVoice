@@ -181,8 +181,8 @@ extension VoiceEngineSettingsView {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(badge == "FluidVoice Pick" ? .cyan.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == "FluidVoice Pick" ? .cyan : .orange)
+                                    .background(Capsule().fill(badge == "MedVoice Pick" ? .cyan.opacity(0.2) : .orange.opacity(0.2)))
+                                    .foregroundStyle(badge == "MedVoice Pick" ? .cyan : .orange)
                             }
 
                             Spacer()

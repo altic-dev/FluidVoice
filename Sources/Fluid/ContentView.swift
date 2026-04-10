@@ -161,8 +161,8 @@ struct ContentView: View {
     @State private var showInDock: Bool = SettingsStore.shared.showInDock
     @State private var showRestartPrompt: Bool = false
     @State private var didOpenAccessibilityPane: Bool = false
-    private let accessibilityRestartFlagKey = "FluidVoice_AccessibilityRestartPending"
-    private let hasAutoRestartedForAccessibilityKey = "FluidVoice_HasAutoRestartedForAccessibility"
+    private let accessibilityRestartFlagKey = "MedVoice_AccessibilityRestartPending"
+    private let hasAutoRestartedForAccessibilityKey = "MedVoice_HasAutoRestartedForAccessibility"
     @State private var accessibilityPollingTask: Task<Void, Never>?
 
     private var isRecordingAnyShortcutCapture: Bool {
@@ -985,7 +985,7 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .animation(nil, value: self.selectedSidebarItem)
-        .navigationTitle("FluidVoice")
+        .navigationTitle("MedVoice")
         .scrollContentBackground(.hidden)
         .background {
             ZStack {
@@ -1175,8 +1175,8 @@ struct ContentView: View {
                     self.instructionStep(number: "2", text: "Choose **Allow** in the system dialog")
                 } else if self.asr.micStatus == .denied {
                     self.instructionStep(number: "1", text: "Click **Open Settings** above")
-                    self.instructionStep(number: "2", text: "Find **FluidVoice** in the microphone list")
-                    self.instructionStep(number: "3", text: "Toggle **FluidVoice ON** to allow access")
+                    self.instructionStep(number: "2", text: "Find **MedVoice** in the microphone list")
+                    self.instructionStep(number: "3", text: "Toggle **MedVoice ON** to allow access")
                 }
             }
             .padding(.leading, 4)
@@ -1884,7 +1884,7 @@ struct ContentView: View {
             )
         }
 
-        // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
+        // When MedVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
         let shouldCopyToClipboard = shouldPersistOutputs &&
             SettingsStore.shared.copyTranscriptionToClipboard &&

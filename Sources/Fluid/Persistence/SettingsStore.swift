@@ -19,7 +19,7 @@ final class SettingsStore: ObservableObject {
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
-        "FluidVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
+        "MedVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
 
     private init() {
         self.migrateTranscriptionStartSoundIfNeeded()
@@ -1276,7 +1276,7 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
-    /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
+    /// When enabled, changing audio devices in MedVoice will also update macOS system audio settings.
     /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
     var syncAudioDevicesWithSystem: Bool {
         get {
@@ -2619,8 +2619,8 @@ final class SettingsStore: ObservableObject {
 
             if self.launchAtStartupEnabled != enabled {
                 let fallbackMessage = enabled
-                    ? "macOS did not enable FluidVoice in Login Items. Unsigned or development builds may not support launch at startup."
-                    : "macOS still shows FluidVoice in Login Items. Check System Settings > General > Login Items."
+                    ? "macOS did not enable MedVoice in Login Items. Unsigned or development builds may not support launch at startup."
+                    : "macOS still shows MedVoice in Login Items. Check System Settings > General > Login Items."
                 objectWillChange.send()
                 self.launchAtStartupErrorMessage = fallbackMessage
                 DebugLogger.shared.warning(fallbackMessage, source: "SettingsStore")
@@ -2670,16 +2670,16 @@ final class SettingsStore: ObservableObject {
             lowercasedDescription.contains("sign") ||
             lowercasedDescription.contains("entitlement")
         {
-            return "FluidVoice could not \(action) launch at startup. This build may not be signed correctly for macOS Login Items."
+            return "MedVoice could not \(action) launch at startup. This build may not be signed correctly for macOS Login Items."
         }
 
         if lowercasedDescription.contains("approval") ||
             lowercasedDescription.contains("authorize")
         {
-            return "macOS needs approval before FluidVoice can \(action) launch at startup. Check System Settings > General > Login Items."
+            return "macOS needs approval before MedVoice can \(action) launch at startup. Check System Settings > General > Login Items."
         }
 
-        return "FluidVoice could not \(action) launch at startup. macOS reported: \(nsError.localizedDescription)"
+        return "MedVoice could not \(action) launch at startup. macOS reported: \(nsError.localizedDescription)"
     }
     #endif
 
@@ -2700,11 +2700,11 @@ final class SettingsStore: ObservableObject {
         var message: String {
             switch self {
             case .enabled:
-                return "FluidVoice reflects the actual macOS login item state."
+                return "MedVoice reflects the actual macOS login item state."
             case .disabled:
-                return "FluidVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
+                return "MedVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
             case .requiresApproval:
-                return "macOS requires approval for FluidVoice in Login Items before launch at startup becomes active."
+                return "macOS requires approval for MedVoice in Login Items before launch at startup becomes active."
             }
         }
     }
@@ -2820,7 +2820,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Media Playback Control
 
     /// When enabled, automatically pauses system media playback when transcription starts.
-    /// Only resumes if FluidVoice was the one that paused it.
+    /// Only resumes if MedVoice was the one that paused it.
     var pauseMediaDuringTranscription: Bool {
         get { self.defaults.object(forKey: Keys.pauseMediaDuringTranscription) as? Bool ?? false }
         set {
@@ -2832,7 +2832,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Custom Dictionary
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
-    /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
+    /// For example: ["fluid voice", "fluid boys"] -> "MedVoice"
     struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
         let id: UUID
         /// Words/phrases to look for (case-insensitive matching)
@@ -3237,11 +3237,11 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        /// Optional badge text for the card (e.g., "FluidVoice Pick")
+        /// Optional badge text for the card (e.g., "MedVoice Pick")
         var badgeText: String? {
             switch self {
-            case .parakeetTDT: return "FluidVoice Pick"
-            case .parakeetTDTv2: return "FluidVoice Pick"
+            case .parakeetTDT: return "MedVoice Pick"
+            case .parakeetTDTv2: return "MedVoice Pick"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
             case .cohereTranscribeSixBit: return "New"

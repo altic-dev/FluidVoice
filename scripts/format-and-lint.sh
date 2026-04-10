@@ -60,7 +60,7 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
 fi
 
 echo "${BLUE}${BOLD}Running SwiftLint...${RESET}"
-tmpfile="$(mktemp -t fluidvoice-swiftlint.XXXXXX)"
+tmpfile="$(mktemp -t medvoice-swiftlint.XXXXXX)"
 
 trap 'rm -f "$tmpfile"' EXIT
 

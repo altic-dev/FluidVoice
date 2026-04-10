@@ -35,7 +35,7 @@ struct FeedbackView: View {
                         VStack(alignment: .leading) {
                             Text("Send Feedback")
                                 .font(.system(size: 28, weight: .bold))
-                            Text("Help us improve FluidVoice")
+                            Text("Help us improve MedVoice")
                                 .font(.system(size: 16))
                                 .foregroundStyle(.secondary)
                         }
@@ -56,7 +56,7 @@ struct FeedbackView: View {
                                     .font(.system(size: 18, weight: .semibold))
                                     .foregroundStyle(self.theme.palette.primaryText)
 
-                                Text("Your feedback helps us make FluidVoice even better")
+                                Text("Your feedback helps us make MedVoice even better")
                                     .font(.system(size: 14))
                                     .foregroundStyle(self.theme.palette.secondaryText)
                             }
@@ -71,7 +71,7 @@ struct FeedbackView: View {
                                 .foregroundStyle(.yellow)
 
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Loving FluidVoice?")
+                                Text("Loving MedVoice?")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(self.theme.palette.primaryText)
 
@@ -196,7 +196,7 @@ struct FeedbackView: View {
         .alert("Feedback Sent", isPresented: self.$showFeedbackConfirmation) {
             Button("OK") {}
         } message: {
-            Text("Thank you for helping us improve FluidVoice.")
+            Text("Thank you for helping us improve MedVoice.")
         }
         .alert("Feedback Failed", isPresented: self.$showFeedbackError) {
             Button("Try Again") {

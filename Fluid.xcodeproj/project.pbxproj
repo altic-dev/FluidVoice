@@ -30,7 +30,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C078D8F2E3B339200FB7CAC /* MedVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MedVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationE2ETests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
@@ -83,7 +83,7 @@
 		7C078D902E3B339200FB7CAC /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */,
+				7C078D8F2E3B339200FB7CAC /* MedVoice Debug.app */,
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
 			);
 			name = Products;
@@ -158,8 +158,8 @@
 				7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
 			);
-			productName = FluidVoice;
-			productReference = 7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */;
+			productName = MedVoice;
+			productReference = 7C078D8F2E3B339200FB7CAC /* MedVoice Debug.app */;
 			productType = "com.apple.product-type.application";
 		};
 		7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */ = {
@@ -408,7 +408,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = V4J43B279J;
+				DEVELOPMENT_TEAM = C3PKL9FPFH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
@@ -436,8 +436,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.5.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
-				PRODUCT_NAME = "FluidVoice Debug";
+				PRODUCT_BUNDLE_IDENTIFIER = com.MedVoice.app;
+				PRODUCT_NAME = "MedVoice Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -462,7 +462,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = V4J43B279J;
+				DEVELOPMENT_TEAM = C3PKL9FPFH;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
@@ -490,8 +490,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.5.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
-				PRODUCT_NAME = FluidVoice;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MedVoice.app;
+				PRODUCT_NAME = MedVoice;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -510,7 +510,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/MedVoice Debug.app/Contents/MacOS/MedVoice Debug";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -522,11 +522,11 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MedVoice.FluidDictationIntegrationTests;
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MedVoice Debug.app/Contents/MacOS/MedVoice Debug";
 			};
 			name = Debug;
 		};
@@ -535,7 +535,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/MedVoice.app/Contents/MacOS/MedVoice";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -547,10 +547,10 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MedVoice.FluidDictationIntegrationTests;
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MedVoice.app/Contents/MacOS/MedVoice";
 			};
 			name = Release;
 		};

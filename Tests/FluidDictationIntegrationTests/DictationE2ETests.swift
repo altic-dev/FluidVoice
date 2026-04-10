@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import FluidVoice_Debug
+@testable import MedVoice_Debug
 
 @MainActor
 final class DictationE2ETests: XCTestCase {
@@ -70,7 +70,7 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(normalized.contains("hello"), "Expected transcription to contain 'hello'. Got: \(raw)")
         XCTAssertTrue(normalized.contains("fluid"), "Expected transcription to contain 'fluid'. Got: \(raw)")
         XCTAssertTrue(
-            normalized.contains("voice") || normalized.contains("fluidvoice") || normalized.contains("boys"),
+            normalized.contains("voice") || normalized.contains("medvoice") || normalized.contains("boys"),
             "Expected transcription to contain 'voice' (or a close variant like 'boys'). Got: \(raw)"
         )
     }
@@ -191,7 +191,7 @@ final class DictationE2ETests: XCTestCase {
 
         // Local runs: isolate per test execution.
         let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FluidVoiceTests", isDirectory: true)
+            .appendingPathComponent("MedVoiceTests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         return base.appendingPathComponent("WhisperModels", isDirectory: true)
     }

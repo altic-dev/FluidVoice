@@ -61,13 +61,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Ensure dock-icon reopen always foregrounds FluidVoice.
+        // Ensure dock-icon reopen always foregrounds MedVoice.
         sender.activate(ignoringOtherApps: true)
 
         if let mainWindow = sender.windows.first(where: { win in
             guard win.level == .normal else { return false }
             guard win.styleMask.contains(.titled) else { return false }
-            return win.title == "FluidVoice" || win.title.contains("FluidVoice")
+            return win.title == "MedVoice" || win.title.contains("MedVoice")
         }) {
             mainWindow.orderFrontRegardless()
             mainWindow.makeKeyAndOrderFront(nil)
@@ -93,7 +93,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let mainWindow = NSApp.windows.first(where: { win in
             guard win.level == .normal else { return false }
             guard win.styleMask.contains(.titled) else { return false }
-            return win.title == "FluidVoice" || win.title.contains("FluidVoice")
+            return win.title == "MedVoice" || win.title.contains("MedVoice")
         }) {
             mainWindow.orderFrontRegardless()
             mainWindow.makeKeyAndOrderFront(nil)
@@ -238,7 +238,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Update Available"
-        alert.informativeText = "FluidVoice \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
+        alert.informativeText = "MedVoice \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Install Now")
         alert.addButton(withTitle: "Later")

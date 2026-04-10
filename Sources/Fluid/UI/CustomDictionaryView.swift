@@ -573,7 +573,7 @@ struct AddBoostTermSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Preferred Word or Phrase")
                         .font(.subheadline.weight(.medium))
-                    TextField("FluidVoice", text: self.$termText)
+                    TextField("MedVoice", text: self.$termText)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { self.saveIfValid() }
                 }
@@ -665,7 +665,7 @@ struct EditBoostTermSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Preferred Word or Phrase")
                         .font(.subheadline.weight(.medium))
-                    TextField("FluidVoice", text: self.$termText)
+                    TextField("MedVoice", text: self.$termText)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { self.saveIfValid() }
                 }
@@ -860,7 +860,7 @@ struct AddDictionaryEntrySheet: View {
                 Text("This is what will appear in the final transcription.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("FluidVoice", text: self.$replacement)
+                TextField("MedVoice", text: self.$replacement)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { self.saveIfValid() }
             }
@@ -1010,7 +1010,7 @@ struct EditDictionaryEntrySheet: View {
                 Text("This is what will appear in the final transcription.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("FluidVoice", text: self.$replacement)
+                TextField("MedVoice", text: self.$replacement)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { self.saveIfValid() }
             }

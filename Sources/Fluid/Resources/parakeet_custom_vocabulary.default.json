@@ -6,7 +6,7 @@
   "minTermLength": 3,
   "terms": [
     {
-      "text": "FluidVoice",
+      "text": "MedVoice",
       "aliases": ["fluid voice", "fluid boys"],
       "weight": 10.0
     }

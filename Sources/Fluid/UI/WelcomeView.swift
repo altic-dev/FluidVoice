@@ -43,7 +43,7 @@ struct WelcomeView: View {
                         Image(systemName: "book.fill")
                             .font(.title2)
                             .foregroundStyle(self.theme.palette.accent)
-                        Text((self.asr.isAsrReady || self.asr.modelsExistOnDisk) ? "Getting Started" : "Welcome to FluidVoice")
+                        Text((self.asr.isAsrReady || self.asr.modelsExistOnDisk) ? "Getting Started" : "Welcome to MedVoice")
                             .font(.title2.weight(.bold))
                     }
                     .padding(.bottom, 4)
@@ -90,8 +90,8 @@ struct WelcomeView: View {
                                     step: 2,
                                     title: self.asr.micStatus == .authorized ? "Microphone Permission Granted" : "Grant Microphone Permission",
                                     description: self.asr.micStatus == .authorized
-                                        ? "FluidVoice has access to your microphone"
-                                        : "Allow FluidVoice to access your microphone for voice input",
+                                        ? "MedVoice has access to your microphone"
+                                        : "Allow MedVoice to access your microphone for voice input",
                                     status: self.asr.micStatus == .authorized ? .completed : .pending,
                                     action: {
                                         if self.asr.micStatus == .notDetermined {
@@ -628,9 +628,9 @@ struct OnboardingFlowView: View {
                     ? "Choose the best voice model for how you speak. Download it once to continue."
                     : "Recommended for your Mac: Whisper. Download it once to continue."
             case .microphone:
-                return "Allow FluidVoice to capture audio from your microphone."
+                return "Allow MedVoice to capture audio from your microphone."
             case .accessibility:
-                return "Allow FluidVoice to type transcriptions into other apps."
+                return "Allow MedVoice to type transcriptions into other apps."
             case .aiEnhancement:
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
@@ -835,7 +835,7 @@ struct OnboardingFlowView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Welcome to FluidVoice")
+            Text("Welcome to MedVoice")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(self.theme.palette.primaryText)
 
@@ -987,8 +987,8 @@ struct OnboardingFlowView: View {
                             if self.shouldShowLanguageChoice && self.recommendedOnboardingModels.count > 1 {
                                 Text(
                                     self.preferredLanguageChoice == .englishOnly
-                                        ? "Choose either FluidVoice-recommended English model."
-                                        : "Choose either FluidVoice-recommended multilingual model."
+                                        ? "Choose either MedVoice-recommended English model."
+                                        : "Choose either MedVoice-recommended multilingual model."
                                 )
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
@@ -1097,8 +1097,8 @@ struct OnboardingFlowView: View {
                                     Text("2. Choose \"Allow\" in the system dialog")
                                 } else {
                                     Text("1. Click \"Open Settings\"")
-                                    Text("2. Find FluidVoice in the microphone list")
-                                    Text("3. Toggle FluidVoice on")
+                                    Text("2. Find MedVoice in the microphone list")
+                                    Text("3. Toggle MedVoice on")
                                 }
                             }
                             .font(.caption)
@@ -1143,14 +1143,14 @@ struct OnboardingFlowView: View {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text("1. Click \"Enable Accessibility\"")
-                                Text("2. Add or enable FluidVoice in Accessibility")
-                                Text("3. FluidVoice should restart automatically")
-                                Text("4. If it does not, use Restart FluidVoice below")
+                                Text("2. Add or enable MedVoice in Accessibility")
+                                Text("3. MedVoice should restart automatically")
+                                Text("4. If it does not, use Restart MedVoice below")
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                            Button("Restart FluidVoice") {
+                            Button("Restart MedVoice") {
                                 self.restartApp()
                             }
                             .buttonStyle(.bordered)
@@ -1551,7 +1551,7 @@ struct OnboardingFlowView: View {
             case .englishOnly:
                 return "English only uses \(self.recommendedOnboardingModelDisplayName)"
             case .multipleLanguages:
-                return "FluidVoice recommends Parakeet TDT v3 and Cohere"
+                return "MedVoice recommends Parakeet TDT v3 and Cohere"
             case .other:
                 return "Whisper and more options"
             }
@@ -1573,7 +1573,7 @@ struct OnboardingFlowView: View {
                         .foregroundStyle(self.theme.palette.primaryText)
 
                     if option != .other {
-                        Text("FluidVoice Recommended")
+                        Text("MedVoice Recommended")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)

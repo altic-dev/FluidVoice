@@ -7,7 +7,7 @@ import Combine
 final class ActiveAppMonitor: ObservableObject {
     static let shared = ActiveAppMonitor()
 
-    /// The currently active application (excluding FluidVoice itself)
+    /// The currently active application (excluding MedVoice itself)
     @Published private(set) var activeApp: NSRunningApplication?
 
     /// The icon of the currently active application
