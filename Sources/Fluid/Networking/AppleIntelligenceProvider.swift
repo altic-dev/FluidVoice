@@ -44,25 +44,17 @@ enum AppleIntelligenceService {
 @available(macOS 26.0, *)
 final class AppleIntelligenceProvider {
     /// Process text with a system prompt (for transcription cleanup)
-    func process(systemPrompt: String, userText: String) async -> String {
-        do {
-            let session = LanguageModelSession()
+    func process(systemPrompt: String, userText: String) async throws -> String {
+        let session = LanguageModelSession()
 
-            let fullPrompt = """
-            \(systemPrompt)
+        let fullPrompt = """
+        \(systemPrompt)
 
-            \(userText)
-            """
+        \(userText)
+        """
 
-            let response = try await session.respond(to: fullPrompt)
-            return response.content
-        } catch {
-            DebugLogger.shared.error(
-                "Apple Intelligence error: \(error.localizedDescription)",
-                source: "AppleIntelligenceProvider"
-            )
-            return "Error: \(error.localizedDescription)"
-        }
+        let response = try await session.respond(to: fullPrompt)
+        return response.content
     }
 
     /// Process rewrite/write requests with conversation history
