@@ -129,9 +129,34 @@ extension AIEnhancementSettingsView {
                         .background(self.theme.palette.separator.opacity(0.5))
 
                     self.promptsStepContent
+
+                    Divider()
+                        .background(self.theme.palette.separator.opacity(0.5))
+
+                    self.streamingToggleRow
                 }
                 .padding(16)
             }
+        }
+    }
+
+    var streamingToggleRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Stream responses")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Send \"stream\": true in AI requests. Turn off if your provider defaults to streaming but the response fails to parse (e.g. some Ollama or self-hosted setups).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { self.settings.enableAIStreaming },
+                set: { self.settings.enableAIStreaming = $0 }
+            ))
+            .toggleStyle(.switch)
+            .tint(self.theme.palette.accent)
+            .labelsHidden()
         }
     }
 
