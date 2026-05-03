@@ -221,10 +221,8 @@ final class LLMClient {
             body["tool_choice"] = "auto"
         }
 
-        // Add streaming flag
-        if config.streaming {
-            body["stream"] = true
-        }
+        // Send the stream flag explicitly — some providers (e.g. Ollama) default to streaming when absent.
+        body["stream"] = config.streaming
 
         // Add extra parameters in layers:
         // 1. Model-specific parameters (from ThinkingParserFactory)

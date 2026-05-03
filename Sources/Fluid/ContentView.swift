@@ -1720,10 +1720,7 @@ struct ContentView: View {
         }
         messages.append(["role": "user", "content": userMessageContent])
 
-        // NOTE: Transcription doesn't need streaming - the full result appears at once
-        // Streaming is only useful for Command/Rewrite modes where real-time display helps
-        // Using non-streaming is simpler and more reliable for transcription cleanup
-        let enableStreaming = false // Hardcoded off for transcription
+        let enableStreaming = SettingsStore.shared.enableAIStreaming
 
         // Build LLMClient configuration
         // Note: No onContentChunk callback needed since we don't display real-time
