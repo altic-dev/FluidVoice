@@ -2015,10 +2015,21 @@ struct ContentView: View {
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
+            let preInsertionMonitoringElement = AutoLearnDictionaryService.shared.captureFocusedElement()
             self.asr.typeTextToActiveField(
                 finalText,
                 preferredTargetPID: typingTarget.pid
-            )
+            ) {
+                // Now that typing is physically complete, we can start monitoring.
+                // Prefer the element that received the insertion; focus can move before this fires.
+                let monitoringElement = preInsertionMonitoringElement
+                    ?? AutoLearnDictionaryService.shared.captureFocusedElement()
+                guard let monitoringElement else { return }
+                AutoLearnDictionaryService.shared.beginMonitoring(
+                    pastedText: finalText,
+                    element: monitoringElement
+                )
+            }
             didTypeExternally = true
         }
 
@@ -2042,7 +2053,6 @@ struct ContentView: View {
                 aiModel: modelInfo.model,
                 aiProvider: modelInfo.provider
             )
-
             NotchOverlayManager.shared.hide()
         } else if shouldPersistOutputs,
                   SettingsStore.shared.copyTranscriptionToClipboard == false,

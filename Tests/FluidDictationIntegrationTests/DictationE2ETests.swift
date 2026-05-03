@@ -17,6 +17,9 @@ final class DictationE2ETests: XCTestCase {
     private let selectedProviderIDKey = "SelectedProviderID"
     private let availableModelsByProviderKey = "AvailableModelsByProvider"
     private let selectedModelByProviderKey = "SelectedModelByProvider"
+    private let customDictionaryEntriesKey = "CustomDictionaryEntries"
+    private let autoLearnCustomDictionaryEnabledKey = "AutoLearnCustomDictionaryEnabled"
+    private let autoLearnCustomDictionarySuggestionsKey = "AutoLearnCustomDictionarySuggestions"
 
     func testTranscriptionStartSound_noneOptionHasNoFile() {
         XCTAssertEqual(SettingsStore.TranscriptionStartSound.none.displayName, "None")
@@ -251,6 +254,230 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(SimpleUpdater.isRollbackVersion("1.5.11-beta.3", differentFrom: "1.5.11-beta.3"))
         XCTAssertTrue(SimpleUpdater.isRollbackVersion("1.5.11-beta.2", differentFrom: "1.5.11-beta.3"))
         XCTAssertFalse(SimpleUpdater.isRollbackVersion(nil, differentFrom: "1.5.11-beta.3"))
+    }
+
+    func testCorrectionDiffEngineCapturesCaseOnlyAcronymCorrection() {
+        let candidates = CorrectionDiffEngine.findCorrectionCandidates(
+            original: "yaml sample",
+            edited: "YAML sample"
+        )
+
+        XCTAssertEqual(candidates, [
+            CorrectionDiffEngine.Candidate(original: "yaml", replacement: "YAML"),
+        ])
+    }
+
+    func testCorrectionDiffEngineCapturesCaseOnlyProductNameCorrection() {
+        let candidates = CorrectionDiffEngine.findCorrectionCandidates(
+            original: "fluidvoice test",
+            edited: "FluidVoice test"
+        )
+
+        XCTAssertEqual(candidates, [
+            CorrectionDiffEngine.Candidate(original: "fluidvoice", replacement: "FluidVoice"),
+        ])
+    }
+
+    func testAutoLearnObservationPreservesPunctuationInTrigger() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordObservationForTesting(
+                original: "node.js",
+                replacement: "Node.js"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "node.js")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Node.js")
+        }
+    }
+
+    func testAutoLearnTracksPunctuationOnlyTechnicalCorrection() {
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = []
+
+            XCTAssertTrue(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "k8s-io",
+                    replacement: "k8s.io"
+                )
+            )
+        }
+    }
+
+    func testAutoLearnTracksSimpleTitleCaseCorrectionAsOrdinarySuggestion() {
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = []
+
+            XCTAssertTrue(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "obsidian",
+                    replacement: "Obsidian"
+                )
+            )
+            XCTAssertFalse(
+                AutoLearnDictionaryService.shared.isHighSignalReplacement("Obsidian")
+            )
+            XCTAssertEqual(
+                AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "Obsidian"),
+                AutoLearnDictionaryService.shared.minimumSuggestionOccurrences
+            )
+            XCTAssertTrue(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "works",
+                    replacement: "Works"
+                )
+            )
+            XCTAssertFalse(
+                AutoLearnDictionaryService.shared.isHighSignalReplacement("Works")
+            )
+        }
+    }
+
+    func testAutoLearnTreatsAcronymAndCamelCaseCorrectionsAsHighSignal() {
+        XCTAssertTrue(
+            AutoLearnDictionaryService.shared.isHighSignalReplacement("YAML")
+        )
+        XCTAssertEqual(
+            AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "YAML"),
+            1
+        )
+        XCTAssertTrue(
+            AutoLearnDictionaryService.shared.isHighSignalReplacement("FluidVoice")
+        )
+        XCTAssertFalse(
+            AutoLearnDictionaryService.shared.isHighSignalReplacement("Works")
+        )
+    }
+
+    func testAutoLearnOnlyRecordsCorrectionsFromInsertedText() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: "New obsidian note.",
+                baselineText: "Old patten. New obsidian note.",
+                currentText: "Old Pattern. New obsidian note."
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: "New obsidian note.",
+                baselineText: "Old patten. New obsidian note.",
+                currentText: "Old patten. New Obsidian note."
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Obsidian")
+        }
+    }
+
+    func testAutoLearnCountsRepeatedSessionCorrectionsWithoutDoubleCounting() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            let baselineText = """
+            I wrote an obsidian note
+            I wrote an obsidian note.
+            I wrote an obsidian note
+            """
+            let currentText = """
+            I wrote an Obsidian note
+            I wrote an Obsidian note.
+            I wrote an Obsidian note
+            """
+
+            AutoLearnDictionaryService.shared.recordCorrectionsDuringSessionForTesting(
+                insertedText: baselineText,
+                baselineText: baselineText,
+                currentText: currentText,
+                processingPasses: 2
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 3)
+        }
+    }
+
+    func testAutoLearnDismissedOrdinarySuggestionReappearsAfterFreshEvidence() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = [
+                SettingsStore.AutoLearnSuggestion(
+                    originalText: "obsidian",
+                    replacement: "Obsidian",
+                    occurrences: 2,
+                    status: .dismissed
+                ),
+            ]
+
+            AutoLearnDictionaryService.shared.recordObservationForTesting(original: "obsidian", replacement: "Obsidian")
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.status, .dismissed)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.dismissedAtOccurrenceCount, 2)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 3)
+
+            AutoLearnDictionaryService.shared.recordObservationForTesting(original: "obsidian", replacement: "Obsidian")
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.status, .pending)
+            XCTAssertNil(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.dismissedAtOccurrenceCount)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 4)
+        }
+    }
+
+    func testAutoLearnDismissedHighSignalSuggestionReappearsAfterOneFreshObservation() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = [
+                SettingsStore.AutoLearnSuggestion(
+                    originalText: "yaml",
+                    replacement: "YAML",
+                    occurrences: 1,
+                    status: .dismissed,
+                    dismissedAtOccurrenceCount: 1
+                ),
+            ]
+
+            AutoLearnDictionaryService.shared.recordObservationForTesting(original: "yaml", replacement: "YAML")
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.status, .pending)
+            XCTAssertNil(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.dismissedAtOccurrenceCount)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 2)
+        }
     }
 
     private static func modelDirectoryForRun() -> URL {

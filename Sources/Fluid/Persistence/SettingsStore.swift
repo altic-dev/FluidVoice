@@ -2263,6 +2263,8 @@ final class SettingsStore: ObservableObject {
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
+            autoLearnCustomDictionaryEnabled: self.autoLearnCustomDictionaryEnabled,
+            autoLearnCustomDictionarySuggestions: self.autoLearnCustomDictionarySuggestions,
             selectedDictationPromptID: self.selectedDictationPromptID,
             dictationPromptOff: self.isDictationPromptOff,
             selectedEditPromptID: self.selectedEditPromptID,
@@ -2335,6 +2337,8 @@ final class SettingsStore: ObservableObject {
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
+        self.autoLearnCustomDictionaryEnabled = payload.autoLearnCustomDictionaryEnabled
+        self.autoLearnCustomDictionarySuggestions = payload.autoLearnCustomDictionarySuggestions
 
         self.dictationPromptProfiles = promptProfiles
         self.appPromptBindings = appPromptBindings
@@ -2911,28 +2915,6 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Custom Dictionary
 
-    /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
-    /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
-        let id: UUID
-        /// Words/phrases to look for (case-insensitive matching)
-        var triggers: [String]
-        /// The correct replacement text
-        var replacement: String
-
-        init(triggers: [String], replacement: String) {
-            self.id = UUID()
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
-        }
-
-        init(id: UUID, triggers: [String], replacement: String) {
-            self.id = id
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
-        }
-    }
-
     var vocabularyBoostingEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.vocabularyBoostingEnabled)
@@ -2959,6 +2941,35 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             if let encoded = try? JSONEncoder().encode(newValue) {
                 self.defaults.set(encoded, forKey: Keys.customDictionaryEntries)
+            }
+        }
+    }
+
+    var autoLearnCustomDictionaryEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.autoLearnCustomDictionaryEnabled)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.autoLearnCustomDictionaryEnabled)
+        }
+    }
+
+    var autoLearnCustomDictionarySuggestions: [AutoLearnSuggestion] {
+        get {
+            guard let data = defaults.data(forKey: Keys.autoLearnCustomDictionarySuggestions),
+                  let decoded = try? JSONDecoder().decode([AutoLearnSuggestion].self, from: data)
+            else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            objectWillChange.send()
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(encoded, forKey: Keys.autoLearnCustomDictionarySuggestions)
+                NotificationCenter.default.post(name: .autoLearnSuggestionsDidChange, object: nil)
             }
         }
     }
@@ -3650,6 +3661,8 @@ private extension SettingsStore {
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
+        static let autoLearnCustomDictionaryEnabled = "AutoLearnCustomDictionaryEnabled"
+        static let autoLearnCustomDictionarySuggestions = "AutoLearnCustomDictionarySuggestions"
 
         // Transcription Provider (ASR)
         static let selectedTranscriptionProvider = "SelectedTranscriptionProvider"

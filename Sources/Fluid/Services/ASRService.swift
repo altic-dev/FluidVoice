@@ -2601,12 +2601,12 @@ final class ASRService: ObservableObject {
 
     private let typingService = TypingService() // Reuse instance to avoid conflicts
 
-    func typeTextToActiveField(_ text: String) {
-        self.typingService.typeTextInstantly(text)
+    func typeTextToActiveField(_ text: String, onComplete: (() -> Void)? = nil) {
+        self.typingService.typeTextInstantly(text, onComplete: onComplete)
     }
 
-    func typeTextToActiveField(_ text: String, preferredTargetPID: pid_t?) {
-        self.typingService.typeTextInstantly(text, preferredTargetPID: preferredTargetPID)
+    func typeTextToActiveField(_ text: String, preferredTargetPID: pid_t?, onComplete: (() -> Void)? = nil) {
+        self.typingService.typeTextInstantly(text, preferredTargetPID: preferredTargetPID, onComplete: onComplete)
     }
 
     /// Removes filler sounds from transcribed text

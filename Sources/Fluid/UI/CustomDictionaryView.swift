@@ -9,32 +9,44 @@
 import SwiftUI
 
 struct CustomDictionaryView: View {
+    private enum SuggestionApprovalResult {
+        case applied
+        case alreadyPresent
+        case conflict(existingReplacement: String)
+    }
+
+    private let maxVisibleAutoLearnSuggestions = 5
     @Environment(\.theme) private var theme
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
+    @State private var autoLearnSuggestions: [SettingsStore.AutoLearnSuggestion] = SettingsStore.shared.autoLearnCustomDictionarySuggestions
     @State private var showAddSheet = false
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
     @State private var showAddBoostSheet = false
     @State private var editingBoostTerm: EditableBoostTerm?
+    @State private var autoLearnEnabled: Bool = SettingsStore.shared.autoLearnCustomDictionaryEnabled
+    @State private var showAutoLearnInfo = false
 
     // Collapsible section states
+    @State private var isAutoLearnSectionExpanded = true
     @State private var isOfflineSectionExpanded = false
     @State private var isAISectionExpanded = true
 
     @State private var boostStatusMessage = "Add custom words for better Parakeet recognition."
     @State private var boostHasError = false
     @State private var vocabBoostingEnabled: Bool = SettingsStore.shared.vocabularyBoostingEnabled
+    @State private var autoLearnStatusMessage: String?
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 self.pageHeader
 
-                // Section 1: Custom Words (Parakeet)
-                self.aiPostProcessingSection
+                self.autoLearnSection
 
-                // Section 2: Instant Replacement
                 self.offlineReplacementSection
+
+                self.aiPostProcessingSection
             }
             .padding(20)
         }
@@ -73,6 +85,12 @@ struct CustomDictionaryView: View {
         }
         .onAppear {
             self.loadBoostTerms()
+            self.reloadAutoLearnSuggestions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .autoLearnSuggestionsDidChange)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                self.reloadAutoLearnSuggestions()
+            }
         }
     }
 
@@ -89,13 +107,248 @@ struct CustomDictionaryView: View {
                     .fontWeight(.semibold)
             }
 
-            Text("Improve transcription accuracy with Custom Words for names and product terms, plus Instant Replacement for simple find-and-replace.")
+            Text("Add words and replacements FluidVoice should remember.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Section 2: Offline Replacement
+    private var pendingAutoLearnSuggestions: [SettingsStore.AutoLearnSuggestion] {
+        return self.autoLearnSuggestions
+            .filter { suggestion in
+                guard suggestion.status == .pending else { return false }
+
+                let threshold = AutoLearnDictionaryService.shared.displayThreshold(for: suggestion)
+                return suggestion.occurrences >= threshold
+            }
+            .sorted { lhs, rhs in
+                if lhs.occurrences != rhs.occurrences {
+                    return lhs.occurrences > rhs.occurrences
+                }
+
+                let lhsHighSignal = AutoLearnDictionaryService.shared.isHighSignalReplacement(lhs.replacement)
+                let rhsHighSignal = AutoLearnDictionaryService.shared.isHighSignalReplacement(rhs.replacement)
+                if lhsHighSignal != rhsHighSignal {
+                    return lhsHighSignal
+                }
+
+                if lhs.lastObservedAt != rhs.lastObservedAt {
+                    return lhs.lastObservedAt > rhs.lastObservedAt
+                }
+
+                return lhs.replacement.localizedCaseInsensitiveCompare(rhs.replacement) == .orderedAscending
+            }
+    }
+
+    private var visibleAutoLearnSuggestions: [SettingsStore.AutoLearnSuggestion] {
+        Array(self.pendingAutoLearnSuggestions.prefix(self.maxVisibleAutoLearnSuggestions))
+    }
+
+    private var hiddenAutoLearnSuggestionCount: Int {
+        max(0, self.pendingAutoLearnSuggestions.count - self.visibleAutoLearnSuggestions.count)
+    }
+
+    private var autoLearnSection: some View {
+        ThemedCard(hoverEffect: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            self.isAutoLearnSectionExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: self.isAutoLearnSectionExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+
+                            Text("Suggested Replacements")
+                                .font(.headline)
+
+                            Text("Alpha")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 1.0, green: 0.35, blue: 0.35)))
+                                .foregroundStyle(.white)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        self.showAutoLearnInfo.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "info.circle.fill")
+                                .font(.caption2)
+                            Text("How it works")
+                                .font(.caption2.weight(.medium))
+                        }
+                        .foregroundStyle(self.theme.palette.accent)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(self.theme.palette.accent.opacity(0.12))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(self.theme.palette.accent.opacity(0.25), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("How suggestions work")
+                    .popover(isPresented: self.$showAutoLearnInfo, arrowEdge: .top) {
+                        self.autoLearnInfoPopover
+                    }
+
+                    Spacer()
+
+                    if !self.pendingAutoLearnSuggestions.isEmpty {
+                        Text("\(self.pendingAutoLearnSuggestions.count)")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(.quaternary))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if self.isAutoLearnSectionExpanded {
+                    Divider()
+                        .padding(.vertical, 12)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: self.$autoLearnEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Suggest replacements from my corrections")
+                                    .font(.subheadline.weight(.medium))
+                                Text("When you correct dictated text, FluidVoice can suggest an Instant Replacement for next time.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .onChange(of: self.autoLearnEnabled) { _, newValue in
+                            SettingsStore.shared.autoLearnCustomDictionaryEnabled = newValue
+                            if !newValue {
+                                AutoLearnDictionaryService.shared.stopMonitoring()
+                            }
+                        }
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(self.theme.palette.contentBackground.opacity(0.6))
+                        )
+
+                        if let autoLearnStatusMessage {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Color.orange)
+                                Text(autoLearnStatusMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.orange.opacity(0.08))
+                            )
+                        }
+
+                        if self.pendingAutoLearnSuggestions.isEmpty {
+                            VStack(spacing: 10) {
+                                Image(systemName: "sparkles.rectangle.stack")
+                                    .font(.system(size: 28))
+                                    .foregroundStyle(.tertiary)
+                                Text(
+                                    self.autoLearnEnabled
+                                        ? "No suggestions yet"
+                                        : "Turn this on to collect suggestions from corrections."
+                                )
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                        } else {
+                            VStack(spacing: 8) {
+                                ForEach(self.visibleAutoLearnSuggestions) { suggestion in
+                                    AutoLearnSuggestionRow(
+                                        suggestion: suggestion,
+                                        onApprove: { self.approveSuggestion(suggestion) },
+                                        onDismiss: { self.dismissSuggestion(suggestion) }
+                                    )
+                                }
+
+                                if self.hiddenAutoLearnSuggestionCount > 0 {
+                                    Text("\(self.hiddenAutoLearnSuggestionCount) more waiting. Add or dismiss one to show the next.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.top, 4)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private var autoLearnInfoPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("How suggestions work")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 10) {
+                self.autoLearnInfoRow(
+                    icon: "waveform",
+                    text: "FluidVoice watches recently dictated text for a short time."
+                )
+                self.autoLearnInfoRow(
+                    icon: "pencil",
+                    text: "If you correct that text, FluidVoice can suggest a replacement."
+                )
+                self.autoLearnInfoRow(
+                    icon: "number",
+                    text: "Most suggestions need 2 corrections. Acronyms, numbers, and special spellings can appear after 1."
+                )
+                self.autoLearnInfoRow(
+                    icon: "checkmark.circle",
+                    text: "Nothing is added to Instant Replacement until you choose Add."
+                )
+                self.autoLearnInfoRow(
+                    icon: "xmark.circle",
+                    text: "Dismissed suggestions can return if you make the same correction again."
+                )
+            }
+        }
+        .frame(width: 420, alignment: .leading)
+        .padding(14)
+    }
+
+    private func autoLearnInfoRow(icon: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(self.theme.palette.accent)
+                .frame(width: 16, alignment: .center)
+
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: - Instant Replacement
 
     private var offlineReplacementSection: some View {
         ThemedCard(hoverEffect: false) {
@@ -229,7 +482,7 @@ struct CustomDictionaryView: View {
         }
     }
 
-    // MARK: - Section 1: Custom Words (Parakeet)
+    // MARK: - Custom Words (Parakeet)
 
     private var aiPostProcessingSection: some View {
         ThemedCard(hoverEffect: false) {
@@ -408,6 +661,75 @@ struct CustomDictionaryView: View {
             self.boostStatusMessage = "Couldn't load custom words: \(error.localizedDescription)"
             self.boostHasError = true
         }
+    }
+
+    private func reloadAutoLearnSuggestions() {
+        self.autoLearnSuggestions = SettingsStore.shared.autoLearnCustomDictionarySuggestions
+        self.autoLearnEnabled = SettingsStore.shared.autoLearnCustomDictionaryEnabled
+    }
+
+    private func saveAutoLearnSuggestions() {
+        SettingsStore.shared.autoLearnCustomDictionarySuggestions = self.autoLearnSuggestions
+    }
+
+    private func approveSuggestion(_ suggestion: SettingsStore.AutoLearnSuggestion) {
+        let trigger = suggestion.originalText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let replacement = suggestion.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trigger.isEmpty, !replacement.isEmpty else { return }
+
+        switch self.applySuggestion(trigger: trigger, replacement: replacement) {
+        case .applied:
+            self.autoLearnStatusMessage = nil
+            self.saveEntries()
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.autoLearnSuggestions.removeAll { $0.id == suggestion.id }
+            }
+            self.saveAutoLearnSuggestions()
+        case .alreadyPresent:
+            self.autoLearnStatusMessage = nil
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.autoLearnSuggestions.removeAll { $0.id == suggestion.id }
+            }
+            self.saveAutoLearnSuggestions()
+        case .conflict(let existingReplacement):
+            self.autoLearnStatusMessage =
+                "\"\(trigger)\" already maps to \"\(existingReplacement)\". Review the existing dictionary entry before approving this suggestion."
+        }
+    }
+
+    private func dismissSuggestion(_ suggestion: SettingsStore.AutoLearnSuggestion) {
+        guard let index = self.autoLearnSuggestions.firstIndex(where: { $0.id == suggestion.id }) else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            self.autoLearnSuggestions[index].status = .dismissed
+            self.autoLearnSuggestions[index].dismissedAtOccurrenceCount = self.autoLearnSuggestions[index].occurrences
+        }
+        self.saveAutoLearnSuggestions()
+    }
+
+    private func applySuggestion(trigger: String, replacement: String) -> SuggestionApprovalResult {
+        if let mappedEntry = self.entries.first(where: { $0.triggers.contains(trigger) }) {
+            if mappedEntry.replacement.caseInsensitiveCompare(replacement) == .orderedSame {
+                return .alreadyPresent
+            }
+            return .conflict(existingReplacement: mappedEntry.replacement)
+        }
+
+        if let index = self.entries.firstIndex(where: { $0.replacement.caseInsensitiveCompare(replacement) == .orderedSame }) {
+            if self.entries[index].triggers.contains(trigger) {
+                return .alreadyPresent
+            }
+            self.entries[index].triggers.append(trigger)
+            self.entries[index].triggers = Array(Set(self.entries[index].triggers)).sorted()
+            return .applied
+        }
+
+        self.entries.append(
+            SettingsStore.CustomDictionaryEntry(
+                triggers: [trigger],
+                replacement: replacement
+            )
+        )
+        return .applied
     }
 
     private func saveBoostTerms() {
@@ -725,6 +1047,8 @@ struct EditBoostTermSheet: View {
 
 // MARK: - Dictionary Entry Row
 
+private let dictionaryRowActionColumnWidth: CGFloat = 112
+
 struct DictionaryEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
     let onEdit: () -> Void
@@ -789,6 +1113,7 @@ struct DictionaryEntryRow: View {
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
             }
+            .frame(width: dictionaryRowActionColumnWidth, alignment: .trailing)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
@@ -1096,5 +1421,108 @@ struct EditDictionaryEntrySheet: View {
         )
         self.onSave(updatedEntry)
         self.dismiss()
+    }
+}
+
+// MARK: - AutoLearn Suggestion Row
+
+struct AutoLearnSuggestionRow: View {
+    let suggestion: SettingsStore.AutoLearnSuggestion
+    let onApprove: () -> Void
+    let onDismiss: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            // Left: original text + metadata
+            VStack(alignment: .leading, spacing: 5) {
+                Text("When heard:")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                Text(self.suggestion.originalText)
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
+
+                HStack(spacing: 6) {
+                    Text(self.occurrenceText)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    Text("·")
+                        .foregroundStyle(.quaternary)
+
+                    Text(self.relativeTimestamp)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Centre: directional arrow
+            Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            // Right: replacement text
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Replace with:")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                Text(self.suggestion.replacement)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(self.theme.palette.accent)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Actions
+            HStack(spacing: 6) {
+                Button {
+                    self.onApprove()
+                } label: {
+                    Label("Add", systemImage: "checkmark")
+                        .font(.caption2.weight(.medium))
+                        .frame(height: 12)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .controlSize(.mini)
+
+                Button {
+                    self.onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.medium))
+                        .frame(width: 18, height: 12)
+                        .contentShape(Rectangle())
+                        .help("Dismiss for now")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Dismiss for now")
+                .accessibilityLabel("Dismiss this suggestion for now")
+            }
+            .frame(width: dictionaryRowActionColumnWidth, alignment: .trailing)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private var relativeTimestamp: String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: self.suggestion.lastObservedAt, relativeTo: Date())
+    }
+
+    private var occurrenceText: String {
+        self.suggestion.occurrences == 1
+            ? "1 correction"
+            : "\(self.suggestion.occurrences) corrections"
     }
 }

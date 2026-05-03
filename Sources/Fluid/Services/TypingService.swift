@@ -224,13 +224,13 @@ final class TypingService {
 
     // MARK: - Public API
 
-    func typeTextInstantly(_ text: String) {
-        self.typeTextInstantly(text, preferredTargetPID: nil)
+    func typeTextInstantly(_ text: String, onComplete: (() -> Void)? = nil) {
+        self.typeTextInstantly(text, preferredTargetPID: nil, onComplete: onComplete)
     }
 
     /// Types/inserts text, optionally preferring a specific target PID for CGEvent posting.
     /// This helps when our overlay temporarily has focus; we can still target the original app.
-    func typeTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
+    func typeTextInstantly(_ text: String, preferredTargetPID: pid_t?, onComplete: (() -> Void)? = nil) {
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
         self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
 
@@ -259,6 +259,16 @@ final class TypingService {
             defer {
                 self.isCurrentlyTyping = false
                 self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
+
+                // Allow a small final settle window before firing completion,
+                // ensuring the target app's event loop has processed the insertion so
+                // baseline snapshots capture the post-insertion state accurately.
+                if self.textInsertionMode == .reliablePaste {
+                    usleep(50_000)
+                }
+                DispatchQueue.main.async {
+                    onComplete?()
+                }
             }
 
             self.log("[TypingService] Starting async text insertion process")
