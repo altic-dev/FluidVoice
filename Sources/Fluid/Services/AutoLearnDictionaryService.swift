@@ -317,7 +317,8 @@ final class AutoLearnDictionaryService {
         self.insertedText = pastedText
         self.recordedSessionObservationCounts = [:]
         self.monitoredElement = element
-        self.monitoredPID = self.pid(for: element)
+        let elementPID = self.pid(for: element)
+        self.monitoredPID = self.monitoringActivationPID(elementPID: elementPID, targetPID: targetPID)
 
         // Capture the full field value as baseline so that both baselineText
         // and lastKnownText (updated via kAXValueChanged) cover the same scope.
@@ -338,7 +339,7 @@ final class AutoLearnDictionaryService {
             self.monitoredPID = nil
             self.startEventFallbackMonitoring(
                 pastedText: pastedText,
-                targetPID: targetPID ?? self.pid(for: element)
+                targetPID: targetPID ?? elementPID
             )
             return
         }
@@ -442,6 +443,13 @@ final class AutoLearnDictionaryService {
             return true
         }
         return activatedPID != monitoredPID
+    }
+
+    private func monitoringActivationPID(elementPID: pid_t?, targetPID: pid_t?) -> pid_t? {
+        if let targetPID, targetPID > 0 {
+            return targetPID
+        }
+        return elementPID
     }
 
     private func startTimeoutTimer() {
@@ -1395,6 +1403,10 @@ extension AutoLearnDictionaryService {
         if self.shouldFinalizeForActivatedApplication(pid: pid) {
             self.finalize()
         }
+    }
+
+    func monitoringActivationPIDForTesting(elementPID: pid_t?, targetPID: pid_t?) -> pid_t? {
+        self.monitoringActivationPID(elementPID: elementPID, targetPID: targetPID)
     }
 
     func finalizeForTesting() {

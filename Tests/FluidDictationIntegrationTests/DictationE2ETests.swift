@@ -588,6 +588,26 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnPrefersTargetPIDForHelperElementActivation() {
+        let targetPID: pid_t = 12_345
+        let helperElementPID: pid_t = 54_321
+
+        XCTAssertEqual(
+            AutoLearnDictionaryService.shared.monitoringActivationPIDForTesting(
+                elementPID: helperElementPID,
+                targetPID: targetPID
+            ),
+            targetPID
+        )
+        XCTAssertEqual(
+            AutoLearnDictionaryService.shared.monitoringActivationPIDForTesting(
+                elementPID: helperElementPID,
+                targetPID: nil
+            ),
+            helperElementPID
+        )
+    }
+
     func testAutoLearnDismissedOrdinarySuggestionReappearsAfterFreshEvidence() {
         self.withRestoredDefaults(
             keys: [
