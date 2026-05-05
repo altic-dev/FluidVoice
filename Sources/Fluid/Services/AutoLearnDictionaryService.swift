@@ -13,6 +13,8 @@ final class AutoLearnDictionaryService {
     private let maxSegmentTokenCount = 3
     private let maxFullDiffTokenCount = 500
     private let scopedDiffContextCharacterCount = 300
+    private let eventFallbackProcessingDebounceSeconds: TimeInterval = 0.8
+    private let eventFallbackMaxTypedReplacementLength = 80
 
     private var insertedText: String = ""
     private var baselineText: String = ""
@@ -25,9 +27,72 @@ final class AutoLearnDictionaryService {
     private var pollingTimer: DispatchSourceTimer?
     private var monitoredElement: AXUIElement?
     private var monitoredPID: pid_t?
+    private var eventFallbackState: EventFallbackMonitoringState?
+    private var eventFallbackTimeoutTimer: DispatchSourceTimer?
+    private var eventFallbackProcessingTimer: DispatchSourceTimer?
+    private var eventFallbackWorkspaceObserver: NSObjectProtocol?
     private var isActive = false
 
-    func captureFocusedElement() -> AXUIElement? {
+    private struct EventFallbackMonitoringState {
+        let insertedText: String
+        let targetPID: pid_t?
+        let targetFrontmostPID: pid_t?
+        let targetBundleIdentifier: String?
+        var typedRun: String = ""
+    }
+
+    func captureFocusedElement(
+        preferredPID: pid_t? = nil,
+        allowsSystemFocusedPIDMismatch: Bool = false
+    ) -> AXUIElement? {
+        if let element = self.captureSystemFocusedElement() {
+            if let preferredPID, self.pid(for: element) != preferredPID {
+                if allowsSystemFocusedPIDMismatch {
+                    self.log(
+                        "AXElementCapture_SystemFocusedPIDMismatchAllowed: preferredPID=\(preferredPID), elementPID=\(self.pid(for: element).map(String.init) ?? "nil")."
+                    )
+                    return element
+                }
+                self.log(
+                    "AXElementCapture_SystemFocusedPIDMismatch: preferredPID=\(preferredPID), elementPID=\(self.pid(for: element).map(String.init) ?? "nil")."
+                )
+            } else {
+                return element
+            }
+        }
+
+        guard let preferredPID, preferredPID > 0 else {
+            self.log("AXElementCapture_Unavailable: no system focused element.")
+            return nil
+        }
+
+        if let element = self.captureApplicationFocusedElement(pid: preferredPID) {
+            self.log("AXElementCapture_AppFocusedFallback")
+            return element
+        }
+
+        let appElement = AXUIElementCreateApplication(preferredPID)
+        let rootElement = self.captureFocusedWindowElement(from: appElement) ?? appElement
+        let candidates = self.readableTextEditingCandidates(
+            in: rootElement,
+            maxDepth: 10,
+            maxVisited: 600
+        )
+
+        guard candidates.count == 1, let element = candidates.first else {
+            if candidates.isEmpty {
+                self.log("AXElementCapture_NoReadableTextCandidate: pid=\(preferredPID).")
+            } else {
+                self.log("AXElementCapture_AmbiguousReadableTextCandidates: pid=\(preferredPID), count=\(candidates.count).")
+            }
+            return nil
+        }
+
+        self.log("AXElementCapture_SingleReadableTextCandidateFallback: pid=\(preferredPID).")
+        return element
+    }
+
+    private func captureSystemFocusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
         var focusedElement: CFTypeRef?
 
@@ -45,6 +110,122 @@ final class AutoLearnDictionaryService {
         return unsafeBitCast(focusedElement, to: AXUIElement.self)
     }
 
+    private func captureApplicationFocusedElement(pid: pid_t) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(pid)
+        var focusedElement: CFTypeRef?
+
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElement
+        ) == .success,
+        let focusedElement,
+        CFGetTypeID(focusedElement) == AXUIElementGetTypeID()
+        else {
+            return nil
+        }
+
+        return unsafeBitCast(focusedElement, to: AXUIElement.self)
+    }
+
+    private func captureFocusedWindowElement(from appElement: AXUIElement) -> AXUIElement? {
+        self.axElementAttribute(appElement, kAXFocusedWindowAttribute as CFString)
+            ?? self.axElementAttribute(appElement, kAXMainWindowAttribute as CFString)
+    }
+
+    private func axElementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else {
+            return nil
+        }
+
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+
+    private func readableTextEditingCandidates(
+        in rootElement: AXUIElement,
+        maxDepth: Int,
+        maxVisited: Int
+    ) -> [AXUIElement] {
+        var candidates: [AXUIElement] = []
+        var visited = 0
+        self.collectReadableTextEditingCandidates(
+            in: rootElement,
+            depth: 0,
+            maxDepth: maxDepth,
+            maxVisited: maxVisited,
+            visited: &visited,
+            candidates: &candidates
+        )
+        return candidates
+    }
+
+    private func collectReadableTextEditingCandidates(
+        in element: AXUIElement,
+        depth: Int,
+        maxDepth: Int,
+        maxVisited: Int,
+        visited: inout Int,
+        candidates: inout [AXUIElement]
+    ) {
+        guard depth <= maxDepth, visited < maxVisited else { return }
+        visited += 1
+
+        if self.isReadableTextEditingElement(element) {
+            candidates.append(element)
+        }
+
+        for child in self.axElementArrayAttribute(element, kAXChildrenAttribute as CFString).prefix(40) {
+            self.collectReadableTextEditingCandidates(
+                in: child,
+                depth: depth + 1,
+                maxDepth: maxDepth,
+                maxVisited: maxVisited,
+                visited: &visited,
+                candidates: &candidates
+            )
+        }
+    }
+
+    private func isReadableTextEditingElement(_ element: AXUIElement) -> Bool {
+        guard let role = self.stringAttribute(element, kAXRoleAttribute as CFString) else {
+            return false
+        }
+        let editableRoles = ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"]
+        guard editableRoles.contains(role),
+              self.currentText(from: element) != nil
+        else {
+            return false
+        }
+
+        var isSettable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &isSettable) == .success else {
+            return true
+        }
+        return isSettable.boolValue
+    }
+
+    private func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func axElementArrayAttribute(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let array = value as? [AXUIElement]
+        else {
+            return []
+        }
+        return array
+    }
+
     func pid(for element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
@@ -53,12 +234,54 @@ final class AutoLearnDictionaryService {
         return pid
     }
 
-    func beginMonitoring(pastedText: String, element: AXUIElement) {
+    func beginMonitoring(pastedText: String, element: AXUIElement, targetPID: pid_t? = nil) {
         guard SettingsStore.shared.autoLearnCustomDictionaryEnabled else {
             self.log("Monitoring skipped: auto-learn disabled.")
             return
         }
-        self.startMonitoring(pastedText: pastedText, element: element)
+        self.startMonitoring(pastedText: pastedText, element: element, targetPID: targetPID)
+    }
+
+    func beginEventFallbackMonitoring(pastedText: String, targetPID: pid_t?) {
+        if Thread.isMainThread {
+            self.startEventFallbackMonitoring(pastedText: pastedText, targetPID: targetPID)
+        } else {
+            DispatchQueue.main.async {
+                self.startEventFallbackMonitoring(pastedText: pastedText, targetPID: targetPID)
+            }
+        }
+    }
+
+    func handleObservedKeyDown(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags,
+        characters: String?
+    ) {
+        if Thread.isMainThread {
+            self.handleObservedKeyDownOnMain(
+                keyCode: keyCode,
+                modifiers: modifiers,
+                characters: characters
+            )
+        } else {
+            DispatchQueue.main.async {
+                self.handleObservedKeyDownOnMain(
+                    keyCode: keyCode,
+                    modifiers: modifiers,
+                    characters: characters
+                )
+            }
+        }
+    }
+
+    func handleObservedMouseDown() {
+        if Thread.isMainThread {
+            self.flushAndClearEventFallbackTypedRun()
+        } else {
+            DispatchQueue.main.async {
+                self.flushAndClearEventFallbackTypedRun()
+            }
+        }
     }
 
     func stopMonitoring() {
@@ -84,10 +307,13 @@ final class AutoLearnDictionaryService {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             self.workspaceObserver = nil
         }
+
+        self.stopEventFallbackMonitoring()
     }
 
-    private func startMonitoring(pastedText: String, element: AXUIElement) {
+    private func startMonitoring(pastedText: String, element: AXUIElement, targetPID: pid_t?) {
         self.finalize()
+        self.finalizeEventFallback()
         self.insertedText = pastedText
         self.recordedSessionObservationCounts = [:]
         self.monitoredElement = element
@@ -103,9 +329,18 @@ final class AutoLearnDictionaryService {
             self.baselineText = fullText
             self.lastKnownText = fullText
         } else {
-            self.log("AXText_Unreadable: using inserted text as baseline.")
-            self.baselineText = pastedText
-            self.lastKnownText = pastedText
+            self.log("AXText_Unreadable: starting event fallback monitoring.")
+            self.insertedText = ""
+            self.baselineText = ""
+            self.lastKnownText = ""
+            self.recordedSessionObservationCounts = [:]
+            self.monitoredElement = nil
+            self.monitoredPID = nil
+            self.startEventFallbackMonitoring(
+                pastedText: pastedText,
+                targetPID: targetPID ?? self.pid(for: element)
+            )
+            return
         }
         self.isActive = true
 
@@ -220,6 +455,257 @@ final class AutoLearnDictionaryService {
         self.timeoutTimer = timer
     }
 
+    private func startEventFallbackMonitoring(pastedText: String, targetPID: pid_t?) {
+        guard SettingsStore.shared.autoLearnCustomDictionaryEnabled else {
+            self.log("EventFallbackSkipped_Disabled")
+            return
+        }
+
+        let trimmedText = pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else {
+            self.log("EventFallbackSkipped_EmptyInsertedText")
+            return
+        }
+
+        self.finalize()
+        self.finalizeEventFallback()
+
+        guard let targetApp = self.eventFallbackTargetApplication(targetPID: targetPID) else {
+            self.log("EventFallbackSkipped_NoTargetApplication")
+            return
+        }
+        self.eventFallbackState = EventFallbackMonitoringState(
+            insertedText: pastedText,
+            targetPID: targetPID,
+            targetFrontmostPID: targetApp.processIdentifier,
+            targetBundleIdentifier: targetApp.bundleIdentifier
+        )
+        self.setupEventFallbackAppSwitchObserver()
+        self.startEventFallbackTimeoutTimer()
+        self.log(
+            "EventFallbackStarted: targetPID=\(targetPID.map(String.init) ?? "nil"), " +
+                "targetFrontmostPID=\(targetApp.processIdentifier), " +
+                "targetBundle=\(targetApp.bundleIdentifier ?? "nil"), insertedChars=\(pastedText.count)."
+        )
+    }
+
+    private func eventFallbackTargetApplication(targetPID: pid_t?) -> NSRunningApplication? {
+        if let targetPID,
+           let targetApp = NSRunningApplication(processIdentifier: targetPID),
+           !self.isSelfApplication(targetApp)
+        {
+            return targetApp
+        }
+
+        if let frontmostApp = NSWorkspace.shared.frontmostApplication,
+           !self.isSelfApplication(frontmostApp) {
+            return frontmostApp
+        }
+
+        return nil
+    }
+
+    private func isSelfApplication(_ app: NSRunningApplication) -> Bool {
+        if app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            return true
+        }
+        guard let selfBundleID = Bundle.main.bundleIdentifier else {
+            return false
+        }
+        return app.bundleIdentifier == selfBundleID
+    }
+
+    private func setupEventFallbackAppSwitchObserver() {
+        self.eventFallbackWorkspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, let state = self.eventFallbackState else { return }
+            guard let activatedApp = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                self.finalizeEventFallback()
+                return
+            }
+
+            if !self.isEventFallbackTargetApplication(activatedApp, state: state) {
+                self.finalizeEventFallback()
+            }
+        }
+    }
+
+    private func startEventFallbackTimeoutTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + self.monitoringTimeoutSeconds)
+        timer.setEventHandler { [weak self] in
+            self?.finalizeEventFallback()
+        }
+        timer.resume()
+        self.eventFallbackTimeoutTimer = timer
+    }
+
+    private func stopEventFallbackMonitoring() {
+        self.eventFallbackTimeoutTimer?.cancel()
+        self.eventFallbackTimeoutTimer = nil
+
+        self.eventFallbackProcessingTimer?.cancel()
+        self.eventFallbackProcessingTimer = nil
+
+        if let observer = self.eventFallbackWorkspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            self.eventFallbackWorkspaceObserver = nil
+        }
+
+        self.eventFallbackState = nil
+    }
+
+    private func finalizeEventFallback() {
+        guard self.eventFallbackState != nil else { return }
+        self.processEventFallbackTypedRun()
+        self.stopEventFallbackMonitoring()
+    }
+
+    private func handleObservedKeyDownOnMain(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags,
+        characters: String?
+    ) {
+        guard self.eventFallbackState != nil else { return }
+        guard self.isEventFallbackTargetFrontmost() else {
+            self.finalizeEventFallback()
+            return
+        }
+
+        if !modifiers.isDisjoint(with: [.command, .control, .option, .function]) {
+            self.flushAndClearEventFallbackTypedRun()
+            return
+        }
+
+        switch keyCode {
+        case 51:
+            self.handleEventFallbackBackspace()
+        case 36, 48, 53, 76, 123, 124, 125, 126:
+            self.flushAndClearEventFallbackTypedRun()
+        default:
+            self.handleEventFallbackCharacters(characters)
+        }
+    }
+
+    private func isEventFallbackTargetFrontmost() -> Bool {
+        guard let state = self.eventFallbackState else {
+            return false
+        }
+
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else { return false }
+
+        return self.isEventFallbackTargetApplication(frontmostApp, state: state)
+    }
+
+    private func isEventFallbackTargetApplication(
+        _ app: NSRunningApplication,
+        state: EventFallbackMonitoringState
+    ) -> Bool {
+        if let targetBundleIdentifier = state.targetBundleIdentifier {
+            guard let bundleIdentifier = app.bundleIdentifier else { return false }
+            return self.isSameApplicationFamily(bundleIdentifier, targetBundleIdentifier)
+        }
+
+        if let targetFrontmostPID = state.targetFrontmostPID {
+            return app.processIdentifier == targetFrontmostPID
+        }
+
+        guard let targetPID = state.targetPID, targetPID > 0 else { return false }
+        return app.processIdentifier == targetPID
+    }
+
+    private func isSameApplicationFamily(_ lhs: String, _ rhs: String) -> Bool {
+        let lhs = lhs.lowercased()
+        let rhs = rhs.lowercased()
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return lhs == rhs ||
+            lhs.hasPrefix("\(rhs).") ||
+            rhs.hasPrefix("\(lhs).")
+    }
+
+    private func handleEventFallbackBackspace() {
+        guard var state = self.eventFallbackState else { return }
+        guard !state.typedRun.isEmpty else { return }
+        state.typedRun.removeLast()
+        self.eventFallbackState = state
+        self.scheduleEventFallbackProcessing()
+    }
+
+    private func handleEventFallbackCharacters(_ characters: String?) {
+        guard var state = self.eventFallbackState,
+              let characters,
+              !characters.isEmpty
+        else {
+            return
+        }
+
+        if characters.rangeOfCharacter(from: .newlines) != nil ||
+            characters.rangeOfCharacter(from: .whitespaces) != nil {
+            self.flushAndClearEventFallbackTypedRun()
+            return
+        }
+
+        let sanitized = characters.filter { character in
+            !character.isNewline && !character.isWhitespace && !character.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        }
+        guard !sanitized.isEmpty else { return }
+
+        state.typedRun += String(sanitized)
+        if state.typedRun.count > self.eventFallbackMaxTypedReplacementLength {
+            self.log("EventFallbackTypedRunCleared_OverLength")
+            state.typedRun = ""
+        }
+        self.eventFallbackState = state
+        self.scheduleEventFallbackProcessing()
+    }
+
+    private func flushAndClearEventFallbackTypedRun() {
+        self.processEventFallbackTypedRun()
+        self.eventFallbackState?.typedRun = ""
+        self.eventFallbackProcessingTimer?.cancel()
+        self.eventFallbackProcessingTimer = nil
+    }
+
+    private func scheduleEventFallbackProcessing() {
+        self.eventFallbackProcessingTimer?.cancel()
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + self.eventFallbackProcessingDebounceSeconds)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.eventFallbackProcessingTimer = nil
+            self.processEventFallbackTypedRun()
+            self.eventFallbackState?.typedRun = ""
+        }
+        timer.resume()
+        self.eventFallbackProcessingTimer = timer
+    }
+
+    private func processEventFallbackTypedRun() {
+        guard SettingsStore.shared.autoLearnCustomDictionaryEnabled,
+              let state = self.eventFallbackState
+        else {
+            return
+        }
+
+        let typedReplacement = state.typedRun.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typedReplacement.isEmpty else { return }
+
+        guard let correction = self.eventFallbackCorrection(
+            insertedText: state.insertedText,
+            typedReplacement: typedReplacement
+        ) else {
+            self.log("EventFallbackSkipped_NoInference: typedChars=\(typedReplacement.count).")
+            return
+        }
+
+        self.recordObservation(original: correction.original, replacement: correction.replacement)
+        self.log("EventFallbackRecorded: original='\(correction.original)', replacement='\(correction.replacement)'.")
+    }
+
     private func finalize() {
         guard self.isActive else { return }
         if let monitoredElement = self.monitoredElement,
@@ -240,6 +726,91 @@ final class AutoLearnDictionaryService {
             return nil
         }
         return value as? String
+    }
+
+    private func eventFallbackCorrection(
+        insertedText: String,
+        typedReplacement: String
+    ) -> CorrectionDiffEngine.Candidate? {
+        let replacement = typedReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !replacement.isEmpty,
+              replacement.count <= self.eventFallbackMaxTypedReplacementLength
+        else {
+            return nil
+        }
+
+        // Without readable AX text, a typed run is a weak signal. Restrict this fallback
+        // to technical/high-signal spellings so ordinary typing after dictation is not learned.
+        guard self.isHighSignalReplacement(replacement) else {
+            self.log("EventFallbackSkipped_NotHighSignal")
+            return nil
+        }
+
+        let candidates = self.eventFallbackOriginalCandidates(
+            insertedText: insertedText,
+            replacement: replacement
+        )
+        guard let best = candidates.min(by: { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score < rhs.score }
+            return lhs.candidate.original.count > rhs.candidate.original.count
+        }) else {
+            return nil
+        }
+
+        let equallyGoodDifferentOriginals = candidates.filter {
+            abs($0.score - best.score) < 0.0001 &&
+                self.triggerPhrase($0.candidate.original) != self.triggerPhrase(best.candidate.original)
+        }
+        guard equallyGoodDifferentOriginals.isEmpty else {
+            self.log("EventFallbackSkipped_AmbiguousOriginal")
+            return nil
+        }
+
+        return best.candidate
+    }
+
+    private typealias EventFallbackOriginalCandidate = (
+        candidate: CorrectionDiffEngine.Candidate,
+        score: Double
+    )
+
+    private func eventFallbackOriginalCandidates(
+        insertedText: String,
+        replacement: String
+    ) -> [EventFallbackOriginalCandidate] {
+        let tokens = self.learningTokens(insertedText)
+        guard !tokens.isEmpty else { return [] }
+
+        let replacementKey = self.normalizePhrase(replacement)
+        guard !replacementKey.isEmpty else { return [] }
+
+        var seenOriginals = Set<String>()
+        var candidates: [EventFallbackOriginalCandidate] = []
+        let maxSpanLength = min(self.maxSegmentTokenCount, tokens.count)
+
+        for spanLength in 1...maxSpanLength {
+            for startIndex in 0...(tokens.count - spanLength) {
+                let endIndex = startIndex + spanLength
+                let original = tokens[startIndex..<endIndex].joined(separator: " ")
+                guard seenOriginals.insert(original).inserted else { continue }
+
+                let candidate = CorrectionDiffEngine.Candidate(
+                    original: original,
+                    replacement: replacement
+                )
+                guard self.shouldTrack(candidate, editedText: replacement) else { continue }
+
+                let originalKey = self.normalizePhrase(original)
+                let maxLength = max(originalKey.count, replacementKey.count)
+                guard maxLength > 0 else { continue }
+
+                let distance = self.levenshteinDistance(originalKey, replacementKey)
+                let score = Double(distance) / Double(maxLength)
+                candidates.append((candidate: candidate, score: score))
+            }
+        }
+
+        return candidates
     }
 
     private func correctionCandidates(
@@ -632,12 +1203,20 @@ final class AutoLearnDictionaryService {
     }
 
     func isHighSignalReplacement(_ replacement: String) -> Bool {
-        let replacementScalars = replacement.unicodeScalars
-        let uppercaseCount = replacementScalars.filter { CharacterSet.uppercaseLetters.contains($0) }.count
-        return uppercaseCount > 1 ||
-            replacement.dropFirst().contains(where: { $0.isUppercase }) ||
+        let replacementTokens = self.replacementSignalTokens(replacement)
+        return replacementTokens.contains { token in
+            let uppercaseCount = token.unicodeScalars.filter { CharacterSet.uppercaseLetters.contains($0) }.count
+            return uppercaseCount > 1 ||
+                token.dropFirst().contains(where: { $0.isUppercase })
+        } ||
             replacement.rangeOfCharacter(from: .decimalDigits) != nil ||
             replacement.rangeOfCharacter(from: CharacterSet(charactersIn: "-_/.'&+")) != nil
+    }
+
+    private func replacementSignalTokens(_ text: String) -> [String] {
+        text
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
     }
 
     private func triggerPhrase(_ text: String) -> String {
@@ -689,6 +1268,11 @@ final class AutoLearnDictionaryService {
 
 #if DEBUG
 extension AutoLearnDictionaryService {
+    struct EventFallbackInferenceResult: Equatable {
+        let original: String
+        let replacement: String
+    }
+
     func shouldTrackForTesting(original: String, replacement: String) -> Bool {
         self.shouldTrack(
             CorrectionDiffEngine.Candidate(original: original, replacement: replacement),
@@ -698,6 +1282,51 @@ extension AutoLearnDictionaryService {
 
     func recordObservationForTesting(original: String, replacement: String) {
         self.recordObservation(original: original, replacement: replacement)
+    }
+
+    func beginEventFallbackSessionForTesting(insertedText: String, targetPID: pid_t? = nil) {
+        self.finalize()
+        self.finalizeEventFallback()
+        self.eventFallbackState = EventFallbackMonitoringState(
+            insertedText: insertedText,
+            targetPID: targetPID,
+            targetFrontmostPID: nil,
+            targetBundleIdentifier: nil
+        )
+    }
+
+    func setEventFallbackTypedRunForTesting(_ typedRun: String) {
+        self.eventFallbackState?.typedRun = typedRun
+    }
+
+    func flushEventFallbackTypedRunForTesting() {
+        self.flushAndClearEventFallbackTypedRun()
+    }
+
+    func inferEventFallbackCorrectionForTesting(
+        insertedText: String,
+        typedReplacement: String
+    ) -> EventFallbackInferenceResult? {
+        self.eventFallbackCorrection(
+            insertedText: insertedText,
+            typedReplacement: typedReplacement
+        ).map {
+            EventFallbackInferenceResult(
+                original: $0.original,
+                replacement: $0.replacement
+            )
+        }
+    }
+
+    func recordEventFallbackReplacementForTesting(insertedText: String, typedReplacement: String) {
+        guard let correction = self.eventFallbackCorrection(
+            insertedText: insertedText,
+            typedReplacement: typedReplacement
+        ) else {
+            return
+        }
+
+        self.recordObservation(original: correction.original, replacement: correction.replacement)
     }
 
     func recordCorrectionsForTesting(insertedText: String, baselineText: String, currentText: String) {

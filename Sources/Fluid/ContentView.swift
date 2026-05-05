@@ -1392,7 +1392,10 @@ struct ContentView: View {
         let focusedPID = TypingService.captureSystemFocusedPID()
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
-        self.recordingAutoLearnElement = AutoLearnDictionaryService.shared.captureFocusedElement()
+        self.recordingAutoLearnElement = AutoLearnDictionaryService.shared.captureFocusedElement(
+            preferredPID: focusedPID,
+            allowsSystemFocusedPIDMismatch: true
+        )
 
         let info = self.getCurrentAppInfo()
         self.recordingAppInfo = info
@@ -2017,7 +2020,10 @@ struct ContentView: View {
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
-            let preInsertionMonitoringElement = AutoLearnDictionaryService.shared.captureFocusedElement()
+            let preInsertionMonitoringElement = AutoLearnDictionaryService.shared.captureFocusedElement(
+                preferredPID: typingTarget.pid,
+                allowsSystemFocusedPIDMismatch: true
+            )
             let recordingMonitoringElement = self.recordingAutoLearnElement
             self.asr.typeTextToActiveField(
                 finalText,
@@ -2025,25 +2031,44 @@ struct ContentView: View {
             ) {
                 // Now that typing is physically complete, we can start monitoring.
                 // Prefer target-PID matches so focus restore failures do not attach to FluidVoice or another app.
+                // Some editors expose the focused AX text element from a helper process, so trusted
+                // pre-insertion captures can still be valid even when their PID differs from the app PID.
                 let monitoringElement = self.autoLearnMonitoringElement(
                     targetPID: typingTarget.pid,
                     candidates: [
-                        preInsertionMonitoringElement,
-                        recordingMonitoringElement,
-                        AutoLearnDictionaryService.shared.captureFocusedElement(),
+                        AutoLearnMonitoringCandidate(
+                            label: "pre-insertion",
+                            element: preInsertionMonitoringElement,
+                            allowsHelperProcessFallback: true
+                        ),
+                        AutoLearnMonitoringCandidate(
+                            label: "recording",
+                            element: recordingMonitoringElement,
+                            allowsHelperProcessFallback: true
+                        ),
+                        AutoLearnMonitoringCandidate(
+                            label: "completion",
+                            element: AutoLearnDictionaryService.shared.captureFocusedElement(preferredPID: typingTarget.pid),
+                            allowsHelperProcessFallback: false
+                        ),
                     ]
                 )
                 self.recordingAutoLearnElement = nil
                 guard let monitoringElement else {
                     DebugLogger.shared.debug(
-                        "Auto-learn monitoring skipped: no AX element matched typing target.",
+                        "Auto-learn AX monitoring skipped: no AX element matched typing target; starting event fallback.",
                         source: "ContentView"
+                    )
+                    AutoLearnDictionaryService.shared.beginEventFallbackMonitoring(
+                        pastedText: finalText,
+                        targetPID: typingTarget.pid
                     )
                     return
                 }
                 AutoLearnDictionaryService.shared.beginMonitoring(
                     pastedText: finalText,
-                    element: monitoringElement
+                    element: monitoringElement,
+                    targetPID: typingTarget.pid
                 )
             }
             didTypeExternally = true
@@ -2100,18 +2125,90 @@ struct ContentView: View {
         return .normal
     }
 
+    private struct AutoLearnMonitoringCandidate {
+        let label: String
+        let element: AXUIElement?
+        let allowsHelperProcessFallback: Bool
+    }
+
     private func autoLearnMonitoringElement(
         targetPID: pid_t?,
-        candidates: [AXUIElement?]
+        candidates: [AutoLearnMonitoringCandidate]
     ) -> AXUIElement? {
-        let elements = candidates.compactMap { $0 }
-        guard let targetPID, targetPID > 0 else {
-            return elements.first
+        let resolvedCandidates = candidates.compactMap { candidate -> (candidate: AutoLearnMonitoringCandidate, pid: pid_t?)? in
+            guard let element = candidate.element else { return nil }
+            return (candidate, AutoLearnDictionaryService.shared.pid(for: element))
         }
 
-        return elements.first { element in
-            AutoLearnDictionaryService.shared.pid(for: element) == targetPID
+        self.logAutoLearnCandidatePIDs(targetPID: targetPID, candidates: resolvedCandidates)
+
+        guard let targetPID, targetPID > 0 else {
+            return resolvedCandidates.first?.candidate.element
         }
+
+        if let matchedCandidate = resolvedCandidates.first(where: { $0.pid == targetPID }) {
+            return matchedCandidate.candidate.element
+        }
+
+        let selfPID = ProcessInfo.processInfo.processIdentifier
+        let selfBundleID = Bundle.main.bundleIdentifier
+        let targetBundleID = self.autoLearnTargetBundleID(targetPID: targetPID)
+        for resolvedCandidate in resolvedCandidates where resolvedCandidate.candidate.allowsHelperProcessFallback {
+            guard let candidatePID = resolvedCandidate.pid,
+                  candidatePID != selfPID
+            else {
+                continue
+            }
+
+            let candidateBundleID = NSRunningApplication(processIdentifier: candidatePID)?.bundleIdentifier
+            guard candidateBundleID != selfBundleID else { continue }
+            guard let candidateBundleID,
+                  let targetBundleID,
+                  self.isAutoLearnSameAppFamily(candidateBundleID, targetBundleID)
+            else {
+                continue
+            }
+
+            DebugLogger.shared.debug(
+                "Auto-learn monitoring using helper-process AX element: " +
+                    "source=\(resolvedCandidate.candidate.label), targetPID=\(targetPID), " +
+                    "elementPID=\(candidatePID), elementBundle=\(candidateBundleID)",
+                source: "ContentView"
+            )
+            return resolvedCandidate.candidate.element
+        }
+
+        return nil
+    }
+
+    private func autoLearnTargetBundleID(targetPID: pid_t) -> String? {
+        NSRunningApplication(processIdentifier: targetPID)?.bundleIdentifier
+    }
+
+    private func isAutoLearnSameAppFamily(_ lhs: String, _ rhs: String) -> Bool {
+        let lhs = lhs.lowercased()
+        let rhs = rhs.lowercased()
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return lhs == rhs ||
+            lhs.hasPrefix("\(rhs).") ||
+            rhs.hasPrefix("\(lhs).")
+    }
+
+    private func logAutoLearnCandidatePIDs(
+        targetPID: pid_t?,
+        candidates: [(candidate: AutoLearnMonitoringCandidate, pid: pid_t?)]
+    ) {
+        let summary = candidates.map { resolvedCandidate -> String in
+            let pid = resolvedCandidate.pid.map(String.init) ?? "nil"
+            let bundleID = resolvedCandidate.pid
+                .flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+                ?? "unknown"
+            return "\(resolvedCandidate.candidate.label):pid=\(pid),bundle=\(bundleID)"
+        }.joined(separator: "; ")
+        DebugLogger.shared.debug(
+            "Auto-learn monitoring candidates: targetPID=\(targetPID.map(String.init) ?? "nil"); \(summary)",
+            source: "ContentView"
+        )
     }
 
     private func reprocessLastDictationFromHistory() {

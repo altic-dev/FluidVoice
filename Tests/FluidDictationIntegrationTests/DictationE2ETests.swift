@@ -351,8 +351,21 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(
             AutoLearnDictionaryService.shared.isHighSignalReplacement("FluidVoice")
         )
+        XCTAssertTrue(
+            AutoLearnDictionaryService.shared.isHighSignalReplacement("Please use FluidVoice")
+        )
         XCTAssertFalse(
             AutoLearnDictionaryService.shared.isHighSignalReplacement("Works")
+        )
+    }
+
+    func testAutoLearnDoesNotTreatTrailingCapitalFragmentAsHighSignal() {
+        XCTAssertFalse(
+            AutoLearnDictionaryService.shared.isHighSignalReplacement("agree W")
+        )
+        XCTAssertEqual(
+            AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "agree W"),
+            AutoLearnDictionaryService.shared.minimumSuggestionOccurrences
         )
     }
 
@@ -587,6 +600,128 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnEventFallbackInfersHighSignalSelectionReplacement() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "Please use signal flow here",
+                typedReplacement: "SignalFlow"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "signal flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "SignalFlow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 1)
+        }
+    }
+
+    func testAutoLearnEventFallbackIncrementsExistingSuggestion() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = [
+                SettingsStore.AutoLearnSuggestion(
+                    originalText: "signal flow",
+                    replacement: "SignalFlow",
+                    occurrences: 4,
+                    lastObservedAt: Date(),
+                    status: .pending
+                ),
+            ]
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "Please use signal flow here",
+                typedReplacement: "SignalFlow"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 5)
+        }
+    }
+
+    func testAutoLearnEventFallbackFlushesPendingTypedRun() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.beginEventFallbackSessionForTesting(
+                insertedText: "Please use signal flow here"
+            )
+            defer { AutoLearnDictionaryService.shared.stopMonitoring() }
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("SignalFlow")
+            AutoLearnDictionaryService.shared.flushEventFallbackTypedRunForTesting()
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "signal flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "SignalFlow")
+        }
+    }
+
+    func testAutoLearnEventFallbackSkipsOrdinaryTitleCaseTyping() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I wrote an obsidian note",
+                typedReplacement: "Obsidian"
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+        }
+    }
+
+    func testAutoLearnEventFallbackSkipsUnrelatedHighSignalTyping() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "Please use alpha path here",
+                typedReplacement: "SignalFlow"
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+        }
+    }
+
     func testAutoLearnDismissedHighSignalSuggestionReappearsAfterOneFreshObservation() {
         self.withRestoredDefaults(
             keys: [
@@ -668,17 +803,19 @@ final class DictationE2ETests: XCTestCase {
     }
 
     private func withPromptSettingsRestored(run: () -> Void) {
-        self.withRestoredDefaults(
-            keys: [
-                self.dictationPromptProfilesKey,
-                self.appPromptBindingsKey,
-                self.selectedDictationPromptIDKey,
-                self.selectedEditPromptIDKey,
-                self.defaultDictationPromptOverrideKey,
-                self.defaultEditPromptOverrideKey,
-            ],
-            run: run
-        )
+        let keys = [
+            self.dictationPromptProfilesKey,
+            self.appPromptBindingsKey,
+            self.selectedDictationPromptIDKey,
+            self.selectedEditPromptIDKey,
+            self.defaultDictationPromptOverrideKey,
+            self.defaultEditPromptOverrideKey,
+        ]
+        self.withRestoredDefaults(keys: keys) {
+            let defaults = UserDefaults.standard
+            keys.forEach { defaults.removeObject(forKey: $0) }
+            run()
+        }
     }
 
     private func withProviderSettingsRestored(run: () -> Void) {

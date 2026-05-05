@@ -306,6 +306,9 @@ final class GlobalHotkeyManager: NSObject {
         let eventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
 
         self.eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -368,6 +371,11 @@ final class GlobalHotkeyManager: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
+        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+            AutoLearnDictionaryService.shared.handleObservedMouseDown()
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
 
@@ -396,6 +404,11 @@ final class GlobalHotkeyManager: NSObject {
             Task {
                 await PostTranscriptionEditTracker.shared.handleKeyDown(keyCode: keyCode, modifiers: eventModifiers)
             }
+            AutoLearnDictionaryService.shared.handleObservedKeyDown(
+                keyCode: keyCode,
+                modifiers: eventModifiers,
+                characters: NSEvent(cgEvent: event)?.characters
+            )
 
             // Check the configured cancel shortcut first.
             if SettingsStore.shared.cancelRecordingHotkeyShortcut.matches(keyCode: keyCode, modifiers: eventModifiers) {

@@ -16,10 +16,12 @@ struct CustomDictionaryView: View {
     }
 
     private let maxVisibleAutoLearnSuggestions = 5
+    private let addedSuggestionConfirmationDelay: TimeInterval = 1.25
     @Environment(\.theme) private var theme
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
     @State private var autoLearnSuggestions: [SettingsStore.AutoLearnSuggestion] = SettingsStore.shared.autoLearnCustomDictionarySuggestions
+    @State private var confirmingAddedSuggestionIDs: Set<UUID> = []
     @State private var showAddSheet = false
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
     @State private var showAddBoostSheet = false
@@ -163,7 +165,7 @@ struct CustomDictionaryView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: 16)
 
-                            Text("Suggested Replacements")
+                            Text("Replacement Suggestions")
                                 .font(.headline)
 
                             Text("Alpha")
@@ -181,22 +183,22 @@ struct CustomDictionaryView: View {
                         self.showAutoLearnInfo.toggle()
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "info.circle.fill")
-                                .font(.caption2)
+                            Image(systemName: "info.circle")
                             Text("How it works")
-                                .font(.caption2.weight(.medium))
                         }
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(self.theme.palette.accent)
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .frame(height: 18)
                         .background(
-                            Capsule()
-                                .fill(self.theme.palette.accent.opacity(0.12))
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(self.theme.palette.accent.opacity(self.showAutoLearnInfo ? 0.14 : 0.08))
                                 .overlay(
-                                    Capsule()
-                                        .stroke(self.theme.palette.accent.opacity(0.25), lineWidth: 1)
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(self.theme.palette.accent.opacity(0.30), lineWidth: 1)
                                 )
                         )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("How suggestions work")
@@ -223,9 +225,9 @@ struct CustomDictionaryView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle(isOn: self.$autoLearnEnabled) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Suggest replacements from my corrections")
+                                Text("Suggest replacements from corrections")
                                     .font(.subheadline.weight(.medium))
-                                Text("When you correct dictated text, FluidVoice can suggest an Instant Replacement for next time.")
+                                Text("When you correct dictated text, FluidVoice can queue likely replacements for review.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -268,7 +270,7 @@ struct CustomDictionaryView: View {
                                 Text(
                                     self.autoLearnEnabled
                                         ? "No suggestions yet"
-                                        : "Turn this on to collect suggestions from corrections."
+                                        : "Turn this on to review replacement suggestions from future corrections."
                                 )
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -280,6 +282,7 @@ struct CustomDictionaryView: View {
                                 ForEach(self.visibleAutoLearnSuggestions) { suggestion in
                                     AutoLearnSuggestionRow(
                                         suggestion: suggestion,
+                                        isAdded: self.confirmingAddedSuggestionIDs.contains(suggestion.id),
                                         onApprove: { self.approveSuggestion(suggestion) },
                                         onDismiss: { self.dismissSuggestion(suggestion) }
                                     )
@@ -309,7 +312,7 @@ struct CustomDictionaryView: View {
             VStack(alignment: .leading, spacing: 10) {
                 self.autoLearnInfoRow(
                     icon: "waveform",
-                    text: "FluidVoice watches recently dictated text for a short time."
+                    text: "FluidVoice watches text you just dictated for a short time."
                 )
                 self.autoLearnInfoRow(
                     icon: "pencil",
@@ -317,7 +320,7 @@ struct CustomDictionaryView: View {
                 )
                 self.autoLearnInfoRow(
                     icon: "number",
-                    text: "Most suggestions need 2 corrections. Acronyms, numbers, and special spellings can appear after 1."
+                    text: "Most suggestions appear after 2 corrections. Technical spellings like FluidVoice can appear after 1."
                 )
                 self.autoLearnInfoRow(
                     icon: "checkmark.circle",
@@ -329,8 +332,10 @@ struct CustomDictionaryView: View {
                 )
             }
         }
-        .frame(width: 420, alignment: .leading)
+        .frame(width: 384, alignment: .leading)
         .padding(14)
+        .background(self.theme.palette.elevatedCardBackground.opacity(0.98))
+        .presentationBackground(self.theme.palette.elevatedCardBackground.opacity(0.98))
     }
 
     private func autoLearnInfoRow(icon: String, text: String) -> some View {
@@ -681,19 +686,28 @@ struct CustomDictionaryView: View {
         case .applied:
             self.autoLearnStatusMessage = nil
             self.saveEntries()
-            withAnimation(.easeInOut(duration: 0.25)) {
-                self.autoLearnSuggestions.removeAll { $0.id == suggestion.id }
-            }
-            self.saveAutoLearnSuggestions()
+            self.confirmAndRemoveApprovedSuggestion(suggestion)
         case .alreadyPresent:
             self.autoLearnStatusMessage = nil
-            withAnimation(.easeInOut(duration: 0.25)) {
-                self.autoLearnSuggestions.removeAll { $0.id == suggestion.id }
-            }
-            self.saveAutoLearnSuggestions()
+            self.confirmAndRemoveApprovedSuggestion(suggestion)
         case .conflict(let existingReplacement):
             self.autoLearnStatusMessage =
                 "\"\(trigger)\" already maps to \"\(existingReplacement)\". Review the existing dictionary entry before approving this suggestion."
+        }
+    }
+
+    private func confirmAndRemoveApprovedSuggestion(_ suggestion: SettingsStore.AutoLearnSuggestion) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            self.confirmingAddedSuggestionIDs.insert(suggestion.id)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + self.addedSuggestionConfirmationDelay) {
+            guard self.confirmingAddedSuggestionIDs.contains(suggestion.id) else { return }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.autoLearnSuggestions.removeAll { $0.id == suggestion.id }
+                self.confirmingAddedSuggestionIDs.remove(suggestion.id)
+            }
+            self.saveAutoLearnSuggestions()
         }
     }
 
@@ -702,6 +716,7 @@ struct CustomDictionaryView: View {
         withAnimation(.easeInOut(duration: 0.25)) {
             self.autoLearnSuggestions[index].status = .dismissed
             self.autoLearnSuggestions[index].dismissedAtOccurrenceCount = self.autoLearnSuggestions[index].occurrences
+            self.confirmingAddedSuggestionIDs.remove(suggestion.id)
         }
         self.saveAutoLearnSuggestions()
     }
@@ -1048,6 +1063,11 @@ struct EditBoostTermSheet: View {
 // MARK: - Dictionary Entry Row
 
 private let dictionaryRowActionColumnWidth: CGFloat = 112
+private let suggestionActionButtonHeight: CGFloat = 24
+private let suggestionAddButtonWidth: CGFloat = 62
+private let suggestionDismissButtonWidth: CGFloat = 24
+private let suggestionActionButtonCornerRadius: CGFloat = 5
+private let suggestionDismissIconFont = Font.system(size: 9, weight: .medium)
 
 struct DictionaryEntryRow: View {
     let entry: SettingsStore.CustomDictionaryEntry
@@ -1428,6 +1448,7 @@ struct EditDictionaryEntrySheet: View {
 
 struct AutoLearnSuggestionRow: View {
     let suggestion: SettingsStore.AutoLearnSuggestion
+    let isAdded: Bool
     let onApprove: () -> Void
     let onDismiss: () -> Void
 
@@ -1482,28 +1503,57 @@ struct AutoLearnSuggestionRow: View {
             // Actions
             HStack(spacing: 6) {
                 Button {
-                    self.onApprove()
+                    if !self.isAdded {
+                        self.onApprove()
+                    }
                 } label: {
-                    Label("Add", systemImage: "checkmark")
-                        .font(.caption2.weight(.medium))
-                        .frame(height: 12)
-                        .fixedSize(horizontal: true, vertical: false)
+                    HStack(spacing: 4) {
+                        if self.isAdded {
+                            Image(systemName: "checkmark")
+                                .font(.caption2.weight(.bold))
+                        }
+
+                        Text(self.isAdded ? "Added" : "Add")
+                    }
+                        .font(.caption2.weight(.semibold))
+                        .frame(width: suggestionAddButtonWidth, height: suggestionActionButtonHeight)
+                        .foregroundStyle(self.theme.palette.accent)
+                        .background(
+                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                                .fill(self.theme.palette.accent.opacity(self.isAdded ? 0.18 : 0.10))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                                .stroke(
+                                    self.theme.palette.accent.opacity(self.isAdded ? 0.55 : 0.34),
+                                    lineWidth: 1
+                                )
+                        )
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.bordered)
-                .tint(.green)
-                .controlSize(.mini)
+                .buttonStyle(.plain)
+                .help(self.isAdded ? "Added to Instant Replacement" : "Add to Instant Replacement")
+                .accessibilityLabel(self.isAdded ? "Added to Instant Replacement" : "Add to Instant Replacement")
 
                 Button {
                     self.onDismiss()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.caption2.weight(.medium))
-                        .frame(width: 18, height: 12)
+                        .font(suggestionDismissIconFont)
+                        .frame(width: suggestionDismissButtonWidth, height: suggestionActionButtonHeight)
+                        .foregroundStyle(.secondary)
+                        .background(
+                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        )
                         .contentShape(Rectangle())
-                        .help("Dismiss for now")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                .buttonStyle(.plain)
+                .disabled(self.isAdded)
                 .help("Dismiss for now")
                 .accessibilityLabel("Dismiss this suggestion for now")
             }
@@ -1512,6 +1562,7 @@ struct AutoLearnSuggestionRow: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
         .transition(.opacity.combined(with: .move(edge: .top)))
+        .animation(.easeInOut(duration: 0.15), value: self.isAdded)
     }
 
     private var relativeTimestamp: String {
