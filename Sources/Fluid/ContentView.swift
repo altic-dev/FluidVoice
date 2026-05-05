@@ -1392,10 +1392,14 @@ struct ContentView: View {
         let focusedPID = TypingService.captureSystemFocusedPID()
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
-        self.recordingAutoLearnElement = AutoLearnDictionaryService.shared.captureFocusedElement(
-            preferredPID: focusedPID,
-            allowsSystemFocusedPIDMismatch: true
-        )
+        if SettingsStore.shared.autoLearnCustomDictionaryEnabled {
+            self.recordingAutoLearnElement = AutoLearnDictionaryService.shared.captureFocusedElement(
+                preferredPID: focusedPID,
+                allowsSystemFocusedPIDMismatch: true
+            )
+        } else {
+            self.recordingAutoLearnElement = nil
+        }
 
         let info = self.getCurrentAppInfo()
         self.recordingAppInfo = info
@@ -2020,15 +2024,23 @@ struct ContentView: View {
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
-            let preInsertionMonitoringElement = AutoLearnDictionaryService.shared.captureFocusedElement(
-                preferredPID: typingTarget.pid,
-                allowsSystemFocusedPIDMismatch: true
-            )
-            let recordingMonitoringElement = self.recordingAutoLearnElement
+            let shouldCaptureAutoLearn = SettingsStore.shared.autoLearnCustomDictionaryEnabled
+            let preInsertionMonitoringElement = shouldCaptureAutoLearn
+                ? AutoLearnDictionaryService.shared.captureFocusedElement(
+                    preferredPID: typingTarget.pid,
+                    allowsSystemFocusedPIDMismatch: true
+                )
+                : nil
+            let recordingMonitoringElement = shouldCaptureAutoLearn ? self.recordingAutoLearnElement : nil
             self.asr.typeTextToActiveField(
                 finalText,
                 preferredTargetPID: typingTarget.pid
             ) {
+                guard SettingsStore.shared.autoLearnCustomDictionaryEnabled else {
+                    self.recordingAutoLearnElement = nil
+                    return
+                }
+
                 // Now that typing is physically complete, we can start monitoring.
                 // Prefer target-PID matches so focus restore failures do not attach to FluidVoice or another app.
                 // Some editors expose the focused AX text element from a helper process, so trusted
