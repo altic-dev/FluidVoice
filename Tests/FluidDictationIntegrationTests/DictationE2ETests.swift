@@ -278,6 +278,48 @@ final class DictationE2ETests: XCTestCase {
         ])
     }
 
+    func testCorrectionDiffEnginePreservesAddedTechnicalEdgePunctuation() {
+        XCTAssertEqual(
+            CorrectionDiffEngine.findCorrectionCandidates(
+                original: "Use net here.",
+                edited: "Use .NET here."
+            ),
+            [CorrectionDiffEngine.Candidate(original: "net", replacement: ".NET")]
+        )
+        XCTAssertEqual(
+            CorrectionDiffEngine.findCorrectionCandidates(
+                original: "Use c here.",
+                edited: "Use C++ here."
+            ),
+            [CorrectionDiffEngine.Candidate(original: "c", replacement: "C++")]
+        )
+        XCTAssertEqual(
+            CorrectionDiffEngine.findCorrectionCandidates(
+                original: "Use sharp here.",
+                edited: "Use C# here."
+            ),
+            [CorrectionDiffEngine.Candidate(original: "sharp", replacement: "C#")]
+        )
+        XCTAssertEqual(
+            CorrectionDiffEngine.findCorrectionCandidates(
+                original: "Use five percent here.",
+                edited: "Use 5% here."
+            ),
+            [CorrectionDiffEngine.Candidate(original: "five percent", replacement: "5%")]
+        )
+    }
+
+    func testCorrectionDiffEngineStripsSentencePunctuationAroundTechnicalTokens() {
+        let candidates = CorrectionDiffEngine.findCorrectionCandidates(
+            original: "Please use node.js, here.",
+            edited: "Please use Node.js, here."
+        )
+
+        XCTAssertEqual(candidates, [
+            CorrectionDiffEngine.Candidate(original: "node.js", replacement: "Node.js"),
+        ])
+    }
+
     func testAutoLearnObservationPreservesPunctuationInTrigger() {
         self.withRestoredDefaults(
             keys: [
