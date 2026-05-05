@@ -11,6 +11,8 @@ final class AutoLearnDictionaryService {
     private let correctionProcessingDebounceSeconds: TimeInterval = 1.25
     private let suggestionThreshold = 2
     private let maxSegmentTokenCount = 3
+    private let maxFullDiffTokenCount = 500
+    private let scopedDiffContextCharacterCount = 300
 
     private var insertedText: String = ""
     private var baselineText: String = ""
@@ -43,8 +45,17 @@ final class AutoLearnDictionaryService {
         return unsafeBitCast(focusedElement, to: AXUIElement.self)
     }
 
+    func pid(for element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
+            return nil
+        }
+        return pid
+    }
+
     func beginMonitoring(pastedText: String, element: AXUIElement) {
         guard SettingsStore.shared.autoLearnCustomDictionaryEnabled else {
+            self.log("Monitoring skipped: auto-learn disabled.")
             return
         }
         self.startMonitoring(pastedText: pastedText, element: element)
@@ -92,6 +103,7 @@ final class AutoLearnDictionaryService {
             self.baselineText = fullText
             self.lastKnownText = fullText
         } else {
+            self.log("AXText_Unreadable: using inserted text as baseline.")
             self.baselineText = pastedText
             self.lastKnownText = pastedText
         }
@@ -230,12 +242,197 @@ final class AutoLearnDictionaryService {
         return value as? String
     }
 
-    private func pid(for element: AXUIElement) -> pid_t? {
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
+    private func correctionCandidates(
+        baseline: String,
+        currentText: String,
+        insertedText: String
+    ) -> [CorrectionDiffEngine.Candidate] {
+        let baselineTokenCount = self.diffTokenCount(baseline)
+        let currentTokenCount = self.diffTokenCount(currentText)
+        if baselineTokenCount <= self.maxFullDiffTokenCount,
+           currentTokenCount <= self.maxFullDiffTokenCount {
+            return CorrectionDiffEngine.findCorrectionCandidates(
+                original: baseline,
+                edited: currentText,
+                maxSegmentTokenCount: self.maxSegmentTokenCount
+            )
+        }
+
+        self.log(
+            "DiffSkipped_OverTokenLimit: baselineTokens=\(baselineTokenCount), currentTokens=\(currentTokenCount); attempting scoped diff."
+        )
+
+        guard let scopedText = self.scopedDiffText(
+            baseline: baseline,
+            currentText: currentText,
+            insertedText: insertedText
+        ) else {
+            return []
+        }
+
+        let scopedBaselineTokenCount = self.diffTokenCount(scopedText.baseline)
+        let scopedCurrentTokenCount = self.diffTokenCount(scopedText.current)
+        guard scopedBaselineTokenCount <= self.maxFullDiffTokenCount,
+              scopedCurrentTokenCount <= self.maxFullDiffTokenCount else {
+            self.log(
+                "DiffSkipped_ScopedWindowOverTokenLimit: baselineTokens=\(scopedBaselineTokenCount), currentTokens=\(scopedCurrentTokenCount)."
+            )
+            return []
+        }
+
+        return CorrectionDiffEngine.findCorrectionCandidates(
+            original: scopedText.baseline,
+            edited: scopedText.current,
+            maxSegmentTokenCount: self.maxSegmentTokenCount
+        )
+    }
+
+    private func scopedDiffText(
+        baseline: String,
+        currentText: String,
+        insertedText: String
+    ) -> (baseline: String, current: String)? {
+        let inserted = insertedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !inserted.isEmpty else {
+            self.log("DiffSkipped_EmptyInsertedText")
             return nil
         }
-        return pid
+
+        let insertedRangeResult = self.uniqueRange(of: inserted, in: baseline)
+        guard case let .found(insertedRange) = insertedRangeResult else {
+            switch insertedRangeResult {
+            case .ambiguous:
+                self.log("DiffSkipped_AmbiguousOccurrence")
+            case .notFound:
+                self.log("DiffSkipped_InsertedTextNotFound")
+            case .found:
+                break
+            }
+            return nil
+        }
+
+        let baselineWindowRange = self.expandedRange(
+            in: baseline,
+            around: insertedRange,
+            contextCharacters: self.scopedDiffContextCharacterCount
+        )
+        let prefixAnchor = String(baseline[baselineWindowRange.lowerBound..<insertedRange.lowerBound])
+        let suffixAnchor = String(baseline[insertedRange.upperBound..<baselineWindowRange.upperBound])
+
+        guard let currentWindowRange = self.currentWindowRange(
+            in: currentText,
+            prefixAnchor: prefixAnchor,
+            suffixAnchor: suffixAnchor
+        ) else {
+            return nil
+        }
+
+        return (
+            baseline: String(baseline[baselineWindowRange]),
+            current: String(currentText[currentWindowRange])
+        )
+    }
+
+    private enum UniqueRangeResult {
+        case found(Range<String.Index>)
+        case notFound
+        case ambiguous
+    }
+
+    private func uniqueRange(of needle: String, in haystack: String) -> UniqueRangeResult {
+        self.uniqueRange(of: needle, in: haystack, range: haystack.startIndex..<haystack.endIndex)
+    }
+
+    private func uniqueRange(
+        of needle: String,
+        in haystack: String,
+        range searchRange: Range<String.Index>
+    ) -> UniqueRangeResult {
+        guard let firstRange = haystack.range(of: needle, range: searchRange) else {
+            return .notFound
+        }
+
+        if haystack.range(of: needle, range: firstRange.upperBound..<searchRange.upperBound) != nil {
+            return .ambiguous
+        }
+
+        return .found(firstRange)
+    }
+
+    private func expandedRange(
+        in text: String,
+        around range: Range<String.Index>,
+        contextCharacters: Int
+    ) -> Range<String.Index> {
+        let lowerDistance = min(contextCharacters, text.distance(from: text.startIndex, to: range.lowerBound))
+        let upperDistance = min(contextCharacters, text.distance(from: range.upperBound, to: text.endIndex))
+        let lowerBound = text.index(range.lowerBound, offsetBy: -lowerDistance)
+        let upperBound = text.index(range.upperBound, offsetBy: upperDistance)
+        return lowerBound..<upperBound
+    }
+
+    private func currentWindowRange(
+        in currentText: String,
+        prefixAnchor: String,
+        suffixAnchor: String
+    ) -> Range<String.Index>? {
+        let startIndex: String.Index
+        let suffixSearchStart: String.Index
+        if prefixAnchor.isEmpty {
+            startIndex = currentText.startIndex
+            suffixSearchStart = currentText.startIndex
+        } else {
+            let prefixResult = self.uniqueRange(of: prefixAnchor, in: currentText)
+            guard case let .found(prefixRange) = prefixResult else {
+                switch prefixResult {
+                case .ambiguous:
+                    self.log("DiffSkipped_AmbiguousPrefixAnchor")
+                case .notFound:
+                    self.log("DiffSkipped_PrefixAnchorNotFound")
+                case .found:
+                    break
+                }
+                return nil
+            }
+            startIndex = prefixRange.lowerBound
+            suffixSearchStart = prefixRange.upperBound
+        }
+
+        let endIndex: String.Index
+        if suffixAnchor.isEmpty {
+            endIndex = currentText.endIndex
+        } else {
+            let searchRange = suffixSearchStart..<currentText.endIndex
+            let suffixResult = self.uniqueRange(of: suffixAnchor, in: currentText, range: searchRange)
+            guard case let .found(relativeSuffixRange) = suffixResult else {
+                switch suffixResult {
+                case .ambiguous:
+                    self.log("DiffSkipped_AmbiguousSuffixAnchor")
+                case .notFound:
+                    self.log("DiffSkipped_SuffixAnchorNotFound")
+                case .found:
+                    break
+                }
+                return nil
+            }
+            endIndex = relativeSuffixRange.upperBound
+        }
+
+        guard startIndex <= endIndex else {
+            self.log("DiffSkipped_InvalidScopedWindow")
+            return nil
+        }
+        return startIndex..<endIndex
+    }
+
+    private func diffTokenCount(_ text: String) -> Int {
+        text.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .count
+    }
+
+    private func log(_ message: String) {
+        DebugLogger.shared.debug(message, source: "AutoLearnDictionary")
     }
 
     private func processCurrentCorrections() {
@@ -248,10 +445,10 @@ final class AutoLearnDictionaryService {
 
         guard baseline != currentText else { return }
 
-        let corrections = CorrectionDiffEngine.findCorrectionCandidates(
-            original: baseline,
-            edited: currentText,
-            maxSegmentTokenCount: self.maxSegmentTokenCount
+        let corrections = self.correctionCandidates(
+            baseline: baseline,
+            currentText: currentText,
+            insertedText: insertedText
         )
 
         guard !corrections.isEmpty else { return }
@@ -504,10 +701,10 @@ extension AutoLearnDictionaryService {
     }
 
     func recordCorrectionsForTesting(insertedText: String, baselineText: String, currentText: String) {
-        let corrections = CorrectionDiffEngine.findCorrectionCandidates(
-            original: baselineText,
-            edited: currentText,
-            maxSegmentTokenCount: self.maxSegmentTokenCount
+        let corrections = self.correctionCandidates(
+            baseline: baselineText,
+            currentText: currentText,
+            insertedText: insertedText
         )
 
         for correction in corrections

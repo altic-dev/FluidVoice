@@ -151,6 +151,7 @@ struct ContentView: View {
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
+    @State private var recordingAutoLearnElement: AXUIElement? = nil
 
     // Command Mode State
     // @State private var showCommandMode: Bool = false
@@ -1391,6 +1392,7 @@ struct ContentView: View {
         let focusedPID = TypingService.captureSystemFocusedPID()
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
+        self.recordingAutoLearnElement = AutoLearnDictionaryService.shared.captureFocusedElement()
 
         let info = self.getCurrentAppInfo()
         self.recordingAppInfo = info
@@ -2016,15 +2018,29 @@ struct ContentView: View {
                 await self.restoreFocusToRecordingTarget()
             }
             let preInsertionMonitoringElement = AutoLearnDictionaryService.shared.captureFocusedElement()
+            let recordingMonitoringElement = self.recordingAutoLearnElement
             self.asr.typeTextToActiveField(
                 finalText,
                 preferredTargetPID: typingTarget.pid
             ) {
                 // Now that typing is physically complete, we can start monitoring.
-                // Prefer the element that received the insertion; focus can move before this fires.
-                let monitoringElement = preInsertionMonitoringElement
-                    ?? AutoLearnDictionaryService.shared.captureFocusedElement()
-                guard let monitoringElement else { return }
+                // Prefer target-PID matches so focus restore failures do not attach to FluidVoice or another app.
+                let monitoringElement = self.autoLearnMonitoringElement(
+                    targetPID: typingTarget.pid,
+                    candidates: [
+                        preInsertionMonitoringElement,
+                        recordingMonitoringElement,
+                        AutoLearnDictionaryService.shared.captureFocusedElement(),
+                    ]
+                )
+                self.recordingAutoLearnElement = nil
+                guard let monitoringElement else {
+                    DebugLogger.shared.debug(
+                        "Auto-learn monitoring skipped: no AX element matched typing target.",
+                        source: "ContentView"
+                    )
+                    return
+                }
                 AutoLearnDictionaryService.shared.beginMonitoring(
                     pastedText: finalText,
                     element: monitoringElement
@@ -2082,6 +2098,20 @@ struct ContentView: View {
             return .onboardingSandbox
         }
         return .normal
+    }
+
+    private func autoLearnMonitoringElement(
+        targetPID: pid_t?,
+        candidates: [AXUIElement?]
+    ) -> AXUIElement? {
+        let elements = candidates.compactMap { $0 }
+        guard let targetPID, targetPID > 0 else {
+            return elements.first
+        }
+
+        return elements.first { element in
+            AutoLearnDictionaryService.shared.pid(for: element) == targetPID
+        }
     }
 
     private func reprocessLastDictationFromHistory() {

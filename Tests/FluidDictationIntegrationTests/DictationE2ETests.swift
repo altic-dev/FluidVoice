@@ -386,6 +386,60 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnUsesScopedDiffForUniqueInsertionInLongDocument() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            let prefix = (0..<520).map { "prefix\($0)" }.joined(separator: " ")
+            let suffix = (0..<520).map { "suffix\($0)" }.joined(separator: " ")
+            let insertedText = "Please use zeta flow here"
+            let baselineText = "\(prefix) \(insertedText) \(suffix)"
+            let currentText = "\(prefix) Please use ZetaFlow here \(suffix)"
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: insertedText,
+                baselineText: baselineText,
+                currentText: currentText
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "zeta flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "ZetaFlow")
+        }
+    }
+
+    func testAutoLearnSkipsScopedDiffWhenInsertedTextOccurrenceIsAmbiguous() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            let prefix = (0..<520).map { "prefix\($0)" }.joined(separator: " ")
+            let suffix = (0..<520).map { "suffix\($0)" }.joined(separator: " ")
+            let insertedText = "Please use zeta flow here"
+            let baselineText = "\(insertedText) \(prefix) \(insertedText) \(suffix)"
+            let currentText = "\(insertedText) \(prefix) Please use ZetaFlow here \(suffix)"
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: insertedText,
+                baselineText: baselineText,
+                currentText: currentText
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+        }
+    }
+
     func testAutoLearnCountsRepeatedSessionCorrectionsWithoutDoubleCounting() {
         self.withRestoredDefaults(
             keys: [
