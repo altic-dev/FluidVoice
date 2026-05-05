@@ -67,7 +67,7 @@ final class DictationE2ETests: XCTestCase {
                 insertionMode: .reliablePaste,
                 canVerifyFocusedText: false
             ),
-            300_000
+            5_000_000
         )
     }
 

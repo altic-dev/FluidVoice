@@ -62,7 +62,6 @@ final class TypingService {
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
     private static let reliablePasteVerificationTimeoutMicros: useconds_t = 5_000_000
-    private static let reliablePasteUnverifiedSettleMicros: useconds_t = 300_000
     private static let standardVerifyTimeoutMicros: useconds_t = 750_000
     private static let standardUnverifiedSettleMicros: useconds_t = 200_000
 
@@ -625,7 +624,7 @@ final class TypingService {
         case (.reliablePaste, true):
             return self.reliablePasteVerificationTimeoutMicros
         case (.reliablePaste, false):
-            return self.reliablePasteUnverifiedSettleMicros
+            return self.reliablePasteVerificationTimeoutMicros
         case (.standard, true):
             return self.standardVerifyTimeoutMicros
         case (.standard, false):
