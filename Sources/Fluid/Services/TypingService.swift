@@ -39,6 +39,13 @@ final class TypingService {
         let selectedRange: CFRange?
         let appScriptValue: String?
         let appScriptSelectedRange: CFRange?
+
+        var canVerifyInsertion: Bool {
+            self.value != nil ||
+                self.selectedRange != nil ||
+                self.appScriptValue != nil ||
+                self.appScriptSelectedRange != nil
+        }
     }
 
     private enum PasteVerificationResult: String {
@@ -54,6 +61,10 @@ final class TypingService {
     private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
+    private static let reliablePasteVerificationTimeoutMicros: useconds_t = 5_000_000
+    private static let reliablePasteUnverifiedSettleMicros: useconds_t = 300_000
+    private static let standardVerifyTimeoutMicros: useconds_t = 750_000
+    private static let standardUnverifiedSettleMicros: useconds_t = 200_000
 
     private var textInsertionMode: SettingsStore.TextInsertionMode {
         SettingsStore.shared.textInsertionMode
@@ -587,17 +598,39 @@ final class TypingService {
         insertionMode: SettingsStore.TextInsertionMode
     ) {
         guard let snapshot else {
-            usleep(insertionMode == .reliablePaste ? 50_000 : 200_000)
+            usleep(Self.insertionSettleTimeoutMicros(
+                insertionMode: insertionMode,
+                canVerifyFocusedText: false
+            ))
             return
         }
 
-        let timeoutMicros: useconds_t = insertionMode == .reliablePaste ? 300_000 : 750_000
+        let timeoutMicros = Self.insertionSettleTimeoutMicros(
+            insertionMode: insertionMode,
+            canVerifyFocusedText: snapshot.canVerifyInsertion
+        )
         let result = self.waitForFocusedTextVerification(
             from: snapshot,
             expectedText: expectedText,
             timeoutMicros: timeoutMicros
         )
         self.log("[TypingService] Completion settle verification: \(result.rawValue)")
+    }
+
+    private static func insertionSettleTimeoutMicros(
+        insertionMode: SettingsStore.TextInsertionMode,
+        canVerifyFocusedText: Bool
+    ) -> useconds_t {
+        switch (insertionMode, canVerifyFocusedText) {
+        case (.reliablePaste, true):
+            return self.reliablePasteVerificationTimeoutMicros
+        case (.reliablePaste, false):
+            return self.reliablePasteUnverifiedSettleMicros
+        case (.standard, true):
+            return self.standardVerifyTimeoutMicros
+        case (.standard, false):
+            return self.standardUnverifiedSettleMicros
+        }
     }
 
     /// Clipboard-paste insertion targeted at a specific PID.
@@ -615,7 +648,7 @@ final class TypingService {
             usleep(80_000)
         }
 
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: Self.reliablePasteVerificationTimeoutMicros) {
             let vKey = Self.pasteVirtualKeyCode
             guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: true),
                   let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: false)
@@ -701,7 +734,7 @@ final class TypingService {
     /// More reliable but slightly slower - copies text to clipboard then pastes
     private func insertTextViaClipboard(_ text: String) -> Bool {
         self.log("[TypingService] Starting clipboard-based insertion")
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: Self.reliablePasteVerificationTimeoutMicros) {
             let vKey = Self.pasteVirtualKeyCode
             guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: true),
                   let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: false)
@@ -728,7 +761,7 @@ final class TypingService {
             return false
         }
 
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: Self.reliablePasteVerificationTimeoutMicros) {
             let escapedAppName = appName.replacingOccurrences(of: "\"", with: "\\\"")
             let script = """
             tell application "System Events"
@@ -973,6 +1006,11 @@ final class TypingService {
             return .unavailable
         }
 
+        guard snapshot.canVerifyInsertion else {
+            usleep(timeoutMicros)
+            return .unavailable
+        }
+
         let pollMicros: useconds_t = 50_000
         let expectedLength = max(1, (expectedText as NSString).length)
         let tolerance = max(2, expectedLength / 5)
@@ -1206,3 +1244,17 @@ final class TypingService {
         keyUpEvent.post(tap: .cghidEventTap)
     }
 }
+
+#if DEBUG
+extension TypingService {
+    static func insertionSettleTimeoutMicrosForTesting(
+        insertionMode: SettingsStore.TextInsertionMode,
+        canVerifyFocusedText: Bool
+    ) -> useconds_t {
+        self.insertionSettleTimeoutMicros(
+            insertionMode: insertionMode,
+            canVerifyFocusedText: canVerifyFocusedText
+        )
+    }
+}
+#endif

@@ -54,6 +54,23 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testReliablePasteCompletionWaitsForVerifiableInsertion() {
+        XCTAssertEqual(
+            TypingService.insertionSettleTimeoutMicrosForTesting(
+                insertionMode: .reliablePaste,
+                canVerifyFocusedText: true
+            ),
+            5_000_000
+        )
+        XCTAssertEqual(
+            TypingService.insertionSettleTimeoutMicrosForTesting(
+                insertionMode: .reliablePaste,
+                canVerifyFocusedText: false
+            ),
+            300_000
+        )
+    }
+
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
         // Arrange
         SettingsStore.shared.shareAnonymousAnalytics = false
