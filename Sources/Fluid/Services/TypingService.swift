@@ -234,32 +234,34 @@ final class TypingService {
 
     // MARK: - Public API
 
-    func typeTextInstantly(_ text: String, onComplete: (() -> Void)? = nil) {
+    @discardableResult
+    func typeTextInstantly(_ text: String, onComplete: (() -> Void)? = nil) -> Bool {
         self.typeTextInstantly(text, preferredTargetPID: nil, onComplete: onComplete)
     }
 
     /// Types/inserts text, optionally preferring a specific target PID for CGEvent posting.
     /// This helps when our overlay temporarily has focus; we can still target the original app.
-    func typeTextInstantly(_ text: String, preferredTargetPID: pid_t?, onComplete: (() -> Void)? = nil) {
+    @discardableResult
+    func typeTextInstantly(_ text: String, preferredTargetPID: pid_t?, onComplete: (() -> Void)? = nil) -> Bool {
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
         self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
 
         guard text.isEmpty == false else {
             self.log("[TypingService] ERROR: Empty text provided, aborting")
-            return
+            return false
         }
 
         // Prevent concurrent typing operations
         guard !self.isCurrentlyTyping else {
             self.log("[TypingService] WARNING: Skipping text injection - already in progress")
-            return
+            return false
         }
 
         // Check accessibility permissions first
         guard AXIsProcessTrusted() else {
             self.log("[TypingService] ERROR: Accessibility permissions required for text injection")
             self.log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
-            return
+            return false
         }
 
         self.log("[TypingService] Accessibility check passed, proceeding with text injection")
@@ -292,6 +294,8 @@ final class TypingService {
                 insertionMode: insertionMode
             )
         }
+
+        return true
     }
 
     // MARK: - Internal insertion pipeline

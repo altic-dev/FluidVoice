@@ -2032,15 +2032,8 @@ struct ContentView: View {
                 )
                 : nil
             let recordingMonitoringElement = shouldCaptureAutoLearn ? self.recordingAutoLearnElement : nil
-            if shouldCaptureAutoLearn, SettingsStore.shared.textInsertionMode == .reliablePaste {
-                // Reliable Paste completion may wait for slow paste targets. Prime the AX-blind fallback
-                // immediately so quick corrections in editors such as prompt boxes are still observed.
-                AutoLearnDictionaryService.shared.beginEventFallbackMonitoring(
-                    pastedText: finalText,
-                    targetPID: typingTarget.pid
-                )
-            }
-            self.asr.typeTextToActiveField(
+            let textInsertionMode = SettingsStore.shared.textInsertionMode
+            let didAcceptTyping = self.asr.typeTextToActiveField(
                 finalText,
                 preferredTargetPID: typingTarget.pid
             ) {
@@ -2088,6 +2081,14 @@ struct ContentView: View {
                 AutoLearnDictionaryService.shared.beginMonitoring(
                     pastedText: finalText,
                     element: monitoringElement,
+                    targetPID: typingTarget.pid
+                )
+            }
+            if shouldCaptureAutoLearn, textInsertionMode == .reliablePaste, didAcceptTyping {
+                // Reliable Paste completion may wait for slow paste targets. Prime the AX-blind fallback
+                // after typing is accepted so quick corrections in prompt boxes are still observed.
+                AutoLearnDictionaryService.shared.beginEventFallbackMonitoring(
+                    pastedText: finalText,
                     targetPID: typingTarget.pid
                 )
             }

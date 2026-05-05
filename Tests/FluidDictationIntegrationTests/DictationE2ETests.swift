@@ -71,6 +71,10 @@ final class DictationE2ETests: XCTestCase {
         )
     }
 
+    func testTypingServiceRejectsEmptyInsertionRequest() {
+        XCTAssertFalse(TypingService().typeTextInstantly(""))
+    }
+
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
         // Arrange
         SettingsStore.shared.shareAnonymousAnalytics = false
