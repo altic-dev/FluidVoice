@@ -2626,16 +2626,16 @@ final class ASRService: ObservableObject {
     // MARK: - Custom Dictionary (Cached Regex)
 
     /// Cache for compiled custom dictionary regexes.
-    /// Key: trigger word, Value: (compiled regex, replacement text)
+    /// Key: trigger word, Value: (compiled regex, escaped replacement template)
     /// Cleared when dictionary entries change.
-    private static var cachedDictionaryPatterns: [(regex: NSRegularExpression, replacement: String)] = []
+    private static var cachedDictionaryPatterns: [(regex: NSRegularExpression, replacementTemplate: String)] = []
     private static var dictionaryCacheNeedsRebuild: Bool = true
 
     /// Rebuilds the regex cache if dictionary has changed.
     /// Called lazily on first apply after settings change.
     private static func rebuildDictionaryCache() {
         let entries = SettingsStore.shared.customDictionaryEntries
-        var patterns: [(regex: NSRegularExpression, replacement: String)] = []
+        var patterns: [(regex: NSRegularExpression, replacementTemplate: String)] = []
 
         for entry in entries {
             for trigger in entry.triggers {
@@ -2646,7 +2646,12 @@ final class ASRService: ObservableObject {
                     options: .caseInsensitive
                 ) else { continue }
 
-                patterns.append((regex: regex, replacement: entry.replacement))
+                patterns.append(
+                    (
+                        regex: regex,
+                        replacementTemplate: NSRegularExpression.escapedTemplate(for: entry.replacement)
+                    )
+                )
             }
         }
 
@@ -2690,7 +2695,7 @@ final class ASRService: ObservableObject {
             result = pattern.regex.stringByReplacingMatches(
                 in: result,
                 range: NSRange(result.startIndex..., in: result),
-                withTemplate: pattern.replacement
+                withTemplate: pattern.replacementTemplate
             )
         }
 

@@ -317,6 +317,24 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testCustomDictionaryEscapesReplacementTemplates() {
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [
+                SettingsStore.CustomDictionaryEntry(triggers: ["five dollars"], replacement: "$5"),
+                SettingsStore.CustomDictionaryEntry(triggers: ["tools path"], replacement: #"C:\Tools"#),
+            ]
+            ASRService.invalidateDictionaryCache()
+
+            let text = "Pay five dollars and open tools path."
+            let result = ASRService.applyCustomDictionary(text)
+
+            XCTAssertEqual(
+                result,
+                #"Pay $5 and open C:\Tools."#
+            )
+        }
+    }
+
     func testAutoLearnTracksPunctuationOnlyTechnicalCorrection() {
         self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
             SettingsStore.shared.customDictionaryEntries = []
