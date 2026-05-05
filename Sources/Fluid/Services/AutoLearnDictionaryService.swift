@@ -786,7 +786,7 @@ final class AutoLearnDictionaryService {
         insertedText: String,
         replacement: String
     ) -> [EventFallbackOriginalCandidate] {
-        let tokens = self.learningTokens(insertedText)
+        let tokens = CorrectionDiffEngine.learningTokenTexts(in: insertedText)
         guard !tokens.isEmpty else { return [] }
 
         let replacementKey = self.normalizePhrase(replacement)

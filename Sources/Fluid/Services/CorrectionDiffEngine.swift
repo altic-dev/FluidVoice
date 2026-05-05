@@ -69,6 +69,10 @@ enum CorrectionDiffEngine {
         return candidates
     }
 
+    nonisolated static func learningTokenTexts(in text: String) -> [String] {
+        Self.tokenize(text).map(\.text)
+    }
+
     private static func buildCandidate(
         originalSegment: [DiffToken],
         editedSegment: [DiffToken],

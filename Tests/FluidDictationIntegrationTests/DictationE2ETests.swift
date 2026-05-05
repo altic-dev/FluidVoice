@@ -723,6 +723,30 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnEventFallbackPreservesPunctuatedOriginalTrigger() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "Please use .net, here",
+                typedReplacement: ".NET"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, ".net")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, ".NET")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 1)
+        }
+    }
+
     func testAutoLearnEventFallbackIncrementsExistingSuggestion() {
         self.withRestoredDefaults(
             keys: [
