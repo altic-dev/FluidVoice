@@ -298,6 +298,25 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testCustomDictionaryMatchesPunctuationEdgeTriggers() {
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = [
+                SettingsStore.CustomDictionaryEntry(triggers: [".net"], replacement: ".NET"),
+                SettingsStore.CustomDictionaryEntry(triggers: ["c++"], replacement: "C++"),
+                SettingsStore.CustomDictionaryEntry(triggers: ["node.js"], replacement: "Node.js"),
+            ]
+            ASRService.invalidateDictionaryCache()
+
+            let text = "I use c++ with .net and node.js, not objc++ or planet."
+            let result = ASRService.applyCustomDictionary(text)
+
+            XCTAssertEqual(
+                result,
+                "I use C++ with .NET and Node.js, not objc++ or planet."
+            )
+        }
+    }
+
     func testAutoLearnTracksPunctuationOnlyTechnicalCorrection() {
         self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
             SettingsStore.shared.customDictionaryEntries = []

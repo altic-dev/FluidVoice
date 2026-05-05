@@ -2641,9 +2641,8 @@ final class ASRService: ObservableObject {
             for trigger in entry.triggers {
                 guard !trigger.isEmpty else { continue }
 
-                let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
                 guard let regex = try? NSRegularExpression(
-                    pattern: "\\b" + escapedTrigger + "\\b",
+                    pattern: self.customDictionaryPattern(for: trigger),
                     options: .caseInsensitive
                 ) else { continue }
 
@@ -2653,6 +2652,12 @@ final class ASRService: ObservableObject {
 
         self.cachedDictionaryPatterns = patterns
         self.dictionaryCacheNeedsRebuild = false
+    }
+
+    private static func customDictionaryPattern(for trigger: String) -> String {
+        let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
+        let tokenCharacterClass = #"\p{L}\p{N}_"#
+        return "(?<![\(tokenCharacterClass)])\(escapedTrigger)(?![\(tokenCharacterClass)])"
     }
 
     /// Invalidates the dictionary cache. Called when settings change.
