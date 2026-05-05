@@ -254,18 +254,12 @@ final class TypingService {
 
         self.log("[TypingService] Accessibility check passed, proceeding with text injection")
         self.isCurrentlyTyping = true
+        let insertionMode = self.textInsertionMode
 
         DispatchQueue.global(qos: .userInitiated).async {
             defer {
                 self.isCurrentlyTyping = false
                 self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
-
-                // Allow a small final settle window before firing completion,
-                // ensuring the target app's event loop has processed the insertion so
-                // baseline snapshots capture the post-insertion state accurately.
-                if self.textInsertionMode == .reliablePaste {
-                    usleep(50_000)
-                }
                 DispatchQueue.main.async {
                     onComplete?()
                 }
@@ -280,7 +274,13 @@ final class TypingService {
                 usleep(200_000)
             }
             self.log("[TypingService] Delay completed, calling insertTextInstantly")
+            let focusedTextSnapshot = self.captureFocusedTextSnapshot()
             self.insertTextInstantly(text, preferredTargetPID: preferredTargetPID)
+            self.waitForInsertionToSettle(
+                from: focusedTextSnapshot,
+                expectedText: text,
+                insertionMode: insertionMode
+            )
         }
     }
 
@@ -579,6 +579,25 @@ final class TypingService {
         }
 
         return true
+    }
+
+    private func waitForInsertionToSettle(
+        from snapshot: FocusedTextSnapshot?,
+        expectedText: String,
+        insertionMode: SettingsStore.TextInsertionMode
+    ) {
+        guard let snapshot else {
+            usleep(insertionMode == .reliablePaste ? 50_000 : 200_000)
+            return
+        }
+
+        let timeoutMicros: useconds_t = insertionMode == .reliablePaste ? 300_000 : 750_000
+        let result = self.waitForFocusedTextVerification(
+            from: snapshot,
+            expectedText: expectedText,
+            timeoutMicros: timeoutMicros
+        )
+        self.log("[TypingService] Completion settle verification: \(result.rawValue)")
     }
 
     /// Clipboard-paste insertion targeted at a specific PID.

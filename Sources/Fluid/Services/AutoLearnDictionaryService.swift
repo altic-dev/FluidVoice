@@ -22,6 +22,7 @@ final class AutoLearnDictionaryService {
     private var correctionProcessingTimer: DispatchSourceTimer?
     private var pollingTimer: DispatchSourceTimer?
     private var monitoredElement: AXUIElement?
+    private var monitoredPID: pid_t?
     private var isActive = false
 
     func captureFocusedElement() -> AXUIElement? {
@@ -61,6 +62,7 @@ final class AutoLearnDictionaryService {
         self.pollingTimer?.cancel()
         self.pollingTimer = nil
         self.monitoredElement = nil
+        self.monitoredPID = nil
 
         if let observer = self.axObserver {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -78,6 +80,7 @@ final class AutoLearnDictionaryService {
         self.insertedText = pastedText
         self.recordedSessionObservationCounts = [:]
         self.monitoredElement = element
+        self.monitoredPID = self.pid(for: element)
 
         // Capture the full field value as baseline so that both baselineText
         // and lastKnownText (updated via kAXValueChanged) cover the same scope.
@@ -176,10 +179,22 @@ final class AutoLearnDictionaryService {
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
             guard let self, self.isActive else { return }
+            if let activatedApp = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+               !self.shouldFinalizeForActivatedApplication(pid: activatedApp.processIdentifier)
+            {
+                return
+            }
             self.finalize()
         }
+    }
+
+    private func shouldFinalizeForActivatedApplication(pid activatedPID: pid_t?) -> Bool {
+        guard let activatedPID, let monitoredPID = self.monitoredPID else {
+            return true
+        }
+        return activatedPID != monitoredPID
     }
 
     private func startTimeoutTimer() {
@@ -213,6 +228,14 @@ final class AutoLearnDictionaryService {
             return nil
         }
         return value as? String
+    }
+
+    private func pid(for element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
+            return nil
+        }
+        return pid
     }
 
     private func processCurrentCorrections() {
@@ -519,6 +542,37 @@ extension AutoLearnDictionaryService {
         for _ in 0..<processingPasses {
             self.processCurrentCorrections()
         }
+    }
+
+    func beginSyntheticMonitoringForTesting(
+        insertedText: String,
+        baselineText: String,
+        monitoredPID: pid_t?
+    ) {
+        self.finalize()
+        self.insertedText = insertedText
+        self.baselineText = baselineText
+        self.lastKnownText = baselineText
+        self.recordedSessionObservationCounts = [:]
+        self.monitoredElement = nil
+        self.monitoredPID = monitoredPID
+        self.isActive = true
+    }
+
+    func updateSyntheticCurrentTextForTesting(_ text: String) {
+        guard self.isActive else { return }
+        self.lastKnownText = text
+    }
+
+    func handleActivatedApplicationForTesting(pid: pid_t?) {
+        guard self.isActive else { return }
+        if self.shouldFinalizeForActivatedApplication(pid: pid) {
+            self.finalize()
+        }
+    }
+
+    func finalizeForTesting() {
+        self.finalize()
     }
 }
 #endif

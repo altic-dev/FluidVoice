@@ -423,6 +423,85 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnCountsRepeatedMultiTokenCorrectionsInSingleSession() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            let baselineText = """
+            Please use beta flow here
+            Please use beta flow here
+            """
+            let currentText = """
+            Please use BetaFlow here
+            Please use BetaFlow here
+            """
+
+            AutoLearnDictionaryService.shared.recordCorrectionsDuringSessionForTesting(
+                insertedText: baselineText,
+                baselineText: baselineText,
+                currentText: currentText,
+                processingPasses: 2
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "beta flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "BetaFlow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 2)
+        }
+    }
+
+    func testAutoLearnCountsSequentialCorrectionsWhenTargetAppReactivatesDuringMonitor() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            let monitoredPID: pid_t = 12_345
+            AutoLearnDictionaryService.shared.beginSyntheticMonitoringForTesting(
+                insertedText: "Please use beta flow here",
+                baselineText: "Please use beta flow here",
+                monitoredPID: monitoredPID
+            )
+            AutoLearnDictionaryService.shared.updateSyntheticCurrentTextForTesting("Please use BetaFlow here")
+
+            AutoLearnDictionaryService.shared.beginSyntheticMonitoringForTesting(
+                insertedText: "Please use beta flow here",
+                baselineText: """
+                Please use BetaFlow here
+                Please use beta flow here
+                """,
+                monitoredPID: monitoredPID
+            )
+            AutoLearnDictionaryService.shared.handleActivatedApplicationForTesting(pid: monitoredPID)
+            AutoLearnDictionaryService.shared.updateSyntheticCurrentTextForTesting(
+                """
+                Please use BetaFlow here
+                Please use BetaFlow here
+                """
+            )
+            AutoLearnDictionaryService.shared.finalizeForTesting()
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "beta flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "BetaFlow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 2)
+        }
+    }
+
     func testAutoLearnDismissedOrdinarySuggestionReappearsAfterFreshEvidence() {
         self.withRestoredDefaults(
             keys: [
