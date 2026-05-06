@@ -815,7 +815,8 @@ final class AutoLearnDictionaryService {
 
         let isAllowedOrdinaryCorrection =
             self.isOrdinaryCaseOnlyEventFallbackCorrection(best.candidate) ||
-            self.isSeparatorCollapseEventFallbackCorrection(best.candidate)
+            self.isCompactEquivalentEventFallbackCorrection(best.candidate) ||
+            self.isDiacriticEquivalentEventFallbackCorrection(best.candidate)
 
         if !isHighSignalReplacement,
            !isAllowedOrdinaryCorrection
@@ -840,16 +841,32 @@ final class AutoLearnDictionaryService {
         return original.caseInsensitiveCompare(replacement) == .orderedSame && original != replacement
     }
 
-    private func isSeparatorCollapseEventFallbackCorrection(_ candidate: CorrectionDiffEngine.Candidate) -> Bool {
+    private func isCompactEquivalentEventFallbackCorrection(_ candidate: CorrectionDiffEngine.Candidate) -> Bool {
         let original = self.triggerPhrase(candidate.original)
         let replacement = candidate.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
         guard original.count >= 4, replacement.count >= 4 else { return false }
+        guard self.compactLearningKey(original) == self.compactLearningKey(replacement) else { return false }
+        guard original.caseInsensitiveCompare(replacement) != .orderedSame else { return false }
 
-        let separatorCharacters = CharacterSet(charactersIn: "-_./&+")
-        guard original.rangeOfCharacter(from: separatorCharacters) != nil else { return false }
+        return self.learningTokens(original).count > 1 ||
+            original.rangeOfCharacter(from: self.compactEquivalentSeparatorCharacters) != nil ||
+            replacement.rangeOfCharacter(from: self.compactEquivalentSeparatorCharacters) != nil
+    }
 
-        return self.compactLearningKey(original) == self.compactLearningKey(replacement) &&
-            original.caseInsensitiveCompare(replacement) != .orderedSame
+    private func isDiacriticEquivalentEventFallbackCorrection(_ candidate: CorrectionDiffEngine.Candidate) -> Bool {
+        let original = self.triggerPhrase(candidate.original)
+        let replacement = candidate.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard original.count >= 4, replacement.count >= 4 else { return false }
+        guard self.containsDiacritic(original) || self.containsDiacritic(replacement) else { return false }
+        guard self.diacriticInsensitiveCompactKey(original) == self.diacriticInsensitiveCompactKey(replacement) else {
+            return false
+        }
+
+        return original.caseInsensitiveCompare(replacement) != .orderedSame
+    }
+
+    private var compactEquivalentSeparatorCharacters: CharacterSet {
+        CharacterSet(charactersIn: "-_./&+'’‐‑‒–—")
     }
 
     private func singleLetterCaseCorrectionCandidate(
@@ -1401,7 +1418,7 @@ final class AutoLearnDictionaryService {
                 token.dropFirst().contains(where: { $0.isUppercase })
         } ||
             replacement.rangeOfCharacter(from: .decimalDigits) != nil ||
-            replacement.rangeOfCharacter(from: CharacterSet(charactersIn: "-_/.'&+")) != nil
+            replacement.rangeOfCharacter(from: self.compactEquivalentSeparatorCharacters) != nil
     }
 
     private func replacementSignalTokens(_ text: String) -> [String] {
@@ -1434,6 +1451,19 @@ final class AutoLearnDictionaryService {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined()
+    }
+
+    private func diacriticInsensitiveCompactKey(_ text: String) -> String {
+        self.compactLearningKey(
+            text.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+        )
+    }
+
+    private func containsDiacritic(_ text: String) -> Bool {
+        text.folding(options: .diacriticInsensitive, locale: .current) != text
     }
 
     private func levenshteinDistance(_ lhs: String, _ rhs: String) -> Int {
