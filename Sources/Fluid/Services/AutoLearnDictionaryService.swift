@@ -41,6 +41,12 @@ final class AutoLearnDictionaryService {
         var typedRun: String = ""
     }
 
+    private enum EventFallbackProcessingOutcome {
+        case recorded
+        case skipped
+        case deferred
+    }
+
     func captureFocusedElement(
         preferredPID: pid_t? = nil,
         allowsSystemFocusedPIDMismatch: Bool = false
@@ -101,8 +107,8 @@ final class AutoLearnDictionaryService {
             kAXFocusedUIElementAttribute as CFString,
             &focusedElement
         ) == .success,
-        let focusedElement,
-        CFGetTypeID(focusedElement) == AXUIElementGetTypeID()
+            let focusedElement,
+            CFGetTypeID(focusedElement) == AXUIElementGetTypeID()
         else {
             return nil
         }
@@ -119,8 +125,8 @@ final class AutoLearnDictionaryService {
             kAXFocusedUIElementAttribute as CFString,
             &focusedElement
         ) == .success,
-        let focusedElement,
-        CFGetTypeID(focusedElement) == AXUIElementGetTypeID()
+            let focusedElement,
+            CFGetTypeID(focusedElement) == AXUIElementGetTypeID()
         else {
             return nil
         }
@@ -326,7 +332,8 @@ final class AutoLearnDictionaryService {
         // the partial transcript against the entire field and produce junk.
         var fieldValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &fieldValue) == .success,
-           let fullText = fieldValue as? String {
+           let fullText = fieldValue as? String
+        {
             self.baselineText = fullText
             self.lastKnownText = fullText
         } else {
@@ -365,7 +372,8 @@ final class AutoLearnDictionaryService {
 
             var value: CFTypeRef?
             if AXUIElementCopyAttributeValue(changedElement, kAXValueAttribute as CFString, &value) == .success,
-               let text = value as? String {
+               let text = value as? String
+            {
                 service.updateLastKnownText(text)
             }
         }
@@ -506,7 +514,8 @@ final class AutoLearnDictionaryService {
         }
 
         if let frontmostApp = NSWorkspace.shared.frontmostApplication,
-           !self.isSelfApplication(frontmostApp) {
+           !self.isSelfApplication(frontmostApp)
+        {
             return frontmostApp
         }
 
@@ -568,7 +577,7 @@ final class AutoLearnDictionaryService {
 
     private func finalizeEventFallback() {
         guard self.eventFallbackState != nil else { return }
-        self.processEventFallbackTypedRun()
+        _ = self.processEventFallbackTypedRun(allowPotentialPrefixCompletion: true)
         self.stopEventFallbackMonitoring()
     }
 
@@ -651,7 +660,8 @@ final class AutoLearnDictionaryService {
         }
 
         if characters.rangeOfCharacter(from: .newlines) != nil ||
-            characters.rangeOfCharacter(from: .whitespaces) != nil {
+            characters.rangeOfCharacter(from: .whitespaces) != nil
+        {
             self.flushAndClearEventFallbackTypedRun()
             return
         }
@@ -671,7 +681,7 @@ final class AutoLearnDictionaryService {
     }
 
     private func flushAndClearEventFallbackTypedRun() {
-        self.processEventFallbackTypedRun()
+        _ = self.processEventFallbackTypedRun(allowPotentialPrefixCompletion: true)
         self.eventFallbackState?.typedRun = ""
         self.eventFallbackProcessingTimer?.cancel()
         self.eventFallbackProcessingTimer = nil
@@ -685,39 +695,66 @@ final class AutoLearnDictionaryService {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             self.eventFallbackProcessingTimer = nil
-            self.processEventFallbackTypedRun()
-            self.eventFallbackState?.typedRun = ""
+            let outcome = self.processEventFallbackTypedRun(allowPotentialPrefixCompletion: false)
+            if outcome != .deferred {
+                self.eventFallbackState?.typedRun = ""
+            }
         }
         timer.resume()
         self.eventFallbackProcessingTimer = timer
     }
 
-    private func processEventFallbackTypedRun() {
+    private func processEventFallbackTypedRun(allowPotentialPrefixCompletion: Bool) -> EventFallbackProcessingOutcome {
         guard SettingsStore.shared.autoLearnCustomDictionaryEnabled,
               let state = self.eventFallbackState
         else {
-            return
+            return .skipped
         }
 
         let typedReplacement = state.typedRun.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !typedReplacement.isEmpty else { return }
+        guard !typedReplacement.isEmpty else { return .skipped }
+
+        if !allowPotentialPrefixCompletion,
+           self.shouldDeferPotentialCorrectionCompletion(
+               insertedText: state.insertedText,
+               typedReplacement: typedReplacement,
+               allowsOrdinaryPrefix: true
+           )
+        {
+            self.log("EventFallbackDeferred_PotentialPrefix: typedChars=\(typedReplacement.count).")
+            return .deferred
+        }
+
+        if !allowPotentialPrefixCompletion,
+           self.singleLetterCaseCorrectionCandidate(
+               insertedText: state.insertedText,
+               replacement: typedReplacement
+           ) != nil
+        {
+            self.log("EventFallbackDeferred_SingleLetterCase: typedChars=\(typedReplacement.count).")
+            return .deferred
+        }
 
         guard let correction = self.eventFallbackCorrection(
             insertedText: state.insertedText,
             typedReplacement: typedReplacement
         ) else {
             self.log("EventFallbackSkipped_NoInference: typedChars=\(typedReplacement.count).")
-            return
+            return .skipped
         }
 
         self.recordObservation(original: correction.original, replacement: correction.replacement)
-        self.log("EventFallbackRecorded: original='\(correction.original)', replacement='\(correction.replacement)'.")
+        self.log(
+            "EventFallbackRecorded: originalChars=\(correction.original.count), replacementChars=\(correction.replacement.count), highSignal=\(self.isHighSignalReplacement(correction.replacement))."
+        )
+        return .recorded
     }
 
     private func finalize() {
         guard self.isActive else { return }
         if let monitoredElement = self.monitoredElement,
-           let currentText = self.currentText(from: monitoredElement) {
+           let currentText = self.currentText(from: monitoredElement)
+        {
             self.lastKnownText = currentText
         }
         self.processCurrentCorrections()
@@ -747,11 +784,13 @@ final class AutoLearnDictionaryService {
             return nil
         }
 
-        // Without readable AX text, a typed run is a weak signal. Restrict this fallback
-        // to technical/high-signal spellings so ordinary typing after dictation is not learned.
-        guard self.isHighSignalReplacement(replacement) else {
-            self.log("EventFallbackSkipped_NotHighSignal")
-            return nil
+        let isHighSignalReplacement = self.isHighSignalReplacement(replacement)
+
+        if let singleLetterCaseCorrection = self.singleLetterCaseCorrectionCandidate(
+            insertedText: insertedText,
+            replacement: replacement
+        ) {
+            return singleLetterCaseCorrection
         }
 
         let candidates = self.eventFallbackOriginalCandidates(
@@ -774,6 +813,13 @@ final class AutoLearnDictionaryService {
             return nil
         }
 
+        if !isHighSignalReplacement,
+           !self.isOrdinaryCaseOnlyEventFallbackCorrection(best.candidate)
+        {
+            self.log("EventFallbackSkipped_NotHighSignal")
+            return nil
+        }
+
         return best.candidate
     }
 
@@ -781,6 +827,92 @@ final class AutoLearnDictionaryService {
         candidate: CorrectionDiffEngine.Candidate,
         score: Double
     )
+
+    private func isOrdinaryCaseOnlyEventFallbackCorrection(_ candidate: CorrectionDiffEngine.Candidate) -> Bool {
+        let original = self.triggerPhrase(candidate.original)
+        let replacement = candidate.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard original.count >= 4, replacement.count >= 4 else { return false }
+        guard self.normalizePhrase(original) == self.normalizePhrase(replacement) else { return false }
+        return original.caseInsensitiveCompare(replacement) == .orderedSame && original != replacement
+    }
+
+    private func singleLetterCaseCorrectionCandidate(
+        insertedText: String,
+        replacement: String
+    ) -> CorrectionDiffEngine.Candidate? {
+        let typedReplacement = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard typedReplacement.count == 1,
+              let typedCharacter = typedReplacement.first,
+              typedCharacter.isUppercase,
+              typedReplacement.unicodeScalars.allSatisfy({ CharacterSet.uppercaseLetters.contains($0) })
+        else {
+            return nil
+        }
+
+        var uniqueCandidates: [String: CorrectionDiffEngine.Candidate] = [:]
+        let typedKey = typedReplacement.lowercased()
+        let tokens = CorrectionDiffEngine.learningTokenTexts(in: insertedText)
+
+        for token in tokens {
+            guard token.count >= 4,
+                  let originalFirstCharacter = token.first,
+                  String(originalFirstCharacter).lowercased() == typedKey,
+                  String(originalFirstCharacter) != typedReplacement
+            else {
+                continue
+            }
+
+            let replacementToken = typedReplacement + String(token.dropFirst())
+            let candidate = CorrectionDiffEngine.Candidate(
+                original: token,
+                replacement: replacementToken
+            )
+            guard self.shouldTrack(candidate, editedText: replacementToken),
+                  self.isOrdinaryCaseOnlyEventFallbackCorrection(candidate) ||
+                  self.isHighSignalReplacement(replacementToken)
+            else {
+                continue
+            }
+
+            uniqueCandidates[self.sessionObservationKey(original: candidate.original, replacement: candidate.replacement)] = candidate
+        }
+
+        return uniqueCandidates.count == 1 ? uniqueCandidates.values.first : nil
+    }
+
+    private func shouldDeferPotentialCorrectionCompletion(
+        insertedText: String,
+        typedReplacement: String,
+        allowsOrdinaryPrefix: Bool
+    ) -> Bool {
+        guard allowsOrdinaryPrefix || self.isHighSignalReplacement(typedReplacement) else { return false }
+
+        let replacementKey = self.compactLearningKey(typedReplacement)
+        guard replacementKey.count >= 3 else { return false }
+
+        let tokens = CorrectionDiffEngine.learningTokenTexts(in: insertedText)
+        guard tokens.count > 1 else { return false }
+
+        let maxSpanLength = min(self.maxSegmentTokenCount, tokens.count)
+        guard maxSpanLength > 1 else { return false }
+
+        for spanLength in 2...maxSpanLength {
+            for startIndex in 0...(tokens.count - spanLength) {
+                let endIndex = startIndex + spanLength
+                let spanKey = self.compactLearningKey(tokens[startIndex..<endIndex].joined(separator: " "))
+                if spanKey == replacementKey {
+                    return false
+                }
+                if spanKey.count > replacementKey.count,
+                   spanKey.hasPrefix(replacementKey)
+                {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
 
     private func eventFallbackOriginalCandidates(
         insertedText: String,
@@ -829,7 +961,8 @@ final class AutoLearnDictionaryService {
         let baselineTokenCount = self.diffTokenCount(baseline)
         let currentTokenCount = self.diffTokenCount(currentText)
         if baselineTokenCount <= self.maxFullDiffTokenCount,
-           currentTokenCount <= self.maxFullDiffTokenCount {
+           currentTokenCount <= self.maxFullDiffTokenCount
+        {
             return CorrectionDiffEngine.findCorrectionCandidates(
                 original: baseline,
                 edited: currentText,
@@ -852,7 +985,8 @@ final class AutoLearnDictionaryService {
         let scopedBaselineTokenCount = self.diffTokenCount(scopedText.baseline)
         let scopedCurrentTokenCount = self.diffTokenCount(scopedText.current)
         guard scopedBaselineTokenCount <= self.maxFullDiffTokenCount,
-              scopedCurrentTokenCount <= self.maxFullDiffTokenCount else {
+              scopedCurrentTokenCount <= self.maxFullDiffTokenCount
+        else {
             self.log(
                 "DiffSkipped_ScopedWindowOverTokenLimit: baselineTokens=\(scopedBaselineTokenCount), currentTokens=\(scopedCurrentTokenCount)."
             )
@@ -1036,7 +1170,16 @@ final class AutoLearnDictionaryService {
 
         for correction in corrections where
             self.isCorrectionFromInsertedText(correction, insertedText: insertedText) &&
-            self.shouldTrack(correction, editedText: currentText) {
+            self.shouldTrack(correction, editedText: currentText)
+        {
+            if self.shouldDeferPotentialCorrectionCompletion(
+                insertedText: insertedText,
+                typedReplacement: correction.replacement,
+                allowsOrdinaryPrefix: false
+            ) {
+                self.log("CorrectionDeferred_PotentialPrefix: replacementChars=\(correction.replacement.count).")
+                continue
+            }
             let observationKey = self.sessionObservationKey(
                 original: correction.original,
                 replacement: correction.replacement
@@ -1245,6 +1388,14 @@ final class AutoLearnDictionaryService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func compactLearningKey(_ text: String) -> String {
+        text
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined()
+    }
+
     private func levenshteinDistance(_ lhs: String, _ rhs: String) -> Int {
         let lhsChars = Array(lhs)
         let rhsChars = Array(rhs)
@@ -1311,6 +1462,13 @@ extension AutoLearnDictionaryService {
         self.flushAndClearEventFallbackTypedRun()
     }
 
+    func processEventFallbackDebouncedTypedRunForTesting() {
+        let outcome = self.processEventFallbackTypedRun(allowPotentialPrefixCompletion: false)
+        if outcome != .deferred {
+            self.eventFallbackState?.typedRun = ""
+        }
+    }
+
     func inferEventFallbackCorrectionForTesting(
         insertedText: String,
         typedReplacement: String
@@ -1348,6 +1506,13 @@ extension AutoLearnDictionaryService {
             where self.isCorrectionFromInsertedText(correction, insertedText: insertedText) &&
             self.shouldTrack(correction, editedText: currentText)
         {
+            if self.shouldDeferPotentialCorrectionCompletion(
+                insertedText: insertedText,
+                typedReplacement: correction.replacement,
+                allowsOrdinaryPrefix: false
+            ) {
+                continue
+            }
             self.recordObservation(original: correction.original, replacement: correction.replacement)
         }
     }

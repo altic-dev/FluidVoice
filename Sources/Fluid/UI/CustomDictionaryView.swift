@@ -330,6 +330,10 @@ struct CustomDictionaryView: View {
                     icon: "xmark.circle",
                     text: "Dismissed suggestions can return if you make the same correction again."
                 )
+                self.autoLearnInfoRow(
+                    icon: "cpu",
+                    text: "Works locally; AI Enhancements are not required."
+                )
             }
         }
         .frame(width: 384, alignment: .leading)
@@ -514,14 +518,14 @@ struct CustomDictionaryView: View {
                             .background(RoundedRectangle(cornerRadius: 4).fill(self.theme.palette.accent.opacity(0.2)))
                             .foregroundStyle(self.theme.palette.accent)
 
+                        Spacer()
+
                         Text("\(self.boostTerms.count)")
-                            .font(.caption2.weight(.medium))
-                            .padding(.horizontal, 6)
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(.quaternary))
                             .foregroundStyle(.secondary)
-
-                        Spacer()
 
                         if self.isAISectionExpanded && !self.boostTerms.isEmpty {
                             Button {
@@ -690,7 +694,7 @@ struct CustomDictionaryView: View {
         case .alreadyPresent:
             self.autoLearnStatusMessage = nil
             self.confirmAndRemoveApprovedSuggestion(suggestion)
-        case .conflict(let existingReplacement):
+        case let .conflict(existingReplacement):
             self.autoLearnStatusMessage =
                 "\"\(trigger)\" already maps to \"\(existingReplacement)\". Review the existing dictionary entry before approving this suggestion."
         }
@@ -800,7 +804,9 @@ private enum BoostStrengthPreset: String, CaseIterable, Identifiable {
     case balanced = "Balanced"
     case strong = "Strong"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var weight: Float {
         switch self {
@@ -1515,21 +1521,21 @@ struct AutoLearnSuggestionRow: View {
 
                         Text(self.isAdded ? "Added" : "Add")
                     }
-                        .font(.caption2.weight(.semibold))
-                        .frame(width: suggestionAddButtonWidth, height: suggestionActionButtonHeight)
-                        .foregroundStyle(self.theme.palette.accent)
-                        .background(
-                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
-                                .fill(self.theme.palette.accent.opacity(self.isAdded ? 0.18 : 0.10))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
-                                .stroke(
-                                    self.theme.palette.accent.opacity(self.isAdded ? 0.55 : 0.34),
-                                    lineWidth: 1
-                                )
-                        )
-                        .contentShape(Rectangle())
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: suggestionAddButtonWidth, height: suggestionActionButtonHeight)
+                    .foregroundStyle(self.theme.palette.accent)
+                    .background(
+                        RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                            .fill(self.theme.palette.accent.opacity(self.isAdded ? 0.18 : 0.10))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: suggestionActionButtonCornerRadius)
+                            .stroke(
+                                self.theme.palette.accent.opacity(self.isAdded ? 0.55 : 0.34),
+                                lineWidth: 1
+                            )
+                    )
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(self.isAdded ? "Added to Instant Replacement" : "Add to Instant Replacement")

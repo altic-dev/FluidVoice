@@ -1,7 +1,6 @@
+@testable import FluidVoice_Debug
 import Foundation
 import XCTest
-
-@testable import FluidVoice_Debug
 
 @MainActor
 final class DictationE2ETests: XCTestCase {
@@ -824,7 +823,101 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
-    func testAutoLearnEventFallbackSkipsOrdinaryTitleCaseTyping() {
+    func testAutoLearnEventFallbackDefersPartialMultiTokenReplacement() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.beginEventFallbackSessionForTesting(
+                insertedText: "I am testing fluid sync"
+            )
+            defer { AutoLearnDictionaryService.shared.stopMonitoring() }
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("FluidS")
+            AutoLearnDictionaryService.shared.processEventFallbackDebouncedTypedRunForTesting()
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("FluidSync")
+            AutoLearnDictionaryService.shared.processEventFallbackDebouncedTypedRunForTesting()
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "fluid sync")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "FluidSync")
+        }
+    }
+
+    func testAutoLearnEventFallbackDefersOrdinaryPrefixUntilHighSignalReplacementCompletes() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.beginEventFallbackSessionForTesting(
+                insertedText: "Please use signal flow here"
+            )
+            defer { AutoLearnDictionaryService.shared.stopMonitoring() }
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("Signal")
+            AutoLearnDictionaryService.shared.processEventFallbackDebouncedTypedRunForTesting()
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("SignalFlow")
+            AutoLearnDictionaryService.shared.processEventFallbackDebouncedTypedRunForTesting()
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "signal flow")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "SignalFlow")
+        }
+    }
+
+    func testAutoLearnAxDiffDefersPartialMultiTokenReplacement() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: "I am testing fluid sync",
+                baselineText: "I am testing fluid sync",
+                currentText: "I am testing FluidS"
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: "I am testing fluid sync",
+                baselineText: "I am testing fluid sync",
+                currentText: "I am testing FluidSync"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "fluid sync")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "FluidSync")
+        }
+    }
+
+    func testAutoLearnEventFallbackTracksOrdinaryCaseOnlyCorrection() {
         self.withRestoredDefaults(
             keys: [
                 self.customDictionaryEntriesKey,
@@ -838,6 +931,113 @@ final class DictationE2ETests: XCTestCase {
 
             AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
                 insertedText: "I wrote an obsidian note",
+                typedReplacement: "Obsidian"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 1)
+            XCTAssertEqual(
+                AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "Obsidian"),
+                AutoLearnDictionaryService.shared.minimumSuggestionOccurrences
+            )
+        }
+    }
+
+    func testAutoLearnEventFallbackInfersSingleLetterTitleCaseCorrection() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I mentioned obsidian today",
+                typedReplacement: "O"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 1)
+            XCTAssertEqual(
+                AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "Obsidian"),
+                AutoLearnDictionaryService.shared.minimumSuggestionOccurrences
+            )
+        }
+    }
+
+    func testAutoLearnEventFallbackDefersSingleLetterTitleCaseCorrectionUntilFlush() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.beginEventFallbackSessionForTesting(
+                insertedText: "I mentioned obsidian today"
+            )
+            defer { AutoLearnDictionaryService.shared.stopMonitoring() }
+
+            AutoLearnDictionaryService.shared.setEventFallbackTypedRunForTesting("O")
+            AutoLearnDictionaryService.shared.processEventFallbackDebouncedTypedRunForTesting()
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.flushEventFallbackTypedRunForTesting()
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "obsidian")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Obsidian")
+        }
+    }
+
+    func testAutoLearnEventFallbackSkipsAmbiguousSingleLetterTitleCaseCorrection() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I opened obsidian often",
+                typedReplacement: "O"
+            )
+
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+        }
+    }
+
+    func testAutoLearnEventFallbackSkipsOrdinaryFuzzyReplacement() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I wrote an oblivion note",
                 typedReplacement: "Obsidian"
             )
 
@@ -916,12 +1116,10 @@ final class DictationE2ETests: XCTestCase {
             if CharacterSet.punctuationCharacters.contains(scalar) { return " " }
             return Character(scalar)
         }
-        let collapsed = String(noPunct)
+        return String(noPunct)
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-
-        return collapsed
     }
 
     private func withRestoredDefaults(keys: [String], run: () -> Void) {
