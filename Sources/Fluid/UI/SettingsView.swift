@@ -836,12 +836,36 @@ struct SettingsView: View {
                                     )
                                     Divider().opacity(0.2)
 
+                                    HStack(alignment: .center) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Music During Transcription")
+                                                .font(.body)
+                                            Text("Leave playing, pause it, or lower the system volume to 10% while you dictate (restored when you stop).")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        Picker("", selection: Binding(
+                                            get: { SettingsStore.shared.mediaBehaviorDuringTranscription },
+                                            set: { SettingsStore.shared.mediaBehaviorDuringTranscription = $0 }
+                                        )) {
+                                            ForEach(SettingsStore.MediaBehaviorDuringTranscription.allCases) { mode in
+                                                Text(mode.displayName).tag(mode)
+                                            }
+                                        }
+                                        .frame(width: 160)
+                                        .labelsHidden()
+                                    }
+                                    Divider().opacity(0.2)
+
                                     self.optionToggleRow(
-                                        title: "Pause Media During Transcription",
-                                        description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
+                                        title: "Keep Mac Awake While Dictating",
+                                        description: "Prevents the display from sleeping or locking while a recording is active. Released as soon as you stop.",
                                         isOn: Binding(
-                                            get: { SettingsStore.shared.pauseMediaDuringTranscription },
-                                            set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
+                                            get: { SettingsStore.shared.preventSleepDuringTranscription },
+                                            set: { SettingsStore.shared.preventSleepDuringTranscription = $0 }
                                         )
                                     )
                                     Divider().opacity(0.2)
