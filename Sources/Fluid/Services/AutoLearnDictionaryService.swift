@@ -813,8 +813,12 @@ final class AutoLearnDictionaryService {
             return nil
         }
 
+        let isAllowedOrdinaryCorrection =
+            self.isOrdinaryCaseOnlyEventFallbackCorrection(best.candidate) ||
+            self.isSeparatorCollapseEventFallbackCorrection(best.candidate)
+
         if !isHighSignalReplacement,
-           !self.isOrdinaryCaseOnlyEventFallbackCorrection(best.candidate)
+           !isAllowedOrdinaryCorrection
         {
             self.log("EventFallbackSkipped_NotHighSignal")
             return nil
@@ -834,6 +838,18 @@ final class AutoLearnDictionaryService {
         guard original.count >= 4, replacement.count >= 4 else { return false }
         guard self.normalizePhrase(original) == self.normalizePhrase(replacement) else { return false }
         return original.caseInsensitiveCompare(replacement) == .orderedSame && original != replacement
+    }
+
+    private func isSeparatorCollapseEventFallbackCorrection(_ candidate: CorrectionDiffEngine.Candidate) -> Bool {
+        let original = self.triggerPhrase(candidate.original)
+        let replacement = candidate.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard original.count >= 4, replacement.count >= 4 else { return false }
+
+        let separatorCharacters = CharacterSet(charactersIn: "-_./&+")
+        guard original.rangeOfCharacter(from: separatorCharacters) != nil else { return false }
+
+        return self.compactLearningKey(original) == self.compactLearningKey(replacement) &&
+            original.caseInsensitiveCompare(replacement) != .orderedSame
     }
 
     private func singleLetterCaseCorrectionCandidate(

@@ -1010,6 +1010,38 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnEventFallbackTracksRepeatedPunctuationCollapseCorrection() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I corrected anti-gravity today",
+                typedReplacement: "Antigravity"
+            )
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "I corrected anti-gravity today",
+                typedReplacement: "Antigravity"
+            )
+
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.count, 1)
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.originalText, "anti-gravity")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.replacement, "Antigravity")
+            XCTAssertEqual(SettingsStore.shared.autoLearnCustomDictionarySuggestions.first?.occurrences, 2)
+            XCTAssertEqual(
+                AutoLearnDictionaryService.shared.displayThreshold(forReplacement: "Antigravity"),
+                AutoLearnDictionaryService.shared.minimumSuggestionOccurrences
+            )
+        }
+    }
+
     func testAutoLearnEventFallbackInfersSingleLetterTitleCaseCorrection() {
         self.withRestoredDefaults(
             keys: [
