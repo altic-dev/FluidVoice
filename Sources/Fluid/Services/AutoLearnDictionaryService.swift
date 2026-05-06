@@ -1219,6 +1219,8 @@ final class AutoLearnDictionaryService {
         let isSameKeyCorrection = originalKey == replacementKey
 
         guard !originalText.isEmpty, !originalKey.isEmpty, !replacement.isEmpty, !replacementKey.isEmpty else { return false }
+        guard !self.hasUnsupportedReplacementBoundary(replacement) else { return false }
+        guard !self.isMismatchedApostropheRewrite(original: originalText, replacement: replacement) else { return false }
         guard !isSameKeyCorrection || signal != nil else { return false }
         guard originalText.count <= 64, replacement.count <= 64 else { return false }
         guard isSameKeyCorrection || self.looksLikeARealCorrection(original: originalKey, replacement: replacementKey) else { return false }
@@ -1294,6 +1296,28 @@ final class AutoLearnDictionaryService {
         let maxRatio: Double = isMultiWord ? 0.65 : 0.50
         let ratio = Double(distance) / Double(maxLength)
         return ratio <= maxRatio
+    }
+
+    private func hasUnsupportedReplacementBoundary(_ replacement: String) -> Bool {
+        let trimmedReplacement = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let firstScalar = trimmedReplacement.unicodeScalars.first,
+              let lastScalar = trimmedReplacement.unicodeScalars.last
+        else {
+            return false
+        }
+
+        let unsupportedBoundaryCharacters = CharacterSet(charactersIn: #"()[]{}"'“”‘’"#)
+        return unsupportedBoundaryCharacters.contains(firstScalar) ||
+            unsupportedBoundaryCharacters.contains(lastScalar)
+    }
+
+    private func isMismatchedApostropheRewrite(original: String, replacement: String) -> Bool {
+        let apostropheCharacters = CharacterSet(charactersIn: "'’")
+        guard replacement.rangeOfCharacter(from: apostropheCharacters) != nil else {
+            return false
+        }
+
+        return self.compactLearningKey(original) != self.compactLearningKey(replacement)
     }
 
     private func isCorrectionFromInsertedText(

@@ -410,6 +410,71 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAutoLearnRejectsAccidentalApostrophePhraseRewrite() {
+        self.withRestoredDefaults(
+            keys: [
+                self.customDictionaryEntriesKey,
+                self.autoLearnCustomDictionaryEnabledKey,
+                self.autoLearnCustomDictionarySuggestionsKey,
+            ]
+        ) {
+            SettingsStore.shared.customDictionaryEntries = []
+            SettingsStore.shared.autoLearnCustomDictionaryEnabled = true
+            SettingsStore.shared.autoLearnCustomDictionarySuggestions = []
+
+            XCTAssertFalse(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "it is",
+                    replacement: "(I'm"
+                )
+            )
+            XCTAssertFalse(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "it is",
+                    replacement: "I'm"
+                )
+            )
+            XCTAssertFalse(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "fluid voice",
+                    replacement: "(FluidVoice"
+                )
+            )
+
+            AutoLearnDictionaryService.shared.recordEventFallbackReplacementForTesting(
+                insertedText: "it is",
+                typedReplacement: "(I'm"
+            )
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+
+            AutoLearnDictionaryService.shared.recordCorrectionsForTesting(
+                insertedText: "it is",
+                baselineText: "it is",
+                currentText: "(I'm"
+            )
+            XCTAssertTrue(SettingsStore.shared.autoLearnCustomDictionarySuggestions.isEmpty)
+        }
+    }
+
+    func testAutoLearnKeepsUsefulTechnicalPunctuationCorrections() {
+        self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
+            SettingsStore.shared.customDictionaryEntries = []
+
+            XCTAssertTrue(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "o reilly",
+                    replacement: "O'Reilly"
+                )
+            )
+            XCTAssertTrue(
+                AutoLearnDictionaryService.shared.shouldTrackForTesting(
+                    original: "net",
+                    replacement: ".NET"
+                )
+            )
+        }
+    }
+
     func testAutoLearnTracksSimpleTitleCaseCorrectionAsOrdinarySuggestion() {
         self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
             SettingsStore.shared.customDictionaryEntries = []
