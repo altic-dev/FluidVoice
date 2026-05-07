@@ -739,20 +739,30 @@ final class ASRService: ObservableObject {
     /// ## Errors
     /// If audio session configuration fails, the method will silently fail
     /// and `isRunning` will remain `false`. Check the debug logs for details.
-    func start() async {
+    /// - Parameter preAppliedMediaAction: Optionally, a media action the
+    ///   caller has already taken before invoking start() — used by
+    ///   ContentView to fire the duck ramp the instant the hotkey fires
+    ///   (alongside the start sound) rather than waiting ~80ms behind the
+    ///   pre-recording UI work. If `.none`, start() will fire the duck
+    ///   itself based on the user's setting.
+    func start(preAppliedMediaAction: MediaSessionAction = .none) async {
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
         guard self.micStatus == .authorized else {
             DebugLogger.shared.error("❌ START() blocked - mic not authorized", source: "ASRService")
+            // The caller may have pre-fired a duck for a session we never get
+            // to run; undo it so the user's volume isn't left at 10%.
+            await MediaPlaybackService.shared.restore(from: preAppliedMediaAction)
             return
         }
         guard self.isRunning == false, self.isStarting == false else {
             DebugLogger.shared.warning("⚠️ START() blocked - already running (started: \(self.isRunning), starting: \(self.isStarting))", source: "ASRService")
+            await MediaPlaybackService.shared.restore(from: preAppliedMediaAction)
             return
         }
 
-        // Reset media session action for this session
-        self.mediaSessionAction = .none
+        // Adopt any media action the caller already took, otherwise reset.
+        self.mediaSessionAction = preAppliedMediaAction
         self.audioRouteRecoveryTask?.cancel()
         self.audioRouteRecoveryTask = nil
         self.isRecoveringAudioRoute = false
@@ -788,8 +798,15 @@ final class ASRService: ObservableObject {
             try self.setupEngineTap()
             DebugLogger.shared.debug("✅ Engine tap setup complete", source: "ASRService")
 
-            // Apply media behaviour AFTER successful audio setup but BEFORE setting isRunning
-            // This ensures we only touch media when we know recording will succeed
+            // Apply media pause behaviour AFTER successful audio setup but
+            // BEFORE setting isRunning, so we only pause if recording will
+            // actually start. Duck is the responsibility of the caller —
+            // ContentView pre-fires it the instant the hotkey arrives so the
+            // fade visibly starts alongside the start sound rather than
+            // waiting behind audio engine setup. If a caller doesn't supply
+            // a pre-applied duck and the setting is .duck, we fire it here
+            // as a fallback so the behaviour still works for any code path
+            // that hasn't been hoisted.
             switch SettingsStore.shared.mediaBehaviorDuringTranscription {
             case .none:
                 self.mediaSessionAction = .none
@@ -800,10 +817,10 @@ final class ASRService: ObservableObject {
                     DebugLogger.shared.info("🎵 Paused system media for transcription", source: "ASRService")
                 }
             case .duck:
-                if let previousVolume = MediaPlaybackService.shared.duckSystemVolume() {
+                if case .ducked = self.mediaSessionAction {
+                    // Duck was pre-fired by the caller — nothing more to do.
+                } else if let previousVolume = MediaPlaybackService.shared.duckSystemVolume() {
                     self.mediaSessionAction = .ducked(previousVolume: previousVolume)
-                } else {
-                    self.mediaSessionAction = .none
                 }
             }
 

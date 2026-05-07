@@ -25,10 +25,13 @@ private let kDuckTargetVolume: Float = 0.10
 /// Length of the fade ramp in seconds. Short enough that the duck has
 /// fully landed before the user starts dictating, long enough to read as a
 /// fade rather than a hard cut.
-private let kFadeDuration: TimeInterval = 0.2
+private let kFadeDuration: TimeInterval = 0.1
 
-/// Number of discrete steps in the fade ramp. 30 steps over 200ms is ~150
-/// Hz, well above the threshold where you'd hear the staircase.
+/// Number of discrete steps in the fade ramp. 30 steps over 100ms is 300 Hz,
+/// well above the threshold where you'd hear the staircase. The fade only
+/// covers the second half of the duck (the first half is a synchronous snap
+/// in `duckSystemVolume()` for snappy feel) so a relaxed 100ms tail reads
+/// as a soft landing rather than a long fade.
 private let kFadeSteps = 30
 
 /// Service that wraps MediaRemoteAdapter's MediaController to provide
@@ -212,11 +215,22 @@ final class MediaPlaybackService {
             )
             return nil
         }
+
+        // Snap the volume halfway down to the duck target SYNCHRONOUSLY before
+        // starting the detached fade. This puts a clearly audible drop on the
+        // user's ear within the round-trip time of one CoreAudio property
+        // write (sub-millisecond), bypassing both Task.detached scheduling
+        // latency and the fade ramp's first few steps where the per-step
+        // volume change is too small to perceive. The detached fade then
+        // smoothly lands the rest of the way to kDuckTargetVolume.
+        let immediateDrop = (previousScalar + kDuckTargetVolume) / 2
+        SystemVolumeController.setVolume(immediateDrop)
+
         DebugLogger.shared.info(
-            "🔉 Fading system volume \(String(format: "%.2f", previousScalar)) → \(String(format: "%.2f", kDuckTargetVolume)) over \(kFadeDuration)s",
+            "🔉 Snapped \(String(format: "%.2f", previousScalar)) → \(String(format: "%.2f", immediateDrop)), fading to \(String(format: "%.2f", kDuckTargetVolume)) over \(kFadeDuration)s",
             source: "MediaPlaybackService"
         )
-        self.startFade(from: previousScalar, to: kDuckTargetVolume, restoreSnapshot: nil)
+        self.startFade(from: immediateDrop, to: kDuckTargetVolume, restoreSnapshot: nil)
         return snapshot
     }
 

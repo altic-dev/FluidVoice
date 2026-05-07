@@ -2947,6 +2947,25 @@ extension ContentView {
 
     private func beginDictationRecording(for slot: SettingsStore.DictationShortcutSlot, mode: ActiveRecordingMode) {
         DebugLogger.shared.debug("Begin dictation recording for slot \(slot.rawValue)", source: "ContentView")
+
+        // Fire the duck first, then the start sound — at the very top of this
+        // function so they happen alongside the hotkey press, not 80ms later
+        // behind captureRecordingContext + setActiveRecordingMode +
+        // setOverlayMode. Duck-before-sound matters because CoreAudio's sound
+        // playback latency (~30-50ms) is shorter than the time it takes the
+        // fade to drop the music to a perceptibly quieter level; if the
+        // sound went first, you'd hear it before the music dipped.
+        let willStart = !self.asr.isRunning
+        var preAppliedMediaAction: MediaSessionAction = .none
+        if willStart, SettingsStore.shared.mediaBehaviorDuringTranscription == .duck {
+            if let prev = MediaPlaybackService.shared.duckSystemVolume() {
+                preAppliedMediaAction = .ducked(previousVolume: prev)
+            }
+        }
+        if willStart, SettingsStore.shared.enableTranscriptionSounds {
+            TranscriptionSoundPlayer.shared.playStartSound()
+        }
+
         self.captureRecordingContext()
         self.applyDictationShortcutSelectionContext(for: slot)
         self.setActiveRecordingMode(mode)
@@ -2954,11 +2973,8 @@ extension ContentView {
         self.menuBarManager.setOverlayMode(.dictation)
 
         guard !self.asr.isRunning else { return }
-        if SettingsStore.shared.enableTranscriptionSounds {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
         Task {
-            await self.asr.start()
+            await self.asr.start(preAppliedMediaAction: preAppliedMediaAction)
         }
     }
 
