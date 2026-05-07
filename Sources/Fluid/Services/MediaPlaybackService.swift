@@ -6,10 +6,15 @@ import MediaRemoteAdapter
 /// What `MediaPlaybackService` did at the start of a transcription session.
 /// Stored on `ASRService` so the matching restore at stop knows whether to
 /// resume playback, restore the system volume, or do nothing.
+///
+/// The duck case carries a `SystemVolumeSnapshot` rather than a single
+/// `Float` so output devices that expose only per-channel volume (no master)
+/// can have their stereo balance restored exactly. A flat scalar would
+/// collapse L/R to their average on every duck cycle.
 enum MediaSessionAction: Equatable {
     case none
     case paused
-    case ducked(previousVolume: Float)
+    case ducked(previousVolume: SystemVolumeSnapshot)
 }
 
 /// Volume the system output is dropped to while ducking. 10% of full scale —
@@ -184,54 +189,65 @@ final class MediaPlaybackService {
     // MARK: - Duck path
 
     /// Snapshots the current system output volume and starts a background
-    /// fade-down to `kDuckTargetVolume`. Returns the previous volume so the
-    /// caller can hand it back to `restoreSystemVolume(previous:)` on stop.
+    /// fade-down to `kDuckTargetVolume`. Returns the snapshot so the caller
+    /// can hand it back to `restoreSystemVolume(previous:)` on stop.
     ///
     /// Returns `nil` if the volume couldn't be read, or if the user's
     /// volume is already at or below the duck target — in either case we
     /// don't touch the volume at all (and the matching restore becomes a
     /// no-op).
-    func duckSystemVolume() -> Float? {
-        guard let previous = SystemVolumeController.currentVolume() else {
+    func duckSystemVolume() -> SystemVolumeSnapshot? {
+        guard let snapshot = SystemVolumeController.currentSnapshot() else {
             DebugLogger.shared.debug(
                 "MediaPlaybackService: Couldn't read system volume, skipping duck",
                 source: "MediaPlaybackService"
             )
             return nil
         }
-        guard previous > kDuckTargetVolume else {
+        let previousScalar = snapshot.averageScalar
+        guard previousScalar > kDuckTargetVolume else {
             DebugLogger.shared.debug(
-                "MediaPlaybackService: Volume \(String(format: "%.2f", previous)) already ≤ duck target, skipping",
+                "MediaPlaybackService: Volume \(String(format: "%.2f", previousScalar)) already ≤ duck target, skipping",
                 source: "MediaPlaybackService"
             )
             return nil
         }
         DebugLogger.shared.info(
-            "🔉 Fading system volume \(String(format: "%.2f", previous)) → \(String(format: "%.2f", kDuckTargetVolume)) over \(kFadeDuration)s",
+            "🔉 Fading system volume \(String(format: "%.2f", previousScalar)) → \(String(format: "%.2f", kDuckTargetVolume)) over \(kFadeDuration)s",
             source: "MediaPlaybackService"
         )
-        self.startFade(from: previous, to: kDuckTargetVolume)
-        return previous
+        self.startFade(from: previousScalar, to: kDuckTargetVolume, restoreSnapshot: nil)
+        return snapshot
     }
 
-    /// Fades the system output volume back up to the value snapshotted by
+    /// Fades the system output volume back up to the snapshot captured by
     /// `duckSystemVolume()`. Reads the live volume first so a mid-fade
     /// interruption (user released the hotkey before the duck-down had
     /// finished) restarts cleanly from wherever the volume actually is.
-    func restoreSystemVolume(previous: Float?) {
+    /// Re-applies the snapshot exactly at the end of the ramp so per-channel
+    /// detail (e.g. uneven L/R balance) comes back precisely rather than
+    /// flattened to the fade scalar.
+    func restoreSystemVolume(previous: SystemVolumeSnapshot?) {
         guard let previous else { return }
         let start = SystemVolumeController.currentVolume() ?? kDuckTargetVolume
+        let target = previous.averageScalar
         DebugLogger.shared.info(
-            "🔊 Fading system volume \(String(format: "%.2f", start)) → \(String(format: "%.2f", previous)) over \(kFadeDuration)s",
+            "🔊 Fading system volume \(String(format: "%.2f", start)) → \(String(format: "%.2f", target)) over \(kFadeDuration)s",
             source: "MediaPlaybackService"
         )
-        self.startFade(from: start, to: previous)
+        self.startFade(from: start, to: target, restoreSnapshot: previous)
     }
 
     /// Cancels any in-flight fade and starts a new one from `start` to
     /// `target` over `kFadeDuration`. Runs detached so the main actor isn't
     /// blocked between steps; CoreAudio property writes are thread-safe.
-    private func startFade(from start: Float, to target: Float) {
+    ///
+    /// - Parameter restoreSnapshot: If non-nil, this snapshot is applied
+    ///   exactly at the end of the ramp instead of writing the scalar
+    ///   `target`. Used by the fade-up so per-channel volume detail
+    ///   (uneven L/R balance) is restored precisely. Pass `nil` for the
+    ///   fade-down — there's nothing to preserve at the duck target.
+    private func startFade(from start: Float, to target: Float, restoreSnapshot: SystemVolumeSnapshot?) {
         self.activeFadeTask?.cancel()
 
         let stepCount = kFadeSteps
@@ -248,11 +264,17 @@ final class MediaPlaybackService {
                     try? await Task.sleep(nanoseconds: stepDelayNanos)
                 }
             }
-            // Land exactly on the target value if we weren't cancelled —
-            // floating-point drift across 30 steps could otherwise leave us
-            // a hair off (e.g. 0.0997 instead of 0.10).
+            // Land exactly on the target if we weren't cancelled —
+            // floating-point drift across the steps could otherwise leave
+            // us a hair off (e.g. 0.0997 instead of 0.10). If the caller
+            // asked for an exact snapshot restore, prefer that over the
+            // scalar target so per-channel detail comes back intact.
             if !Task.isCancelled {
-                _ = SystemVolumeController.setVolume(target)
+                if let restoreSnapshot {
+                    _ = SystemVolumeController.restore(restoreSnapshot)
+                } else {
+                    _ = SystemVolumeController.setVolume(target)
+                }
             }
         }
     }

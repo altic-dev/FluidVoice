@@ -2261,6 +2261,7 @@ final class SettingsStore: ObservableObject {
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
             gaavModeEnabled: self.gaavModeEnabled,
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
+            mediaBehaviorDuringTranscription: self.mediaBehaviorDuringTranscription,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
             selectedDictationPromptID: self.selectedDictationPromptID,
@@ -2332,7 +2333,15 @@ final class SettingsStore: ObservableObject {
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
         self.gaavModeEnabled = payload.gaavModeEnabled
-        self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        // Prefer the lossless enum if the backup carried it (new builds);
+        // fall back to the legacy bool for backups from older versions.
+        // Either way the assignment is deterministic — current state on the
+        // restoring machine never decides the outcome.
+        if let mode = payload.mediaBehaviorDuringTranscription {
+            self.mediaBehaviorDuringTranscription = mode
+        } else {
+            self.mediaBehaviorDuringTranscription = payload.pauseMediaDuringTranscription ? .pause : .none
+        }
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
 
@@ -2945,17 +2954,15 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Legacy boolean view of `mediaBehaviorDuringTranscription`. Kept so
-    /// `BackupService`'s payload (which exports a `Bool`) stays compatible.
-    /// Setting `true` selects `.pause`; setting `false` selects `.none` only
-    /// if the current mode was `.pause` — `.duck` is preserved.
+    /// `BackupService`'s payload (which still exports a `Bool` for backward
+    /// compatibility with older builds) round-trips through the same key.
+    /// Deterministic in both directions: `true` selects `.pause`, `false`
+    /// selects `.none`. Restore paths should prefer the lossless enum field
+    /// on the payload when available so `.duck` survives a round trip.
     var pauseMediaDuringTranscription: Bool {
         get { self.mediaBehaviorDuringTranscription == .pause }
         set {
-            if newValue {
-                self.mediaBehaviorDuringTranscription = .pause
-            } else if self.mediaBehaviorDuringTranscription == .pause {
-                self.mediaBehaviorDuringTranscription = .none
-            }
+            self.mediaBehaviorDuringTranscription = newValue ? .pause : .none
         }
     }
 
