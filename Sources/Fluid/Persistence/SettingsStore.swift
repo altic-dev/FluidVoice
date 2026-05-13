@@ -2276,6 +2276,7 @@ final class SettingsStore: ObservableObject {
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
             gaavModeEnabled: self.gaavModeEnabled,
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
+            mediaBehaviorDuringTranscription: self.mediaBehaviorDuringTranscription,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
             selectedDictationPromptID: self.selectedDictationPromptID,
@@ -2349,7 +2350,15 @@ final class SettingsStore: ObservableObject {
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
         self.gaavModeEnabled = payload.gaavModeEnabled
-        self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        // Prefer the lossless enum if the backup carried it (new builds);
+        // fall back to the legacy bool for backups from older versions.
+        // Either way the assignment is deterministic — current state on the
+        // restoring machine never decides the outcome.
+        if let mode = payload.mediaBehaviorDuringTranscription {
+            self.mediaBehaviorDuringTranscription = mode
+        } else {
+            self.mediaBehaviorDuringTranscription = payload.pauseMediaDuringTranscription ? .pause : .none
+        }
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
 
@@ -2918,13 +2927,72 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Media Playback Control
 
-    /// When enabled, automatically pauses system media playback when transcription starts.
-    /// Only resumes if FluidVoice was the one that paused it.
-    var pauseMediaDuringTranscription: Bool {
-        get { self.defaults.object(forKey: Keys.pauseMediaDuringTranscription) as? Bool ?? false }
+    /// What FluidVoice does to system media playback when transcription starts.
+    enum MediaBehaviorDuringTranscription: String, Codable, CaseIterable, Identifiable {
+        /// Leave media alone.
+        case none
+        /// Pause currently playing media; resume on stop if FluidVoice paused it.
+        case pause
+        /// Drop the system output volume to a low value during transcription
+        /// and restore it on stop. Music keeps playing, just quietly.
+        case duck
+
+        var id: String { self.rawValue }
+
+        var displayName: String {
+            switch self {
+            case .none: return "Leave Playing"
+            case .pause: return "Pause"
+            case .duck: return "Lower Volume"
+            }
+        }
+    }
+
+    /// What to do with system media playback while transcribing.
+    /// New unified setting; reads migrate cleanly from the legacy
+    /// `pauseMediaDuringTranscription` boolean if present.
+    var mediaBehaviorDuringTranscription: MediaBehaviorDuringTranscription {
+        get {
+            if let raw = self.defaults.string(forKey: Keys.mediaBehaviorDuringTranscription),
+               let mode = MediaBehaviorDuringTranscription(rawValue: raw) {
+                return mode
+            }
+            // Migrate from legacy bool key on first read.
+            if self.defaults.object(forKey: Keys.pauseMediaDuringTranscription) != nil {
+                return self.defaults.bool(forKey: Keys.pauseMediaDuringTranscription) ? .pause : .none
+            }
+            return .none
+        }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.pauseMediaDuringTranscription)
+            self.defaults.set(newValue.rawValue, forKey: Keys.mediaBehaviorDuringTranscription)
+            // Keep the legacy bool in sync so backup/restore round-trips don't
+            // surprise users who roll back to an older build.
+            self.defaults.set(newValue == .pause, forKey: Keys.pauseMediaDuringTranscription)
+        }
+    }
+
+    /// Legacy boolean view of `mediaBehaviorDuringTranscription`. Kept so
+    /// `BackupService`'s payload (which still exports a `Bool` for backward
+    /// compatibility with older builds) round-trips through the same key.
+    /// Deterministic in both directions: `true` selects `.pause`, `false`
+    /// selects `.none`. Restore paths should prefer the lossless enum field
+    /// on the payload when available so `.duck` survives a round trip.
+    var pauseMediaDuringTranscription: Bool {
+        get { self.mediaBehaviorDuringTranscription == .pause }
+        set {
+            self.mediaBehaviorDuringTranscription = newValue ? .pause : .none
+        }
+    }
+
+    /// When enabled, FluidVoice creates an `IOPMAssertion` while a recording
+    /// is active so the display doesn't sleep and the screen doesn't lock
+    /// mid-dictation. Released as soon as recording stops.
+    var preventSleepDuringTranscription: Bool {
+        get { self.defaults.object(forKey: Keys.preventSleepDuringTranscription) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.preventSleepDuringTranscription)
         }
     }
 
@@ -3690,6 +3758,8 @@ private extension SettingsStore {
 
         /// Media Playback Control
         static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"
+        static let mediaBehaviorDuringTranscription = "MediaBehaviorDuringTranscription"
+        static let preventSleepDuringTranscription = "PreventSleepDuringTranscription"
 
         /// Custom Dictation Prompt
         static let customDictationPrompt = "CustomDictationPrompt"

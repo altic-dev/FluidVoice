@@ -62,6 +62,11 @@ struct SettingsBackupPayload: Codable, Equatable {
     let removeFillerWordsEnabled: Bool
     let gaavModeEnabled: Bool
     let pauseMediaDuringTranscription: Bool
+    /// Lossless capture of the unified media-behaviour enum (none / pause /
+    /// duck). Optional so that backups created by older builds (which only
+    /// wrote the legacy bool) still decode cleanly. New builds prefer this
+    /// field on restore and fall back to the bool only when it's nil.
+    let mediaBehaviorDuringTranscription: SettingsStore.MediaBehaviorDuringTranscription?
     let vocabularyBoostingEnabled: Bool
     let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
     let selectedDictationPromptID: String?
