@@ -608,7 +608,7 @@
 			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.10.2;
+				minimumVersion = 0.12.1;
 			};
 		};
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
