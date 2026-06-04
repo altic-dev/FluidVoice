@@ -1,6 +1,6 @@
 # FluidVoice
 
-[![Supported Models](https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1)
+[![Supported Models](https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20SenseVoice%20%7C%20Apple%20Speech%20%7C%20Whisper-blue)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1)
 
 Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
@@ -17,7 +17,7 @@ Fully open source voice-to-text dictation app for macOS with AI enhancement.
 
 - Added **NVIDIA Nemotron Speech 3.5** support on day 0, including **Nemotron 3.5 Multilingual** and **Nemotron Speech 3.5 Ultra Fast Low Latency** for Apple Silicon
 - FluidVoice is one of the first dictation apps to support **Nemotron Speech 3.5 streaming-capable transcription** in a native macOS workflow
-- Expanded the voice engine lineup with **Nemotron, Parakeet Flash, Parakeet v3/v2, Cohere, Apple Speech, and Whisper**
+- Expanded the voice engine lineup with **Nemotron, Parakeet Flash, Parakeet v3/v2, Cohere, SenseVoice, Apple Speech, and Whisper**
 
 ## Star History
 
@@ -59,7 +59,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 ## Features
 - **Live Preview Mode**: Real-time transcription preview in overlay
-- **Multiple Speech Models**: Nemotron Speech 3.5, Parakeet Flash, Parakeet TDT v3 & v2, Cohere Transcribe, Apple Speech, and Whisper
+- **Multiple Speech Models**: Nemotron Speech 3.5, Parakeet Flash, Parakeet TDT v3 & v2, Cohere Transcribe, SenseVoice, Apple Speech, and Whisper
 - **Real-time transcription** with extremely low latency
 - **AI enhancement** with OpenAI, Groq, and custom providers
 - **Global hotkey** for instant voice capture
@@ -78,11 +78,14 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 | Parakeet TDT v3 | Fast default multilingual dictation | [25 languages](#parakeet-tdt-v3-languages) | ~500 MB | Apple Silicon |
 | Parakeet TDT v2 | Fastest English-only dictation | [English only](#parakeet-tdt-v2-languages) | ~500 MB | Apple Silicon |
 | Cohere Transcribe | High-accuracy multilingual dictation | [14 languages](#cohere-transcribe-languages) | ~1.4 GB | Apple Silicon |
+| SenseVoice Small | Compact local transcription with emotion/audio event tags via sherpa-onnx | Mandarin, Cantonese, English, Japanese, Korean | ~230 MB | Apple Silicon |
 | Apple Speech | Zero-download native macOS speech recognition | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
 | Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
 
 Notes:
 Nemotron Speech 3.5 Ultra Fast Low Latency is the newest Apple Silicon option for streaming-capable multilingual dictation. Nemotron 3.5 Multilingual is slower but tuned for higher accuracy. Parakeet Flash is the best pick when you want English words to appear live with the lowest latency. Whisper remains the fallback for Intel Macs and the widest language coverage.
+
+SenseVoice uses the sherpa-onnx SenseVoice Small int8 model. Install `sherpa-onnx-offline` or set the `SenseVoiceSherpaOnnxExecutablePath` macOS default to your sherpa-onnx executable path before using it for dictation.
 
 ### Parakeet Flash Languages
 
