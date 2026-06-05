@@ -196,6 +196,7 @@ final class SenseVoiceProvider: TranscriptionProvider {
         process.arguments = [
             "--tokens=\(modelDirectory.appendingPathComponent(Constants.tokensFile).path)",
             "--sense-voice-model=\(modelDirectory.appendingPathComponent(Constants.modelFile).path)",
+            "--sense-voice-language=en",
             "--num-threads=2",
             "--sense-voice-use-itn=1",
             "--debug=0",

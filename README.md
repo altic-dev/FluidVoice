@@ -78,14 +78,14 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 | Parakeet TDT v3 | Fast default multilingual dictation | [25 languages](#parakeet-tdt-v3-languages) | ~500 MB | Apple Silicon |
 | Parakeet TDT v2 | Fastest English-only dictation | [English only](#parakeet-tdt-v2-languages) | ~500 MB | Apple Silicon |
 | Cohere Transcribe | High-accuracy multilingual dictation | [14 languages](#cohere-transcribe-languages) | ~1.4 GB | Apple Silicon |
-| SenseVoice Small | Compact local transcription with emotion/audio event tags via sherpa-onnx | Mandarin, Cantonese, English, Japanese, Korean | ~230 MB | Apple Silicon |
+| SenseVoice Small | Compact English-only local transcription with emotion/audio event tags via sherpa-onnx | English only | ~230 MB | Apple Silicon |
 | Apple Speech | Zero-download native macOS speech recognition | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
 | Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
 
 Notes:
 Nemotron Speech 3.5 Ultra Fast Low Latency is the newest Apple Silicon option for streaming-capable multilingual dictation. Nemotron 3.5 Multilingual is slower but tuned for higher accuracy. Parakeet Flash is the best pick when you want English words to appear live with the lowest latency. Whisper remains the fallback for Intel Macs and the widest language coverage.
 
-SenseVoice uses the sherpa-onnx SenseVoice Small int8 model. Install `sherpa-onnx-offline` or set the `SenseVoiceSherpaOnnxExecutablePath` macOS default to your sherpa-onnx executable path before using it for dictation.
+SenseVoice uses the sherpa-onnx SenseVoice Small int8 model and is forced to English mode in FluidVoice. Install `sherpa-onnx-offline` or set the `SenseVoiceSherpaOnnxExecutablePath` macOS default to your sherpa-onnx executable path before using it for dictation.
 
 ### Parakeet Flash Languages
 

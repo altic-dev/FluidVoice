@@ -2914,7 +2914,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
             case .cohereTranscribeSixBit: return "Cohere Transcribe"
-            case .senseVoiceSmall: return "SenseVoice Small"
+            case .senseVoiceSmall: return "SenseVoice Small (English)"
             case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
@@ -2937,7 +2937,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "English Only (Live Streaming)"
             case .qwen3Asr: return "30 Languages"
             case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
-            case .senseVoiceSmall: return "ZH, EN, JA, KO, Cantonese"
+            case .senseVoiceSmall: return "English Only"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Around 40 Languages"
             case .appleSpeech: return "System Languages"
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
@@ -3073,7 +3073,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
             case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
-            case .senseVoiceSmall: return "SenseVoice - Fast Local"
+            case .senseVoiceSmall: return "SenseVoice - English"
             case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
@@ -3105,7 +3105,7 @@ final class SettingsStore: ObservableObject {
             case .cohereTranscribeSixBit:
                 return "High-accuracy multilingual transcription. Select the language manually before dictation for best results."
             case .senseVoiceSmall:
-                return "Compact non-autoregressive local transcription through sherpa-onnx. Supports Chinese, English, Japanese, Korean, and Cantonese with emotion and audio event tags."
+                return "Compact non-autoregressive English transcription through sherpa-onnx with emotion and audio event tags."
             case .nemotronOffline:
                 return "Slower but more accurate NVIDIA Nemotron 3.5 transcription. Supports 40 language-locales with auto or manual language selection."
             case .nemotronStreaming:
@@ -3796,7 +3796,7 @@ extension SettingsStore.SpeechModel {
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
         case .senseVoiceSmall:
-            return "ZH, EN, JA, KO, YUE"
+            return "EN"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "40 language-locales"
         case .appleSpeechAnalyzer:
@@ -3815,7 +3815,7 @@ extension SettingsStore.SpeechModel {
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
         case .senseVoiceSmall:
-            return "Mandarin Chinese, English, Japanese, Korean, and Cantonese"
+            return "English"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "Spanish, Italian, Portuguese, Hindi, Korean, English, German, French, Russian, Turkish, Vietnamese, Dutch, Japanese, Arabic, " +
                 "Ukrainian; Polish, Norwegian Bokmal, Finnish, Mandarin, Czech, Bulgarian, Slovak, Swedish, Croatian, Romanian, Estonian, " +
