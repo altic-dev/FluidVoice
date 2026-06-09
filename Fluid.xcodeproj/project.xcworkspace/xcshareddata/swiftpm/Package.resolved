@@ -31,10 +31,10 @@
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/altic-dev/FluidAudio.git",
+      "location" : "https://github.com/jayrodge/FluidAudio.git",
       "state" : {
-        "branch" : "B/cohere-coreml-asr",
-        "revision" : "72625bbccf9f6c797a540a1f1cb66a4cb60753eb"
+        "branch" : "add-sensevoice-coreml-for-fluidvoice",
+        "revision" : "6c722f8fa71248ea753311620f257aa7657fff24"
       }
     },
     {

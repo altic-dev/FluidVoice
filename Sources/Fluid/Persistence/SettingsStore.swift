@@ -3105,7 +3105,7 @@ final class SettingsStore: ObservableObject {
             case .cohereTranscribeSixBit:
                 return "High-accuracy multilingual transcription. Select the language manually before dictation for best results."
             case .senseVoiceSmall:
-                return "Compact non-autoregressive English transcription through sherpa-onnx with emotion and audio event tags."
+                return "Compact non-autoregressive English transcription through FluidAudio CoreML on Apple Silicon."
             case .nemotronOffline:
                 return "Slower but more accurate NVIDIA Nemotron 3.5 transcription. Supports 40 language-locales with auto or manual language selection."
             case .nemotronStreaming:
@@ -3399,14 +3399,15 @@ final class SettingsStore: ObservableObject {
                 }
                 return spec.validateArtifacts(at: directory)
             case .senseVoiceSmall:
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                    .appendingPathComponent("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17", isDirectory: true)
-                return directory.map { url in
-                    [
-                        "model.int8.onnx",
-                        "tokens.txt",
-                    ].allSatisfy { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
-                } ?? false
+                #if canImport(FluidAudio)
+                let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                    .appendingPathComponent("FluidAudio", isDirectory: true)
+                    .appendingPathComponent("Models", isDirectory: true)
+                    .appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
+                return directory.map { SenseVoiceModels.modelsExist(at: $0, precision: .int8) } ?? false
+                #else
+                return false
+                #endif
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 let hint: String
                 switch self {

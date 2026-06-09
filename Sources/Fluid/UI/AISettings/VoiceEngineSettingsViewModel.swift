@@ -210,7 +210,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
         case .senseVoiceSmall:
-            return "SenseVoice downloads the compact int8 sherpa-onnx model locally and runs it in English mode. Install sherpa-onnx or set SenseVoiceSherpaOnnxExecutablePath before dictation."
+            return "SenseVoice downloads the compact int8 FluidAudio CoreML model locally and runs it in English mode on Apple Silicon."
         case .nemotronOffline:
             return "Nemotron 3.5 Multilingual is slower but more accurate. Supports around 40 languages with auto or manual language selection. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronStreaming, .nemotronStreaming320:

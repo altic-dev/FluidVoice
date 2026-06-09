@@ -1,49 +1,65 @@
 import Foundation
 
+#if arch(arm64)
+import FluidAudio
+
+private actor SenseVoiceProgressSink {
+    private let handler: ((Double) -> Void)?
+
+    init(handler: ((Double) -> Void)?) {
+        self.handler = handler
+    }
+
+    func emit(_ progress: Double) {
+        self.handler?(progress)
+    }
+}
+
 final class SenseVoiceProvider: TranscriptionProvider {
     let name = "SenseVoice"
     var isAvailable: Bool { true }
     private(set) var isReady = false
-    var prefersNativeFileTranscription: Bool { true }
 
-    private struct SenseVoiceCLIResult: Decodable {
-        let text: String
-        let emotion: String?
-        let event: String?
-    }
-
-    private enum Constants {
-        static let folderName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-        static let archiveName = "\(folderName).tar.bz2"
-        static let archiveURL = URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/\(archiveName)")!
-        static let modelFile = "model.int8.onnx"
-        static let tokensFile = "tokens.txt"
-        static let executableDefaultsKey = "SenseVoiceSherpaOnnxExecutablePath"
-    }
-
-    private var cacheDirectory: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(Constants.folderName, isDirectory: true)
-    }
+    private let precision: SenseVoiceEncoderPrecision = .int8
+    private let language: Int32 = SenseVoiceConfig.englishLanguage
+    private let maxSamplesPerPass = 96 * SenseVoiceConfig.sampleRate
+    private var manager: SenseVoiceManager?
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
         guard self.isReady == false else { return }
-        guard let directory = self.cacheDirectory else {
-            throw Self.makeError("Unable to resolve a cache directory for SenseVoice.")
-        }
 
-        if self.modelsExistOnDisk() {
-            progressHandler?(1.0)
-            self.isReady = true
-            return
-        }
+        let progressSink = SenseVoiceProgressSink(handler: progressHandler)
+        await progressSink.emit(0.05)
+        let progressTicker = Task(priority: .utility) {
+            var stagedProgress = 0.05
+            let stageCap = 0.82
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if Task.isCancelled { break }
+                if stagedProgress >= stageCap { continue }
 
-        try await self.downloadAndExtractModel(to: directory, progressHandler: progressHandler)
-        guard self.modelsExistOnDisk() else {
-            throw Self.makeError("SenseVoice model files are incomplete after download.")
+                let remaining = stageCap - stagedProgress
+                let step = max(0.008, remaining * 0.12)
+                stagedProgress = min(stageCap, stagedProgress + step)
+                await progressSink.emit(stagedProgress)
+            }
         }
+        defer { progressTicker.cancel() }
+
+        let manager = try await SenseVoiceManager.load(
+            precision: self.precision,
+            language: self.language,
+            progressHandler: { progress in
+                Task {
+                    await progressSink.emit(min(0.88, progress.fractionCompleted * 0.88))
+                }
+            }
+        )
+
+        progressTicker.cancel()
+        self.manager = manager
         self.isReady = true
-        progressHandler?(1.0)
+        await progressSink.emit(1.0)
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -51,254 +67,99 @@ final class SenseVoiceProvider: TranscriptionProvider {
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        guard samples.count >= 16_000 else {
+        guard samples.count >= SenseVoiceConfig.sampleRate else {
             return ASRTranscriptionResult(text: "", confidence: 0)
         }
-        let previewSamples = samples.count > 160_000 ? Array(samples.suffix(160_000)) : samples
-        return try await self.transcribeFinal(previewSamples)
+        return try await self.transcribeChunked(samples)
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        guard samples.isEmpty == false else {
-            return ASRTranscriptionResult(text: "", confidence: 0)
-        }
-        guard self.modelsExistOnDisk(), let directory = self.cacheDirectory else {
-            throw Self.makeError("SenseVoice model is not downloaded.")
-        }
-        let executableURL = try Self.resolveSherpaExecutable()
-        let wavURL = try Self.writeTemporaryWAV(samples: samples)
-        defer { try? FileManager.default.removeItem(at: wavURL) }
-
-        let result = try Self.runSherpa(
-            executableURL: executableURL,
-            modelDirectory: directory,
-            wavURL: wavURL
-        )
-        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
+        try await self.transcribeChunked(samples)
     }
 
     func transcribeFile(at fileURL: URL) async throws -> ASRTranscriptionResult {
-        guard self.modelsExistOnDisk(), let directory = self.cacheDirectory else {
-            throw Self.makeError("SenseVoice model is not downloaded.")
-        }
-        let executableURL = try Self.resolveSherpaExecutable()
-        let result = try Self.runSherpa(
-            executableURL: executableURL,
-            modelDirectory: directory,
-            wavURL: fileURL
-        )
-        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
+        let converter = AudioConverter(sampleRate: Double(SenseVoiceConfig.sampleRate))
+        let samples = try converter.resampleAudioFile(fileURL)
+        return try await self.transcribeChunked(samples)
     }
 
     func modelsExistOnDisk() -> Bool {
-        guard let directory = self.cacheDirectory else { return false }
-        return [
-            Constants.modelFile,
-            Constants.tokensFile,
-        ].allSatisfy { entry in
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent(entry).path)
-        }
+        guard let directory = Self.cacheDirectory else { return false }
+        return SenseVoiceModels.modelsExist(at: directory, precision: self.precision)
     }
 
     func clearCache() async throws {
-        if let directory = self.cacheDirectory,
-           FileManager.default.fileExists(atPath: directory.path)
-        {
-            try FileManager.default.removeItem(at: directory)
-        }
+        self.manager = nil
         self.isReady = false
+        guard let directory = Self.cacheDirectory,
+              FileManager.default.fileExists(atPath: directory.path)
+        else {
+            return
+        }
+        try FileManager.default.removeItem(at: directory)
     }
 
-    private func downloadAndExtractModel(to directory: URL, progressHandler: ((Double) -> Void)?) async throws {
-        let parent = directory.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        let archiveURL = parent.appendingPathComponent(Constants.archiveName, isDirectory: false)
-        defer { try? FileManager.default.removeItem(at: archiveURL) }
-
-        let delegate = DownloadProgressDelegate { progress in
-            progressHandler?(progress * 0.85)
+    private func transcribeChunked(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        guard samples.isEmpty == false else {
+            return ASRTranscriptionResult(text: "", confidence: 0)
         }
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        let task = session.downloadTask(with: Constants.archiveURL)
+        guard let manager = self.manager else {
+            throw Self.makeError("SenseVoice model is not initialized.")
+        }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            delegate.onFinish = { temporaryURL, response in
-                do {
-                    if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                        throw Self.makeError("SenseVoice download failed with HTTP \(http.statusCode).")
-                    }
-                    if FileManager.default.fileExists(atPath: archiveURL.path) {
-                        try FileManager.default.removeItem(at: archiveURL)
-                    }
-                    try FileManager.default.moveItem(at: temporaryURL, to: archiveURL)
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        if samples.count <= self.maxSamplesPerPass {
+            let text = try await manager.transcribe(audio: samples)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
+        }
+
+        var transcriptions: [String] = []
+        var offset = 0
+        while offset < samples.count {
+            let end = min(offset + self.maxSamplesPerPass, samples.count)
+            let chunkText = try await manager.transcribe(audio: Array(samples[offset..<end]))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if chunkText.isEmpty == false {
+                transcriptions.append(chunkText)
             }
-            delegate.onError = { error in
-                continuation.resume(throwing: error)
-            }
-            task.resume()
+            offset = end
         }
 
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
-        }
-        progressHandler?(0.9)
-        try Self.extractArchive(archiveURL, into: parent)
-        progressHandler?(0.98)
+        let text = transcriptions.joined(separator: " ")
+        return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
     }
 
-    private static func extractArchive(_ archiveURL: URL, into directory: URL) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["xjf", archiveURL.path, "-C", directory.path]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw Self.makeError("Failed to extract SenseVoice model archive.")
-        }
-    }
-
-    private static func resolveSherpaExecutable() throws -> URL {
-        if let explicitPath = UserDefaults.standard.string(forKey: Constants.executableDefaultsKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            explicitPath.isEmpty == false,
-            FileManager.default.isExecutableFile(atPath: explicitPath)
-        {
-            return URL(fileURLWithPath: explicitPath)
-        }
-
-        let candidates = [
-            "/opt/homebrew/bin/sherpa-onnx-offline",
-            "/usr/local/bin/sherpa-onnx-offline",
-            "/usr/bin/sherpa-onnx-offline",
-        ]
-        if let match = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return URL(fileURLWithPath: match)
-        }
-
-        throw Self.makeError(
-            "SenseVoice requires sherpa-onnx-offline. Install sherpa-onnx or set the \(Constants.executableDefaultsKey) default to the executable path."
-        )
-    }
-
-    private static func runSherpa(
-        executableURL: URL,
-        modelDirectory: URL,
-        wavURL: URL
-    ) throws -> SenseVoiceCLIResult {
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = [
-            "--tokens=\(modelDirectory.appendingPathComponent(Constants.tokensFile).path)",
-            "--sense-voice-model=\(modelDirectory.appendingPathComponent(Constants.modelFile).path)",
-            "--sense-voice-language=en",
-            "--num-threads=2",
-            "--sense-voice-use-itn=1",
-            "--debug=0",
-            wavURL.path,
-        ]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let errorOutput = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-        guard process.terminationStatus == 0 else {
-            let message = errorOutput.isEmpty ? output : errorOutput
-            throw Self.makeError("SenseVoice transcription failed: \(message)")
-        }
-
-        for line in output.components(separatedBy: .newlines).reversed() {
-            guard line.contains("\"text\""), let data = line.data(using: .utf8) else { continue }
-            if let decoded = try? JSONDecoder().decode(SenseVoiceCLIResult.self, from: data) {
-                return decoded
-            }
-        }
-
-        throw Self.makeError("SenseVoice did not return a parseable transcription result.")
-    }
-
-    private static func writeTemporaryWAV(samples: [Float]) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sensevoice-\(UUID().uuidString).wav", isDirectory: false)
-        var data = Data()
-        let pcm = samples.map { sample -> Int16 in
-            let clamped = max(-1.0, min(1.0, sample))
-            return Int16(clamped * Float(Int16.max))
-        }
-        let dataBytes = UInt32(pcm.count * MemoryLayout<Int16>.size)
-
-        data.append(contentsOf: "RIFF".utf8)
-        data.append(UInt32(36 + dataBytes).littleEndianData)
-        data.append(contentsOf: "WAVEfmt ".utf8)
-        data.append(UInt32(16).littleEndianData)
-        data.append(UInt16(1).littleEndianData)
-        data.append(UInt16(1).littleEndianData)
-        data.append(UInt32(16_000).littleEndianData)
-        data.append(UInt32(16_000 * 2).littleEndianData)
-        data.append(UInt16(2).littleEndianData)
-        data.append(UInt16(16).littleEndianData)
-        data.append(contentsOf: "data".utf8)
-        data.append(dataBytes.littleEndianData)
-        pcm.withUnsafeBufferPointer { buffer in
-            let rawBuffer = UnsafeRawBufferPointer(buffer)
-            if let baseAddress = rawBuffer.baseAddress {
-                data.append(Data(bytes: baseAddress, count: rawBuffer.count))
-            }
-        }
-        try data.write(to: url, options: .atomic)
-        return url
+    private static var cacheDirectory: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
     }
 
     private static func makeError(_ description: String) -> NSError {
         NSError(domain: "SenseVoiceProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: description])
     }
+}
+#else
+final class SenseVoiceProvider: TranscriptionProvider {
+    let name = "SenseVoice"
+    var isAvailable: Bool { false }
+    var isReady: Bool { false }
 
-    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
-        private let onProgress: ((Double) -> Void)?
-        var onFinish: ((URL, URLResponse) -> Void)?
-        var onError: ((Error) -> Void)?
+    func prepare(progressHandler: ((Double) -> Void)?) async throws {
+        throw NSError(
+            domain: "SenseVoiceProvider",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "SenseVoice requires Apple Silicon."]
+        )
+    }
 
-        init(onProgress: ((Double) -> Void)?) {
-            self.onProgress = onProgress
-        }
-
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            guard let response = downloadTask.response else { return }
-            self.onFinish?(location, response)
-        }
-
-        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            if let error { self.onError?(error) }
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            downloadTask: URLSessionDownloadTask,
-            didWriteData bytesWritten: Int64,
-            totalBytesWritten: Int64,
-            totalBytesExpectedToWrite: Int64
-        ) {
-            guard totalBytesExpectedToWrite > 0 else { return }
-            self.onProgress?(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
-        }
+    func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        throw NSError(
+            domain: "SenseVoiceProvider",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "SenseVoice requires Apple Silicon."]
+        )
     }
 }
-
-private extension FixedWidthInteger {
-    var littleEndianData: Data {
-        var value = self.littleEndian
-        return Data(bytes: &value, count: MemoryLayout<Self>.size)
-    }
-}
+#endif

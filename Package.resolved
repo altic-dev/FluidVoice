@@ -1,5 +1,5 @@
 {
-  "originHash" : "05ea74bc26b0fcf88ae5bb3d58eee58199def2b550e5fd4a7f5b5c58bddb7b77",
+  "originHash" : "2573eafa06ec8b5beb07df650ac1591969041be985f51c6da67fc14d21281ae2",
   "pins" : [
     {
       "identity" : "appupdater",
@@ -31,10 +31,10 @@
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/altic-dev/FluidAudio.git",
+      "location" : "https://github.com/jayrodge/FluidAudio.git",
       "state" : {
-        "branch" : "B/cohere-coreml-asr",
-        "revision" : "72625bbccf9f6c797a540a1f1cb66a4cb60753eb"
+        "branch" : "add-sensevoice-coreml-for-fluidvoice",
+        "revision" : "6c722f8fa71248ea753311620f257aa7657fff24"
       }
     },
     {
