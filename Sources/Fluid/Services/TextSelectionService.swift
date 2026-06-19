@@ -66,6 +66,33 @@ final class TextSelectionService {
     /// the poll is bounded by `Self.clipboardCopyTimeoutMicros` so a missing selection (no
     /// pasteboard write) degrades to `nil` quickly rather than hanging.
     private func getSelectedTextViaClipboard() -> String? {
+        // Coordinate with TypingService's pasteboard session. A paste insertion keeps the
+        // user's clipboard "in flight" — it writes the to-be-pasted text, posts Cmd+V, and
+        // restores the snapshot on a background queue up to several seconds later — all under
+        // the shared `PasteboardSession`. If we sampled `changeCount` and posted our Cmd+C
+        // while that restore was still pending, the paste's writes would masquerade as our
+        // copy (wrong selection captured) and our snapshot/restore would fight the paste's.
+        // Acquiring the same session makes the two mutually exclusive (issue #259).
+        //
+        // This runs on the main thread for Write/Rewrite mode, so the acquire is BOUNDED. The
+        // timeout is load-bearing for deadlock-freedom, not just UX: the paste path holds the
+        // session while running its paste closure, which resolves the layout-aware Cmd+V key
+        // code via `LayoutAwareKeyCode`, which does `DispatchQueue.main.sync` when off-main. So a
+        // background paste can hold the session *and* be waiting on the main thread; a blocking
+        // acquire here would let the two wait on each other. The timed wait breaks that — on
+        // timeout we proceed unguarded (no worse than the uncoordinated behavior this guard
+        // replaces), the main run loop drains, the paste's `main.sync` completes, and the
+        // session frees. We always release before returning (the deferred `endExclusive`).
+        let acquiredSession = PasteboardSession.tryBeginExclusive(timeoutMicros: Self.pasteboardSessionWaitMicros)
+        if !acquiredSession {
+            self.diag("Clipboard fallback: proceeding without pasteboard session (wait timed out)")
+        }
+        defer {
+            if acquiredSession {
+                PasteboardSession.endExclusive()
+            }
+        }
+
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot.capture(from: pasteboard)
         let changeCountBeforeCopy = pasteboard.changeCount
@@ -153,6 +180,14 @@ final class TextSelectionService {
     /// Kept tight because this runs on the main thread; the copy normally completes in tens
     /// of milliseconds, and exceeding this just means "treat as no selection."
     private static let clipboardCopyTimeoutMicros: useconds_t = 300_000
+
+    /// Upper bound on how long to wait for an in-flight `TypingService` pasteboard session to
+    /// finish before reading the selection. Covers TypingService's full async-restore window
+    /// (`restoreDelayMicros` = 5 s) plus margin, so a genuinely pending paste restore completes
+    /// before we sample `changeCount`. Capped so a stuck session can't freeze the main thread:
+    /// on timeout we proceed without the session guard (no worse than the prior behavior). In
+    /// practice the session is released as soon as the paste is verified, far sooner than this.
+    private static let pasteboardSessionWaitMicros: useconds_t = 5_500_000
 
     /// Restores `snapshot` onto `pasteboard`, then briefly watches for a *late* pasteboard
     /// write and re-restores if one lands.

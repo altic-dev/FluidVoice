@@ -43,8 +43,6 @@ final class TypingService {
     }
 
     private static let focusSnapshotQueue = DispatchQueue(label: "TypingService.FocusSnapshot")
-    private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
-    private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
     private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
 
@@ -552,11 +550,11 @@ final class TypingService {
         restoreDelayMicros: useconds_t,
         action: () -> Bool
     ) -> Bool {
-        Self.pasteboardSessionSemaphore.wait()
+        PasteboardSession.beginExclusive()
         var releasesPasteboardSessionOnReturn = true
         defer {
             if releasesPasteboardSessionOnReturn {
-                Self.pasteboardSessionSemaphore.signal()
+                PasteboardSession.endExclusive()
             }
         }
 
@@ -579,8 +577,8 @@ final class TypingService {
         }
 
         releasesPasteboardSessionOnReturn = false
-        Self.pasteboardRestoreQueue.async {
-            defer { Self.pasteboardSessionSemaphore.signal() }
+        PasteboardSession.restoreQueue.async {
+            defer { PasteboardSession.endExclusive() }
             _ = self.waitForFocusedTextVerification(
                 from: focusedTextSnapshot,
                 expectedText: text,

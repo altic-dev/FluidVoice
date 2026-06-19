@@ -2369,6 +2369,53 @@ final class DictationE2ETests: XCTestCase {
 
         XCTAssertEqual(first, second)
     }
+
+    // MARK: - PasteboardSession (shared pasteboard mutual-exclusion guard, issue #259)
+
+    func testPasteboardSession_isFreeInitiallyAndReleases() {
+        // Acquiring a free session must succeed immediately; after releasing, the next
+        // acquire must succeed again (the signal is balanced, value returns to 1).
+        XCTAssertTrue(PasteboardSession.tryBeginExclusive(timeoutMicros: 50_000))
+        PasteboardSession.endExclusive()
+        XCTAssertTrue(PasteboardSession.tryBeginExclusive(timeoutMicros: 50_000))
+        PasteboardSession.endExclusive()
+    }
+
+    func testPasteboardSession_blocksWhileHeldThenSucceedsAfterRelease() {
+        // Model the real race: a paste path holds the session on a background queue while the
+        // (main-thread) selection-read path tries to acquire it. The bounded attempt must FAIL
+        // while held, then SUCCEED once the holder releases — proving mutual exclusion and the
+        // bounded-wait fallback both work.
+        let acquiredByHolder = DispatchSemaphore(value: 0)
+        let holderMayRelease = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            PasteboardSession.beginExclusive()
+            acquiredByHolder.signal()
+            holderMayRelease.wait()
+            PasteboardSession.endExclusive()
+        }
+
+        // Wait until the background holder owns the session.
+        XCTAssertEqual(acquiredByHolder.wait(timeout: .now() + 2.0), .success)
+
+        // While held, a short bounded attempt must time out (not acquire, not hang).
+        XCTAssertFalse(
+            PasteboardSession.tryBeginExclusive(timeoutMicros: 100_000),
+            "Session is held by the background holder; bounded attempt must time out"
+        )
+
+        // Release the holder; the session becomes free.
+        holderMayRelease.signal()
+
+        // Now an acquire must succeed (poll briefly to absorb the cross-thread handoff).
+        var acquired = false
+        for _ in 0..<20 where !acquired {
+            acquired = PasteboardSession.tryBeginExclusive(timeoutMicros: 100_000)
+        }
+        XCTAssertTrue(acquired, "Session must be acquirable after the holder releases")
+        PasteboardSession.endExclusive()
+    }
 }
 
 extension DictationE2ETests {
