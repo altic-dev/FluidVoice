@@ -594,7 +594,7 @@ struct OnboardingFlowView: View {
             case .multipleLanguages:
                 return "Uses Parakeet TDT v3 or Cohere"
             case .other:
-                return "Whisper and manual choices"
+                return "Whisper, Apple Speech (no download), and manual choices"
             }
         }
     }
@@ -693,8 +693,8 @@ struct OnboardingFlowView: View {
 
     private var onboardingModelOptions: [SettingsStore.SpeechModel] {
         let candidates: [SettingsStore.SpeechModel] = CPUArchitecture.isAppleSilicon
-            ? [.parakeetTDT, .cohereTranscribeSixBit, .parakeetRealtime, .parakeetTDTv2, .whisperBase, .whisperSmall]
-            : [.whisperBase, .whisperTiny, .whisperSmall, .whisperMedium]
+            ? [.parakeetTDT, .cohereTranscribeSixBit, .parakeetRealtime, .parakeetTDTv2, .appleSpeech, .appleSpeechAnalyzer, .whisperBase, .whisperSmall]
+            : [.appleSpeech, .appleSpeechAnalyzer, .whisperBase, .whisperTiny, .whisperSmall, .whisperMedium]
 
         var seenModelIDs = Set<String>()
         return candidates.filter { model in
