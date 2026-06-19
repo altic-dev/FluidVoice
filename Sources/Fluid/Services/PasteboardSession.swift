@@ -47,10 +47,11 @@ enum PasteboardSession {
     /// during its brief key-code-lookup window a background paste holds the session *and* is
     /// waiting on the main thread — if the main-thread selection read blocked on the session
     /// forever, the two would wait on each other. The timeout breaks that cycle: on expiry the
-    /// selection read returns, the main run loop drains, the paste's `main.sync` completes, and
-    /// the session is released. On timeout the selection read proceeds without the lock — no
-    /// worse than the uncoordinated behavior that preceded this guard. **Do not convert this to
-    /// an unbounded blocking wait: the timeout is what prevents the inversion from hanging.**
+    /// selection read skips its clipboard fallback, the main run loop drains, the paste's
+    /// `main.sync` completes, and the session is released. Callers must not proceed to mutate
+    /// or sample the pasteboard unguarded after a timeout, because that re-opens the
+    /// cross-session race this guard exists to prevent. **Do not convert this to an unbounded
+    /// blocking wait: the timeout is what prevents the inversion from hanging.**
     static func tryBeginExclusive(timeoutMicros: useconds_t) -> Bool {
         let deadline = DispatchTime.now() + .microseconds(Int(timeoutMicros))
         return self.semaphore.wait(timeout: deadline) == .success

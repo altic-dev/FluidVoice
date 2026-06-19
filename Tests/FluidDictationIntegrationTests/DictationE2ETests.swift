@@ -2335,7 +2335,12 @@ final class DictationE2ETests: XCTestCase {
             run: run
         )
     }
+}
 
+// Shared-primitive coverage for the Write Mode clipboard fallback (issue #259). Kept in an
+// extension so these tests do not add to the main `DictationE2ETests` class body, which is
+// at the `type_body_length` limit.
+extension DictationE2ETests {
     // MARK: - LayoutAwareKeyCode (shared Cmd+C / Cmd+V key-code lookup, issue #259)
 
     func testLayoutAwareKeyCode_resolvesLatinCharactersOnCurrentLayout() {

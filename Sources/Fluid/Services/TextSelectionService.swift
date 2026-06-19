@@ -74,23 +74,24 @@ final class TextSelectionService {
         // copy (wrong selection captured) and our snapshot/restore would fight the paste's.
         // Acquiring the same session makes the two mutually exclusive (issue #259).
         //
-        // This runs on the main thread for Write/Rewrite mode, so the acquire is BOUNDED. The
-        // timeout is load-bearing for deadlock-freedom, not just UX: the paste path holds the
-        // session while running its paste closure, which resolves the layout-aware Cmd+V key
-        // code via `LayoutAwareKeyCode`, which does `DispatchQueue.main.sync` when off-main. So a
-        // background paste can hold the session *and* be waiting on the main thread; a blocking
-        // acquire here would let the two wait on each other. The timed wait breaks that — on
-        // timeout we proceed unguarded (no worse than the uncoordinated behavior this guard
-        // replaces), the main run loop drains, the paste's `main.sync` completes, and the
-        // session frees. We always release before returning (the deferred `endExclusive`).
+        // This runs on the main thread for Write/Rewrite mode, so the acquire is short and
+        // BOUNDED. The timeout is load-bearing for deadlock-freedom, not just UX: the paste
+        // path holds the session while running its paste closure, which resolves the
+        // layout-aware Cmd+V key code via `LayoutAwareKeyCode`, which does
+        // `DispatchQueue.main.sync` when off-main. So a background paste can hold the session
+        // *and* be waiting on the main thread; a blocking acquire here would let the two wait
+        // on each other. The short timed wait breaks that inversion. On timeout we skip the
+        // clipboard fallback entirely (degrading to "no selection") rather than sampling
+        // `changeCount` or posting Cmd+C without the guard, which would re-open the
+        // cross-session race this coordination prevents. We always release before returning
+        // (the deferred `endExclusive`).
         let acquiredSession = PasteboardSession.tryBeginExclusive(timeoutMicros: Self.pasteboardSessionWaitMicros)
-        if !acquiredSession {
-            self.diag("Clipboard fallback: proceeding without pasteboard session (wait timed out)")
+        guard acquiredSession else {
+            self.diag("Clipboard fallback: skipped because pasteboard session is busy")
+            return nil
         }
         defer {
-            if acquiredSession {
-                PasteboardSession.endExclusive()
-            }
+            PasteboardSession.endExclusive()
         }
 
         let pasteboard = NSPasteboard.general
@@ -115,10 +116,16 @@ final class TextSelectionService {
         // Read the copied selection only if the pasteboard actually changed.
         let copiedText = didChange ? pasteboard.string(forType: .string) : nil
 
-        // Always restore the user's previous pasteboard, then defend that restore against a
-        // late synthetic-copy write (a slow/busy target app processing our Cmd+C after the
-        // read timeout would otherwise clobber the restored clipboard — see the method doc).
-        self.restoreClipboardDefensively(snapshot, to: pasteboard)
+        // Restore only in response to a real pasteboard write. If Cmd+C never changed the
+        // pasteboard (usually no selection), clearing and rewriting the snapshot would degrade
+        // complex clipboard contents that `data(forType:)` could not faithfully capture. The
+        // helper still watches briefly for a late copy write and restores if one appears.
+        self.restoreClipboardDefensively(
+            snapshot,
+            to: pasteboard,
+            changeCountBeforeCopy: changeCountBeforeCopy,
+            didObserveCopyWrite: didChange
+        )
 
         guard didChange else {
             self.diag("Clipboard fallback: pasteboard unchanged within timeout (no selection?)")
@@ -181,36 +188,46 @@ final class TextSelectionService {
     /// of milliseconds, and exceeding this just means "treat as no selection."
     private static let clipboardCopyTimeoutMicros: useconds_t = 300_000
 
-    /// Upper bound on how long to wait for an in-flight `TypingService` pasteboard session to
-    /// finish before reading the selection. Covers TypingService's full async-restore window
-    /// (`restoreDelayMicros` = 5 s) plus margin, so a genuinely pending paste restore completes
-    /// before we sample `changeCount`. Capped so a stuck session can't freeze the main thread:
-    /// on timeout we proceed without the session guard (no worse than the prior behavior). In
-    /// practice the session is released as soon as the paste is verified, far sooner than this.
-    private static let pasteboardSessionWaitMicros: useconds_t = 5_500_000
+    /// Upper bound on how long to wait for an in-flight `TypingService` pasteboard session
+    /// before reading the selection. Kept comparable to `clipboardCopyTimeoutMicros`: long
+    /// enough to absorb normal handoff jitter, short enough that a paste verification timeout
+    /// in AX-opaque apps cannot freeze the main thread for seconds. If this expires, the
+    /// clipboard fallback is skipped rather than run without the session guard.
+    private static let pasteboardSessionWaitMicros: useconds_t = 250_000
 
-    /// Restores `snapshot` onto `pasteboard`, then briefly watches for a *late* pasteboard
-    /// write and re-restores if one lands.
+    /// Restores `snapshot` onto `pasteboard` only after observing a pasteboard write, then
+    /// briefly watches for a *late* pasteboard write and re-restores if one lands.
     ///
     /// The hazard: our synthetic Cmd+C is delivered asynchronously. If the target app is
     /// slow/busy it may process the copy *after* `clipboardCopyTimeoutMicros` has elapsed and
-    /// we've already restored — its delayed write would then clobber the user's clipboard,
-    /// leaving the copied selection (or stale data) where the user's content should be. That
-    /// breaks the "always restore the user's clipboard" guarantee.
+    /// we've already given up — its delayed write would then clobber the user's clipboard,
+    /// leaving the copied selection (or stale data) where the user's content should be.
     ///
-    /// Defense: after restoring, record the change count our own restore produced and poll
-    /// for a short, bounded settle window. Any further change is an external write — almost
-    /// certainly the app's delayed copy — so we restore again (capped at `maxLateCopyRestores`
-    /// re-restores within `lateCopySettleMicros` total). The loop is doubly bounded (time and
-    /// retry count) so it cannot hang; because each pass ends by re-restoring the user's
-    /// snapshot, it cannot leave the selection text on the clipboard.
+    /// Defense: if the initial copy write landed, restore immediately; otherwise leave the
+    /// pasteboard untouched. Then record the relevant change count and poll for a short,
+    /// bounded settle window. Any further change is an external write — almost certainly the
+    /// app's delayed copy — so we restore then (capped at `maxLateCopyRestores` restores within
+    /// `lateCopySettleMicros` total). The loop is doubly bounded (time and retry count) so it
+    /// cannot hang. Crucially, a timed-out Cmd+C with no late write never clears and rewrites
+    /// the pasteboard, preserving complex clipboard contents that a snapshot may only partially
+    /// capture.
     ///
     /// Runs synchronously on the caller's thread (the main thread for Write/Rewrite mode),
     /// consistent with the copy-wait above; the added latency is bounded by
     /// `lateCopySettleMicros` and only paid on this last-resort fallback path.
-    private func restoreClipboardDefensively(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
-        snapshot.restore(to: pasteboard)
-        var lastRestoreChangeCount = pasteboard.changeCount
+    private func restoreClipboardDefensively(
+        _ snapshot: PasteboardSnapshot,
+        to pasteboard: NSPasteboard,
+        changeCountBeforeCopy: Int,
+        didObserveCopyWrite: Bool
+    ) {
+        var lastObservedChangeCount: Int
+        if didObserveCopyWrite {
+            snapshot.restore(to: pasteboard)
+            lastObservedChangeCount = pasteboard.changeCount
+        } else {
+            lastObservedChangeCount = changeCountBeforeCopy
+        }
 
         var restoresRemaining = Self.maxLateCopyRestores
         let pollMicros: useconds_t = 10_000
@@ -220,22 +237,23 @@ final class TextSelectionService {
             usleep(pollMicros)
             waited += pollMicros
 
-            guard pasteboard.changeCount != lastRestoreChangeCount else { continue }
+            guard pasteboard.changeCount != lastObservedChangeCount else { continue }
 
-            // A write landed after our restore — the target app's delayed synthetic copy
-            // clobbering the user's clipboard. Restore the user's snapshot again.
+            // A write landed after our restore or after the initial copy timeout — the target
+            // app's delayed synthetic copy clobbering the user's clipboard. Restore the user's
+            // snapshot in response to that observed write.
             guard restoresRemaining > 0 else {
                 self.diag("Clipboard fallback: late write persisted past \(Self.maxLateCopyRestores) restores; leaving user clipboard restored as of last attempt")
                 return
             }
             restoresRemaining -= 1
             snapshot.restore(to: pasteboard)
-            lastRestoreChangeCount = pasteboard.changeCount
+            lastObservedChangeCount = pasteboard.changeCount
             self.diag("Clipboard fallback: re-restored user clipboard after a late synthetic-copy write")
         }
 
         // Reconcile a write that landed in the final poll interval (just past the loop edge).
-        if pasteboard.changeCount != lastRestoreChangeCount, restoresRemaining > 0 {
+        if pasteboard.changeCount != lastObservedChangeCount, restoresRemaining > 0 {
             snapshot.restore(to: pasteboard)
             self.diag("Clipboard fallback: final re-restore after a late write at the settle-window edge")
         }
