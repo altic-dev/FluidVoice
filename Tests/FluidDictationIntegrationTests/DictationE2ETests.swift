@@ -511,6 +511,76 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(SimpleUpdater.isRollbackVersion(nil, differentFrom: "1.5.11-beta.3"))
     }
 
+    // MARK: - TypingService selection-range safety (#319)
+
+    func testSanitizedSelectedTextRange_rejectsNSNotFoundLocation() {
+        // macOS 26 reports {location: NSNotFound, length: 0} when there is no valid caret.
+        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: NSNotFound, length: 0)))
+    }
+
+    func testSanitizedSelectedTextRange_rejectsNegativeLocationOrLength() {
+        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: -1, length: 0)))
+        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: 5, length: -3)))
+    }
+
+    func testSanitizedSelectedTextRange_passesValidRangeUnchanged() {
+        let valid = TypingService.sanitizedSelectedTextRange(CFRange(location: 12, length: 4))
+        XCTAssertEqual(valid?.location, 12)
+        XCTAssertEqual(valid?.length, 4)
+    }
+
+    func testCaretMovedExpectedDistance_nsNotFoundLocationDoesNotTrap() {
+        // Regression for #319: before.location == NSNotFound (Int.max) must not trap on
+        // `before.location + expectedLength`; it should simply report "not moved as expected".
+        let before = CFRange(location: NSNotFound, length: 0)
+        let after = CFRange(location: 5, length: 0)
+        XCTAssertFalse(
+            TypingService.caretMovedExpectedDistance(before: before, after: after, expectedLength: 5, tolerance: 2)
+        )
+    }
+
+    func testCaretMovedExpectedDistance_withinToleranceReturnsTrue() {
+        let before = CFRange(location: 10, length: 0)
+        let after = CFRange(location: 16, length: 0) // expected 15, delta 1 <= tolerance 2
+        XCTAssertTrue(
+            TypingService.caretMovedExpectedDistance(before: before, after: after, expectedLength: 5, tolerance: 2)
+        )
+    }
+
+    func testCaretMovedExpectedDistance_outsideToleranceReturnsFalse() {
+        let before = CFRange(location: 10, length: 0)
+        let after = CFRange(location: 40, length: 0) // expected 15, delta 25 > tolerance 2
+        XCTAssertFalse(
+            TypingService.caretMovedExpectedDistance(before: before, after: after, expectedLength: 5, tolerance: 2)
+        )
+    }
+
+    func testCaretMovedExpectedDistance_nonCollapsedSelectionReturnsFalse() {
+        let before = CFRange(location: 10, length: 0)
+        let after = CFRange(location: 15, length: 3) // length != 0 => not a settled caret
+        XCTAssertFalse(
+            TypingService.caretMovedExpectedDistance(before: before, after: after, expectedLength: 5, tolerance: 2)
+        )
+    }
+
+    func testBoundedSelectionRange_rejectsNSNotFoundLocationWithPositiveLength() {
+        // Regression for the #319 crash class in TextSelectionService: a {location: NSNotFound, length: >0}
+        // range slips past a `!= kCFNotFound` guard and must not trap on `location + length`.
+        XCTAssertNil(TextSelectionService.boundedSelectionRange(CFRange(location: NSNotFound, length: 4), textLength: 100))
+    }
+
+    func testBoundedSelectionRange_rejectsOutOfBoundsAndEmpty() {
+        XCTAssertNil(TextSelectionService.boundedSelectionRange(CFRange(location: 98, length: 5), textLength: 100))
+        XCTAssertNil(TextSelectionService.boundedSelectionRange(CFRange(location: 10, length: 0), textLength: 100))
+        XCTAssertNil(TextSelectionService.boundedSelectionRange(CFRange(location: -1, length: 4), textLength: 100))
+    }
+
+    func testBoundedSelectionRange_acceptsValidRange() {
+        let valid = TextSelectionService.boundedSelectionRange(CFRange(location: 10, length: 5), textLength: 100)
+        XCTAssertEqual(valid?.location, 10)
+        XCTAssertEqual(valid?.length, 5)
+    }
+
     private static func modelDirectoryForRun() -> URL {
         // Use a stable path on CI so GitHub Actions cache can speed up runs.
         if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||

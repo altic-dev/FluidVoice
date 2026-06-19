@@ -981,7 +981,18 @@ final class TypingService {
 
         var range = CFRange()
         let ok = AXValueGetValue(unsafeBitCast(axValue, to: AXValue.self), .cfRange, &range)
-        return ok ? range : nil
+        return ok ? Self.sanitizedSelectedTextRange(range) : nil
+    }
+
+    /// Rejects selection ranges that macOS reports when there is no valid caret/selection.
+    /// On macOS 26, `kAXSelectedTextRangeAttribute` can come back as `{location: NSNotFound, length: 0}`
+    /// (`NSNotFound == Int.max`); feeding that raw location into caret arithmetic
+    /// (`before.location + expectedLength`) overflows and traps. Returning nil here keeps both
+    /// callers (`captureFocusedTextSnapshot`, `insertTextAtCursorUsingSelectedRange`) on their
+    /// existing nil-handling paths instead of operating on a poisoned range.
+    static func sanitizedSelectedTextRange(_ range: CFRange) -> CFRange? {
+        guard range.location >= 0, range.location != NSNotFound, range.length >= 0 else { return nil }
+        return range
     }
 
     private func captureFocusedTextSnapshot() -> FocusedTextSnapshot? {
@@ -1062,13 +1073,9 @@ final class TypingService {
 
             if let before = snapshot.appScriptSelectedRange,
                let after = current.appScriptSelectedRange,
-               after.length == 0
+               Self.caretMovedExpectedDistance(before: before, after: after, expectedLength: expectedLength, tolerance: tolerance)
             {
-                let expectedCaretLocation = before.location + expectedLength
-                let caretDelta = abs(after.location - expectedCaretLocation)
-                if caretDelta <= tolerance {
-                    return .appScriptCaretMovedExpectedDistance
-                }
+                return .appScriptCaretMovedExpectedDistance
             }
 
             if let currentValue = current.value,
@@ -1080,17 +1087,31 @@ final class TypingService {
 
             if let before = snapshot.selectedRange,
                let after = current.selectedRange,
-               after.length == 0
+               Self.caretMovedExpectedDistance(before: before, after: after, expectedLength: expectedLength, tolerance: tolerance)
             {
-                let expectedCaretLocation = before.location + expectedLength
-                let caretDelta = abs(after.location - expectedCaretLocation)
-                if caretDelta <= tolerance {
-                    return .caretMovedExpectedDistance
-                }
+                return .caretMovedExpectedDistance
             }
         }
 
         return .timeout
+    }
+
+    /// Returns true when `after`'s collapsed caret sits within `tolerance` of where inserting
+    /// `expectedLength` characters at `before` should have left it. Overflow-safe: a selection
+    /// `location` of `NSNotFound`/`Int.max` (which macOS 26 can report) no longer traps on the
+    /// `before.location + expectedLength` addition that crashed the deferred verification path (#319).
+    static func caretMovedExpectedDistance(
+        before: CFRange,
+        after: CFRange,
+        expectedLength: Int,
+        tolerance: Int
+    ) -> Bool {
+        guard after.length == 0, tolerance >= 0 else { return false }
+        let (expectedCaretLocation, addOverflowed) = before.location.addingReportingOverflow(expectedLength)
+        guard !addOverflowed else { return false }
+        let (caretDelta, subOverflowed) = after.location.subtractingReportingOverflow(expectedCaretLocation)
+        guard !subOverflowed else { return false }
+        return caretDelta.magnitude <= UInt(tolerance)
     }
 
     private func captureAppScriptTextSnapshot(forBundleIdentifier bundleIdentifier: String?) -> AppScriptTextSnapshot? {

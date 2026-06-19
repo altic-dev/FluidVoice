@@ -108,7 +108,7 @@ final class TextSelectionService {
             return nil
         }
 
-        guard range.location != kCFNotFound, range.length > 0 else {
+        guard range.location >= 0, range.location != NSNotFound, range.length > 0 else {
             self.diag("Selected range empty (location=\(range.location), length=\(range.length))")
             return nil
         }
@@ -121,17 +121,26 @@ final class TextSelectionService {
         }
 
         let nsText = fullText as NSString
-        guard range.location >= 0,
-              range.length > 0,
-              range.location + range.length <= nsText.length
-        else {
+        guard let safeRange = Self.boundedSelectionRange(range, textLength: nsText.length) else {
             self.diag("Selected range out of bounds (textLen=\(nsText.length), location=\(range.location), length=\(range.length))")
             return nil
         }
 
-        let extracted = nsText.substring(with: NSRange(location: range.location, length: range.length))
+        let extracted = nsText.substring(with: safeRange)
         self.diag("Selected range extraction succeeded (chars=\(extracted.count))")
         return extracted
+    }
+
+    /// Overflow-safe bounds validation for an AX-derived selection range against `textLength`.
+    /// Returns the in-bounds `NSRange`, or nil when the range is invalid or out of bounds.
+    /// macOS 26 can report `kAXSelectedTextRangeAttribute` with `location == NSNotFound` (`Int.max`);
+    /// using `addingReportingOverflow` here prevents the `location + length` integer-overflow trap
+    /// such a value would otherwise cause (the same #319 crash class as TypingService).
+    static func boundedSelectionRange(_ range: CFRange, textLength: Int) -> NSRange? {
+        guard range.location >= 0, range.location != NSNotFound, range.length > 0 else { return nil }
+        let (rangeEnd, overflowed) = range.location.addingReportingOverflow(range.length)
+        guard !overflowed, rangeEnd <= textLength else { return nil }
+        return NSRange(location: range.location, length: range.length)
     }
 
     private func describe(_ error: AXError) -> String {
