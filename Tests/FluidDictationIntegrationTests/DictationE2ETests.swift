@@ -513,20 +513,27 @@ final class DictationE2ETests: XCTestCase {
 
     // MARK: - TypingService selection-range safety (#319)
 
-    func testSanitizedSelectedTextRange_rejectsNSNotFoundLocation() {
-        // macOS 26 reports {location: NSNotFound, length: 0} when there is no valid caret.
-        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: NSNotFound, length: 0)))
+    func testClampedInsertionRange_nsNotFoundLocationClampsToEnd() {
+        // Regression for #319: macOS 26 can report {location: NSNotFound, length: 0}. The AX-direct
+        // insertion path must clamp that sentinel to the end of the field ({textLength, 0}) so the
+        // dictated text is inserted at the end, NOT bail (which would fall through to a whole-field
+        // overwrite via setTextViaValue and lose the field's existing contents).
+        let clamped = TypingService.clampedInsertionRange(CFRange(location: NSNotFound, length: 0), textLength: 42)
+        XCTAssertEqual(clamped.location, 42)
+        XCTAssertEqual(clamped.length, 0)
     }
 
-    func testSanitizedSelectedTextRange_rejectsNegativeLocationOrLength() {
-        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: -1, length: 0)))
-        XCTAssertNil(TypingService.sanitizedSelectedTextRange(CFRange(location: 5, length: -3)))
+    func testClampedInsertionRange_clampsLocationAndLengthIntoBounds() {
+        // Over-long location/length get clamped to stay inside the field.
+        let clamped = TypingService.clampedInsertionRange(CFRange(location: 100, length: 50), textLength: 20)
+        XCTAssertEqual(clamped.location, 20)
+        XCTAssertEqual(clamped.length, 0)
     }
 
-    func testSanitizedSelectedTextRange_passesValidRangeUnchanged() {
-        let valid = TypingService.sanitizedSelectedTextRange(CFRange(location: 12, length: 4))
-        XCTAssertEqual(valid?.location, 12)
-        XCTAssertEqual(valid?.length, 4)
+    func testClampedInsertionRange_passesValidRangeUnchanged() {
+        let clamped = TypingService.clampedInsertionRange(CFRange(location: 5, length: 3), textLength: 20)
+        XCTAssertEqual(clamped.location, 5)
+        XCTAssertEqual(clamped.length, 3)
     }
 
     func testCaretMovedExpectedDistance_nsNotFoundLocationDoesNotTrap() {

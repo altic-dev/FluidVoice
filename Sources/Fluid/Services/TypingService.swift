@@ -981,18 +981,13 @@ final class TypingService {
 
         var range = CFRange()
         let ok = AXValueGetValue(unsafeBitCast(axValue, to: AXValue.self), .cfRange, &range)
-        return ok ? Self.sanitizedSelectedTextRange(range) : nil
-    }
-
-    /// Rejects selection ranges that macOS reports when there is no valid caret/selection.
-    /// On macOS 26, `kAXSelectedTextRangeAttribute` can come back as `{location: NSNotFound, length: 0}`
-    /// (`NSNotFound == Int.max`); feeding that raw location into caret arithmetic
-    /// (`before.location + expectedLength`) overflows and traps. Returning nil here keeps both
-    /// callers (`captureFocusedTextSnapshot`, `insertTextAtCursorUsingSelectedRange`) on their
-    /// existing nil-handling paths instead of operating on a poisoned range.
-    static func sanitizedSelectedTextRange(_ range: CFRange) -> CFRange? {
-        guard range.location >= 0, range.location != NSNotFound, range.length >= 0 else { return nil }
-        return range
+        // Return the raw range. macOS 26 can report a sentinel `{location: NSNotFound, length: 0}`,
+        // but both callers handle it safely: `insertTextAtCursorUsingSelectedRange` clamps the
+        // location to the field length (inserting at the end, preserving contents), and the deferred
+        // verification path runs it through the overflow-safe `caretMovedExpectedDistance`. Rejecting
+        // the sentinel in this shared getter instead caused approach-0 insertion to bail to a
+        // whole-field overwrite (#319 regression), so sanitization stays out of the getter.
+        return ok ? range : nil
     }
 
     private func captureFocusedTextSnapshot() -> FocusedTextSnapshot? {
@@ -1194,9 +1189,10 @@ final class TypingService {
         let currentNSString = currentValue as NSString
         let maxLen = currentNSString.length
 
-        let safeLoc = max(0, min(range.location, maxLen))
-        let safeLen = max(0, min(range.length, maxLen - safeLoc))
-        range = CFRange(location: safeLoc, length: safeLen)
+        // Clamp the AX-reported range into the field. A macOS 26 sentinel location of NSNotFound
+        // (Int.max) clamps to the end of the field, so the text is inserted at the end rather than
+        // triggering a bail-out (and the whole-field overwrite that approach 1 would perform). #319.
+        range = Self.clampedInsertionRange(range, textLength: maxLen)
 
         let mutable = NSMutableString(string: currentValue)
         mutable.replaceCharacters(in: NSRange(location: range.location, length: range.length), with: text)
@@ -1217,6 +1213,18 @@ final class TypingService {
 
         self.log("[TypingService] SUCCESS: Inserted text using selected range + value")
         return true
+    }
+
+    /// Clamps an AX-derived selection range into a field of `textLength` UTF-16 units.
+    /// A sentinel location of `NSNotFound` (`Int.max`), which macOS 26 can report when there is no
+    /// valid caret, clamps to the end of the field (`{textLength, 0}`) so insertion appends rather
+    /// than bailing out. The returned location/length are always within `0...textLength`, so callers
+    /// can safely add a (bounded) inserted length without overflowing (#319).
+    static func clampedInsertionRange(_ range: CFRange, textLength: Int) -> CFRange {
+        let safeMax = max(0, textLength)
+        let safeLoc = max(0, min(range.location, safeMax))
+        let safeLen = max(0, min(range.length, safeMax - safeLoc))
+        return CFRange(location: safeLoc, length: safeLen)
     }
 
     // Why is it working now? And why is it not working now?
