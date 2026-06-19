@@ -1044,7 +1044,12 @@ struct OnboardingFlowView: View {
                                 .foregroundStyle(self.theme.palette.primaryText)
 
                             VStack(spacing: 8) {
-                                ForEach(Array(self.onboardingAlternativeModels.prefix(3))) { model in
+                                // Cap of 5 fits the longest alternatives list any branch
+                                // produces (Intel + macOS 26: Apple Speech, Apple Speech
+                                // Analyzer, Whisper Tiny/Small/Medium), so adding the Apple
+                                // offline models never evicts a previously reachable Whisper
+                                // option.
+                                ForEach(Array(self.onboardingAlternativeModels.prefix(5))) { model in
                                     self.onboardingModelOptionRow(for: model)
                                 }
                             }
