@@ -1,3 +1,5 @@
+import Carbon.HIToolbox
+import CoreGraphics
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -2332,6 +2334,40 @@ final class DictationE2ETests: XCTestCase {
             ],
             run: run
         )
+    }
+
+    // MARK: - LayoutAwareKeyCode (shared Cmd+C / Cmd+V key-code lookup, issue #259)
+
+    func testLayoutAwareKeyCode_resolvesLatinCharactersOnCurrentLayout() {
+        // "c" and "v" exist on every Latin keyboard layout, so the lookup must resolve a real
+        // key code rather than returning the fallback. We pass an out-of-band sentinel as the
+        // fallback so a successful lookup is provably distinct from the fallback path.
+        let sentinel = CGKeyCode(0xFFFF)
+        let cKey = LayoutAwareKeyCode.virtualKeyCode(for: "c", qwertyFallback: sentinel)
+        let vKey = LayoutAwareKeyCode.virtualKeyCode(for: "v", qwertyFallback: sentinel)
+
+        XCTAssertNotEqual(cKey, sentinel, "Expected to resolve a real key code for \"c\"")
+        XCTAssertNotEqual(vKey, sentinel, "Expected to resolve a real key code for \"v\"")
+        XCTAssertLessThan(cKey, 128, "Virtual key codes are in 0..<128")
+        XCTAssertLessThan(vKey, 128, "Virtual key codes are in 0..<128")
+    }
+
+    func testLayoutAwareKeyCode_fallsBackForUnmappableCharacter() {
+        // No physical key produces this emoji, so the scan finds nothing and must return the
+        // supplied fallback — exercising the layout-unavailable / not-found path deterministically.
+        let sentinel = CGKeyCode(0xABCD)
+        let result = LayoutAwareKeyCode.virtualKeyCode(for: "🍎", qwertyFallback: sentinel)
+
+        XCTAssertEqual(result, sentinel)
+    }
+
+    func testLayoutAwareKeyCode_isDeterministicAcrossCalls() {
+        // Re-evaluated on every call (so a runtime layout switch is picked up) but stable for a
+        // fixed layout: two back-to-back lookups must agree.
+        let first = LayoutAwareKeyCode.virtualKeyCode(for: "v", qwertyFallback: CGKeyCode(kVK_ANSI_V))
+        let second = LayoutAwareKeyCode.virtualKeyCode(for: "v", qwertyFallback: CGKeyCode(kVK_ANSI_V))
+
+        XCTAssertEqual(first, second)
     }
 }
 

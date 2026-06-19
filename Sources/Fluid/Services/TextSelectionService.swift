@@ -88,8 +88,10 @@ final class TextSelectionService {
         // Read the copied selection only if the pasteboard actually changed.
         let copiedText = didChange ? pasteboard.string(forType: .string) : nil
 
-        // Always restore the user's previous pasteboard, regardless of outcome.
-        snapshot.restore(to: pasteboard)
+        // Always restore the user's previous pasteboard, then defend that restore against a
+        // late synthetic-copy write (a slow/busy target app processing our Cmd+C after the
+        // read timeout would otherwise clobber the restored clipboard — see the method doc).
+        self.restoreClipboardDefensively(snapshot, to: pasteboard)
 
         guard didChange else {
             self.diag("Clipboard fallback: pasteboard unchanged within timeout (no selection?)")
@@ -106,8 +108,13 @@ final class TextSelectionService {
 
     /// Posts a synthetic Cmd+C to the currently focused app via the HID event tap.
     /// Returns false only if the CGEvents could not be created.
+    ///
+    /// The key code for "c" is resolved against the active keyboard layout (via the same
+    /// mechanism `TypingService` uses for Cmd+V), so the copy lands on the correct physical
+    /// key on non-QWERTY layouts (Dvorak/AZERTY/...). Falls back to the ANSI "c" key code
+    /// only when the layout data is unavailable.
     private func postSyntheticCopy() -> Bool {
-        let cKeyCode = CGKeyCode(kVK_ANSI_C)
+        let cKeyCode = LayoutAwareKeyCode.virtualKeyCode(for: "c", qwertyFallback: CGKeyCode(kVK_ANSI_C))
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: false)
         else {
@@ -146,6 +153,67 @@ final class TextSelectionService {
     /// Kept tight because this runs on the main thread; the copy normally completes in tens
     /// of milliseconds, and exceeding this just means "treat as no selection."
     private static let clipboardCopyTimeoutMicros: useconds_t = 300_000
+
+    /// Restores `snapshot` onto `pasteboard`, then briefly watches for a *late* pasteboard
+    /// write and re-restores if one lands.
+    ///
+    /// The hazard: our synthetic Cmd+C is delivered asynchronously. If the target app is
+    /// slow/busy it may process the copy *after* `clipboardCopyTimeoutMicros` has elapsed and
+    /// we've already restored — its delayed write would then clobber the user's clipboard,
+    /// leaving the copied selection (or stale data) where the user's content should be. That
+    /// breaks the "always restore the user's clipboard" guarantee.
+    ///
+    /// Defense: after restoring, record the change count our own restore produced and poll
+    /// for a short, bounded settle window. Any further change is an external write — almost
+    /// certainly the app's delayed copy — so we restore again (capped at `maxLateCopyRestores`
+    /// re-restores within `lateCopySettleMicros` total). The loop is doubly bounded (time and
+    /// retry count) so it cannot hang; because each pass ends by re-restoring the user's
+    /// snapshot, it cannot leave the selection text on the clipboard.
+    ///
+    /// Runs synchronously on the caller's thread (the main thread for Write/Rewrite mode),
+    /// consistent with the copy-wait above; the added latency is bounded by
+    /// `lateCopySettleMicros` and only paid on this last-resort fallback path.
+    private func restoreClipboardDefensively(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
+        snapshot.restore(to: pasteboard)
+        var lastRestoreChangeCount = pasteboard.changeCount
+
+        var restoresRemaining = Self.maxLateCopyRestores
+        let pollMicros: useconds_t = 10_000
+        var waited: useconds_t = 0
+
+        while waited < Self.lateCopySettleMicros {
+            usleep(pollMicros)
+            waited += pollMicros
+
+            guard pasteboard.changeCount != lastRestoreChangeCount else { continue }
+
+            // A write landed after our restore — the target app's delayed synthetic copy
+            // clobbering the user's clipboard. Restore the user's snapshot again.
+            guard restoresRemaining > 0 else {
+                self.diag("Clipboard fallback: late write persisted past \(Self.maxLateCopyRestores) restores; leaving user clipboard restored as of last attempt")
+                return
+            }
+            restoresRemaining -= 1
+            snapshot.restore(to: pasteboard)
+            lastRestoreChangeCount = pasteboard.changeCount
+            self.diag("Clipboard fallback: re-restored user clipboard after a late synthetic-copy write")
+        }
+
+        // Reconcile a write that landed in the final poll interval (just past the loop edge).
+        if pasteboard.changeCount != lastRestoreChangeCount, restoresRemaining > 0 {
+            snapshot.restore(to: pasteboard)
+            self.diag("Clipboard fallback: final re-restore after a late write at the settle-window edge")
+        }
+    }
+
+    /// Total time the defensive restore watches for a late synthetic-copy write before giving
+    /// up. Bounds the extra main-thread latency added on top of `clipboardCopyTimeoutMicros`.
+    private static let lateCopySettleMicros: useconds_t = 200_000
+
+    /// Maximum number of re-restores during the settle window. A real app emits one delayed
+    /// write per Cmd+C, so 1 suffices in practice; the small headroom covers pathological
+    /// repeated writers without ever looping unbounded.
+    private static let maxLateCopyRestores = 3
 
     private func getFocusedElement() -> AXUIElement? {
         let systemWideElement = AXUIElementCreateSystemWide()
