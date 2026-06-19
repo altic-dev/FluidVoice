@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import Foundation
 
 final class TextSelectionService {
@@ -42,11 +43,109 @@ final class TextSelectionService {
             }
         }
 
+        // 3. Final fallback: synthetic Cmd+C, read the pasteboard, restore it.
+        // Electron / GPU-rendered editors (Zed, VS Code, Obsidian, web editors in Chrome)
+        // frequently don't expose the focused element or selection through the AX tree, so
+        // both AX strategies above return nothing. Copying the live selection is the only
+        // reliable way to read it from those apps (issue #259).
+        if let text = getSelectedTextViaClipboard() {
+            return text
+        }
+
         self.diag("Selection capture failed: no selected text found")
         return nil
     }
 
     // MARK: - Private Helpers
+
+    /// Reads the current selection by synthesizing Cmd+C, polling the pasteboard for the
+    /// resulting write, then restoring the user's previous pasteboard contents. This is a
+    /// last resort used only when the Accessibility tree yields no selection.
+    ///
+    /// Runs synchronously on the caller's thread (the main thread for Write/Rewrite mode);
+    /// the poll is bounded by `Self.clipboardCopyTimeoutMicros` so a missing selection (no
+    /// pasteboard write) degrades to `nil` quickly rather than hanging.
+    private func getSelectedTextViaClipboard() -> String? {
+        let pasteboard = NSPasteboard.general
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        let changeCountBeforeCopy = pasteboard.changeCount
+
+        self.diag("Trying clipboard fallback (synthetic Cmd+C)")
+        guard self.postSyntheticCopy() else {
+            self.diag("Clipboard fallback: failed to post Cmd+C events")
+            return nil
+        }
+
+        // Cmd+C is delivered asynchronously; wait for the target app to write the selection
+        // to the pasteboard. The change-count increments on any write, even if the copied
+        // text equals the prior contents, so this reliably detects a successful copy.
+        let didChange = self.waitForPasteboardChange(
+            pasteboard,
+            since: changeCountBeforeCopy,
+            timeoutMicros: Self.clipboardCopyTimeoutMicros
+        )
+
+        // Read the copied selection only if the pasteboard actually changed.
+        let copiedText = didChange ? pasteboard.string(forType: .string) : nil
+
+        // Always restore the user's previous pasteboard, regardless of outcome.
+        snapshot.restore(to: pasteboard)
+
+        guard didChange else {
+            self.diag("Clipboard fallback: pasteboard unchanged within timeout (no selection?)")
+            return nil
+        }
+        guard let copiedText, !copiedText.isEmpty else {
+            self.diag("Clipboard fallback: pasteboard changed but yielded no string")
+            return nil
+        }
+
+        self.diag("Clipboard fallback succeeded (chars=\(copiedText.count))")
+        return copiedText
+    }
+
+    /// Posts a synthetic Cmd+C to the currently focused app via the HID event tap.
+    /// Returns false only if the CGEvents could not be created.
+    private func postSyntheticCopy() -> Bool {
+        let cKeyCode = CGKeyCode(kVK_ANSI_C)
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: false)
+        else {
+            return false
+        }
+
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+
+        keyDown.post(tap: .cghidEventTap)
+        usleep(10_000)
+        keyUp.post(tap: .cghidEventTap)
+        return true
+    }
+
+    /// Polls `pasteboard.changeCount` until it differs from `previousChangeCount` or the
+    /// timeout elapses. Returns whether a change was observed.
+    private func waitForPasteboardChange(
+        _ pasteboard: NSPasteboard,
+        since previousChangeCount: Int,
+        timeoutMicros: useconds_t
+    ) -> Bool {
+        let pollMicros: useconds_t = 10_000
+        var waited: useconds_t = 0
+        while waited < timeoutMicros {
+            if pasteboard.changeCount != previousChangeCount {
+                return true
+            }
+            usleep(pollMicros)
+            waited += pollMicros
+        }
+        return pasteboard.changeCount != previousChangeCount
+    }
+
+    /// Upper bound on how long to wait for a synthetic Cmd+C to land on the pasteboard.
+    /// Kept tight because this runs on the main thread; the copy normally completes in tens
+    /// of milliseconds, and exceeding this just means "treat as no selection."
+    private static let clipboardCopyTimeoutMicros: useconds_t = 300_000
 
     private func getFocusedElement() -> AXUIElement? {
         let systemWideElement = AXUIElementCreateSystemWide()
