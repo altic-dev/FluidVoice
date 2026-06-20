@@ -589,9 +589,9 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
+			repositoryURL = "https://github.com/jayrodge/FluidAudio.git";
 			requirement = {
-				branch = "B/cohere-coreml-asr";
+				branch = "add-sensevoice-coreml-for-fluidvoice";
 				kind = branch;
 			};
 		};
@@ -608,7 +608,7 @@
 			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.10.2;
+				minimumVersion = 0.12.1;
 			};
 		};
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {

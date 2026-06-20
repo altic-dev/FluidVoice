@@ -140,6 +140,7 @@ final class ASRService: ObservableObject {
     private var fluidAudioProvider: FluidAudioProvider?
     private var parakeetRealtimeProvider: ParakeetRealtimeProvider?
     private var externalCoreMLProvider: ExternalCoreMLTranscriptionProvider?
+    private var senseVoiceProvider: SenseVoiceProvider?
     private var nemotronProviders: [NemotronProvider.Mode: NemotronProvider] = [:]
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
@@ -172,6 +173,8 @@ final class ASRService: ObservableObject {
             return self.getParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
             return self.getExternalCoreMLProvider()
+        case .senseVoiceSmall:
+            return self.getSenseVoiceProvider()
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return self.getNemotronProvider(mode: model.nemotronProviderMode)
         case .qwen3Asr:
@@ -213,6 +216,16 @@ final class ASRService: ObservableObject {
         let provider = ExternalCoreMLTranscriptionProvider()
         self.externalCoreMLProvider = provider
         DebugLogger.shared.info("ASRService: Created external CoreML provider", source: "ASRService")
+        return provider
+    }
+
+    private func getSenseVoiceProvider() -> SenseVoiceProvider {
+        if let existing = senseVoiceProvider {
+            return existing
+        }
+        let provider = SenseVoiceProvider()
+        self.senseVoiceProvider = provider
+        DebugLogger.shared.info("ASRService: Created SenseVoice provider", source: "ASRService")
         return provider
     }
 
@@ -373,6 +386,8 @@ final class ASRService: ObservableObject {
             return ParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
             return ExternalCoreMLTranscriptionProvider(modelOverride: model)
+        case .senseVoiceSmall:
+            return SenseVoiceProvider()
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return NemotronProvider(mode: model.nemotronProviderMode)
         case .qwen3Asr:
@@ -451,6 +466,7 @@ final class ASRService: ObservableObject {
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
+        self.senseVoiceProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil

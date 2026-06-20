@@ -68,6 +68,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             models = models.filter { $0.provider == .apple }
         case .cohere:
             models = models.filter { $0.provider == .cohere }
+        case .senseVoice:
+            models = models.filter { $0.provider == .senseVoice }
         case .openai:
             models = models.filter { $0.provider == .openai }
         }
@@ -207,6 +209,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "Qwen3 ASR is a multilingual FluidAudio model with strong quality, but higher memory usage. Requires macOS 15+."
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
+        case .senseVoiceSmall:
+            return "SenseVoice downloads the compact int8 FluidAudio CoreML model locally and runs it in English mode on Apple Silicon."
         case .nemotronOffline:
             return "Nemotron 3.5 Multilingual is slower but more accurate. Supports around 40 languages with auto or manual language selection. Best on Apple Silicon with 8GB+ RAM."
         case .nemotronStreaming, .nemotronStreaming320:
