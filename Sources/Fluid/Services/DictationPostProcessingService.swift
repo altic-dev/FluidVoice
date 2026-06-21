@@ -199,7 +199,8 @@ final class DictationPostProcessingService {
         }
 
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
-        let systemPrompt = ""
+        let usesTranscriptTemplate = promptText.contains(SettingsStore.transcriptPlaceholder)
+        let systemPrompt = usesTranscriptTemplate ? "" : promptText
         let userMessageContent = SettingsStore.renderDictationUserMessage(
             promptText: promptText,
             transcript: trimmed

@@ -1845,15 +1845,17 @@ struct ContentView: View {
             return self.buildSystemPrompt(appInfo: appInfo, dictationSlot: dictationSlot)
         }()
 
-        // Dictation enhancement folds the prompt + transcript into a single user
-        // turn (substituting `${transcript}` when present, otherwise appending
-        // the transcript after a blank line). Non-dictation callers — the AI
-        // chat tab specifically — keep the legacy two-message layout where
-        // the prompt is the system turn and the input is the user turn.
+        // Dictation enhancement normally sends prompt instructions as the
+        // system turn and only the tagged transcript as the user turn. Explicit
+        // `${transcript}` templates keep their legacy single user-message shape.
+        // Non-dictation callers — the AI chat tab specifically — keep the
+        // legacy two-message layout where the prompt is the system turn and
+        // the input is the user turn.
         let systemPrompt: String
         let userMessageContent: String
         if isDictationCall {
-            systemPrompt = ""
+            let usesTranscriptTemplate = promptText.contains(SettingsStore.transcriptPlaceholder)
+            systemPrompt = usesTranscriptTemplate ? "" : promptText
             userMessageContent = SettingsStore.renderDictationUserMessage(
                 promptText: promptText,
                 transcript: inputText
@@ -1931,10 +1933,10 @@ struct ContentView: View {
             )
         }
 
-        // Build messages array. For dictation enhancement the whole prompt +
-        // transcript is folded into a single user message, so we omit the
-        // (empty) system role. Non-dictation callers keep the legacy
-        // system + user shape.
+        // Build messages array. Dictation enhancement uses system + user by
+        // default, but explicit `${transcript}` templates omit the system role
+        // because the full template is already the user message. Non-dictation
+        // callers keep the legacy system + user shape.
         var messages: [[String: Any]] = []
         if !systemPrompt.isEmpty {
             messages.append(["role": "system", "content": systemPrompt])

@@ -1230,18 +1230,16 @@ final class SettingsStore: ObservableObject {
     /// when composing the user message for a dictation enhancement call.
     static let transcriptPlaceholder = "${transcript}"
 
-    /// Compose the user-turn string for a dictation enhancement call by folding
-    /// the transcript into the prompt template. If the template contains the
-    /// `${transcript}` placeholder, the placeholder is replaced; otherwise
-    /// the transcript is appended after a blank line, matching the pre-PR
-    /// behaviour of sending the transcript as a separate user message.
+    /// Compose the user-turn string for a dictation enhancement call.
+    /// If the prompt explicitly contains the `${transcript}` placeholder, keep
+    /// honoring that full user-message template. Otherwise the prompt belongs
+    /// in the system turn, and the user turn contains only tagged transcript
+    /// content.
     static func renderDictationUserMessage(promptText: String, transcript: String) -> String {
         if promptText.contains(self.transcriptPlaceholder) {
             return promptText.replacingOccurrences(of: self.transcriptPlaceholder, with: transcript)
         }
-        let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedPrompt.isEmpty { return transcript }
-        return promptText + "\n\n" + transcript
+        return "<transcript>\n\(transcript)\n</transcript>"
     }
 
     private func defaultPromptResolution(
