@@ -18,7 +18,13 @@ enum LLMError: Error, LocalizedError {
         case .invalidResponse:
             return "Invalid response from LLM"
         case let .httpError(code, message):
-            return "HTTP \(code): \(message.trimmingCharacters(in: .whitespacesAndNewlines))"
+            // Privacy: `message` is the raw provider error body, which can echo the request
+            // (and therefore the user's dictated transcript / prompt). This description is
+            // surfaced to callers that persist `error.localizedDescription` to the plaintext
+            // disk log, so it must not embed the body — expose the status code and body size
+            // only. The raw body remains available on the associated value for non-logging use.
+            let bodyChars = message.trimmingCharacters(in: .whitespacesAndNewlines).count
+            return "HTTP \(code) (error body: \(bodyChars) chars)"
         case let .networkError(error):
             return Self.userFacingNetworkMessage(from: error)
         case .encodingError:
@@ -249,12 +255,11 @@ final class LLMClient {
             throw LLMError.encodingError
         }
 
-        // Log the request for debugging
+        // Log the request for debugging. Privacy: the serialized body embeds the user's
+        // dictated transcript / prompt, and DebugLogger persists to a plaintext disk log, so
+        // log only metadata (message count, model, body size) — never the body contents.
         let messageCount = config.messages.count
-        if let bodyStr = String(data: jsonData, encoding: .utf8) {
-            let truncated = bodyStr.count > 500 ? String(bodyStr.prefix(500)) + "..." : bodyStr
-            DebugLogger.shared.debug("LLMClient: Request (\(messageCount) messages, model=\(config.model), streaming=\(config.streaming)): \(truncated)", source: "LLMClient")
-        }
+        DebugLogger.shared.debug("LLMClient: Request (\(messageCount) messages, model=\(config.model), streaming=\(config.streaming), bodyBytes=\(jsonData.count))", source: "LLMClient")
 
         // Build URLRequest
         var request = URLRequest(url: url)
@@ -474,7 +479,9 @@ final class LLMClient {
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
-            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
+            // Privacy: do not persist the error body (it can echo the request/prompt) — log
+            // status and body size only. The full text is still thrown to the caller.
+            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode) (\(data.count) bytes)", source: "LLMClient")
             throw LLMError.httpError(http.statusCode, errText)
         }
 
@@ -651,12 +658,12 @@ final class LLMClient {
                 continue
             }
 
-            // DEBUG LOG: Show full delta to see all fields (e.g., 'reasoning', 'thought', 'delta_reasoning', etc.)
-            if let deltaData = try? JSONSerialization.data(withJSONObject: delta, options: [.fragmentsAllowed]),
-               let deltaString = String(data: deltaData, encoding: .utf8)
-            {
-                DebugLogger.shared.debug("LLMClient: Full Delta: \(deltaString)", source: "LLMClient")
-            }
+            // DEBUG LOG: Show which delta fields are present (e.g., 'reasoning', 'thought',
+            // 'delta_reasoning', etc.) to diagnose provider response shapes. Privacy: the
+            // delta values are the model's response derived from the user's dictation, and
+            // DebugLogger persists to a plaintext disk log — log field names only, not values.
+            let deltaFields = delta.keys.sorted().joined(separator: ", ")
+            DebugLogger.shared.debug("LLMClient: Delta fields: [\(deltaFields)]", source: "LLMClient")
 
             // Handle separate reasoning fields (OpenAI 'reasoning', 'reasoning_content', DeepSeek, etc.)
             let reasoningField = delta["reasoning_content"] as? String ??
@@ -693,12 +700,14 @@ final class LLMClient {
                         // For safety with tag-based parsers, we let the parser decide unless it's a known separate-field model.
                     }
 
-                    // Debug: Log first few chunks and any chunk containing think tags
+                    // Debug: Log the shape of the first few chunks and any chunk containing think
+                    // tags. Privacy: chunk content is the model's response derived from the user's
+                    // dictation, and DebugLogger persists to a plaintext disk log — log only the
+                    // chunk length and whether a think tag was detected, never the content itself.
                     let containsThinkTag = content.contains("<think") || content.contains("</think") || content.contains("<thinking") || content.contains("</thinking")
                     if thinkingBuffer.count + contentBuffer.count < 8 || containsThinkTag {
-                        let escaped = content.replacingOccurrences(of: "\n", with: "\\n")
                         let marker = containsThinkTag ? " [HAS THINK TAG!]" : ""
-                        DebugLogger.shared.debug("LLMClient: Chunk '\(escaped)'\(marker)", source: "LLMClient")
+                        DebugLogger.shared.debug("LLMClient: Chunk (\(content.count) chars)\(marker)", source: "LLMClient")
                     }
 
                     let previousState = state
@@ -1014,17 +1023,18 @@ final class LLMClient {
     private func logRequest(_ request: URLRequest) {
         guard let url = request.url, let method = request.httpMethod else { return }
 
-        var bodyString = ""
-        if let body = request.httpBody {
-            bodyString = String(data: body, encoding: .utf8) ?? ""
-        }
+        // Privacy: the request body contains the user's dictated transcript / prompt /
+        // selected text. DebugLogger persists every line to a plaintext disk log
+        // (~/Library/Logs/Fluid/Fluid.log), so the body must never be logged. We log the
+        // body length only, mirroring the existing Authorization-header redaction.
+        let bodyByteCount = request.httpBody?.count ?? 0
 
         var curl = "curl -X \(method) \"\(url.absoluteString)\" \\\n"
         for (key, value) in request.allHTTPHeaderFields ?? [:] {
             let maskedValue = key.lowercased().contains("auth") ? "Bearer [REDACTED]" : value
             curl += "  -H \"\(key): \(maskedValue)\" \\\n"
         }
-        curl += "  -d '\(bodyString)'"
+        curl += "  -d '[REDACTED \(bodyByteCount) bytes]'"
 
         DebugLogger.shared.info("LLMClient: Full Request as cURL:\n\(curl)", source: "LLMClient")
     }

@@ -104,7 +104,8 @@ final class AppleSpeechProvider: TranscriptionProvider {
                 if let result = result, result.isFinal {
                     hasResumed = true
                     let transcription = result.bestTranscription.formattedString
-                    DebugLogger.shared.debug("AppleSpeechProvider: Got final result: '\(transcription)'", source: "AppleSpeechProvider")
+                    // Privacy: transcription is recognized speech; log length only.
+                    DebugLogger.shared.debug("AppleSpeechProvider: Got final result: \(transcription.count) chars", source: "AppleSpeechProvider")
                     continuation.resume(returning: ASRTranscriptionResult(text: transcription, confidence: 1.0))
                 }
                 // Partial results ignored as we requested final only

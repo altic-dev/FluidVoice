@@ -2147,7 +2147,7 @@ struct ContentView: View {
 
         // If this was a rewrite recording, process the rewrite instead of typing
         if wasRewriteMode {
-            DebugLogger.shared.info("Processing rewrite with instruction: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing rewrite (instruction chars: \(transcribedText.count))", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .edit,
@@ -2160,7 +2160,7 @@ struct ContentView: View {
 
         // If this was a command recording, process the command
         if wasCommandMode {
-            DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing command (chars: \(transcribedText.count))", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .command,
@@ -2868,7 +2868,7 @@ struct ContentView: View {
     ) async {
         self.rewriteModeService.setPromptAppBundleID(appInfo.bundleId)
         let hasOriginalText = !self.rewriteModeService.originalText.isEmpty
-        DebugLogger.shared.info("Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction: '\(instruction)', originalText length: \(self.rewriteModeService.originalText.count)", source: "ContentView")
+        DebugLogger.shared.info("Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction chars: \(instruction.count), originalText length: \(self.rewriteModeService.originalText.count)", source: "ContentView")
 
         // Show processing animation
         self.menuBarManager.setProcessing(true)
@@ -2990,7 +2990,7 @@ struct ContentView: View {
     // MARK: - Command Mode Voice Processing
 
     private func processCommandWithVoice(_ command: String) async {
-        DebugLogger.shared.info("Processing voice command: '\(command)'", source: "ContentView")
+        DebugLogger.shared.info("Processing voice command (chars: \(command.count))", source: "ContentView")
 
         // Show processing animation
         self.menuBarManager.setProcessing(true)
@@ -3571,11 +3571,17 @@ extension ContentView {
     }
 
     private func logDictationPromptTrace(_ title: String, value: String) {
-        let line = "[PromptTrace][Dictate] \(title):\n\(value)"
+        // Privacy: prompt-trace values are raw user content (the dictated transcript, the
+        // folded prompt, the model's answer and thinking). DebugLogger persists every line to
+        // a plaintext disk log (~/Library/Logs/Fluid/Fluid.log), and this trace is enabled
+        // whenever EnableDebugLogs is on (the default), so the raw value must never be routed
+        // there. The full trace remains available on the console for live debugging, gated
+        // behind the explicit FLUID_PROMPT_TRACE=1 env var; only a redacted metadata line is
+        // persisted to the log.
         if self.forcePromptTraceToConsole {
-            print(line)
+            print("[PromptTrace][Dictate] \(title):\n\(value)")
         }
-        DebugLogger.shared.debug(line, source: "ContentView")
+        DebugLogger.shared.debug("[PromptTrace][Dictate] \(title) (\(value.count) chars) [REDACTED]", source: "ContentView")
     }
 
     private func customPromptAnalyticsProperties(promptSource: String, overrideEmpty: Bool?) -> [String: Any] {

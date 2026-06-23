@@ -235,10 +235,10 @@ final class FunctionCallingProvider {
             return .error("Failed to encode request")
         }
 
-        // Debug: Log request payload
-        if let requestString = String(data: jsonData, encoding: .utf8) {
-            DebugLogger.shared.debug("Request JSON: \(requestString)", source: "FunctionCallingProvider")
-        }
+        // Debug: Log request metadata. Privacy: the request body embeds the user's dictated
+        // transcript / prompt, and DebugLogger persists to a plaintext disk log, so log only
+        // the body size, never its contents.
+        DebugLogger.shared.debug("Request JSON: \(jsonData.count) bytes", source: "FunctionCallingProvider")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -254,14 +254,16 @@ final class FunctionCallingProvider {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
 
-            // Log response
-            if let responseString = String(data: data, encoding: .utf8) {
-                DebugLogger.shared.debug("📥 LLM Response: \(responseString)", source: "FunctionCallingProvider")
-            }
+            // Log response metadata. Privacy: the response body is the model's reply derived
+            // from the user's dictation, and DebugLogger persists to a plaintext disk log, so
+            // log only its size, never the contents.
+            DebugLogger.shared.debug("📥 LLM Response: \(data.count) bytes", source: "FunctionCallingProvider")
 
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                 let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
-                DebugLogger.shared.error("HTTP \(http.statusCode): \(errText)", source: "FunctionCallingProvider")
+                // Privacy: do not persist the error body (it can echo the request/prompt) — log
+                // status and body size only. The full text is still returned to the caller.
+                DebugLogger.shared.error("HTTP \(http.statusCode): \(data.count) bytes", source: "FunctionCallingProvider")
                 return .error("HTTP \(http.statusCode): \(errText)")
             }
 
@@ -283,8 +285,10 @@ final class FunctionCallingProvider {
                 var parsedCalls: [(name: String, arguments: [String: Any], callId: String)] = []
 
                 for toolCall in toolCalls {
+                    // Privacy: tool-call arguments are model-generated from the user's dictation
+                    // and may contain user content; log the tool name and argument size only.
                     DebugLogger.shared.info(
-                        "  → \(toolCall.function.name)(\(toolCall.function.arguments))",
+                        "  → \(toolCall.function.name)(\(toolCall.function.arguments.count) chars)",
                         source: "FunctionCallingProvider"
                     )
                     // Parse arguments JSON string
@@ -381,8 +385,10 @@ final class FunctionCallingProvider {
 
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                 let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
+                // Privacy: do not persist the error body (it can echo the request/prompt) — log
+                // status and body size only. The full text is still returned to the caller.
                 DebugLogger.shared.error(
-                    "HTTP \(http.statusCode) in continueWithToolResults: \(errText)",
+                    "HTTP \(http.statusCode) in continueWithToolResults: \(data.count) bytes",
                     source: "FunctionCallingProvider"
                 )
                 return .error("HTTP \(http.statusCode): \(errText)")

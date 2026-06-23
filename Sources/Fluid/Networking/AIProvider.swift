@@ -131,7 +131,9 @@ final class OpenAICompatibleProvider: AIProvider {
 
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                 let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
-                DebugLogger.shared.error("AI API error HTTP \(http.statusCode): \(errText)", source: "AIProvider")
+                // Privacy: do not persist the error body (it can echo the request/prompt) — log
+                // status and body size only. The full text is still returned to the caller.
+                DebugLogger.shared.error("AI API error HTTP \(http.statusCode): \(data.count) bytes", source: "AIProvider")
                 return "Error: HTTP \(http.statusCode): \(errText)"
             }
             let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)

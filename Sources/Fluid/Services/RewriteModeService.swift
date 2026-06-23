@@ -387,11 +387,15 @@ final class RewriteModeService: ObservableObject {
     }
 
     private func logPromptTrace(_ title: String, value: String) {
-        let line = "[PromptTrace][Edit] \(title):\n\(value)"
+        // Privacy: prompt-trace values are raw user content (selected text, the spoken
+        // instruction, the model's answer). appendDiagnosticLog persists to a plaintext disk
+        // log (~/Library/Logs/Fluid/Fluid.log), so the raw value must never be routed there.
+        // The full trace is still available on the console for live debugging, gated behind
+        // the explicit FLUID_PROMPT_TRACE=1 env var; only a redacted metadata line is persisted.
         if self.forcePromptTraceToConsole {
-            print(line)
+            print("[PromptTrace][Edit] \(title):\n\(value)")
         }
-        self.appendDiagnosticLog(line)
+        self.appendDiagnosticLog("[PromptTrace][Edit] \(title) (\(value.count) chars) [REDACTED]")
     }
 
     private func appendDiagnosticLog(_ message: String) {

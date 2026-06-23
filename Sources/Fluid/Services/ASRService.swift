@@ -1377,7 +1377,9 @@ final class ASRService: ObservableObject {
         guard let hit = hits.first else { return }
         if hit != self.lastBoostHitTerm {
             self.lastBoostHitTerm = hit
-            DebugLogger.shared.info("BOOST_HIT: '\(hit)'", source: "ASRService")
+            // Privacy: hit is a word from the user's transcript; log only that a boosted term
+            // was detected (with its length), never the term itself.
+            DebugLogger.shared.info("BOOST_HIT detected (\(hit.count) chars)", source: "ASRService")
         }
         self.refreshWordBoostStatus()
     }
@@ -2529,8 +2531,10 @@ final class ASRService: ObservableObject {
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
             let finalRTF = finalAudioSeconds > 0 ? (Double(finalElapsedMs) / 1000.0) / finalAudioSeconds : 0
             DebugLogger.shared.debug("stop(): final transcription finished source=\(finalSource)", source: "ASRService")
+            // Privacy: result.text is the user's dictated transcript; DebugLogger persists to a
+            // plaintext disk log, so log only its length and confidence, never the text itself.
             DebugLogger.shared.debug(
-                "Transcription completed: '\(result.text)' (confidence: \(result.confidence))",
+                "Transcription completed: \(result.text.count) chars (confidence: \(result.confidence))",
                 source: "ASRService"
             )
             DebugLogger.shared.info(
@@ -2563,7 +2567,8 @@ final class ASRService: ObservableObject {
             if !useDictionaryTrainingPath {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
             }
-            DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
+            // Privacy: outputText is the post-processed dictated transcript; log length only.
+            DebugLogger.shared.debug("After post-processing: \(outputText.count) chars", source: "ASRService")
             self.benchmarkLog("stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)")
             if !useDictionaryTrainingPath,
                SettingsStore.shared.saveTranscriptionHistory,
@@ -4728,7 +4733,8 @@ final class ASRService: ObservableObject {
                 self.partialTranscription = updatedText
                 self.previousFullTranscription = newText
 
-                DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
+                // Privacy: updatedText is the live partial transcript; log length only.
+                DebugLogger.shared.debug("✅ Streaming: \(updatedText.count) chars (\(String(format: "%.2f", duration))s)", source: "ASRService")
             }
             let rtf = chunk.isEmpty ? 0 : duration / (Double(chunk.count) / 16_000.0)
             let chunkDoneAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)

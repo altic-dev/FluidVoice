@@ -317,7 +317,9 @@ final class TypingService {
             "request chars=\(text.count) mode=\(mode.rawValue) autocompleteSteps=\(plan.steps.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")"
         )
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
-        self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
+        // Privacy: `text` is the user's dictation result / AI-rewritten output being injected
+        // into the focused app. DebugLogger persists every line to a plaintext disk log, so the
+        // content is never logged — the length above is the diagnostic.
 
         guard text.isEmpty == false else {
             self.bench("request_return reason=empty_text")
@@ -395,7 +397,8 @@ final class TypingService {
 
     private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
-        self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+        // Privacy: do not log the text content (the dictation result / AI output); the length
+        // above is the diagnostic — DebugLogger persists every line to a plaintext disk log.
 
         if self.textInsertionMode == .standard,
            let ghosttyTargetPID = self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID)
