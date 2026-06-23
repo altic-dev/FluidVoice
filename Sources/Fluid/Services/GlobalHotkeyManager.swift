@@ -493,10 +493,75 @@ final class GlobalHotkeyManager: NSObject {
         self.runLoopSource = nil
     }
 
+    /// Virtual key codes (`kVK_*`) for the system shortcuts we fast-path in `handleKeyEvent`.
+    private enum SystemShortcutKeyCode {
+        static let tab: UInt16 = 48 // kVK_Tab
+        static let space: UInt16 = 49 // kVK_Space
+        static let grave: UInt16 = 50 // kVK_ANSI_Grave (`)
+    }
+
+    /// Returns `true` for Command-modified system shortcuts (Cmd+Tab, Cmd+Shift+Tab,
+    /// Cmd+Space, Cmd+`) that should be passed straight through without running the
+    /// hotkey-matching machinery.
+    ///
+    /// The session event tap fires for every key event system-wide, so doing the full
+    /// modifier-tracking and shortcut-matching pass on these high-frequency switching
+    /// shortcuts adds perceptible latency to app switching and Spotlight. That latency
+    /// compounds when VoiceOver is also intercepting the same events. None of these
+    /// shortcuts can be a FluidVoice hotkey (they are reserved by macOS), so passing
+    /// them through immediately is safe.
+    nonisolated static func isSystemShortcutPassthrough(
+        type: CGEventType,
+        flags: CGEventFlags,
+        keyCode: UInt16
+    ) -> Bool {
+        guard type == .keyDown || type == .keyUp else { return false }
+        guard flags.contains(.maskCommand) else { return false }
+        switch keyCode {
+        case SystemShortcutKeyCode.tab, SystemShortcutKeyCode.space, SystemShortcutKeyCode.grave:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// When a modifier-only FluidVoice shortcut key (e.g. a Command-based one) is being held and a
+    /// *different* key is pressed, record the combo and cancel any pending hold-mode start. The user
+    /// is performing a key combination (e.g. Cmd+Tab), not holding the modifier on its own, so the
+    /// pending mode start must be cancelled.
+    private func cancelPendingHoldModeForComboKeyPress() {
+        guard self.modifierOnlyKeyDown else { return }
+        self.otherKeyPressedDuringModifier = true
+        // Cancel any pending hold mode start (user is doing a key combo, not just modifier)
+        if let pending = self.pendingHoldModeStart {
+            pending.cancel()
+            self.pendingHoldModeStart = nil
+            self.pendingHoldModeType = nil
+            DebugLogger.shared.info("Another key pressed - cancelled pending hold mode start", source: "GlobalHotkeyManager")
+        }
+    }
+
     // swiftlint:disable cyclomatic_complexity function_body_length
     private func handleKeyEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if let tapRecoveryResult = self.handleTapDisableEvent(type: type, event: event) {
             return tapRecoveryResult
+        }
+
+        // Fast path: pass system switching shortcuts straight through before any matching
+        // work, so app switching / Spotlight stay snappy (especially with VoiceOver active).
+        if Self.isSystemShortcutPassthrough(
+            type: type,
+            flags: event.flags,
+            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        ) {
+            // Still record the combo + cancel any pending modifier-only hold start before passing
+            // through: if a Command-based modifier-only shortcut is held, this Cmd+Tab/Space/` press
+            // must not look like a clean modifier hold (which would otherwise mis-trigger that mode
+            // on release or after the hold delay while the user is just switching apps).
+            if type == .keyDown {
+                self.cancelPendingHoldModeForComboKeyPress()
+            }
+            return Unmanaged.passUnretained(event)
         }
 
         if self.isShortcutCaptureActiveProvider?() ?? false {
@@ -517,16 +582,7 @@ final class GlobalHotkeyManager: NSObject {
         switch type {
         case .keyDown:
             // If a modifier-only shortcut key is being held and this is a different key, mark it
-            if self.modifierOnlyKeyDown {
-                self.otherKeyPressedDuringModifier = true
-                // Cancel any pending hold mode start (user is doing a key combo, not just modifier)
-                if let pending = self.pendingHoldModeStart {
-                    pending.cancel()
-                    self.pendingHoldModeStart = nil
-                    self.pendingHoldModeType = nil
-                    DebugLogger.shared.info("Another key pressed - cancelled pending hold mode start", source: "GlobalHotkeyManager")
-                }
-            }
+            self.cancelPendingHoldModeForComboKeyPress()
 
             // Observe post-transcription edits (do not consume the event).
             Task {

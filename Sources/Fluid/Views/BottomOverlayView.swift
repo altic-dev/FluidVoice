@@ -256,6 +256,11 @@ final class BottomOverlayWindowController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
+        // Keep the overlay panel out of the accessibility tree so VoiceOver does not
+        // announce it or shift focus away from the user's active app.
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
+
         let contentView = BottomOverlayView()
         let hostingView = BottomOverlayHostingView(rootView: contentView)
 
@@ -527,6 +532,11 @@ final class BottomOverlayPromptMenuController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+
+        // Keep the menu panel out of the accessibility tree so VoiceOver does not
+        // announce it or shift focus away from the user's active app.
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayPromptMenuView(
             promptMode: self.resolvedPromptMode(),
@@ -805,6 +815,11 @@ final class BottomOverlayModeMenuController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
+        // Keep the menu panel out of the accessibility tree so VoiceOver does not
+        // announce it or shift focus away from the user's active app.
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
+
         let contentView = BottomOverlayModeMenuView(
             maxWidth: self.menuMaxWidth,
             onHoverChanged: { [weak self] hovering in
@@ -1068,6 +1083,11 @@ final class BottomOverlayActionsMenuController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+
+        // Keep the menu panel out of the accessibility tree so VoiceOver does not
+        // announce it or shift focus away from the user's active app.
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayActionsMenuView(
             maxWidth: self.menuMaxWidth,
@@ -2983,6 +3003,9 @@ struct BottomOverlayView: View {
             self.isHoveringActionsChip = false
             self.isHoveringSettingsChip = false
         }
+        // The overlay is a non-interactive dictation HUD; hide its SwiftUI content from
+        // VoiceOver so it is not announced and cannot steal focus from the active app.
+        .accessibilityHidden(true)
         // TODO: Add tap-to-expand for command mode history (future enhancement)
         // .contentShape(Rectangle())
         // .onTapGesture {
