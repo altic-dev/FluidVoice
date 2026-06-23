@@ -160,4 +160,83 @@ final class GlobalHotkeyManagerSystemShortcutTests: XCTestCase {
         XCTAssertFalse(modifiers.contains(.option))
         XCTAssertFalse(modifiers.contains(.control))
     }
+
+    // MARK: - Release safety for saved shortcuts (hasActivePress overload)
+
+    func testSavedComboReleaseWithReducedModifiersIsNotFastPathed() {
+        // Saved shortcut is Cmd+Shift+Tab. The user releases Shift first, so the Tab keyUp
+        // arrives as Cmd-only. The flag-based collision check no longer sees the configured
+        // shortcut, but an in-flight press exists, so the release MUST NOT be fast-pathed —
+        // otherwise the keyUp handlers never clear is*KeyPressed or stop the recording.
+        let configured: [(shortcut: HotkeyShortcut, isEnabled: Bool)] = [
+            (HotkeyShortcut(keyCode: self.tab, modifierFlags: [.command, .shift]), true),
+        ]
+
+        // Documents the underlying hazard: the flag-based check alone would fast-path this
+        // release because the current flags (Cmd only) no longer match Cmd+Shift+Tab.
+        XCTAssertTrue(
+            GlobalHotkeyManager.shouldFastPathSystemShortcut(
+                type: .keyUp, flags: .maskCommand, keyCode: self.tab, configuredShortcuts: configured
+            ),
+            "Flag-based check is expected to miss the saved combo on a reduced-modifier release"
+        )
+
+        // The release-safe overload suppresses it because a press is in flight.
+        XCTAssertFalse(
+            GlobalHotkeyManager.shouldFastPathSystemShortcut(
+                type: .keyUp,
+                flags: .maskCommand,
+                keyCode: self.tab,
+                configuredShortcuts: configured,
+                hasActivePress: true
+            ),
+            "A release with an in-flight press must not be fast-pathed"
+        )
+    }
+
+    func testSavedOptionSpaceReleaseWithReducedModifiersIsNotFastPathed() {
+        // Saved shortcut is Cmd+Option+Space. Option released first, Space keyUp arrives as
+        // Cmd-only while a press is in flight: the release must reach the keyUp handlers.
+        let configured: [(shortcut: HotkeyShortcut, isEnabled: Bool)] = [
+            (HotkeyShortcut(keyCode: self.space, modifierFlags: [.command, .option]), true),
+        ]
+
+        XCTAssertFalse(
+            GlobalHotkeyManager.shouldFastPathSystemShortcut(
+                type: .keyUp,
+                flags: .maskCommand,
+                keyCode: self.space,
+                configuredShortcuts: configured,
+                hasActivePress: true
+            )
+        )
+    }
+
+    func testReleaseWithoutActivePressStillFastPaths() {
+        // No in-flight press (e.g. a genuine system Cmd+Tab the user never bound): the keyUp
+        // keeps the latency win and is fast-pathed.
+        XCTAssertTrue(
+            GlobalHotkeyManager.shouldFastPathSystemShortcut(
+                type: .keyUp,
+                flags: .maskCommand,
+                keyCode: self.tab,
+                configuredShortcuts: [],
+                hasActivePress: false
+            )
+        )
+    }
+
+    func testKeyDownIgnoresActivePressGuard() {
+        // The release guard is keyUp-only: a keyDown is unaffected by hasActivePress and still
+        // fast-paths a non-conflicting candidate.
+        XCTAssertTrue(
+            GlobalHotkeyManager.shouldFastPathSystemShortcut(
+                type: .keyDown,
+                flags: .maskCommand,
+                keyCode: self.tab,
+                configuredShortcuts: [],
+                hasActivePress: true
+            )
+        )
+    }
 }

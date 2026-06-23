@@ -563,6 +563,37 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
+    /// Final gate for the fast path, layering the keyUp release-safety check on top of the
+    /// flag-based collision check.
+    ///
+    /// `shouldFastPathSystemShortcut` compares the event's *current* modifier flags against the
+    /// configured shortcuts, which is correct for keyDown. A keyUp, however, can arrive with fewer
+    /// modifiers than its keyDown (the user lets go of an extra modifier first, e.g. Shift before
+    /// Tab in a saved Cmd+Shift+Tab shortcut while Command is still held). The flag-based check then
+    /// no longer recognizes the configured shortcut, so on its own it would fast-path the release and
+    /// the keyUp handlers would never clear `is*KeyPressed` or stop the recording. `hasActivePress`
+    /// reports whether that key code currently has an in-flight press the keyUp handlers must finish;
+    /// when it does, the release is never fast-pathed regardless of the current modifier flags.
+    nonisolated static func shouldFastPathSystemShortcut(
+        type: CGEventType,
+        flags: CGEventFlags,
+        keyCode: UInt16,
+        configuredShortcuts: [(shortcut: HotkeyShortcut, isEnabled: Bool)],
+        hasActivePress: Bool
+    ) -> Bool {
+        guard Self.shouldFastPathSystemShortcut(
+            type: type,
+            flags: flags,
+            keyCode: keyCode,
+            configuredShortcuts: configuredShortcuts
+        ) else {
+            return false
+        }
+        // A release with an in-flight press for this key code must reach the keyUp handlers.
+        if type == .keyUp, hasActivePress { return false }
+        return true
+    }
+
     /// When a modifier-only FluidVoice shortcut key (e.g. a Command-based one) is being held and a
     /// *different* key is pressed, record the combo and cancel any pending hold-mode start. The user
     /// is performing a key combination (e.g. Cmd+Tab), not holding the modifier on its own, so the
@@ -592,11 +623,18 @@ final class GlobalHotkeyManager: NSObject {
         // work, so app switching / Spotlight stay snappy (especially with VoiceOver active).
         // Suppressed when the combo collides with a configured FluidVoice shortcut (e.g. the
         // user bound Cmd+Space), so the user's shortcut still fires instead of being shadowed.
+        //
+        // The flag-based collision check is correct for keyDown, but a keyUp can carry different
+        // modifiers than its keyDown (e.g. Shift released before Tab while Command is still held
+        // for a saved Cmd+Shift+Tab). So on keyUp we additionally suppress the fast path whenever
+        // that key code has an in-flight press the keyUp handlers below must finish, so the release
+        // is never stripped before it can clear is*KeyPressed and stop recording.
         if Self.shouldFastPathSystemShortcut(
             type: type,
             flags: flags,
             keyCode: keyCode,
-            configuredShortcuts: self.configuredShortcutsForSystemPassthroughConflict()
+            configuredShortcuts: self.configuredShortcutsForSystemPassthroughConflict(),
+            hasActivePress: self.hasActivePressNeedingReleaseHandling(forKeyCode: keyCode)
         ) {
             // Still record the combo + cancel any pending modifier-only hold start before passing
             // through: if a Command-based modifier-only shortcut is held, this Cmd+Tab/Space/` press
@@ -1805,6 +1843,35 @@ final class GlobalHotkeyManager: NSObject {
         })
 
         return shortcuts
+    }
+
+    /// Returns `true` if a configured shortcut whose key code is `keyCode` currently has an
+    /// in-flight press whose release must be handled by the `keyUp` handlers in `handleKeyEvent`.
+    ///
+    /// The flag-based conflict check in `shouldFastPathSystemShortcut` is correct for `keyDown`,
+    /// but a `keyUp` can arrive with different modifier flags than the `keyDown` did (e.g. the user
+    /// releases Shift before Tab while Command is still held for a saved Cmd+Shift+Tab shortcut).
+    /// At that point the flag-based check no longer matches the configured shortcut, so without this
+    /// guard the release would be fast-pathed and the `keyUp` handlers below would never clear the
+    /// `is*KeyPressed` state or stop the recording. Those handlers match releases by key code only
+    /// (independent of modifiers), so this mirrors them: if the matching press flag is set, the
+    /// release is not eligible for the fast path.
+    private func hasActivePressNeedingReleaseHandling(forKeyCode keyCode: UInt16) -> Bool {
+        if self.isKeyPressed, keyCode == self.shortcut.keyCode { return true }
+        if self.isPromptModeKeyPressed, self.promptModeShortcutEnabled, keyCode == self.promptModeShortcut.keyCode {
+            return true
+        }
+        if self.isCommandModeKeyPressed, self.commandModeShortcutEnabled, keyCode == self.commandModeShortcut.keyCode {
+            return true
+        }
+        if self.isRewriteKeyPressed, self.rewriteModeShortcutEnabled, keyCode == self.rewriteModeShortcut.keyCode {
+            return true
+        }
+        if self.isPromptAssignmentKeyPressed,
+           self.promptShortcutAssignments.contains(where: { $0.shortcut.keyCode == keyCode }) {
+            return true
+        }
+        return false
     }
 
     private func matchesShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
