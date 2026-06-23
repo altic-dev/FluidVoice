@@ -256,10 +256,10 @@ final class BottomOverlayWindowController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        // Keep the overlay panel out of the accessibility tree so VoiceOver does not
-        // announce it or shift focus away from the user's active app.
-        panel.setAccessibilityElement(false)
-        panel.setAccessibilityRole(.unknown)
+        // Focus stealing is already prevented by the .nonactivatingPanel style mask; we do
+        // NOT suppress the panel's accessibility element, because this panel hosts interactive
+        // controls (mode/prompt/actions/settings chips, AI-failure Retry/Dismiss). VoiceOver
+        // visibility of the passive HUD is handled per-subview inside BottomOverlayView.
 
         let contentView = BottomOverlayView()
         let hostingView = BottomOverlayHostingView(rootView: contentView)
@@ -533,10 +533,9 @@ final class BottomOverlayPromptMenuController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        // Keep the menu panel out of the accessibility tree so VoiceOver does not
-        // announce it or shift focus away from the user's active app.
-        panel.setAccessibilityElement(false)
-        panel.setAccessibilityRole(.unknown)
+        // Focus stealing is already prevented by the .nonactivatingPanel style mask; we do NOT
+        // suppress the panel's accessibility element, because this menu panel hosts interactive
+        // selection rows that VoiceOver users must be able to reach.
 
         let contentView = BottomOverlayPromptMenuView(
             promptMode: self.resolvedPromptMode(),
@@ -815,10 +814,9 @@ final class BottomOverlayModeMenuController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        // Keep the menu panel out of the accessibility tree so VoiceOver does not
-        // announce it or shift focus away from the user's active app.
-        panel.setAccessibilityElement(false)
-        panel.setAccessibilityRole(.unknown)
+        // Focus stealing is already prevented by the .nonactivatingPanel style mask; we do NOT
+        // suppress the panel's accessibility element, because this menu panel hosts interactive
+        // selection rows that VoiceOver users must be able to reach.
 
         let contentView = BottomOverlayModeMenuView(
             maxWidth: self.menuMaxWidth,
@@ -1084,10 +1082,9 @@ final class BottomOverlayActionsMenuController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        // Keep the menu panel out of the accessibility tree so VoiceOver does not
-        // announce it or shift focus away from the user's active app.
-        panel.setAccessibilityElement(false)
-        panel.setAccessibilityRole(.unknown)
+        // Focus stealing is already prevented by the .nonactivatingPanel style mask; we do NOT
+        // suppress the panel's accessibility element, because this menu panel hosts interactive
+        // selection rows that VoiceOver users must be able to reach.
 
         let contentView = BottomOverlayActionsMenuView(
             maxWidth: self.menuMaxWidth,
@@ -2602,6 +2599,7 @@ struct BottomOverlayView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 
     private var aiProcessingFailureView: some View {
@@ -2691,6 +2689,8 @@ struct BottomOverlayView: View {
                                             }
                                         }
                                     }
+                                    // Passive transcription preview: hidden from VoiceOver.
+                                    .accessibilityHidden(true)
                                 }
                             } else {
                                 Color.clear
@@ -2722,6 +2722,8 @@ struct BottomOverlayView: View {
                                             .truncationMode(.head)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .padding(.vertical, max(2, self.transcriptionVerticalPadding - 1))
+                                            // Passive transcription preview: hidden from VoiceOver.
+                                            .accessibilityHidden(true)
                                     } else {
                                         Text(previewText)
                                             .font(.system(size: self.layout.transFontSize, weight: .medium))
@@ -2732,6 +2734,8 @@ struct BottomOverlayView: View {
                                             .fixedSize(horizontal: false, vertical: true)
                                             .frame(width: self.previewMaxWidth, alignment: .leading)
                                             .padding(.vertical, self.transcriptionVerticalPadding)
+                                            // Passive transcription preview: hidden from VoiceOver.
+                                            .accessibilityHidden(true)
                                     }
                                 }
                             } else if self.shouldShowProcessingStatus {
@@ -2814,6 +2818,8 @@ struct BottomOverlayView: View {
                         }
                     }
                 }
+                // Passive waveform + mode-label row: hidden from VoiceOver.
+                .accessibilityHidden(true)
             }
             .padding(.horizontal, self.layout.hPadding)
             .padding(.vertical, self.layout.vPadding)
@@ -3003,9 +3009,10 @@ struct BottomOverlayView: View {
             self.isHoveringActionsChip = false
             self.isHoveringSettingsChip = false
         }
-        // The overlay is a non-interactive dictation HUD; hide its SwiftUI content from
-        // VoiceOver so it is not announced and cannot steal focus from the active app.
-        .accessibilityHidden(true)
+        // The interactive controls (mode/prompt/actions/settings chips and the AI-failure
+        // Retry/Dismiss buttons) stay in the accessibility tree so VoiceOver users can reach
+        // them; only the passive HUD content (transcription preview, waveform/mode row) is
+        // hidden from VoiceOver below, so it is not announced or focused while dictating.
         // TODO: Add tap-to-expand for command mode history (future enhancement)
         // .contentShape(Rectangle())
         // .onTapGesture {

@@ -500,16 +500,19 @@ final class GlobalHotkeyManager: NSObject {
         static let grave: UInt16 = 50 // kVK_ANSI_Grave (`)
     }
 
-    /// Returns `true` for Command-modified system shortcuts (Cmd+Tab, Cmd+Shift+Tab,
-    /// Cmd+Space, Cmd+`) that should be passed straight through without running the
-    /// hotkey-matching machinery.
+    /// Returns `true` for Command-modified *candidate* system switching shortcuts
+    /// (Cmd+Tab, Cmd+Shift+Tab, Cmd+Space, Cmd+`) that may be passed straight through
+    /// without running the hotkey-matching machinery.
     ///
     /// The session event tap fires for every key event system-wide, so doing the full
     /// modifier-tracking and shortcut-matching pass on these high-frequency switching
     /// shortcuts adds perceptible latency to app switching and Spotlight. That latency
-    /// compounds when VoiceOver is also intercepting the same events. None of these
-    /// shortcuts can be a FluidVoice hotkey (they are reserved by macOS), so passing
-    /// them through immediately is safe.
+    /// compounds when VoiceOver is also intercepting the same events.
+    ///
+    /// This decision is *candidate-only*: the shortcut recorder accepts arbitrary keyDown
+    /// combinations, so a user can bind one of these combos as a FluidVoice shortcut. Use
+    /// `shouldFastPathSystemShortcut(type:flags:keyCode:configuredShortcuts:)` for the real
+    /// gate — it suppresses the fast path when the combo collides with a configured shortcut.
     nonisolated static func isSystemShortcutPassthrough(
         type: CGEventType,
         flags: CGEventFlags,
@@ -522,6 +525,41 @@ final class GlobalHotkeyManager: NSObject {
             return true
         default:
             return false
+        }
+    }
+
+    /// Maps `CGEventFlags` to the `NSEvent.ModifierFlags` used for shortcut matching.
+    nonisolated static func eventModifierFlags(from flags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var modifiers: NSEvent.ModifierFlags = []
+        if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
+        if flags.contains(.maskCommand) { modifiers.insert(.command) }
+        if flags.contains(.maskAlternate) { modifiers.insert(.option) }
+        if flags.contains(.maskControl) { modifiers.insert(.control) }
+        if flags.contains(.maskShift) { modifiers.insert(.shift) }
+        return modifiers
+    }
+
+    /// Returns `true` only when a candidate system switching shortcut should actually be
+    /// fast-pathed — i.e. it is a candidate (`isSystemShortcutPassthrough`) AND it does not
+    /// collide with any currently-configured (and enabled) FluidVoice shortcut.
+    ///
+    /// If the incoming combo matches a configured FluidVoice shortcut, the fast path is
+    /// suppressed so the event falls through to normal matching and the user's shortcut still
+    /// fires. The common (non-conflicting) case keeps the latency win.
+    nonisolated static func shouldFastPathSystemShortcut(
+        type: CGEventType,
+        flags: CGEventFlags,
+        keyCode: UInt16,
+        configuredShortcuts: [(shortcut: HotkeyShortcut, isEnabled: Bool)]
+    ) -> Bool {
+        guard Self.isSystemShortcutPassthrough(type: type, flags: flags, keyCode: keyCode) else {
+            return false
+        }
+
+        let modifiers = Self.eventModifierFlags(from: flags)
+        return !configuredShortcuts.contains { configured in
+            configured.isEnabled &&
+                configured.shortcut.matches(keyCode: keyCode, modifiers: modifiers)
         }
     }
 
@@ -547,12 +585,18 @@ final class GlobalHotkeyManager: NSObject {
             return tapRecoveryResult
         }
 
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+
         // Fast path: pass system switching shortcuts straight through before any matching
         // work, so app switching / Spotlight stay snappy (especially with VoiceOver active).
-        if Self.isSystemShortcutPassthrough(
+        // Suppressed when the combo collides with a configured FluidVoice shortcut (e.g. the
+        // user bound Cmd+Space), so the user's shortcut still fires instead of being shadowed.
+        if Self.shouldFastPathSystemShortcut(
             type: type,
-            flags: event.flags,
-            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+            flags: flags,
+            keyCode: keyCode,
+            configuredShortcuts: self.configuredShortcutsForSystemPassthroughConflict()
         ) {
             // Still record the combo + cancel any pending modifier-only hold start before passing
             // through: if a Command-based modifier-only shortcut is held, this Cmd+Tab/Space/` press
@@ -569,15 +613,7 @@ final class GlobalHotkeyManager: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
-
-        var eventModifiers: NSEvent.ModifierFlags = []
-        if flags.contains(.maskSecondaryFn) { eventModifiers.insert(.function) }
-        if flags.contains(.maskCommand) { eventModifiers.insert(.command) }
-        if flags.contains(.maskAlternate) { eventModifiers.insert(.option) }
-        if flags.contains(.maskControl) { eventModifiers.insert(.control) }
-        if flags.contains(.maskShift) { eventModifiers.insert(.shift) }
+        let eventModifiers = Self.eventModifierFlags(from: flags)
 
         switch type {
         case .keyDown:
@@ -1747,6 +1783,28 @@ final class GlobalHotkeyManager: NSObject {
         } else {
             await self.asrService.stopWithoutTranscription()
         }
+    }
+
+    /// The set of currently-configured FluidVoice shortcuts (with their enabled state) that the
+    /// system-shortcut fast path must not silently shadow. A combo that matches an enabled entry
+    /// here is NOT fast-pathed, so the user's bound shortcut still fires (see
+    /// `shouldFastPathSystemShortcut`). The main dictation, cancel, and prompt-assignment
+    /// shortcuts are always active; the prompt/command/rewrite mode shortcuts honor their
+    /// enabled flags so a disabled mode shortcut does not block the fast path.
+    private func configuredShortcutsForSystemPassthroughConflict() -> [(shortcut: HotkeyShortcut, isEnabled: Bool)] {
+        var shortcuts: [(shortcut: HotkeyShortcut, isEnabled: Bool)] = [
+            (self.shortcut, true),
+            (self.promptModeShortcut, self.promptModeShortcutEnabled),
+            (self.commandModeShortcut, self.commandModeShortcutEnabled),
+            (self.rewriteModeShortcut, self.rewriteModeShortcutEnabled),
+            (SettingsStore.shared.cancelRecordingHotkeyShortcut, true),
+        ]
+
+        shortcuts.append(contentsOf: self.promptShortcutAssignments.map {
+            (shortcut: $0.shortcut, isEnabled: true)
+        })
+
+        return shortcuts
     }
 
     private func matchesShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
