@@ -132,6 +132,13 @@ enum VoiceEngineLanguageCatalog {
     private static func routeCandidates(for language: VoiceEngineLanguage) -> [VoiceEngineLanguageRoute] {
         var routes: [VoiceEngineLanguageRoute] = []
 
+        // Hebrew-specialized Whisper model (ivrit.ai). Listed first so it is the
+        // recommended engine when Hebrew is selected. The model forces decode language to
+        // Hebrew internally (see SpeechModel.forcedWhisperLanguageCode).
+        if language.id == "he" {
+            routes.append(Self.route(language, .whisperIvritV3Turbo, .whisper(languageCode: "iw")))
+        }
+
         if language.id == "en" {
             routes.append(Self.route(language, .parakeetTDTv2, .automatic))
             routes.append(Self.route(language, .parakeetRealtime, .automatic))

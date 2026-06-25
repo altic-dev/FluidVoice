@@ -2313,6 +2313,8 @@ struct OnboardingFlowView: View {
             return "Nemotron Offline"
         case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLarge:
             return "Whisper"
+        case .whisperIvritV3Turbo:
+            return "ivrit.ai · Whisper v3 Turbo"
         default:
             return model.displayName
         }

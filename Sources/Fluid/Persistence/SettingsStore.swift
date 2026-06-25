@@ -3536,6 +3536,7 @@ final class SettingsStore: ObservableObject {
         case whisperMedium = "whisper-medium"
         case whisperLargeTurbo = "whisper-large-turbo" // temporarily disabled in UI
         case whisperLarge = "whisper-large"
+        case whisperIvritV3Turbo = "whisper-ivrit-v3-turbo" // Hebrew-specialized Whisper (ivrit.ai)
 
         var id: String {
             rawValue
@@ -3561,6 +3562,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo (Disabled)"
             case .whisperLarge: return "Whisper Large"
+            case .whisperIvritV3Turbo: return "Whisper Hebrew (ivrit.ai Turbo)"
             }
         }
 
@@ -3577,6 +3579,8 @@ final class SettingsStore: ObservableObject {
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "99 Languages"
+            case .whisperIvritV3Turbo:
+                return "Hebrew"
             }
         }
 
@@ -3598,6 +3602,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "~1.5 GB"
             case .whisperLargeTurbo: return "~1.6 GB"
             case .whisperLarge: return "~2.9 GB"
+            case .whisperIvritV3Turbo: return "~1.6 GB"
             }
         }
 
@@ -3624,6 +3629,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "ggml-medium.bin"
             case .whisperLargeTurbo: return "ggml-large-v3-turbo.bin"
             case .whisperLarge: return "ggml-large-v3.bin"
+            case .whisperIvritV3Turbo: return "ggml-ivrit-v3-turbo.bin"
             default: return nil
             }
         }
@@ -3637,6 +3643,29 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "medium"
             case .whisperLargeTurbo: return "large-v3-turbo"
             case .whisperLarge: return "large-v3"
+            case .whisperIvritV3Turbo: return "ivrit-v3-turbo"
+            default: return nil
+            }
+        }
+
+        /// Remote URL to download the ggml model from. Standard Whisper models live in
+        /// ggerganov/whisper.cpp; the ivrit.ai Hebrew model lives in its own HF repo under a
+        /// generic filename, so the remote path is decoupled from the local cache filename.
+        var whisperDownloadURL: URL? {
+            guard let file = self.whisperModelFile else { return nil }
+            switch self {
+            case .whisperIvritV3Turbo:
+                return URL(string: "https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin")
+            default:
+                return URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(file)")
+            }
+        }
+
+        /// Forces the whisper.cpp decode language for language-specialized models.
+        /// Returns a WhisperLanguage raw value (e.g. "iw" for Hebrew), or nil to auto-detect.
+        var forcedWhisperLanguageCode: String? {
+            switch self {
+            case .whisperIvritV3Turbo: return "iw" // SwiftWhisper's WhisperLanguage.hebrew rawValue
             default: return nil
             }
         }
@@ -3717,6 +3746,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return "Medium Quality"
             case .whisperLargeTurbo: return "Higher Quality but Faster"
             case .whisperLarge: return "Maximum Accuracy"
+            case .whisperIvritV3Turbo: return "Hebrew - ivrit.ai"
             }
         }
 
@@ -3758,6 +3788,8 @@ final class SettingsStore: ObservableObject {
                 return "Near-maximum accuracy with optimized speed."
             case .whisperLarge:
                 return "Best possible accuracy. Large download and memory usage."
+            case .whisperIvritV3Turbo:
+                return "Hebrew-specialized Whisper Large v3 Turbo, fine-tuned by ivrit.ai on real Israeli speech. Best accuracy for Hebrew and mixed Hebrew-English dictation."
             }
         }
 
@@ -3786,6 +3818,8 @@ final class SettingsStore: ObservableObject {
                 return 8.0
             case .whisperLarge:
                 return 10.0 // Large model needs ~6-8GB working memory + model size
+            case .whisperIvritV3Turbo:
+                return 8.0 // large-v3-turbo class model (~1.6 GB) + working memory
             }
         }
 
@@ -3823,6 +3857,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 2
             case .whisperLargeTurbo: return 3
             case .whisperLarge: return 1
+            case .whisperIvritV3Turbo: return 3
             }
         }
 
@@ -3844,6 +3879,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 4
             case .whisperLargeTurbo: return 5
             case .whisperLarge: return 5
+            case .whisperIvritV3Turbo: return 5
             }
         }
 
@@ -3865,6 +3901,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.40
             case .whisperLargeTurbo: return 0.65
             case .whisperLarge: return 0.20
+            case .whisperIvritV3Turbo: return 0.65
             }
         }
 
@@ -3886,6 +3923,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.80
             case .whisperLargeTurbo: return 0.95
             case .whisperLarge: return 1.00
+            case .whisperIvritV3Turbo: return 0.95
             }
         }
 
@@ -3926,7 +3964,7 @@ final class SettingsStore: ObservableObject {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
-            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge, .whisperIvritV3Turbo:
                 return false // Too slow for real-time chunk processing
             default:
                 return true // All other models support streaming
@@ -3983,7 +4021,7 @@ final class SettingsStore: ObservableObject {
                 return .qwen
             case .cohereTranscribeSixBit:
                 return .cohere
-            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge, .whisperIvritV3Turbo:
                 return .openai
             }
         }
@@ -4082,6 +4120,8 @@ final class SettingsStore: ObservableObject {
                 return "Apple"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "OpenAI"
+            case .whisperIvritV3Turbo:
+                return "ivrit.ai"
             }
         }
 
@@ -4106,6 +4146,8 @@ final class SettingsStore: ObservableObject {
                 return "#A2AAAD" // Apple Gray
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return "#10A37F" // OpenAI Teal
+            case .whisperIvritV3Turbo:
+                return "#0B6E4F" // ivrit.ai green
             }
         }
     }

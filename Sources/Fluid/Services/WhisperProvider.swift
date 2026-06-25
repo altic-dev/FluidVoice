@@ -71,6 +71,8 @@ final class WhisperProvider: TranscriptionProvider {
             return 1000 * 1024 * 1024
         // case "ggml-large-v3-turbo.bin": // buggy - so removed temporarily
         //     return 1200 * 1024 * 1024
+        case "ggml-ivrit-v3-turbo.bin":
+            return 1200 * 1024 * 1024
         case "ggml-large-v3.bin":
             return 2000 * 1024 * 1024
         default:
@@ -170,7 +172,17 @@ final class WhisperProvider: TranscriptionProvider {
 
         // Load the model
         DebugLogger.shared.info("WhisperProvider: Loading Whisper model...", source: "WhisperProvider")
-        self.whisper = Whisper(fromFileURL: self.modelURL)
+        let whisperInstance = Whisper(fromFileURL: self.modelURL)
+
+        // Language-specialized models (e.g. ivrit.ai Hebrew) force the decode language so
+        // whisper.cpp does not fall back to auto-detection on short or accented audio.
+        if let languageCode = targetModel.forcedWhisperLanguageCode,
+           let language = WhisperLanguage(rawValue: languageCode)
+        {
+            whisperInstance.params.language = language
+            DebugLogger.shared.info("WhisperProvider: Forcing decode language to \(languageCode)", source: "WhisperProvider")
+        }
+        self.whisper = whisperInstance
 
         self.loadedModelName = currentModelName
         self.isReady = true
@@ -259,16 +271,18 @@ final class WhisperProvider: TranscriptionProvider {
     // MARK: - Model Download
 
     private func downloadModel(progressHandler: ((Double) -> Void)?) async throws {
-        // Whisper models are hosted on Hugging Face
-        let modelURLString = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(modelName)"
-
-        guard let url = URL(string: modelURLString) else {
+        // Whisper models are hosted on Hugging Face. Most live in ggerganov/whisper.cpp, but
+        // language-specialized models (e.g. ivrit.ai Hebrew) ship from their own repo, so the
+        // remote URL is resolved per-model rather than built from the local filename.
+        let targetModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        guard let url = targetModel.whisperDownloadURL else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Invalid model URL"]
             )
         }
+        let modelURLString = url.absoluteString
 
         DebugLogger.shared.info("WhisperProvider: Downloading from \(modelURLString)", source: "WhisperProvider")
 
