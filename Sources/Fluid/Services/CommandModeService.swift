@@ -437,7 +437,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Check if we need confirmation for destructive commands
-                if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
+                if SettingsStore.shared.commandModeConfirmBeforeExecute, Self.isDestructiveCommand(tc.command) {
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
@@ -559,8 +559,11 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func isDestructiveCommand(_ command: String) -> Bool {
-        let cmd = command.lowercased()
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+        // Trim leading whitespace and newlines before classification so an
+        // indented or newline-prefixed command (for example ` sudo reboot`
+        // or "\ndd if=...") cannot slip past the `hasPrefix` checks below.
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         // Commands that start with these are destructive
         let destructivePrefixes = [
@@ -571,7 +574,6 @@ final class CommandModeService: ObservableObject {
             "chmod ", "chown ", "chgrp ", // change permissions/ownership
             "dd ", // disk operations
             "mkfs", "format", // filesystem formatting
-            "> ", // overwrite file
             "truncate ", // truncate file
             "shred ", // secure delete
         ]
@@ -590,6 +592,32 @@ final class CommandModeService: ObservableObject {
         ]
 
         if destructivePatterns.contains(where: { cmd.contains($0) }) {
+            return true
+        }
+
+        // Piping output into a shell interpreter runs arbitrary code
+        // (for example `curl ... | sh`, `... | bash`, or `... | /bin/bash`).
+        // The optional path segment catches absolute or relative interpreter
+        // paths; the trailing word boundary avoids false positives like
+        // `... | shasum` or `... | shuf`.
+        if cmd.range(of: #"\|\s*(\S*/)?(sh|bash|zsh|dash|fish)\b"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        // Piping into `tee` writes (or appends with -a) to files, the same
+        // destructive effect as a redirect (for example `... | tee ~/.zshrc`).
+        // The optional path segment catches `... | /usr/bin/tee`; the word
+        // boundary avoids names that merely contain `tee`.
+        if cmd.range(of: #"\|\s*(\S*/)?tee\b"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        // Output redirects overwrite or append to files, with or without
+        // surrounding spaces (for example `echo x > ~/.zshrc`, `echo x>f`,
+        // or `cat y >> /etc/hosts`). Excluding a leading `-`/`=` skips arrows
+        // like `->`/`=>`, and requiring a non-`&` target skips file-descriptor
+        // duplications like `2>&1`.
+        if cmd.range(of: #"(?<![-=])>>?\s*[^&\s]"#, options: .regularExpression) != nil {
             return true
         }
 
