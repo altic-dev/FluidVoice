@@ -432,7 +432,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Check if we need confirmation for destructive commands
-                if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
+                if SettingsStore.shared.commandModeConfirmBeforeExecute, Self.isDestructiveCommand(tc.command) {
                     self.didRequireConfirmationThisRun = true
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
@@ -591,8 +591,28 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func isDestructiveCommand(_ command: String) -> Bool {
-        let cmd = command.lowercased()
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+        // Inspect each chained segment independently so a destructive command
+        // hidden after a separator (for example "echo ok && killall Finder")
+        // is not masked by a benign leading command. "&&", "||", ";", "&"
+        // (background) and newlines all separate commands in the shell. Pipe
+        // ("|") is intentionally not a split point here; piped destructive
+        // commands are matched by the substring patterns in isDestructiveSegment.
+        // "&&" is normalized before the single "&" so it is not mistaken for two
+        // background separators.
+        let normalized = command
+            .replacingOccurrences(of: "&&", with: "\n")
+            .replacingOccurrences(of: "||", with: "\n")
+            .replacingOccurrences(of: ";", with: "\n")
+            .replacingOccurrences(of: "&", with: "\n")
+
+        return normalized
+            .components(separatedBy: "\n")
+            .contains { isDestructiveSegment($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    private nonisolated static func isDestructiveSegment(_ segment: String) -> Bool {
+        let cmd = segment.lowercased()
 
         // Commands that start with these are destructive
         let destructivePrefixes = [
