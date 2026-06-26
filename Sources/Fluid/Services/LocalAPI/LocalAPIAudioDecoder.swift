@@ -9,7 +9,10 @@ enum LocalAPIAudioDecoder {
         let file = try AVAudioFile(forReading: fileURL)
         let sourceFormat = file.processingFormat
         let maxFrames = AVAudioFramePosition(sourceFormat.sampleRate * self.maxDurationSeconds)
-        let framesToRead = min(file.length, maxFrames)
+        guard file.length <= maxFrames else {
+            throw self.durationLimitExceededError()
+        }
+        let framesToRead = file.length
         guard framesToRead > 0 else { return [] }
 
         guard let sourceBuffer = AVAudioPCMBuffer(
@@ -47,13 +50,17 @@ enum LocalAPIAudioDecoder {
 
         let maxFrames = AVAudioFramePosition(sourceFormat.sampleRate * self.maxDurationSeconds)
         guard file.length <= maxFrames else {
-            throw NSError(
-                domain: "LocalAPIAudioDecoder",
-                code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "Audio file exceeds the \(Int(self.maxDurationSeconds)) second API limit."]
-            )
+            throw self.durationLimitExceededError()
         }
 
         return Int((Double(file.length) * self.sampleRate / sourceFormat.sampleRate).rounded())
+    }
+
+    private static func durationLimitExceededError() -> NSError {
+        NSError(
+            domain: "LocalAPIAudioDecoder",
+            code: -5,
+            userInfo: [NSLocalizedDescriptionKey: "Audio file exceeds the \(Int(self.maxDurationSeconds)) second API limit."]
+        )
     }
 }
