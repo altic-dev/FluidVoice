@@ -1,0 +1,72 @@
+name: Build and Test
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build FluidVoice
+    runs-on: macos-latest
+    timeout-minutes: 40
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install SwiftLint
+      run: brew install swiftlint
+
+    - name: Install xcpretty
+      run: sudo gem install xcpretty
+
+    - name: Cache Whisper models
+      uses: actions/cache@v4
+      with:
+        path: ~/Library/Caches/WhisperModels
+        key: ${{ runner.os }}-whisper-models-v1
+
+    - name: Run SwiftLint (strict)
+      run: swiftlint --strict --config .swiftlint.yml
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+    
+    - name: Show Xcode version
+      run: xcodebuild -version
+      
+    - name: Resolve Swift Package Dependencies
+      run: xcodebuild -resolvePackageDependencies -project Fluid.xcodeproj -scheme Fluid
+      
+    - name: Build Project
+      run: |
+        set -o pipefail
+        xcodebuild clean build \
+          -project Fluid.xcodeproj \
+          -scheme Fluid \
+          -destination 'platform=macOS,arch=arm64' \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          | xcpretty
+      continue-on-error: false
+      
+    - name: Run Tests
+      run: |
+        set -o pipefail
+        xcodebuild test \
+          -project Fluid.xcodeproj \
+          -scheme Fluid \
+          -destination 'platform=macOS,arch=arm64' \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          | xcpretty

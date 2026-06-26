@@ -1,0 +1,5 @@
+# Xcode project files - use custom merge driver for better conflict resolution
+*.pbxproj merge=union
+
+# This helps prevent team ID conflicts by merging non-conflicting changes automatically
+# Contributors should still be careful not to commit team ID changes

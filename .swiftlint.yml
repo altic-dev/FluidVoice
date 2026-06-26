@@ -1,0 +1,76 @@
+disabled_rules:
+  - colon # handled by SwiftFormat
+  - trailing_comma # handled by SwiftFormat
+  - explicit_type_interface
+  - closure_body_length
+  - attributes 
+  - multiple_closures_with_trailing_closure 
+  - opening_brace # handled by SwiftFormat
+  - implicit_optional_initialization # common in SwiftUI/AppKit; doesn't indicate a bug here
+  - nesting # large view/service files often contain nested types
+  - todo # TODOs are allowed during iteration; tracked in issues/PRs
+
+opt_in_rules:
+  - discouraged_optional_collection
+  - empty_count
+  - fatal_error_message
+  - file_header
+  - first_where
+  - force_unwrapping
+  - literal_expression_end_indentation
+  - multiline_arguments
+  - pattern_matching_keywords
+  - redundant_type_annotation
+  - sorted_imports
+  - strict_fileprivate
+  - toggle_bool
+  - unavailable_function
+
+excluded:
+  - .build
+  - DerivedData
+  - Fluid.xcodeproj
+  - scratch
+line_length:
+  warning: 250
+  error: 300
+  ignores_comments: true
+  ignores_urls: true
+
+identifier_name:
+  min_length: 1
+  allowed_symbols: ["_"]
+  excluded: [id, ui, ai, x, y, ok, xs, sm, md, lg, xl, c]
+
+type_body_length:
+  warning: 2000
+  error: 2500
+
+file_length:
+  warning: 4000
+  error: 5000
+
+function_body_length:
+  warning: 400
+  error: 600
+
+cyclomatic_complexity:
+  warning: 80
+  error: 100
+
+function_parameter_count:
+  warning: 7
+  error: 10
+
+large_tuple:
+  warning: 4
+  error: 6
+
+custom_rules:
+  disallow_nslog:
+    regex: 'NSLog'
+    message: "Use DebugLogger.shared.* for consistency."
+  enforce_mark_spacing:
+    regex: '\/\/ MARK:(?! - )'
+    message: "Format section markers as `// MARK: - Section`."
+

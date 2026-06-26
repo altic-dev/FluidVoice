@@ -1,0 +1,113 @@
+{
+  "pins" : [
+    {
+      "identity" : "appupdater",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mxcl/AppUpdater.git",
+      "state" : {
+        "revision" : "1b60169700489f16cfbe2feb6b1e32ca5c9464b8",
+        "version" : "1.1.1"
+      }
+    },
+    {
+      "identity" : "dynamicnotchkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/altic-dev/DynamicNotchKit.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "708f31da5319436c64059ee7ae566953407063d7"
+      }
+    },
+    {
+      "identity" : "fluidaudio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/altic-dev/FluidAudio.git",
+      "state" : {
+        "branch" : "B/cohere-coreml-asr",
+        "revision" : "72625bbccf9f6c797a540a1f1cb66a4cb60753eb"
+      }
+    },
+    {
+      "identity" : "foundation",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PromiseKit/Foundation",
+      "state" : {
+        "revision" : "985f17fa69ee0e5b7eb3ff9be87ffc4e05fc0927",
+        "version" : "3.4.0"
+      }
+    },
+    {
+      "identity" : "path.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mxcl/Path.swift",
+      "state" : {
+        "revision" : "8e355c28e9393c42e58b18c54cace2c42c98a616",
+        "version" : "1.4.1"
+      }
+    },
+    {
+      "identity" : "posthog-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/PostHog/posthog-ios.git",
+      "state" : {
+        "revision" : "1ba3e8636d4f1ad9f18f5a4273e88d39a162466b",
+        "version" : "3.41.1"
+      }
+    },
+    {
+      "identity" : "promisekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mxcl/PromiseKit.git",
+      "state" : {
+        "revision" : "8a98e31a47854d3180882c8068cc4d9381bf382d",
+        "version" : "6.22.1"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "7b847a3b7008b2dc2f47ca3110d8c782fb2e5c7e",
+        "version" : "1.3.0"
+      }
+    },
+    {
+      "identity" : "swift-jinja",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-jinja.git",
+      "state" : {
+        "revision" : "d81197f35f41445bc10e94600795e68c6f5e94b0",
+        "version" : "2.3.1"
+      }
+    },
+    {
+      "identity" : "swift-transformers",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-transformers",
+      "state" : {
+        "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
+        "version" : "1.1.6"
+      }
+    },
+    {
+      "identity" : "swiftwhisper",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/exPHAT/SwiftWhisper.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "c340197966ebd264f3135d3955874b40f8ed58bc"
+      }
+    },
+    {
+      "identity" : "version",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mxcl/Version",
+      "state" : {
+        "revision" : "200046c93f6d5d78a6d72bfd9c0b27a95e9c0a2b",
+        "version" : "1.2.0"
+      }
+    }
+  ],
+  "version" : 2
+}

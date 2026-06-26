@@ -1,0 +1,665 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
+		7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */; };
+		7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
+		7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
+		7CAA00012F42AA0100C0DEF0 /* CommandModeDestructiveCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CAA00022F42AA0100C0DEF0 /* CommandModeDestructiveCommandTests.swift */; };
+		7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */; };
+		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
+		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
+		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
+		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		7CDB0A322F3C4D5600FB7CAD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7C078D8E2E3B339200FB7CAC;
+			remoteInfo = fluid;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
+		7CAA00022F42AA0100C0DEF0 /* CommandModeDestructiveCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandModeDestructiveCommandTests.swift; sourceTree = "<group>"; };
+		7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationE2ETests.swift; sourceTree = "<group>"; };
+		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
+		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
+		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		7C078D912E3B339200FB7CAC /* Sources/Fluid */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/Fluid;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7C078D8C2E3B339200FB7CAC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
+				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
+				7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */,
+				7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */,
+				7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7CDB0A222F3C4D5600FB7CAD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7C078D862E3B339200FB7CAC = {
+			isa = PBXGroup;
+			children = (
+				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+				7CDB0A242F3C4D5600FB7CAD /* Tests */,
+				7CDB0A282F3C4D5600FB7CAD /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		7C078D902E3B339200FB7CAC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */,
+				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7CDB0A242F3C4D5600FB7CAD /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */ = {
+			isa = PBXGroup;
+			children = (
+				7CDB0A262F3C4D5600FB7CAD /* Helpers */,
+				7CDB0A272F3C4D5600FB7CAD /* Resources */,
+				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
+				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
+				7CAA00022F42AA0100C0DEF0 /* CommandModeDestructiveCommandTests.swift */,
+			);
+			path = FluidDictationIntegrationTests;
+			sourceTree = "<group>";
+		};
+		7CDB0A262F3C4D5600FB7CAD /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */,
+			);
+			path = Helpers;
+			sourceTree = "<group>";
+		};
+		7CDB0A272F3C4D5600FB7CAD /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		7CDB0A282F3C4D5600FB7CAD /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7C078D8E2E3B339200FB7CAC /* fluid */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7C078D9A2E3B339300FB7CAC /* Build configuration list for PBXNativeTarget "fluid" */;
+			buildPhases = (
+				7C078D8B2E3B339200FB7CAC /* Sources */,
+				7C078D8C2E3B339200FB7CAC /* Frameworks */,
+				7C078D8D2E3B339200FB7CAC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+			);
+			name = fluid;
+			packageProductDependencies = (
+				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
+				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
+				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */,
+				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+			);
+			productName = FluidVoice;
+			productReference = 7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */;
+			productType = "com.apple.product-type.application";
+		};
+		7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7CDB0A332F3C4D5600FB7CAD /* Build configuration list for PBXNativeTarget "FluidDictationIntegrationTests" */;
+			buildPhases = (
+				7CDB0A212F3C4D5600FB7CAD /* Sources */,
+				7CDB0A222F3C4D5600FB7CAD /* Frameworks */,
+				7CDB0A232F3C4D5600FB7CAD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7CDB0A312F3C4D5600FB7CAD /* PBXTargetDependency */,
+			);
+			name = FluidDictationIntegrationTests;
+			productName = FluidDictationIntegrationTests;
+			productReference = 7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7C078D872E3B339200FB7CAC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					7C078D8E2E3B339200FB7CAC = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					7CDB0A1F2F3C4D5600FB7CAD = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = 7C078D8A2E3B339200FB7CAC /* Build configuration list for PBXProject "Fluid" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 7C078D862E3B339200FB7CAC;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
+				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
+				7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */,
+				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 7C078D902E3B339200FB7CAC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7C078D8E2E3B339200FB7CAC /* fluid */,
+				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7C078D8D2E3B339200FB7CAC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7CDB0A232F3C4D5600FB7CAD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7C078D8B2E3B339200FB7CAC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7CDB0A212F3C4D5600FB7CAD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
+				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
+				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
+				7CAA00012F42AA0100C0DEF0 /* CommandModeDestructiveCommandTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7CDB0A312F3C4D5600FB7CAD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7C078D8E2E3B339200FB7CAC /* fluid */;
+			targetProxy = 7CDB0A322F3C4D5600FB7CAD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		7C078D982E3B339300FB7CAC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		7C078D992E3B339300FB7CAC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		7C078D9B2E3B339300FB7CAC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = YES;
+				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
+				ENABLE_RESOURCE_ACCESS_PRINTING = YES;
+				ENABLE_RESOURCE_ACCESS_USB = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe speech from microphone";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
+				PRODUCT_NAME = "FluidVoice Debug";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		7C078D9C2E3B339300FB7CAC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = YES;
+				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
+				ENABLE_RESOURCE_ACCESS_PRINTING = YES;
+				ENABLE_RESOURCE_ACCESS_USB = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Transcribe speech from microphone";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
+				PRODUCT_NAME = FluidVoice;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
+		7CDB0A342F3C4D5600FB7CAD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidDictationIntegrationTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
+				PRODUCT_NAME = FluidDictationIntegrationTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+			};
+			name = Debug;
+		};
+		7CDB0A352F3C4D5600FB7CAD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidDictationIntegrationTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
+				PRODUCT_NAME = FluidDictationIntegrationTests;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7C078D8A2E3B339200FB7CAC /* Build configuration list for PBXProject "Fluid" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C078D982E3B339300FB7CAC /* Debug */,
+				7C078D992E3B339300FB7CAC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7C078D9A2E3B339300FB7CAC /* Build configuration list for PBXNativeTarget "fluid" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C078D9B2E3B339300FB7CAC /* Debug */,
+				7C078D9C2E3B339300FB7CAC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7CDB0A332F3C4D5600FB7CAD /* Build configuration list for PBXNativeTarget "FluidDictationIntegrationTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7CDB0A342F3C4D5600FB7CAD /* Debug */,
+				7CDB0A352F3C4D5600FB7CAD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
+			requirement = {
+				branch = "B/cohere-coreml-asr";
+				kind = branch;
+			};
+		};
+		7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/exPHAT/SwiftWhisper.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.0;
+			};
+		};
+		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/altic-dev/DynamicNotchKit.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ejbills/mediaremote-adapter";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mxcl/AppUpdater.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7C078DA42E3B386A00FB7CAC /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C1C72F02EECBD1300E3BF4D /* XCRemoteSwiftPackageReference "SwiftWhisper" */;
+			productName = SwiftWhisper;
+		};
+		7C3697882ED70F9C005874CE /* DynamicNotchKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */;
+			productName = DynamicNotchKit;
+		};
+		7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */;
+			productName = MediaRemoteAdapter;
+		};
+		7CE006BC2E80EBE600DDCCD6 /* AppUpdater */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */;
+			productName = AppUpdater;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 7C078D872E3B339200FB7CAC /* Project object */;
+}
