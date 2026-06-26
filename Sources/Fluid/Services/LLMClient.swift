@@ -795,7 +795,7 @@ final class LLMClient {
 
     // MARK: - Parse Non-Streaming Message
 
-    private func parseResponsesResponse(_ json: [String: Any]) throws -> Response {
+    func parseResponsesResponse(_ json: [String: Any]) throws -> Response {
         guard let output = json["output"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
         }
@@ -838,12 +838,12 @@ final class LLMClient {
 
         return Response(
             thinking: thinking.isEmpty ? nil : thinking,
-            content: cleanedContent.isEmpty ? rawContent.trimmingCharacters(in: .whitespacesAndNewlines) : cleanedContent,
+            content: cleanedContent,
             toolCalls: parsedToolCalls
         )
     }
 
-    private func parseMessageResponse(_ message: [String: Any]) -> Response {
+    func parseMessageResponse(_ message: [String: Any]) -> Response {
         // Extract content
         let rawContent = message["content"] as? String ?? ""
 
@@ -878,7 +878,7 @@ final class LLMClient {
 
         return Response(
             thinking: finalThinking.isEmpty ? nil : finalThinking,
-            content: cleanedContent.isEmpty ? rawContent : cleanedContent,
+            content: cleanedContent,
             toolCalls: parsedToolCalls
         )
     }
