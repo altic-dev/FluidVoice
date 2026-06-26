@@ -108,11 +108,22 @@ final class TerminalService {
                 }
             }
 
+            // Drain stdout and stderr concurrently while the process is still
+            // running. A child that writes more than the pipe buffer (~64KB)
+            // blocks on write() until its output is read, so reading only after
+            // waitUntilExit() would deadlock until the timeout fired and return
+            // truncated output. Background reads keep both pipes drained so the
+            // process can run to completion.
+            let outputHandle = outputPipe.fileHandleForReading
+            let errorHandle = errorPipe.fileHandleForReading
+            async let pendingOutput = Task.detached { outputHandle.readDataToEndOfFile() }.value
+            async let pendingError = Task.detached { errorHandle.readDataToEndOfFile() }.value
+
+            let outputData = await pendingOutput
+            let errorData = await pendingError
+
             process.waitUntilExit()
             timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
 
             let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)

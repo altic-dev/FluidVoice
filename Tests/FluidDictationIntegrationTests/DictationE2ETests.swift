@@ -2225,6 +2225,39 @@ final class DictationE2ETests: XCTestCase {
         )
     }
 
+    func testTerminalServiceExecute_largeStdoutIsNotTruncatedAndReturnsQuickly() async {
+        // Regression for a pipe-buffer deadlock: execute() used to call
+        // waitUntilExit() before draining stdout, so a command writing more than
+        // the ~64KB pipe buffer blocked on write() until the 30s timeout fired,
+        // returning truncated output with success == false. Draining stdout and
+        // stderr concurrently lets the command run to completion.
+        let service = TerminalService()
+        let lineCount = 200_000
+
+        let result = await service.execute(command: "seq 1 \(lineCount)")
+
+        XCTAssertTrue(result.success, "Expected success, got exitCode \(result.exitCode) error \(result.error ?? "nil")")
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertGreaterThan(result.output.utf8.count, 64 * 1024, "Output should exceed the 64KB pipe buffer")
+        XCTAssertTrue(result.output.hasSuffix("\(lineCount)"), "Last line should be complete, output was truncated")
+        XCTAssertEqual(result.output.split(separator: "\n").count, lineCount)
+        XCTAssertLessThan(result.executionTimeMs, 15000, "Should return promptly, not after the ~30s timeout")
+    }
+
+    func testTerminalServiceExecute_largeStderrIsNotTruncated() async throws {
+        // The same deadlock applied to stderr; both pipes must be drained concurrently.
+        let service = TerminalService()
+        let lineCount = 200_000
+
+        let result = await service.execute(command: "seq 1 \(lineCount) 1>&2")
+
+        XCTAssertTrue(result.success, "Expected success, got exitCode \(result.exitCode)")
+        let stderr = try XCTUnwrap(result.error)
+        XCTAssertGreaterThan(stderr.utf8.count, 64 * 1024, "Stderr should exceed the 64KB pipe buffer")
+        XCTAssertTrue(stderr.hasSuffix("\(lineCount)"), "Last stderr line should be complete, output was truncated")
+        XCTAssertLessThan(result.executionTimeMs, 15000, "Should return promptly, not after the ~30s timeout")
+    }
+
     private static func modelDirectoryForRun() -> URL {
         // Use a stable path on CI so GitHub Actions cache can speed up runs.
         if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||
