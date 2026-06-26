@@ -2160,6 +2160,21 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Extra seconds to keep recording after the user presses stop, so the tail of their
+    /// last word isn't clipped. Default 0.2; range 0–0.4s. Read by ASRService at stop time.
+    var recordingTailDuration: Double {
+        get {
+            // 0 is a valid value here (disables the tail), so don't treat a stored 0 as "unset".
+            guard self.defaults.object(forKey: Keys.recordingTailDuration) != nil else { return 0.2 }
+            return self.defaults.double(forKey: Keys.recordingTailDuration)
+        }
+        set {
+            objectWillChange.send()
+            let clamped = max(min(newValue, 0.4), 0.0)
+            self.defaults.set(clamped, forKey: Keys.recordingTailDuration)
+        }
+    }
+
     /// The size of the recording overlay (default: medium)
     var overlaySize: OverlaySize {
         get {
@@ -3292,6 +3307,7 @@ final class SettingsStore: ObservableObject {
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
+            recordingTailDuration: self.recordingTailDuration,
             overlaySize: self.overlaySize,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
@@ -3445,6 +3461,9 @@ final class SettingsStore: ObservableObject {
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
+        if let recordingTailDuration = payload.recordingTailDuration {
+            self.recordingTailDuration = recordingTailDuration
+        }
         self.overlaySize = payload.overlaySize
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
@@ -5452,6 +5471,7 @@ private extension SettingsStore {
         static let overlayPosition = "OverlayPosition"
         static let notchPresentationMode = "NotchPresentationMode"
         static let overlayBottomOffset = "OverlayBottomOffset"
+        static let recordingTailDuration = "RecordingTailDuration"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"
         static let overlaySize = "OverlaySize"
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"

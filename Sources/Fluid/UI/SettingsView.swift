@@ -836,6 +836,32 @@ struct SettingsView: View {
                                     }
                                     Divider().opacity(0.2)
 
+                                    HStack(alignment: .center) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Extra recording after stop")
+                                                .font(self.theme.typography.bodyStrong)
+                                                .foregroundStyle(self.settingsTitleText)
+                                            Text("Keeps recording briefly after you press stop so your last word isn't cut off.")
+                                                .font(self.theme.typography.bodySmall)
+                                                .foregroundStyle(self.settingsSecondaryText)
+                                        }
+
+                                        Spacer()
+
+                                        HStack(spacing: 6) {
+                                            Slider(value: self.$settings.recordingTailDuration, in: 0...0.4, step: 0.05)
+                                                .frame(width: 110)
+                                                .controlSize(.small)
+
+                                            Text(String(format: "%.2f s", self.settings.recordingTailDuration))
+                                                .font(.caption.monospaced())
+                                                .foregroundStyle(self.settingsSecondaryText)
+                                                .frame(width: 54, alignment: .trailing)
+                                        }
+                                        .frame(width: 170, alignment: .trailing)
+                                    }
+                                    Divider().opacity(0.2)
+
                                     self.optionToggleRow(
                                         title: "Copy to Clipboard",
                                         description: "Automatically copy transcribed text to clipboard as a backup.",

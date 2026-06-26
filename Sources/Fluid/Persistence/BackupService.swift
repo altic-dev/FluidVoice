@@ -81,6 +81,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let visualizerNoiseThreshold: Double
     let overlayPosition: SettingsStore.OverlayPosition
     let overlayBottomOffset: Double
+    // Optional so backups written before this field existed still decode.
+    let recordingTailDuration: Double?
     let overlaySize: SettingsStore.OverlaySize
     let transcriptionPreviewCharLimit: Int
     let userTypingWPM: Int
