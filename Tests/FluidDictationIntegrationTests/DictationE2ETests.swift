@@ -3,6 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
+// swiftlint:disable:next type_body_length
 final class DictationE2ETests: XCTestCase {
     private let enableTranscriptionSoundsKey = "EnableTranscriptionSounds"
     private let transcriptionStartSoundKey = "TranscriptionStartSound"
@@ -1218,6 +1219,31 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertEqual(state.customWords.map(\.text), ["FluidVoice", "Barath"])
         XCTAssertEqual(state.customWords.map(\.weight), [10.0, 10.0])
         XCTAssertEqual(state.customWords.map(\.aliases), [[], []])
+    }
+
+    // MARK: - Privacy: disk-log redaction
+
+    // LLMError.httpError carries the raw provider error body, which can echo the request and
+    // therefore the user's dictated transcript / prompt. Callers persist error.localizedDescription
+    // to the plaintext disk log (~/Library/Logs/Fluid/Fluid.log), so the description must surface the
+    // body size only, never the body itself. Regression guard for the disk-log privacy fix: this
+    // fails if the raw error body is ever re-embedded in the description.
+    func testHTTPErrorDescriptionDoesNotEmbedProviderBody() {
+        let secretBody = "echoed-prompt: the user dictated their account password hunter2"
+        let description = LLMError.httpError(503, secretBody).errorDescription ?? ""
+
+        XCTAssertFalse(
+            description.contains(secretBody),
+            "LLMError.httpError description must not embed the raw provider error body. Got: \(description)"
+        )
+        XCTAssertTrue(
+            description.contains("503"),
+            "LLMError.httpError description should still surface the status code. Got: \(description)"
+        )
+        XCTAssertTrue(
+            description.contains("\(secretBody.count) chars"),
+            "LLMError.httpError description should report the body size for diagnostics. Got: \(description)"
+        )
     }
 
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
