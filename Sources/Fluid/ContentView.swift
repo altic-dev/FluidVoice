@@ -1811,7 +1811,7 @@ struct ContentView: View {
         // input) is always the sole user turn. Folding both into the user message
         // was the previous behaviour for dictation calls, but it causes weaker
         // models to answer the transcript rather than apply the instructions.
-        let systemPrompt = promptText
+        let systemPrompt = SettingsStore.renderSystemPrompt(promptText: promptText, transcript: inputText)
         let userMessageContent = inputText
 
         // Route to Apple Intelligence if selected

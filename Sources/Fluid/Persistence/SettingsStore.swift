@@ -1149,6 +1149,14 @@ final class SettingsStore: ObservableObject {
         return promptText + "\n\n" + transcript
     }
 
+    /// Substitute `${transcript}` in a system-role prompt template.
+    /// Unlike `renderDictationUserMessage`, this never appends the transcript —
+    /// the transcript is always sent as a separate user turn.
+    static func renderSystemPrompt(promptText: String, transcript: String) -> String {
+        guard promptText.contains(self.transcriptPlaceholder) else { return promptText }
+        return promptText.replacingOccurrences(of: self.transcriptPlaceholder, with: transcript)
+    }
+
     private func defaultPromptResolution(
         for mode: PromptMode,
         source: PromptResolutionSource,

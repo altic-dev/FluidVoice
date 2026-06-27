@@ -8,11 +8,10 @@ import XCTest
 
 @MainActor
 final class DictationSystemPromptTests: XCTestCase {
-
     // MARK: - effectiveDictationSystemPrompt
 
     func testEffectiveDictationSystemPrompt_returnsConfiguredPrompt() {
-        withPromptSettingsRestored {
+        self.withPromptSettingsRestored {
             let settings = SettingsStore.shared
             let custom = SettingsStore.DictationPromptProfile(
                 name: "Test Profile",
@@ -29,7 +28,7 @@ final class DictationSystemPromptTests: XCTestCase {
     }
 
     func testEffectiveDictationSystemPrompt_offSelection_returnsDefault() {
-        withPromptSettingsRestored {
+        self.withPromptSettingsRestored {
             let settings = SettingsStore.shared
             settings.setDictationPromptSelection(.off)
 
@@ -40,21 +39,21 @@ final class DictationSystemPromptTests: XCTestCase {
         }
     }
 
-    // MARK: - renderDictationUserMessage (user message must be only the transcript)
+    // MARK: - renderSystemPrompt (${transcript} placeholder in the system role)
 
-    func testRenderDictationUserMessage_emptyPrompt_returnsOnlyTranscript() {
-        // After the fix, userMessageContent = trimmed (the raw transcript).
-        // renderDictationUserMessage("", transcript:) must return only the transcript.
-        let transcript = "this is the dictated text"
-        let result = SettingsStore.renderDictationUserMessage(promptText: "", transcript: transcript)
-        XCTAssertEqual(result, transcript, "user message with empty promptText must be the transcript only — no instructions appended")
+    func testRenderSystemPrompt_noPlaceholder_returnsPromptUnchanged() {
+        let prompt = "Clean up the transcript."
+        let result = SettingsStore.renderSystemPrompt(promptText: prompt, transcript: "hello world")
+        XCTAssertEqual(result, prompt, "prompt without placeholder must be returned unchanged")
     }
 
-    func testRenderDictationUserMessage_transcriptPlaceholder_isReplacedCorrectly() {
-        // Verify placeholder substitution is not broken by the refactor.
+    func testRenderSystemPrompt_transcriptPlaceholder_isSubstitutedInSystemRole() {
+        // Users can embed ${transcript} in their system prompt template so the transcript
+        // appears inline in their instructions. renderSystemPrompt must substitute it before
+        // the prompt is sent to the provider as the system message.
         let prompt = "Rewrite cleanly: \(SettingsStore.transcriptPlaceholder)"
         let transcript = "um so like yeah"
-        let result = SettingsStore.renderDictationUserMessage(promptText: prompt, transcript: transcript)
+        let result = SettingsStore.renderSystemPrompt(promptText: prompt, transcript: transcript)
         XCTAssertEqual(result, "Rewrite cleanly: um so like yeah")
     }
 
