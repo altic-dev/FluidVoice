@@ -1807,23 +1807,12 @@ struct ContentView: View {
             return self.buildSystemPrompt(appInfo: appInfo, dictationSlot: dictationSlot)
         }()
 
-        // Dictation enhancement folds the prompt + transcript into a single user
-        // turn (substituting `${transcript}` when present, otherwise appending
-        // the transcript after a blank line). Non-dictation callers — the AI
-        // chat tab specifically — keep the legacy two-message layout where
-        // the prompt is the system turn and the input is the user turn.
-        let systemPrompt: String
-        let userMessageContent: String
-        if isDictationCall {
-            systemPrompt = ""
-            userMessageContent = SettingsStore.renderDictationUserMessage(
-                promptText: promptText,
-                transcript: inputText
-            )
-        } else {
-            systemPrompt = promptText
-            userMessageContent = inputText
-        }
+        // Instructions always go in the system role; the transcript (or user
+        // input) is always the sole user turn. Folding both into the user message
+        // was the previous behaviour for dictation calls, but it causes weaker
+        // models to answer the transcript rather than apply the instructions.
+        let systemPrompt = promptText
+        let userMessageContent = inputText
 
         // Route to Apple Intelligence if selected
         if currentSelectedProviderID == "apple-intelligence" {
