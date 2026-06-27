@@ -73,12 +73,11 @@ final class DictationPostProcessingService {
             )
         }
 
-        let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
-        let systemPrompt = ""
-        let userMessageContent = SettingsStore.renderDictationUserMessage(
-            promptText: promptText,
+        let systemPrompt = SettingsStore.renderSystemPrompt(
+            promptText: settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil),
             transcript: trimmed
         )
+        let userMessageContent = trimmed
 
         if resolved.providerID == "apple-intelligence" {
             #if canImport(FoundationModels)
