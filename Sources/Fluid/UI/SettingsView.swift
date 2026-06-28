@@ -1042,6 +1042,20 @@ struct SettingsView: View {
                         .padding(.vertical, 4)
 
                         VStack(alignment: .leading, spacing: 12) {
+                            self.settingsToggleRow(
+                                title: "Prefer Built-in Mic with Bluetooth Output",
+                                description: "Use the Mac microphone instead of a Bluetooth headset mic while Bluetooth headphones are the output device.",
+                                isOn: Binding(
+                                    get: { self.settings.preferBuiltInMicrophoneForBluetoothOutput },
+                                    set: { newValue in
+                                        self.settings.preferBuiltInMicrophoneForBluetoothOutput = newValue
+                                        if newValue {
+                                            self.applyBuiltInInputPreferenceForBluetoothOutput()
+                                        }
+                                    }
+                                )
+                            )
+
                             HStack {
                                 Text("Input Device")
                                     .font(self.theme.typography.bodyStrong)
@@ -1077,6 +1091,7 @@ struct SettingsView: View {
                                     // Only change system default if sync is enabled
                                     if SettingsStore.shared.syncAudioDevicesWithSystem {
                                         _ = AudioDevice.setDefaultInputDevice(uid: newUID)
+                                        self.applyBuiltInInputPreferenceForBluetoothOutput()
                                     }
                                 }
                                 // Sync selection when devices load or change
@@ -1097,6 +1112,7 @@ struct SettingsView: View {
                                             }
                                         }
                                     }
+                                    self.applyBuiltInInputPreferenceForBluetoothOutput()
                                 }
                             }
 
@@ -1135,6 +1151,7 @@ struct SettingsView: View {
                                     // Only change system default if sync is enabled
                                     if SettingsStore.shared.syncAudioDevicesWithSystem {
                                         _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
+                                        self.applyBuiltInInputPreferenceForBluetoothOutput()
                                     }
                                 }
                                 // Sync selection when devices load or change
@@ -1158,6 +1175,7 @@ struct SettingsView: View {
                                             }
                                         }
                                     }
+                                    self.applyBuiltInInputPreferenceForBluetoothOutput()
                                 }
                             }
 
@@ -1583,6 +1601,7 @@ struct SettingsView: View {
                 // This avoids the CoreAudio/SwiftUI AttributeGraph race condition that causes EXC_BAD_ACCESS.
                 self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
                 self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
+                self.applyBuiltInInputPreferenceForBluetoothOutput()
                 self.refreshRollbackState()
                 self.settings.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
                 self.refreshAudioHistoryUsage()
@@ -1831,6 +1850,12 @@ struct SettingsView: View {
         SettingsStore.shared.shareAnonymousAnalytics = enabled
         AnalyticsService.shared.setEnabled(enabled)
         AnalyticsService.shared.capture(.analyticsConsentChanged, properties: ["enabled": enabled])
+    }
+
+    private func applyBuiltInInputPreferenceForBluetoothOutput() {
+        guard let inputDevice = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "SettingsView") else { return }
+        self.selectedInputUID = inputDevice.uid
+        self.cachedDefaultInputName = inputDevice.name
     }
 
     // MARK: - Helper Views

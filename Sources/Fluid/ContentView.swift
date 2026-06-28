@@ -343,6 +343,9 @@ struct ContentView: View {
             .onChange(of: self.audioObserver.changeTick) { _, _ in
                 // Hardware change detected → refresh device lists
                 self.refreshDevices()
+                if let builtInInput = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ContentView") {
+                    self.selectedInputUID = builtInInput.uid
+                }
 
                 // Only sync UI with system defaults when sync is enabled
                 // When sync is disabled, keep the user's preferred device selection
@@ -576,6 +579,10 @@ struct ContentView: View {
                self.inputDevices.contains(where: { $0.uid == systemInputUID })
             {
                 self.selectedInputUID = systemInputUID
+            }
+
+            if let builtInInput = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ContentView") {
+                self.selectedInputUID = builtInInput.uid
             }
 
             if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
@@ -4072,7 +4079,9 @@ private extension ContentView {
         self.isRewriteModeShortcutEnabled = SettingsStore.shared.rewriteModeShortcutEnabled
         self.playgroundUsed = SettingsStore.shared.playgroundUsed
         self.visualizerNoiseThreshold = SettingsStore.shared.visualizerNoiseThreshold
-        self.selectedInputUID = AudioDevice.getDefaultInputDevice()?.uid ?? ""
+        self.selectedInputUID = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ContentView")?.uid
+            ?? AudioDevice.getDefaultInputDevice()?.uid
+            ?? ""
         self.selectedOutputUID = SettingsStore.shared.preferredOutputDeviceUID ?? ""
         self.enableDebugLogs = SettingsStore.shared.enableDebugLogs
         self.hotkeyMode = SettingsStore.shared.hotkeyMode

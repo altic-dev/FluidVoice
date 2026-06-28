@@ -824,6 +824,8 @@ final class ASRService: ObservableObject {
         defer { self.isStarting = false }
 
         do {
+            AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ASRService")
+
             DebugLogger.shared.debug("⚙️ Calling configureSession()...", source: "ASRService")
             try self.configureSession()
             DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
@@ -2086,34 +2088,51 @@ final class ASRService: ObservableObject {
                        currentDevice.uid != preferredUID,
                        currentDevice.uid == systemDefault?.uid
                     {
-                        DebugLogger.shared.info(
-                            "🔌 Preferred device '\(preferredDevice.name)' reconnected. Auto-switching...",
-                            source: "ASRService"
-                        )
-
-                        if self.isRunning {
+                        if SettingsStore.shared.preferBuiltInMicrophoneForBluetoothOutput,
+                           preferredDevice.isBluetoothAudioDevice
+                        {
                             DebugLogger.shared.info(
-                                "Recording in progress - deferring preferred device switch until audio route recovery",
+                                "Preferred Bluetooth input '\(preferredDevice.name)' reconnected. Keeping built-in microphone preference active.",
                                 source: "ASRService"
                             )
-                            self.scheduleAudioRouteRecovery(reason: "preferred input reconnected")
+                            _ = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ASRService")
                         } else {
-                            DebugLogger.shared.info("Not recording - updating binding for next session", source: "ASRService")
-                            _ = self.setEngineInputDevice(
-                                deviceID: preferredDevice.id,
-                                deviceUID: preferredDevice.uid,
-                                deviceName: preferredDevice.name
+                            DebugLogger.shared.info(
+                                "🔌 Preferred device '\(preferredDevice.name)' reconnected. Auto-switching...",
+                                source: "ASRService"
                             )
+
+                            if self.isRunning {
+                                DebugLogger.shared.info(
+                                    "Recording in progress - deferring preferred device switch until audio route recovery",
+                                    source: "ASRService"
+                                )
+                                self.scheduleAudioRouteRecovery(reason: "preferred input reconnected")
+                            } else {
+                                DebugLogger.shared.info("Not recording - updating binding for next session", source: "ASRService")
+                                _ = self.setEngineInputDevice(
+                                    deviceID: preferredDevice.id,
+                                    deviceUID: preferredDevice.uid,
+                                    deviceName: preferredDevice.name
+                                )
+                            }
                         }
                     }
                 }
 
                 // Check for newly connected Bluetooth devices (auto-switch)
                 for device in currentDevices {
-                    if device.name.localizedCaseInsensitiveContains("airpods") ||
-                        device.name.localizedCaseInsensitiveContains("bluetooth")
-                    {
+                    if device.isBluetoothAudioDevice {
                         if !cachedUIDs.contains(device.uid) {
+                            if SettingsStore.shared.preferBuiltInMicrophoneForBluetoothOutput {
+                                DebugLogger.shared.info(
+                                    "🎧 New Bluetooth input detected: '\(device.name)'. Keeping built-in microphone preference active.",
+                                    source: "ASRService"
+                                )
+                                _ = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "ASRService")
+                                continue
+                            }
+
                             DebugLogger.shared.info(
                                 "🎧 New Bluetooth device detected: '\(device.name)'. Auto-switching...",
                                 source: "ASRService"

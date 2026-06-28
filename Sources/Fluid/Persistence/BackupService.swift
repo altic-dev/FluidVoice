@@ -56,6 +56,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let textInsertionMode: SettingsStore.TextInsertionMode
     let preferredInputDeviceUID: String?
     let preferredOutputDeviceUID: String?
+    let preferBuiltInMicrophoneForBluetoothOutput: Bool?
     let visualizerNoiseThreshold: Double
     let overlayPosition: SettingsStore.OverlayPosition
     let overlayBottomOffset: Double

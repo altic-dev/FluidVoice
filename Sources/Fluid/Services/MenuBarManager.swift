@@ -577,6 +577,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         if SettingsStore.shared.syncAudioDevicesWithSystem {
             _ = AudioDevice.setDefaultInputDevice(uid: uid)
+            _ = AudioDevice.applyBuiltInInputForBluetoothOutputIfNeeded(source: "MenuBarManager")
         }
 
         self.refreshMicrophoneMenu()

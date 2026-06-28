@@ -1601,6 +1601,16 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
+    var preferBuiltInMicrophoneForBluetoothOutput: Bool {
+        get {
+            self.defaults.object(forKey: Keys.preferBuiltInMicrophoneForBluetoothOutput) as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.preferBuiltInMicrophoneForBluetoothOutput)
+        }
+    }
+
     /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
     /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
     var syncAudioDevicesWithSystem: Bool {
@@ -2741,6 +2751,7 @@ final class SettingsStore: ObservableObject {
             textInsertionMode: self.textInsertionMode,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
+            preferBuiltInMicrophoneForBluetoothOutput: self.preferBuiltInMicrophoneForBluetoothOutput,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
@@ -2831,6 +2842,9 @@ final class SettingsStore: ObservableObject {
         self.textInsertionMode = payload.textInsertionMode
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.preferredOutputDeviceUID = payload.preferredOutputDeviceUID
+        if let preferBuiltInMicrophoneForBluetoothOutput = payload.preferBuiltInMicrophoneForBluetoothOutput {
+            self.preferBuiltInMicrophoneForBluetoothOutput = preferBuiltInMicrophoneForBluetoothOutput
+        }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
@@ -4276,6 +4290,7 @@ private extension SettingsStore {
         static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
+        static let preferBuiltInMicrophoneForBluetoothOutput = "PreferBuiltInMicrophoneForBluetoothOutput"
         static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"

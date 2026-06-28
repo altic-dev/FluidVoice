@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CoreAudio
 import Foundation
 import XCTest
 
@@ -22,6 +23,7 @@ final class DictationE2ETests: XCTestCase {
     private let commandModeLinkedToGlobalKey = "CommandModeLinkedToGlobal"
     private let commandModeSelectedProviderIDKey = "CommandModeSelectedProviderID"
     private let commandModeSelectedModelKey = "CommandModeSelectedModel"
+    private let preferBuiltInMicrophoneForBluetoothOutputKey = "PreferBuiltInMicrophoneForBluetoothOutput"
     private var privateAISelectedModelIDKey: String {
         PrivateAIProviderFeature.shared.selectedModelDefaultsKey
     }
@@ -67,6 +69,89 @@ final class DictationE2ETests: XCTestCase {
             XCTAssertNil(defaults.object(forKey: self.enableTranscriptionSoundsKey))
             XCTAssertEqual(defaults.string(forKey: self.transcriptionStartSoundKey), SettingsStore.TranscriptionStartSound.fluidSfx2.rawValue)
         }
+    }
+
+    func testPreferBuiltInMicrophoneForBluetoothOutput_defaultsOffAndPersistsToggle() {
+        self.withRestoredDefaults(keys: [self.preferBuiltInMicrophoneForBluetoothOutputKey]) {
+            let settings = SettingsStore.shared
+            UserDefaults.standard.removeObject(forKey: self.preferBuiltInMicrophoneForBluetoothOutputKey)
+
+            XCTAssertFalse(settings.preferBuiltInMicrophoneForBluetoothOutput)
+
+            settings.preferBuiltInMicrophoneForBluetoothOutput = true
+            XCTAssertTrue(settings.preferBuiltInMicrophoneForBluetoothOutput)
+
+            settings.preferBuiltInMicrophoneForBluetoothOutput = false
+            XCTAssertFalse(settings.preferBuiltInMicrophoneForBluetoothOutput)
+        }
+    }
+
+    func testBuiltInMicrophonePreferenceReplacesBluetoothInputWhenBluetoothOutputActive() {
+        let airPodsInput = self.audioDevice(
+            id: 1,
+            uid: "airpods-input",
+            name: "Noah AirPods Pro",
+            hasInput: true,
+            hasOutput: false,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+        let airPodsOutput = self.audioDevice(
+            id: 2,
+            uid: "airpods-output",
+            name: "Noah AirPods Pro",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+        let builtInMic = self.audioDevice(
+            id: 3,
+            uid: "BuiltInMicrophoneDevice",
+            name: "MacBook Pro Microphone",
+            hasInput: true,
+            hasOutput: false
+        )
+
+        XCTAssertEqual(
+            AudioDevice.builtInInputForBluetoothOutput(
+                currentInput: airPodsInput,
+                output: airPodsOutput,
+                inputDevices: [airPodsInput, builtInMic]
+            )?.uid,
+            builtInMic.uid
+        )
+    }
+
+    func testBuiltInMicrophonePreferenceKeepsExternalInputWhenBluetoothOutputActive() {
+        let usbMic = self.audioDevice(
+            id: 1,
+            uid: "usb-mic",
+            name: "Shure MV7",
+            hasInput: true,
+            hasOutput: false
+        )
+        let airPodsOutput = self.audioDevice(
+            id: 2,
+            uid: "airpods-output",
+            name: "Noah AirPods Pro",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+        let builtInMic = self.audioDevice(
+            id: 3,
+            uid: "BuiltInMicrophoneDevice",
+            name: "MacBook Pro Microphone",
+            hasInput: true,
+            hasOutput: false
+        )
+
+        XCTAssertNil(
+            AudioDevice.builtInInputForBluetoothOutput(
+                currentInput: usbMic,
+                output: airPodsOutput,
+                inputDevices: [usbMic, builtInMic]
+            )
+        )
     }
 
     func testDictionaryTransferDocument_encodesSimpleUserFormat() throws {
@@ -1004,6 +1089,24 @@ final class DictationE2ETests: XCTestCase {
         }
 
         run()
+    }
+
+    private func audioDevice(
+        id: AudioObjectID,
+        uid: String,
+        name: String,
+        hasInput: Bool,
+        hasOutput: Bool,
+        transportType: UInt32? = nil
+    ) -> AudioDevice.Device {
+        AudioDevice.Device(
+            id: id,
+            uid: uid,
+            name: name,
+            hasInput: hasInput,
+            hasOutput: hasOutput,
+            transportType: transportType
+        )
     }
 
     private func withPromptSettingsRestored(run: () -> Void) {

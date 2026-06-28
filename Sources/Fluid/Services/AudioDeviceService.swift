@@ -18,6 +18,28 @@ enum AudioDevice {
         let name: String
         let hasInput: Bool
         let hasOutput: Bool
+        let transportType: UInt32?
+
+        var isBluetoothAudioDevice: Bool {
+            if self.transportType == kAudioDeviceTransportTypeBluetooth ||
+                self.transportType == kAudioDeviceTransportTypeBluetoothLE
+            {
+                return true
+            }
+
+            let searchableText = "\(self.name) \(self.uid)".lowercased()
+            return searchableText.contains("airpods") ||
+                searchableText.contains("bluetooth")
+        }
+
+        var isBuiltInMicrophone: Bool {
+            let searchableText = "\(self.name) \(self.uid)".lowercased()
+            return self.hasInput &&
+                searchableText.contains("microphone") &&
+                (searchableText.contains("built") ||
+                    searchableText.contains("macbook") ||
+                    self.uid == "BuiltInMicrophoneDevice")
+        }
     }
 
     static func listAllDevices() -> [Device] {
@@ -64,10 +86,60 @@ enum AudioDevice {
             let uid = self.getStringProperty(devId, selector: kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal) ?? ""
             let hasIn = self.hasChannels(devId, scope: kAudioObjectPropertyScopeInput)
             let hasOut = self.hasChannels(devId, scope: kAudioObjectPropertyScopeOutput)
-            devices.append(Device(id: devId, uid: uid, name: name, hasInput: hasIn, hasOutput: hasOut))
+            let transportType = self.getUInt32Property(
+                devId,
+                selector: kAudioDevicePropertyTransportType,
+                scope: kAudioObjectPropertyScopeGlobal
+            )
+            devices.append(Device(id: devId, uid: uid, name: name, hasInput: hasIn, hasOutput: hasOut, transportType: transportType))
         }
 
         return devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    static func builtInInputForBluetoothOutput(
+        currentInput: Device?,
+        output: Device?,
+        inputDevices: [Device]
+    ) -> Device? {
+        guard output?.isBluetoothAudioDevice == true else { return nil }
+        guard currentInput == nil || currentInput?.isBluetoothAudioDevice == true else { return nil }
+        return inputDevices.first { $0.isBuiltInMicrophone }
+    }
+
+    @discardableResult
+    static func applyBuiltInInputForBluetoothOutputIfNeeded(source: String) -> Device? {
+        guard SettingsStore.shared.preferBuiltInMicrophoneForBluetoothOutput else { return nil }
+
+        let inputDevices = self.listInputDevices()
+        let currentInput = self.getDefaultInputDevice()
+        let currentOutput = self.getDefaultOutputDevice()
+
+        guard let builtInInput = self.builtInInputForBluetoothOutput(
+            currentInput: currentInput,
+            output: currentOutput,
+            inputDevices: inputDevices
+        ) else {
+            return nil
+        }
+
+        SettingsStore.shared.preferredInputDeviceUID = builtInInput.uid
+
+        guard currentInput?.uid != builtInInput.uid else { return builtInInput }
+
+        if self.setDefaultInputDevice(uid: builtInInput.uid) {
+            DebugLogger.shared.info(
+                "Using built-in microphone '\(builtInInput.name)' while Bluetooth output is active",
+                source: source
+            )
+            return builtInInput
+        }
+
+        DebugLogger.shared.warning(
+            "Failed to switch input to built-in microphone '\(builtInInput.name)' while Bluetooth output is active",
+            source: source
+        )
+        return nil
     }
 
     static func listInputDevices() -> [Device] {
@@ -171,6 +243,24 @@ enum AudioDevice {
         let status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, &value)
         guard status == noErr else { return nil }
         return value?.takeRetainedValue() as String?
+    }
+
+    private static func getUInt32Property(
+        _ devId: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope
+    ) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var value: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, &value)
+        guard status == noErr else { return nil }
+        return value
     }
 
     private static func hasChannels(_ devId: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
