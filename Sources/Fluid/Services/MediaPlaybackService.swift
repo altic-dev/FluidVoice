@@ -134,6 +134,8 @@ final class MediaPlaybackService {
                     return false
                 }
 
+                // Runs exactly once, only for the winning callback, before resuming the
+                // continuation, so suppression cannot be applied by a duplicate callback.
                 beforeResume()
                 continuation.resume(returning: value)
                 return true
@@ -203,8 +205,11 @@ final class MediaPlaybackService {
                 )
 
                 if isPlaying {
-                    self.applySuppression()
-                    resumeOnce(true)
+                    // Gate the suppression behind the same one-shot as the resume.
+                    // MediaRemoteAdapter can fire this callback more than once, and ducking
+                    // is not idempotent (it reads the current volume as the "original"), so a
+                    // duplicate must not re-duck or overwrite `activeSuppression`.
+                    resumeOnce(true) { self.applySuppression() }
                 } else {
                     DebugLogger.shared.debug(
                         """
