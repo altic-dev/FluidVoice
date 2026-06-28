@@ -74,6 +74,12 @@ final class NemotronProvider: TranscriptionProvider {
             .appendingPathComponent(self.folderHint, isDirectory: true)
     }
 
+    static var compiledModelCacheDirectory: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("CompiledNemotronModels", isDirectory: true)
+    }
+
     func modelsExistOnDisk() -> Bool {
         guard let dir = self.cacheDirectory else { return false }
         return Self.artifactsAreComplete(at: dir)
@@ -174,7 +180,16 @@ final class NemotronProvider: TranscriptionProvider {
                 "Nemotron: ANE model load failed; retrying with cpuAndGPU fallback [error=\(error.localizedDescription)]",
                 source: "Nemotron"
             )
-            manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndGPU)
+            self.clearCompiledModelCache()
+            do {
+                manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndGPU)
+            } catch {
+                let compiledCachePath = Self.compiledModelCacheDirectory?.path ?? "~/Library/Caches/FluidAudio/CompiledNemotronModels"
+                throw Self.makeError(
+                    "Nemotron model failed to load even after clearing the compiled CoreML cache at \(compiledCachePath). If this continues, manually delete ~/Library/Caches/FluidAudio/CompiledNemotronModels and try again.",
+                    underlyingError: error
+                )
+            }
         }
         try await self.applySelectedLanguage(to: manager)
         try Task.checkCancellation()
@@ -335,6 +350,26 @@ final class NemotronProvider: TranscriptionProvider {
         self.isReady = false
         self.streamedSampleCount = 0
         self.activeLanguageCode = nil
+    }
+
+    private func clearCompiledModelCache() {
+        Self.clearCompiledModelCache(at: Self.compiledModelCacheDirectory)
+    }
+
+    static func clearCompiledModelCache(at directory: URL?) {
+        guard let directory, FileManager.default.fileExists(atPath: directory.path) else { return }
+        DebugLogger.shared.warning(
+            "Nemotron: clearing compiled CoreML cache at \(directory.path)",
+            source: "Nemotron"
+        )
+        do {
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            DebugLogger.shared.warning(
+                "Nemotron: failed to clear compiled CoreML cache at \(directory.path): \(error.localizedDescription)",
+                source: "Nemotron"
+            )
+        }
     }
 
     private func transcribeBatched(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -597,7 +632,7 @@ final class NemotronProvider: TranscriptionProvider {
         return nil
     }
 
-    private static func shouldRetryWithoutNeuralEngine(_ error: Error) -> Bool {
+    static func shouldRetryWithoutNeuralEngine(_ error: Error) -> Bool {
         if self.hasNeuralEngineRetryCode(error as NSError) {
             return true
         }
@@ -636,8 +671,12 @@ final class NemotronProvider: TranscriptionProvider {
         }
     }
 
-    private static func makeError(_ description: String) -> NSError {
-        NSError(domain: "NemotronProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: description])
+    private static func makeError(_ description: String, underlyingError: Error? = nil) -> NSError {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: description]
+        if let underlyingError {
+            userInfo[NSUnderlyingErrorKey] = underlyingError
+        }
+        return NSError(domain: "NemotronProvider", code: -1, userInfo: userInfo)
     }
 }
 #else
