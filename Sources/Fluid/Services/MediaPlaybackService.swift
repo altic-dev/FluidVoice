@@ -42,16 +42,31 @@ final class MediaPlaybackService {
     )
 
     private let mediaController: any MediaPlaybackControlling
+    private let volumeController: SystemAudioVolumeController
     private let queryTimeoutSeconds: TimeInterval
     private let timeoutScheduler: TimeoutScheduler
+
+    /// Tracks the action we took for the current transcription session so that
+    /// `resumeIfWePaused(_:)` can revert exactly what was applied.
+    private enum ActiveSuppression {
+        /// We sent a pause command and should send play() to restore.
+        case paused
+        /// We lowered the output volume from `original` to `applied` and should
+        /// raise it back to `original`.
+        case ducked(original: Float, applied: Float)
+    }
+
+    private var activeSuppression: ActiveSuppression?
 
     /// Creates an isolated service with injectable dependencies for deterministic tests.
     init(
         mediaController: any MediaPlaybackControlling,
+        volumeController: SystemAudioVolumeController = SystemAudioVolumeController(),
         queryTimeoutSeconds: TimeInterval,
         timeoutScheduler: @escaping TimeoutScheduler
     ) {
         self.mediaController = mediaController
+        self.volumeController = volumeController
         self.queryTimeoutSeconds = queryTimeoutSeconds
         self.timeoutScheduler = timeoutScheduler
     }
@@ -64,11 +79,16 @@ final class MediaPlaybackService {
     // MARK: - Public API
 
     #if arch(arm64)
-    /// Pauses system media playback if something is currently playing.
+    /// Suppresses system media while transcription is active, if something is
+    /// currently playing.
     ///
-    /// - Returns: `true` if a pause request was issued, `false` if nothing was playing or
-    ///   if we couldn't determine playback state. The media adapter does not acknowledge
-    ///   command completion.
+    /// Depending on `SettingsStore.duckMediaInsteadOfPausing`, this either fully
+    /// pauses playback or lowers the system output volume ("ducking"). The action
+    /// taken is recorded so `resumeIfWePaused(_:)` can revert exactly what was done.
+    ///
+    /// - Returns: `true` if we took an action (pause or duck) that must later be
+    ///   reverted, `false` if nothing was playing or if we couldn't determine
+    ///   playback state. The media adapter does not acknowledge command completion.
     ///
     /// - Note: Uses a local one-shot gate to protect against `MediaRemoteAdapter`
     ///   firing the `getTrackInfo` callback more than once, which would otherwise
@@ -183,16 +203,8 @@ final class MediaPlaybackService {
                 )
 
                 if isPlaying {
-                    resumeOnce(true) {
-                        DebugLogger.shared.info(
-                            """
-                            MediaPlaybackService: Media is playing, sending pause command \
-                            (elapsedMs: \(elapsedMilliseconds()))
-                            """,
-                            source: "MediaPlaybackService"
-                        )
-                        self.mediaController.pause()
-                    }
+                    self.applySuppression()
+                    resumeOnce(true)
                 } else {
                     DebugLogger.shared.debug(
                         """
@@ -207,25 +219,94 @@ final class MediaPlaybackService {
         }
     }
 
-    /// Resumes media playback only if we were the ones who paused it.
+    /// Reverts the media suppression applied for this session — resuming playback
+    /// if we paused it, or restoring the output volume if we ducked it.
     ///
     /// - Parameter wePaused: `true` if `pauseIfPlaying()` returned `true` for this session.
     func resumeIfWePaused(_ wePaused: Bool) async {
         guard wePaused else {
             DebugLogger.shared.debug(
-                "MediaPlaybackService: We didn't pause media, not resuming",
+                "MediaPlaybackService: We didn't suppress media, nothing to revert",
                 source: "MediaPlaybackService"
             )
             return
         }
 
+        self.revertSuppression()
+    }
+
+    // MARK: - Suppression helpers
+
+    /// Either pauses playback or ducks the system output volume, based on the
+    /// user's setting, and records what was done in `activeSuppression`.
+    private func applySuppression() {
+        // Ducking: lower the output volume instead of stopping playback entirely.
+        if SettingsStore.shared.duckMediaInsteadOfPausing,
+           let original = self.volumeController.currentOutputVolume()
+        {
+            let level = Float(SettingsStore.shared.duckMediaVolumeLevel)
+            let target = original * level
+            if self.volumeController.setOutputVolume(target) {
+                // Read back the level the device actually snapped to (volume can be
+                // quantized to coarse steps) so the restore-time change check is accurate.
+                let applied = self.volumeController.currentOutputVolume() ?? target
+                self.activeSuppression = .ducked(original: original, applied: applied)
+                DebugLogger.shared.info(
+                    "MediaPlaybackService: Ducked output volume \(original) -> \(applied) for transcription",
+                    source: "MediaPlaybackService"
+                )
+                return
+            }
+
+            DebugLogger.shared.warning(
+                "MediaPlaybackService: Failed to lower output volume, falling back to pausing media",
+                source: "MediaPlaybackService"
+            )
+        }
+
         DebugLogger.shared.info(
-            "MediaPlaybackService: Resuming media playback (we paused it)",
+            "MediaPlaybackService: Media is playing, sending pause command",
             source: "MediaPlaybackService"
         )
+        self.mediaController.pause()
+        self.activeSuppression = .paused
+    }
 
-        // Use explicit play() command - never toggle
-        self.mediaController.play()
+    /// Reverts whatever `applySuppression()` did for the current session.
+    private func revertSuppression() {
+        switch self.activeSuppression {
+        case .paused:
+            DebugLogger.shared.info(
+                "MediaPlaybackService: Resuming media playback (we paused it)",
+                source: "MediaPlaybackService"
+            )
+            // Use explicit play() command - never toggle
+            self.mediaController.play()
+
+        case let .ducked(original, applied):
+            // Only restore if the volume is still roughly where we left it. If the
+            // user adjusted it during dictation, respect their choice and leave it.
+            if let current = self.volumeController.currentOutputVolume(), abs(current - applied) > 0.02 {
+                DebugLogger.shared.info(
+                    "MediaPlaybackService: Output volume changed during dictation (\(applied) -> \(current)), leaving as-is",
+                    source: "MediaPlaybackService"
+                )
+            } else {
+                DebugLogger.shared.info(
+                    "MediaPlaybackService: Restoring output volume to \(original) (we ducked it)",
+                    source: "MediaPlaybackService"
+                )
+                self.volumeController.setOutputVolume(original)
+            }
+
+        case .none:
+            DebugLogger.shared.debug(
+                "MediaPlaybackService: No active suppression to revert",
+                source: "MediaPlaybackService"
+            )
+        }
+
+        self.activeSuppression = nil
     }
     #else
     // Intel Mac stub - media control not available

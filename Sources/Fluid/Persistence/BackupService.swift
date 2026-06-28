@@ -109,6 +109,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let pauseMediaDuringTranscription: Bool
     let automaticDictionaryLearningEnabled: Bool?
     let pronunciationMatchingEnabled: Bool?
+    let duckMediaInsteadOfPausing: Bool?
+    let duckMediaVolumeLevel: Double?
     let vocabularyBoostingEnabled: Bool
     let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
     let selectedDictationPromptID: String?
