@@ -19,7 +19,8 @@ final class TranscriptionSoundPlayer {
         self.play(
             soundName: soundName,
             desiredVolume: settings.transcriptionSoundVolume,
-            independentVolume: settings.transcriptionSoundIndependentVolume
+            independentVolume: settings.transcriptionSoundIndependentVolume,
+            enforceDuckingPrecedence: true
         )
     }
 
@@ -31,7 +32,8 @@ final class TranscriptionSoundPlayer {
         self.play(
             soundName: soundName,
             desiredVolume: settings.transcriptionSoundVolume,
-            independentVolume: settings.transcriptionSoundIndependentVolume
+            independentVolume: settings.transcriptionSoundIndependentVolume,
+            enforceDuckingPrecedence: true
         )
     }
 
@@ -60,7 +62,8 @@ final class TranscriptionSoundPlayer {
     private func play(
         soundName: String,
         desiredVolume: Float,
-        independentVolume: Bool
+        independentVolume: Bool,
+        enforceDuckingPrecedence: Bool = false
     ) {
         let startedAt = ProcessInfo.processInfo.systemUptime
         DebugLogger.shared.benchmark(
@@ -77,7 +80,9 @@ final class TranscriptionSoundPlayer {
         // Media ducking owns system volume during dictation, so the cue must not
         // independently change and asynchronously restore that same volume.
         let settings = SettingsStore.shared
-        let duckingOwnsSystemVolume = settings.pauseMediaDuringTranscription && settings.duckMediaInsteadOfPausing
+        let duckingOwnsSystemVolume = enforceDuckingPrecedence
+            && settings.pauseMediaDuringTranscription
+            && settings.duckMediaInsteadOfPausing
         let useIndependentVolume = independentVolume && !duckingOwnsSystemVolume
 
         self.playbackQueue.async { [weak self] in
