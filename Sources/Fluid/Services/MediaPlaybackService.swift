@@ -51,9 +51,10 @@ final class MediaPlaybackService {
     private enum ActiveSuppression {
         /// We sent a pause command and should send play() to restore.
         case paused
-        /// We lowered the output volume from `original` to `applied` and should
-        /// raise it back to `original`.
-        case ducked(original: Float, applied: Float)
+        /// We lowered the output volume. `original` is the pre-duck snapshot to
+        /// restore (preserving per-channel balance); `applied` is what the device
+        /// actually snapped to, used to detect user changes mid-dictation.
+        case ducked(original: OutputVolumeSnapshot, applied: OutputVolumeSnapshot)
     }
 
     private var activeSuppression: ActiveSuppression?
@@ -247,17 +248,17 @@ final class MediaPlaybackService {
     private func applySuppression() {
         // Ducking: lower the output volume instead of stopping playback entirely.
         if SettingsStore.shared.duckMediaInsteadOfPausing,
-           let original = self.volumeController.currentOutputVolume()
+           let original = self.volumeController.captureOutputVolume()
         {
             let level = Float(SettingsStore.shared.duckMediaVolumeLevel)
-            let target = original * level
-            if self.volumeController.setOutputVolume(target) {
-                // Read back the level the device actually snapped to (volume can be
+            let target = original.scaled(by: level)
+            if self.volumeController.apply(target) {
+                // Re-capture what the device actually snapped to (volume can be
                 // quantized to coarse steps) so the restore-time change check is accurate.
-                let applied = self.volumeController.currentOutputVolume() ?? target
+                let applied = self.volumeController.captureOutputVolume() ?? target
                 self.activeSuppression = .ducked(original: original, applied: applied)
                 DebugLogger.shared.info(
-                    "MediaPlaybackService: Ducked output volume \(original) -> \(applied) for transcription",
+                    "MediaPlaybackService: Ducked output volume \(original.averageLevel) -> \(applied.averageLevel) for transcription",
                     source: "MediaPlaybackService"
                 )
                 return
@@ -291,17 +292,19 @@ final class MediaPlaybackService {
         case let .ducked(original, applied):
             // Only restore if the volume is still roughly where we left it. If the
             // user adjusted it during dictation, respect their choice and leave it.
-            if let current = self.volumeController.currentOutputVolume(), abs(current - applied) > 0.02 {
+            if let current = self.volumeController.currentAverageLevel(matching: applied),
+               abs(current - applied.averageLevel) > 0.02
+            {
                 DebugLogger.shared.info(
-                    "MediaPlaybackService: Output volume changed during dictation (\(applied) -> \(current)), leaving as-is",
+                    "MediaPlaybackService: Output volume changed during dictation (\(applied.averageLevel) -> \(current)), leaving as-is",
                     source: "MediaPlaybackService"
                 )
             } else {
                 DebugLogger.shared.info(
-                    "MediaPlaybackService: Restoring output volume to \(original) (we ducked it)",
+                    "MediaPlaybackService: Restoring output volume to \(original.averageLevel) (we ducked it)",
                     source: "MediaPlaybackService"
                 )
-                self.volumeController.setOutputVolume(original)
+                self.volumeController.apply(original)
             }
 
         case .none:
