@@ -96,6 +96,20 @@ final class MediaPlaybackService {
     ///   crash with `EXC_BREAKPOINT` (SIGTRAP) due to double-resume of a
     ///   `CheckedContinuation`.
     func pauseIfPlaying() async -> Bool {
+        // A suppression from a previous session may not have been reverted yet: stop() flips
+        // isRunning false before its (slow) final transcription pass, and only reverts media
+        // afterwards, so a new dictation can start during that window. Don't begin a second
+        // suppression — capturing the already-ducked volume would lose the true original and
+        // could leave the Mac stuck at the ducked level. Report no new action; the in-flight
+        // revert from the prior session restores the original volume.
+        guard self.activeSuppression == nil else {
+            DebugLogger.shared.warning(
+                "MediaPlaybackService: Suppression already active from a prior session, not starting another",
+                source: "MediaPlaybackService"
+            )
+            return false
+        }
+
         return await withCheckedContinuation { continuation in
             let queryStartedAt = DispatchTime.now().uptimeNanoseconds
             let resumeLock = NSLock()
