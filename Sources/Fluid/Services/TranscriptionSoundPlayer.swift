@@ -12,33 +12,45 @@ final class TranscriptionSoundPlayer {
     private init() {}
 
     func playStartSound() {
-        guard SettingsStore.shared.enableTranscriptionSounds else { return }
+        guard SettingsStore.shared.enableTranscriptionSounds else {
+            DebugLogger.shared.debug("Start sound skipped because transcription sounds are disabled", source: "TranscriptionSoundPlayer")
+            return
+        }
         let selected = SettingsStore.shared.transcriptionStartSound
-        guard let soundName = selected.startSoundFileName else { return }
-        self.play(soundName: soundName)
+        guard let soundName = selected.startSoundFileName else {
+            DebugLogger.shared.debug("Start sound skipped because selected sound is none", source: "TranscriptionSoundPlayer")
+            return
+        }
+        self.play(soundName: soundName, purpose: "start")
     }
 
     func playStopSound() {
-        guard SettingsStore.shared.enableTranscriptionSounds else { return }
+        guard SettingsStore.shared.enableTranscriptionSounds else {
+            DebugLogger.shared.debug("Stop sound skipped because transcription sounds are disabled", source: "TranscriptionSoundPlayer")
+            return
+        }
         let selected = SettingsStore.shared.transcriptionStartSound
-        guard let soundName = selected.stopSoundFileName else { return }
-        self.play(soundName: soundName)
+        guard let soundName = selected.stopSoundFileName else {
+            DebugLogger.shared.debug("Stop sound skipped because selected sound has no stop sound", source: "TranscriptionSoundPlayer")
+            return
+        }
+        self.play(soundName: soundName, purpose: "stop")
     }
 
     /// Preview a specific sound at the current volume setting (used in Settings UI).
     func playPreview(sound: SettingsStore.TranscriptionStartSound) {
         guard let soundName = sound.startSoundFileName else { return }
-        self.play(soundName: soundName)
+        self.play(soundName: soundName, purpose: "preview")
     }
 
     /// Preview current sound at a specific volume (used when slider is released).
     func playPreviewAtVolume(_ volume: Float) {
         let selected = SettingsStore.shared.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
-        self.play(soundName: soundName, overrideVolume: volume)
+        self.play(soundName: soundName, overrideVolume: volume, purpose: "preview")
     }
 
-    private func play(soundName: String, overrideVolume: Float? = nil) {
+    private func play(soundName: String, overrideVolume: Float? = nil, purpose: String) {
         guard let url = Bundle.main.url(forResource: soundName, withExtension: "m4a") else {
             DebugLogger.shared.error("Missing sound resource: \(soundName).m4a", source: "TranscriptionSoundPlayer")
             return
@@ -71,7 +83,11 @@ final class TranscriptionSoundPlayer {
             } else {
                 player.volume = desiredVolume
             }
-            player.play()
+            let started = player.play()
+            DebugLogger.shared.info(
+                "Played \(purpose) sound \(soundName).m4a started=\(started) volume=\(player.volume)",
+                source: "TranscriptionSoundPlayer"
+            )
 
             // Restore system volume after the sound finishes
             if settings.transcriptionSoundIndependentVolume, let saved = self.savedSystemVolume {

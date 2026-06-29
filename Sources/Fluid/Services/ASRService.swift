@@ -576,6 +576,16 @@ final class ASRService: ObservableObject {
     private var engineConfigurationChangeObserver: NSObjectProtocol?
     private var audioRouteRecoveryTask: Task<Void, Never>?
     private let audioRouteRecoveryDelayNanoseconds: UInt64 = 1_000_000_000
+    private let startupEngineConfigurationRecoveryDelayNanoseconds: UInt64 = 100_000_000
+    private let startupEngineConfigurationRecoveryWindowSeconds: TimeInterval = 2.0
+    private let startupCaptureReadyStableDelaySeconds: TimeInterval = 0.45
+    private let startupCaptureReadyAfterRecoveryDelaySeconds: TimeInterval = 0.10
+    private let startupCaptureReadyTimeoutSeconds: TimeInterval = 1.75
+    private let startupCaptureReadyPollNanoseconds: UInt64 = 25_000_000
+    private let startupCaptureReadyMinimumSamples = 2_048
+    private var lastEngineStartCompletedAt: TimeInterval?
+    private var startupEngineConfigurationRecoveryScheduled = false
+    private var startupEngineConfigurationRecoveryCompletedAt: TimeInterval?
     private var isRecoveringAudioRoute = false
     private let fastPreviewStopGraceNanoseconds: UInt64 = 200_000_000
     private let fastPreviewSampleRate = 16_000
@@ -871,6 +881,9 @@ final class ASRService: ObservableObject {
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
+        self.lastEngineStartCompletedAt = nil
+        self.startupEngineConfigurationRecoveryScheduled = false
+        self.startupEngineConfigurationRecoveryCompletedAt = nil
         self.streamingChunkAnalyticsSuccessCount = 0
         self.lastStreamingChunkFailureAnalyticsAt = nil
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
@@ -961,6 +974,56 @@ final class ASRService: ObservableObject {
                 userInfo: ["errorMessage": errorMessage]
             )
         }
+    }
+
+    func waitForCaptureReadyForStartCue() async -> Bool {
+        let waitStartedAt = Date().timeIntervalSince1970
+
+        while self.isRunning {
+            let now = Date().timeIntervalSince1970
+            let sampleCount = self.audioBuffer.count
+            let routeRecoveryIdle = self.isRecoveringAudioRoute == false && self.audioRouteRecoveryTask == nil
+
+            let stableEnough: Bool
+            if let completedAt = self.startupEngineConfigurationRecoveryCompletedAt {
+                stableEnough = now - completedAt >= self.startupCaptureReadyAfterRecoveryDelaySeconds
+            } else if self.startupEngineConfigurationRecoveryScheduled {
+                stableEnough = false
+            } else if let engineStartedAt = self.lastEngineStartCompletedAt {
+                stableEnough = now - engineStartedAt >= self.startupCaptureReadyStableDelaySeconds
+            } else {
+                stableEnough = false
+            }
+
+            if routeRecoveryIdle,
+               stableEnough,
+               sampleCount >= self.startupCaptureReadyMinimumSamples
+            {
+                DebugLogger.shared.info(
+                    "Capture ready for start cue (samples=\(sampleCount), waitedMs=\(Int(((now - waitStartedAt) * 1000).rounded())))",
+                    source: "ASRService"
+                )
+                return true
+            }
+
+            if now - waitStartedAt >= self.startupCaptureReadyTimeoutSeconds {
+                let ready = routeRecoveryIdle && sampleCount > 0
+                DebugLogger.shared.warning(
+                    "Timed out waiting for capture-ready start cue (ready=\(ready), samples=\(sampleCount), routeRecoveryIdle=\(routeRecoveryIdle), stableEnough=\(stableEnough))",
+                    source: "ASRService"
+                )
+                return ready
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: self.startupCaptureReadyPollNanoseconds)
+            } catch {
+                return false
+            }
+        }
+
+        DebugLogger.shared.debug("Start cue wait cancelled because ASR is no longer running", source: "ASRService")
+        return false
     }
 
     /// Stops the recording session and returns the transcribed text.
@@ -1746,6 +1809,7 @@ final class ASRService: ObservableObject {
                 )
 
                 try self.engine.start()
+                self.lastEngineStartCompletedAt = Date().timeIntervalSince1970
                 DebugLogger.shared.info("AVAudioEngine started successfully on attempt \(attempts + 1)", source: "ASRService")
                 return
             } catch {
@@ -1864,12 +1928,16 @@ final class ASRService: ObservableObject {
             return
         }
 
-        DebugLogger.shared.warning("Audio route changed while recording; scheduling recovery (\(reason))", source: "ASRService")
-        self.audioCapturePipeline.setRecordingEnabled(false)
-        self.audioLevelSubject.send(0.0)
-
         self.audioRouteRecoveryTask?.cancel()
-        let recoveryDelayNanoseconds = self.audioRouteRecoveryDelayNanoseconds
+        let isStartupEngineConfigurationRecovery = self.isStartupEngineConfigurationRecovery(reason: reason)
+        if isStartupEngineConfigurationRecovery {
+            self.startupEngineConfigurationRecoveryScheduled = true
+        }
+        let recoveryDelayNanoseconds = self.recoveryDelayNanoseconds(for: reason)
+        DebugLogger.shared.warning(
+            "Audio route changed while recording; scheduling recovery (\(reason), delayMs=\(recoveryDelayNanoseconds / 1_000_000))",
+            source: "ASRService"
+        )
         self.audioRouteRecoveryTask = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: recoveryDelayNanoseconds)
@@ -1878,6 +1946,21 @@ final class ASRService: ObservableObject {
             }
             await self?.recoverAudioRoute(reason: reason)
         }
+    }
+
+    private func recoveryDelayNanoseconds(for reason: String) -> UInt64 {
+        self.isStartupEngineConfigurationRecovery(reason: reason)
+            ? self.startupEngineConfigurationRecoveryDelayNanoseconds
+            : self.audioRouteRecoveryDelayNanoseconds
+    }
+
+    private func isStartupEngineConfigurationRecovery(reason: String) -> Bool {
+        guard reason == "engine configuration changed",
+              let lastEngineStartCompletedAt
+        else { return false }
+
+        let startAge = Date().timeIntervalSince1970 - lastEngineStartCompletedAt
+        return startAge >= 0 && startAge <= self.startupEngineConfigurationRecoveryWindowSeconds
     }
 
     @MainActor
@@ -1915,6 +1998,9 @@ final class ASRService: ObservableObject {
             }
 
             DebugLogger.shared.info("Audio route recovery succeeded", source: "ASRService")
+            if reason == "engine configuration changed", self.startupEngineConfigurationRecoveryScheduled {
+                self.startupEngineConfigurationRecoveryCompletedAt = Date().timeIntervalSince1970
+            }
         } catch {
             DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
             await self.stopWithoutTranscription()

@@ -2830,15 +2830,13 @@ struct ContentView: View {
             self.menuBarManager.showRecordingOverlayImmediately()
         }
 
-        if !self.isRecordingForCommand, !self.isRecordingForRewrite {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
-
         Task {
             await self.asr.start()
             if !self.asr.isRunning {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
+                return
             }
+            await self.playStartCueWhenCaptureReady()
         }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
@@ -3077,9 +3075,9 @@ struct ContentView: View {
                     "Starting voice recording for command",
                     source: "ContentView"
                 )
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
                     await self.asr.start()
+                    await self.playStartCueWhenCaptureReady()
                 }
             },
             rewriteModeCallback: {
@@ -3112,9 +3110,9 @@ struct ContentView: View {
 
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
                     await self.asr.start()
+                    await self.playStartCueWhenCaptureReady()
                 }
             },
             isDictateRecordingProvider: {
@@ -3430,22 +3428,43 @@ extension ContentView {
             self.appBench("asr_start_skipped reason=already_running")
             return
         }
-        if SettingsStore.shared.enableTranscriptionSounds {
-            TranscriptionSoundPlayer.shared.playStartSound()
-        }
         Task {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
             await self.asr.start()
             if !self.asr.isRunning {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
+                DebugLogger.shared.benchmark(
+                    "APP_BENCH",
+                    message: "asr_start_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStartStartedAt) * 1000).rounded()))",
+                    source: "AppBenchmark"
+                )
+                return
             }
             DebugLogger.shared.benchmark(
                 "APP_BENCH",
                 message: "asr_start_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStartStartedAt) * 1000).rounded()))",
                 source: "AppBenchmark"
             )
+            await self.playStartCueWhenCaptureReady()
         }
+    }
+
+    private func playStartCueWhenCaptureReady() async {
+        let cueWaitStartedAt = ProcessInfo.processInfo.systemUptime
+        let ready = await self.asr.waitForCaptureReadyForStartCue()
+        DebugLogger.shared.benchmark(
+            "APP_BENCH",
+            message: "start_cue_ready ready=\(ready) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - cueWaitStartedAt) * 1000).rounded()))",
+            source: "AppBenchmark"
+        )
+
+        guard ready, self.asr.isRunning else {
+            DebugLogger.shared.debug("Start cue skipped because capture is no longer active", source: "ContentView")
+            return
+        }
+
+        TranscriptionSoundPlayer.shared.playStartSound()
     }
 
     private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) {
