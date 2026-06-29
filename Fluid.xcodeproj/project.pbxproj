@@ -11,6 +11,7 @@
 		7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */; };
 		7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
 		7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		6D19DEDFE36041A385D02553 /* VoiceCommandProcessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97032BFB139242FDA10E67BF /* VoiceCommandProcessorTests.swift */; };
 		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
 		7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */; };
 		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
@@ -32,6 +33,7 @@
 /* Begin PBXFileReference section */
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		97032BFB139242FDA10E67BF /* VoiceCommandProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCommandProcessorTests.swift; sourceTree = "<group>"; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
 		7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationE2ETests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
@@ -104,6 +106,7 @@
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
+				97032BFB139242FDA10E67BF /* VoiceCommandProcessorTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -258,6 +261,7 @@
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
+				6D19DEDFE36041A385D02553 /* VoiceCommandProcessorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

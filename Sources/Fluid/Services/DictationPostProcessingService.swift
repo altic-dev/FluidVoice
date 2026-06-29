@@ -22,7 +22,16 @@ final class DictationPostProcessingService {
 
     func process(_ inputText: String, dictationSlot: SettingsStore.DictationShortcutSlot = .primary) async throws -> Result {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+
+        let (voiceStripped, voicePendingAction) = VoiceCommandProcessor.detect(in: trimmed, settings: SettingsStore.shared)
+        if let commandAction = voicePendingAction, voiceStripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Command-only utterance: apply the edit and bypass the LLM entirely.
+            let edited = VoiceCommandProcessor.apply(commandAction, to: "", settings: SettingsStore.shared)
+            return Result(text: edited, providerID: SettingsStore.shared.selectedProviderID, model: "")
+        }
+        let effectiveTrimmed = voiceStripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? trimmed : voiceStripped
+
+        guard !effectiveTrimmed.isEmpty else {
             return Result(text: "", providerID: SettingsStore.shared.selectedProviderID, model: "")
         }
 
@@ -49,7 +58,7 @@ final class DictationPostProcessingService {
            isPrivateAIProvider || PrivateAIIntegrationService.shouldHandleDictation(model: resolved.model)
         {
             let response = try await PrivateAIIntegrationService.shared.enhanceDictation(
-                trimmed,
+                effectiveTrimmed,
                 runtime: PrivateAIIntegrationService.RuntimeConfiguration(
                     selectedProviderID: resolved.providerID,
                     providerKey: resolved.providerKey,
@@ -67,7 +76,7 @@ final class DictationPostProcessingService {
                 )
             )
             return Result(
-                text: ASRService.applyGAAVFormatting(response.outputText),
+                text: self.applyPendingVoiceEdit(ASRService.applyGAAVFormatting(response.outputText), action: voicePendingAction),
                 providerID: resolved.providerID,
                 model: resolved.model
             )
@@ -77,7 +86,7 @@ final class DictationPostProcessingService {
         let systemPrompt = ""
         let userMessageContent = SettingsStore.renderDictationUserMessage(
             promptText: promptText,
-            transcript: trimmed
+            transcript: effectiveTrimmed
         )
 
         if resolved.providerID == "apple-intelligence" {
@@ -86,10 +95,10 @@ final class DictationPostProcessingService {
                 let provider = AppleIntelligenceProvider()
                 let output = try await provider.process(systemPrompt: systemPrompt, userText: userMessageContent)
                 guard !output.isEmpty else { throw AIProcessingError.emptyResponse }
-                return Result(text: ASRService.applyGAAVFormatting(output), providerID: resolved.providerID, model: resolved.model)
+                return Result(text: self.applyPendingVoiceEdit(ASRService.applyGAAVFormatting(output), action: voicePendingAction), providerID: resolved.providerID, model: resolved.model)
             }
             #endif
-            return Result(text: trimmed, providerID: resolved.providerID, model: resolved.model)
+            return Result(text: self.applyPendingVoiceEdit(effectiveTrimmed, action: voicePendingAction), providerID: resolved.providerID, model: resolved.model)
         }
 
         guard !resolved.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -131,10 +140,15 @@ final class DictationPostProcessingService {
             throw AIProcessingError.emptyResponse
         }
         return Result(
-            text: ASRService.applyGAAVFormatting(response.content),
+            text: self.applyPendingVoiceEdit(ASRService.applyGAAVFormatting(response.content), action: voicePendingAction),
             providerID: resolved.providerID,
             model: resolved.model
         )
+    }
+
+    private func applyPendingVoiceEdit(_ text: String, action: EditAction?) -> String {
+        guard let action else { return text }
+        return VoiceCommandProcessor.apply(action, to: text, settings: SettingsStore.shared)
     }
 
     private func resolveProvider(settings: SettingsStore, dictationSlot: SettingsStore.DictationShortcutSlot) -> ResolvedProvider {

@@ -2408,6 +2408,21 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    // MARK: - Voice Command Settings
+
+    var voiceCommandsEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.voiceCommandsEnabled) }
+        set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.voiceCommandsEnabled) }
+    }
+
+    var voiceCommandScratchWordCount: Int {
+        get {
+            let raw = self.defaults.integer(forKey: Keys.voiceCommandScratchWordCount)
+            return raw > 0 ? raw : 1
+        }
+        set { objectWillChange.send(); self.defaults.set(max(1, newValue), forKey: Keys.voiceCommandScratchWordCount) }
+    }
+
     // MARK: - Rewrite Mode Settings
 
     var rewriteModeHotkeyShortcut: HotkeyShortcut {
@@ -4316,6 +4331,10 @@ private extension SettingsStore {
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
         static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
 
+        // Voice Command Keys
+        static let voiceCommandsEnabled = "VoiceCommandsEnabled"
+        static let voiceCommandScratchWordCount = "VoiceCommandScratchWordCount"
+
         // Prompt Mode Keys (Transcribe with Prompt)
         static let promptModeHotkeyShortcut = "PromptModeHotkeyShortcut"
         static let promptModeShortcutEnabled = "PromptModeShortcutEnabled"
@@ -4709,3 +4728,5 @@ extension SettingsStore {
         return newModel
     }
 }
+
+extension SettingsStore: VoiceCommandSettings {}
