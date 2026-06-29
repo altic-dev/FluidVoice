@@ -74,12 +74,18 @@ final class TranscriptionSoundPlayer {
             return
         }
 
+        // Media ducking owns system volume during dictation, so the cue must not
+        // independently change and asynchronously restore that same volume.
+        let settings = SettingsStore.shared
+        let duckingOwnsSystemVolume = settings.pauseMediaDuringTranscription && settings.duckMediaInsteadOfPausing
+        let useIndependentVolume = independentVolume && !duckingOwnsSystemVolume
+
         self.playbackQueue.async { [weak self] in
             self?.playOnPlaybackQueue(
                 soundName: soundName,
                 url: url,
                 desiredVolume: desiredVolume,
-                independentVolume: independentVolume,
+                independentVolume: useIndependentVolume,
                 startedAt: startedAt
             )
         }
