@@ -253,9 +253,9 @@ final class MediaPlaybackService {
             let level = Float(SettingsStore.shared.duckMediaVolumeLevel)
             let target = original.scaled(by: level)
             if self.volumeController.apply(target) {
-                // Re-capture what the device actually snapped to (volume can be
-                // quantized to coarse steps) so the restore-time change check is accurate.
-                let applied = self.volumeController.captureOutputVolume() ?? target
+                // Re-read what the device actually snapped to (volume can be quantized to
+                // coarse steps) so the restore-time change check is accurate.
+                let applied = self.volumeController.reread(target) ?? target
                 self.activeSuppression = .ducked(original: original, applied: applied)
                 DebugLogger.shared.info(
                     "MediaPlaybackService: Ducked output volume \(original.averageLevel) -> \(applied.averageLevel) for transcription",
@@ -292,7 +292,7 @@ final class MediaPlaybackService {
         case let .ducked(original, applied):
             // Only restore if the volume is still roughly where we left it. If the
             // user adjusted it during dictation, respect their choice and leave it.
-            if let current = self.volumeController.currentAverageLevel(matching: applied),
+            if let current = self.volumeController.reread(applied)?.averageLevel,
                abs(current - applied.averageLevel) > 0.02
             {
                 DebugLogger.shared.info(

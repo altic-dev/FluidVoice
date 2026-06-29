@@ -22,17 +22,23 @@ struct SystemAudioVolumeController {
     func captureOutputVolume() -> OutputVolumeSnapshot? {
         guard let device = self.defaultOutputDevice() else { return nil }
 
-        // Prefer the single master element when the device exposes it.
-        if let master = self.scalarVolume(device: device, element: kAudioObjectPropertyElementMain) {
+        // Prefer the single master element, but only when it is *settable* — otherwise we
+        // could capture a read-only master and then fail to restore it on a device whose
+        // per-channel volumes are the ones that are actually settable.
+        if self.isVolumeSettable(device: device, element: kAudioObjectPropertyElementMain),
+           let master = self.scalarVolume(device: device, element: kAudioObjectPropertyElementMain)
+        {
             return OutputVolumeSnapshot(
                 deviceID: device,
                 channels: [.init(element: kAudioObjectPropertyElementMain, volume: master)]
             )
         }
 
-        // Otherwise capture each stereo channel individually so balance is retained.
+        // Otherwise capture each *settable* stereo channel individually so balance is retained.
         let channels = self.stereoChannels(device: device).compactMap { element -> OutputVolumeSnapshot.Channel? in
-            guard let volume = self.scalarVolume(device: device, element: element) else { return nil }
+            guard self.isVolumeSettable(device: device, element: element),
+                  let volume = self.scalarVolume(device: device, element: element)
+            else { return nil }
             return .init(element: element, volume: volume)
         }
         guard !channels.isEmpty else { return nil }
@@ -53,14 +59,20 @@ struct SystemAudioVolumeController {
         return didSet
     }
 
-    /// Reads the current average level of the same device and elements captured in
-    /// `snapshot`, for detecting whether the user changed the volume since we set it.
-    func currentAverageLevel(matching snapshot: OutputVolumeSnapshot) -> Float? {
-        let values = snapshot.channels.compactMap {
-            self.scalarVolume(device: snapshot.deviceID, element: $0.element)
+    /// Re-reads the current levels of the same device and elements captured in
+    /// `snapshot`, returning an updated snapshot — used both to learn what the hardware
+    /// actually snapped to (volume can be quantized to coarse steps) and to detect
+    /// whether the user changed the volume since we set it. Operates on the snapshot's
+    /// own device, so it is unaffected if the default output device changes mid-session.
+    ///
+    /// - Returns: An updated snapshot, or `nil` if a captured element is no longer readable.
+    func reread(_ snapshot: OutputVolumeSnapshot) -> OutputVolumeSnapshot? {
+        let channels = snapshot.channels.compactMap { channel -> OutputVolumeSnapshot.Channel? in
+            guard let volume = self.scalarVolume(device: snapshot.deviceID, element: channel.element) else { return nil }
+            return .init(element: channel.element, volume: volume)
         }
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Float(values.count)
+        guard channels.count == snapshot.channels.count else { return nil }
+        return OutputVolumeSnapshot(deviceID: snapshot.deviceID, channels: channels)
     }
 
     // MARK: - Private CoreAudio helpers
@@ -113,6 +125,19 @@ struct SystemAudioVolumeController {
         let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &volume)
         guard status == noErr else { return nil }
         return volume
+    }
+
+    /// Whether the volume scalar for `element` exists and can be written.
+    private func isVolumeSettable(device: AudioDeviceID, element: AudioObjectPropertyElement) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: element
+        )
+        guard AudioObjectHasProperty(device, &address) else { return false }
+
+        var settable = DarwinBoolean(false)
+        return AudioObjectIsPropertySettable(device, &address, &settable) == noErr && settable.boolValue
     }
 
     private func setScalarVolume(
