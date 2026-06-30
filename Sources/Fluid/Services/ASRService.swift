@@ -583,9 +583,12 @@ final class ASRService: ObservableObject {
     private let startupCaptureReadyTimeoutSeconds: TimeInterval = 1.75
     private let startupCaptureReadyPollNanoseconds: UInt64 = 25_000_000
     private let startupCaptureReadyMinimumSamples = 2_048
+    private let stoppedEngineReuseGraceNanoseconds: UInt64 = 20_000_000_000
     private var lastEngineStartCompletedAt: TimeInterval?
     private var startupEngineConfigurationRecoveryScheduled = false
     private var startupEngineConfigurationRecoveryCompletedAt: TimeInterval?
+    private var stoppedEngineRetainedAt: TimeInterval?
+    private var stoppedEngineReleaseTask: Task<Void, Never>?
     private var isRecoveringAudioRoute = false
     private let fastPreviewStopGraceNanoseconds: UInt64 = 200_000_000
     private let fastPreviewSampleRate = 16_000
@@ -659,6 +662,7 @@ final class ASRService: ObservableObject {
     }
 
     deinit {
+        self.stoppedEngineReleaseTask?.cancel()
         if let observer = self.vocabularyChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -877,6 +881,12 @@ final class ASRService: ObservableObject {
         self.isProcessingChunk = false
         self.skipNextChunk = false
         self.benchmarkSessionID += 1
+        let reusedStoppedEngineAgeMs = self.stoppedEngineAgeMilliseconds()
+        self.cancelStoppedEngineRelease(reason: "start")
+        self.benchmarkLog(
+            "engine_reuse_start hit=\(reusedStoppedEngineAgeMs != nil) ageMs=\(reusedStoppedEngineAgeMs.map(String.init) ?? "nil")"
+        )
+        self.stoppedEngineRetainedAt = nil
         self.benchmarkRecordingStartedAt = Date().timeIntervalSince1970
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
@@ -1026,6 +1036,67 @@ final class ASRService: ObservableObject {
         return false
     }
 
+    private func stoppedEngineAgeMilliseconds() -> Int? {
+        guard let stoppedEngineRetainedAt else { return nil }
+        return self.elapsedMilliseconds(since: stoppedEngineRetainedAt)
+    }
+
+    private func cancelStoppedEngineRelease(reason: String) {
+        guard let stoppedEngineReleaseTask else { return }
+        stoppedEngineReleaseTask.cancel()
+        self.stoppedEngineReleaseTask = nil
+        self.benchmarkLog("engine_reuse_release_cancelled reason=\(reason)")
+    }
+
+    private func releaseStoppedEngine(reason: String) {
+        self.stoppedEngineReleaseTask?.cancel()
+        self.stoppedEngineReleaseTask = nil
+        self.stoppedEngineRetainedAt = nil
+
+        let oldEngine = self.engineStorage
+        self.engineStorage = nil
+        self.benchmarkLog("engine_reuse_release reason=\(reason) hadEngine=\(oldEngine != nil)")
+
+        if let oldEngine {
+            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
+        }
+    }
+
+    private func retainStoppedEngineForReuse(reason: String) {
+        guard self.engineStorage != nil else {
+            self.benchmarkLog("engine_reuse_retained hit=false reason=\(reason)")
+            return
+        }
+
+        self.cancelStoppedEngineRelease(reason: "reschedule")
+        self.stoppedEngineRetainedAt = Date().timeIntervalSince1970
+        let reuseGraceNanoseconds = self.stoppedEngineReuseGraceNanoseconds
+        self.benchmarkLog(
+            "engine_reuse_retained hit=true reason=\(reason) graceMs=\(reuseGraceNanoseconds / 1_000_000)"
+        )
+
+        self.stoppedEngineReleaseTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: reuseGraceNanoseconds)
+            } catch {
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard self.isRunning == false,
+                      self.isStarting == false,
+                      self.isRecoveringAudioRoute == false
+                else {
+                    self.benchmarkLog("engine_reuse_release_deferred reason=busy")
+                    return
+                }
+
+                self.releaseStoppedEngine(reason: "reuse_grace_expired")
+            }
+        }
+    }
+
     /// Stops the recording session and returns the transcribed text.
     ///
     /// This method performs the complete transcription process:
@@ -1110,12 +1181,7 @@ final class ASRService: ObservableObject {
         // (potentially slow) final transcription pass.
         await MainActor.run { onCaptureStopped?() }
 
-        // Recreate the engine instance instead of calling reset() to prevent format corruption
-        // VoiceInk approach: tearing down and rebuilding ensures fresh, valid audio format on restart
-        DebugLogger.shared.debug("🗑️ Deallocating old engine and creating fresh instance...", source: "ASRService")
-        self.engineStorage = nil // Explicitly release old engine
-        // New engine will be lazily created on next access via computed property
-        DebugLogger.shared.debug("✅ Engine instance recreated", source: "ASRService")
+        self.retainStoppedEngineForReuse(reason: "normal_stop")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -1429,26 +1495,28 @@ final class ASRService: ObservableObject {
 
     private func configureSession() throws {
         DebugLogger.shared.debug("🔧 configureSession() - ENTERED", source: "ASRService")
+        let hadExistingEngine = self.engineStorage != nil
+        let engine = self.engine
 
-        if self.engine.isRunning {
+        if engine.isRunning {
             DebugLogger.shared.debug("⚠️ Engine is running, stopping before configuration", source: "ASRService")
-            self.engine.stop()
+            engine.stop()
             DebugLogger.shared.debug("✅ Engine stopped", source: "ASRService")
         }
 
-        // No need to call engine.reset() here - we created a fresh engine in stop()
-        // Accessing the engine property will either return the existing fresh engine,
-        // or create a new one if this is the first start
-        DebugLogger.shared.debug("ℹ️ Using fresh engine instance (created lazily)", source: "ASRService")
+        DebugLogger.shared.debug(
+            hadExistingEngine ? "ℹ️ Using retained engine instance" : "ℹ️ Created fresh engine instance lazily",
+            source: "ASRService"
+        )
 
         // Force input node instantiation (ensures the underlying AUHAL AudioUnit exists)
         DebugLogger.shared.debug("📍 Forcing input node instantiation...", source: "ASRService")
-        _ = self.engine.inputNode
+        _ = engine.inputNode
         DebugLogger.shared.debug("Input node instantiated", source: "ASRService")
 
         // Force output node instantiation for output device binding
         DebugLogger.shared.debug("📍 Forcing output node instantiation...", source: "ASRService")
-        _ = self.engine.outputNode
+        _ = engine.outputNode
         DebugLogger.shared.debug("✅ Output node instantiated", source: "ASRService")
 
         // NOTE: Device binding occurs in startEngine() BEFORE engine.prepare()
