@@ -4480,7 +4480,7 @@ extension SettingsStore {
             case .reliablePaste:
                 return "Clipboard Paste"
             case .clipboardOnly:
-                return "Clipboard Only"
+                return "Copy to Clipboard Only"
             }
         }
 
