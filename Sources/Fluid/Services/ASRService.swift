@@ -588,8 +588,7 @@ final class ASRService: ObservableObject {
     private var startupEngineConfigurationRecoveryScheduled = false
     private var startupEngineConfigurationRecoveryCompletedAt: TimeInterval?
     private var startupEngineConfigurationRecoveryCompletedSampleCount: Int?
-    private var recordingSessionCounter: UInt64 = 0
-    private var activeRecordingSessionID: UInt64?
+    private var recordingSessionTracker = RecordingSessionTracker()
     private var stoppedEngineRetainedAt: TimeInterval?
     private var stoppedEngineReleaseTask: Task<Void, Never>?
     private var isRecoveringAudioRoute = false
@@ -609,7 +608,7 @@ final class ASRService: ObservableObject {
     private var lastAudioLevelSentAt: TimeInterval = 0
 
     var currentRecordingSessionID: UInt64? {
-        self.activeRecordingSessionID
+        self.recordingSessionTracker.currentID
     }
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
@@ -874,8 +873,7 @@ final class ASRService: ObservableObject {
 
         // Reset media pause state for this session
         self.didPauseMediaForThisSession = false
-        self.recordingSessionCounter &+= 1
-        self.activeRecordingSessionID = self.recordingSessionCounter
+        self.recordingSessionTracker.beginSession()
         self.audioRouteRecoveryTask?.cancel()
         self.audioRouteRecoveryTask = nil
         self.isRecoveringAudioRoute = false
@@ -961,7 +959,7 @@ final class ASRService: ObservableObject {
             }
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
         } catch {
-            self.activeRecordingSessionID = nil
+            self.recordingSessionTracker.clearSession()
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
 
             // Resume media if we paused it before the failure
@@ -999,49 +997,55 @@ final class ASRService: ObservableObject {
 
     func waitForCaptureReadyForStartCue(sessionID: UInt64) async -> Bool {
         let waitStartedAt = Date().timeIntervalSince1970
+        let configuration = StartCueCaptureReadiness.Configuration(
+            stableDelaySeconds: self.startupCaptureReadyStableDelaySeconds,
+            afterRecoveryDelaySeconds: self.startupCaptureReadyAfterRecoveryDelaySeconds,
+            timeoutSeconds: self.startupCaptureReadyTimeoutSeconds,
+            minimumSamples: self.startupCaptureReadyMinimumSamples
+        )
 
-        while self.isRunning, self.activeRecordingSessionID == sessionID {
+        while true {
             let now = Date().timeIntervalSince1970
             let sampleCount = self.audioBuffer.count
             let routeRecoveryIdle = self.isRecoveringAudioRoute == false && self.audioRouteRecoveryTask == nil
+            let evaluation = StartCueCaptureReadiness.evaluate(
+                StartCueCaptureReadiness.Snapshot(
+                    isRunning: self.isRunning,
+                    activeSessionID: self.recordingSessionTracker.currentID,
+                    requestedSessionID: sessionID,
+                    now: now,
+                    waitStartedAt: waitStartedAt,
+                    sampleCount: sampleCount,
+                    routeRecoveryIdle: routeRecoveryIdle,
+                    startupRecoveryScheduled: self.startupEngineConfigurationRecoveryScheduled,
+                    startupRecoveryCompletedAt: self.startupEngineConfigurationRecoveryCompletedAt,
+                    startupRecoveryCompletedSampleCount: self.startupEngineConfigurationRecoveryCompletedSampleCount,
+                    engineStartedAt: self.lastEngineStartCompletedAt
+                ),
+                configuration: configuration
+            )
 
-            let stableEnough: Bool
-            if let completedAt = self.startupEngineConfigurationRecoveryCompletedAt {
-                stableEnough = now - completedAt >= self.startupCaptureReadyAfterRecoveryDelaySeconds
-            } else if self.startupEngineConfigurationRecoveryScheduled {
-                stableEnough = false
-            } else if let engineStartedAt = self.lastEngineStartCompletedAt {
-                stableEnough = now - engineStartedAt >= self.startupCaptureReadyStableDelaySeconds
-            } else {
-                stableEnough = false
-            }
-            let readySampleCount: Int
-            if self.startupEngineConfigurationRecoveryCompletedAt != nil,
-               let recoveryCompletedSampleCount = self.startupEngineConfigurationRecoveryCompletedSampleCount
-            {
-                readySampleCount = max(0, sampleCount - recoveryCompletedSampleCount)
-            } else {
-                readySampleCount = sampleCount
-            }
-
-            if routeRecoveryIdle,
-               stableEnough,
-               readySampleCount >= self.startupCaptureReadyMinimumSamples
-            {
+            switch evaluation.decision {
+            case .ready:
                 DebugLogger.shared.info(
-                    "Capture ready for start cue (samples=\(sampleCount), readySamples=\(readySampleCount), waitedMs=\(Int(((now - waitStartedAt) * 1000).rounded())))",
+                    "Capture ready for start cue (samples=\(sampleCount), readySamples=\(evaluation.readySampleCount), waitedMs=\(Int(((now - waitStartedAt) * 1000).rounded())))",
                     source: "ASRService"
                 )
                 return true
-            }
 
-            if now - waitStartedAt >= self.startupCaptureReadyTimeoutSeconds {
-                let ready = routeRecoveryIdle && readySampleCount > 0
+            case .timedOut(let ready):
                 DebugLogger.shared.warning(
-                    "Timed out waiting for capture-ready start cue (ready=\(ready), samples=\(sampleCount), readySamples=\(readySampleCount), routeRecoveryIdle=\(routeRecoveryIdle), stableEnough=\(stableEnough))",
+                    "Timed out waiting for capture-ready start cue (ready=\(ready), samples=\(sampleCount), readySamples=\(evaluation.readySampleCount), routeRecoveryIdle=\(routeRecoveryIdle), stableEnough=\(evaluation.stableEnough))",
                     source: "ASRService"
                 )
                 return ready
+
+            case .inactive:
+                DebugLogger.shared.debug("Start cue wait cancelled because ASR is no longer running", source: "ASRService")
+                return false
+
+            case .wait:
+                break
             }
 
             do {
@@ -1050,9 +1054,6 @@ final class ASRService: ObservableObject {
                 return false
             }
         }
-
-        DebugLogger.shared.debug("Start cue wait cancelled because ASR is no longer running", source: "ASRService")
-        return false
     }
 
     private func stoppedEngineAgeMilliseconds() -> Int? {
@@ -1155,12 +1156,12 @@ final class ASRService: ObservableObject {
         self.benchmarkLog("stop_start ageMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) bufferedSamples=\(self.audioBuffer.count)")
 
         guard self.isRunning else {
-            self.activeRecordingSessionID = nil
+            self.recordingSessionTracker.clearSession()
             DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
             return ""
         }
         defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
-        self.activeRecordingSessionID = nil
+        self.recordingSessionTracker.clearSession()
 
         self.audioRouteRecoveryTask?.cancel()
         self.audioRouteRecoveryTask = nil
@@ -1456,7 +1457,7 @@ final class ASRService: ObservableObject {
     }
 
     func stopWithoutTranscription() async {
-        self.activeRecordingSessionID = nil
+        self.recordingSessionTracker.clearSession()
         guard self.isRunning else { return }
         defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
 
@@ -3357,6 +3358,107 @@ private extension ASRService {
 }
 
 // MARK: - Audio capture pipeline
+
+struct RecordingSessionTracker {
+    private var counter: UInt64 = 0
+    private(set) var currentID: UInt64?
+
+    @discardableResult
+    mutating func beginSession() -> UInt64 {
+        self.counter &+= 1
+        self.currentID = self.counter
+        return self.counter
+    }
+
+    mutating func clearSession() {
+        self.currentID = nil
+    }
+
+    func isActive(_ sessionID: UInt64) -> Bool {
+        self.currentID == sessionID
+    }
+}
+
+enum StartCueCaptureReadiness {
+    struct Configuration {
+        let stableDelaySeconds: TimeInterval
+        let afterRecoveryDelaySeconds: TimeInterval
+        let timeoutSeconds: TimeInterval
+        let minimumSamples: Int
+    }
+
+    struct Snapshot {
+        let isRunning: Bool
+        let activeSessionID: UInt64?
+        let requestedSessionID: UInt64
+        let now: TimeInterval
+        let waitStartedAt: TimeInterval
+        let sampleCount: Int
+        let routeRecoveryIdle: Bool
+        let startupRecoveryScheduled: Bool
+        let startupRecoveryCompletedAt: TimeInterval?
+        let startupRecoveryCompletedSampleCount: Int?
+        let engineStartedAt: TimeInterval?
+    }
+
+    enum Decision: Equatable {
+        case ready
+        case wait
+        case inactive
+        case timedOut(ready: Bool)
+    }
+
+    struct Evaluation: Equatable {
+        let decision: Decision
+        let stableEnough: Bool
+        let readySampleCount: Int
+    }
+
+    static func evaluate(_ snapshot: Snapshot, configuration: Configuration) -> Evaluation {
+        let stableEnough = self.isStableEnough(snapshot, configuration: configuration)
+        let readySampleCount = self.readySampleCount(for: snapshot)
+
+        guard snapshot.isRunning, snapshot.activeSessionID == snapshot.requestedSessionID else {
+            return Evaluation(decision: .inactive, stableEnough: stableEnough, readySampleCount: readySampleCount)
+        }
+
+        if snapshot.routeRecoveryIdle,
+           stableEnough,
+           readySampleCount >= configuration.minimumSamples
+        {
+            return Evaluation(decision: .ready, stableEnough: stableEnough, readySampleCount: readySampleCount)
+        }
+
+        if snapshot.now - snapshot.waitStartedAt >= configuration.timeoutSeconds {
+            let ready = snapshot.routeRecoveryIdle && readySampleCount > 0
+            return Evaluation(decision: .timedOut(ready: ready), stableEnough: stableEnough, readySampleCount: readySampleCount)
+        }
+
+        return Evaluation(decision: .wait, stableEnough: stableEnough, readySampleCount: readySampleCount)
+    }
+
+    private static func isStableEnough(_ snapshot: Snapshot, configuration: Configuration) -> Bool {
+        if let completedAt = snapshot.startupRecoveryCompletedAt {
+            return snapshot.now - completedAt >= configuration.afterRecoveryDelaySeconds
+        }
+        if snapshot.startupRecoveryScheduled {
+            return false
+        }
+        if let engineStartedAt = snapshot.engineStartedAt {
+            return snapshot.now - engineStartedAt >= configuration.stableDelaySeconds
+        }
+        return false
+    }
+
+    private static func readySampleCount(for snapshot: Snapshot) -> Int {
+        if snapshot.startupRecoveryCompletedAt != nil,
+           let recoveryCompletedSampleCount = snapshot.startupRecoveryCompletedSampleCount
+        {
+            return max(0, snapshot.sampleCount - recoveryCompletedSampleCount)
+        }
+        return snapshot.sampleCount
+    }
+}
 
 //
 // AVAudioEngine's tap runs on a realtime audio thread. ASRService is @MainActor, so we must NOT
