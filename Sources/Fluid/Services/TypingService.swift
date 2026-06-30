@@ -277,6 +277,14 @@ final class TypingService {
             return
         }
 
+        // Clipboard-only mode: skip all insertion machinery and write to clipboard directly.
+        // This avoids the accessibility-permission requirement and settle delay entirely. (#481)
+        if mode == .clipboardOnly {
+            self.bench("request_return reason=clipboard_only")
+            ClipboardService.copyToClipboard(text)
+            return
+        }
+
         // Prevent concurrent typing operations
         guard !self.isCurrentlyTyping else {
             self.bench("request_return reason=already_typing")

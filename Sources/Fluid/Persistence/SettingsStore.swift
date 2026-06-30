@@ -4467,6 +4467,7 @@ extension SettingsStore {
     enum TextInsertionMode: String, CaseIterable, Identifiable, Codable {
         case standard
         case reliablePaste
+        case clipboardOnly
 
         var id: String {
             self.rawValue
@@ -4478,6 +4479,8 @@ extension SettingsStore {
                 return "Clipboard Free Insert"
             case .reliablePaste:
                 return "Clipboard Paste"
+            case .clipboardOnly:
+                return "Clipboard Only"
             }
         }
 
@@ -4487,6 +4490,8 @@ extension SettingsStore {
                 return "Fastest path. Inserts text without changing the clipboard, with paste fallback if direct insertion is unavailable."
             case .reliablePaste:
                 return "Compatibility path. Uses a temporary clipboard paste, so clipboard history apps may briefly record dictated text."
+            case .clipboardOnly:
+                return "Copies transcribed text to the clipboard without inserting it. Useful for remote desktop workflows or when you prefer to paste manually."
             }
         }
     }
