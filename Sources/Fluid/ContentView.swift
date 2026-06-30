@@ -2836,7 +2836,8 @@ struct ContentView: View {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
                 return
             }
-            await self.playStartCueWhenCaptureReady()
+            guard let sessionID = self.asr.currentRecordingSessionID else { return }
+            await self.playStartCueWhenCaptureReady(sessionID: sessionID)
         }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
@@ -3077,7 +3078,10 @@ struct ContentView: View {
                 )
                 Task {
                     await self.asr.start()
-                    await self.playStartCueWhenCaptureReady()
+                    guard self.asr.isRunning,
+                          let sessionID = self.asr.currentRecordingSessionID
+                    else { return }
+                    await self.playStartCueWhenCaptureReady(sessionID: sessionID)
                 }
             },
             rewriteModeCallback: {
@@ -3112,7 +3116,10 @@ struct ContentView: View {
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
                 Task {
                     await self.asr.start()
-                    await self.playStartCueWhenCaptureReady()
+                    guard self.asr.isRunning,
+                          let sessionID = self.asr.currentRecordingSessionID
+                    else { return }
+                    await self.playStartCueWhenCaptureReady(sessionID: sessionID)
                 }
             },
             isDictateRecordingProvider: {
@@ -3446,20 +3453,24 @@ extension ContentView {
                 message: "asr_start_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStartStartedAt) * 1000).rounded()))",
                 source: "AppBenchmark"
             )
-            await self.playStartCueWhenCaptureReady()
+            guard let sessionID = self.asr.currentRecordingSessionID else { return }
+            await self.playStartCueWhenCaptureReady(sessionID: sessionID)
         }
     }
 
-    private func playStartCueWhenCaptureReady() async {
+    private func playStartCueWhenCaptureReady(sessionID: UInt64) async {
         let cueWaitStartedAt = ProcessInfo.processInfo.systemUptime
-        let ready = await self.asr.waitForCaptureReadyForStartCue()
+        let ready = await self.asr.waitForCaptureReadyForStartCue(sessionID: sessionID)
         DebugLogger.shared.benchmark(
             "APP_BENCH",
             message: "start_cue_ready ready=\(ready) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - cueWaitStartedAt) * 1000).rounded()))",
             source: "AppBenchmark"
         )
 
-        guard ready, self.asr.isRunning else {
+        guard ready,
+              self.asr.isRunning,
+              self.asr.currentRecordingSessionID == sessionID
+        else {
             DebugLogger.shared.debug("Start cue skipped because capture is no longer active", source: "ContentView")
             return
         }

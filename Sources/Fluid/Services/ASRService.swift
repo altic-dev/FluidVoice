@@ -588,6 +588,8 @@ final class ASRService: ObservableObject {
     private var startupEngineConfigurationRecoveryScheduled = false
     private var startupEngineConfigurationRecoveryCompletedAt: TimeInterval?
     private var startupEngineConfigurationRecoveryCompletedSampleCount: Int?
+    private var recordingSessionCounter: UInt64 = 0
+    private var activeRecordingSessionID: UInt64?
     private var stoppedEngineRetainedAt: TimeInterval?
     private var stoppedEngineReleaseTask: Task<Void, Never>?
     private var isRecoveringAudioRoute = false
@@ -605,6 +607,10 @@ final class ASRService: ObservableObject {
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> { self.audioLevelSubject.eraseToAnyPublisher() }
     private var lastAudioLevelSentAt: TimeInterval = 0
+
+    var currentRecordingSessionID: UInt64? {
+        self.activeRecordingSessionID
+    }
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
         let snapshot = self.lastCompletedAudioSnapshot
@@ -868,6 +874,8 @@ final class ASRService: ObservableObject {
 
         // Reset media pause state for this session
         self.didPauseMediaForThisSession = false
+        self.recordingSessionCounter &+= 1
+        self.activeRecordingSessionID = self.recordingSessionCounter
         self.audioRouteRecoveryTask?.cancel()
         self.audioRouteRecoveryTask = nil
         self.isRecoveringAudioRoute = false
@@ -953,6 +961,7 @@ final class ASRService: ObservableObject {
             }
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
         } catch {
+            self.activeRecordingSessionID = nil
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
 
             // Resume media if we paused it before the failure
@@ -988,10 +997,10 @@ final class ASRService: ObservableObject {
         }
     }
 
-    func waitForCaptureReadyForStartCue() async -> Bool {
+    func waitForCaptureReadyForStartCue(sessionID: UInt64) async -> Bool {
         let waitStartedAt = Date().timeIntervalSince1970
 
-        while self.isRunning {
+        while self.isRunning, self.activeRecordingSessionID == sessionID {
             let now = Date().timeIntervalSince1970
             let sampleCount = self.audioBuffer.count
             let routeRecoveryIdle = self.isRecoveringAudioRoute == false && self.audioRouteRecoveryTask == nil
@@ -1146,10 +1155,12 @@ final class ASRService: ObservableObject {
         self.benchmarkLog("stop_start ageMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) bufferedSamples=\(self.audioBuffer.count)")
 
         guard self.isRunning else {
+            self.activeRecordingSessionID = nil
             DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
             return ""
         }
         defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
+        self.activeRecordingSessionID = nil
 
         self.audioRouteRecoveryTask?.cancel()
         self.audioRouteRecoveryTask = nil
@@ -1445,6 +1456,7 @@ final class ASRService: ObservableObject {
     }
 
     func stopWithoutTranscription() async {
+        self.activeRecordingSessionID = nil
         guard self.isRunning else { return }
         defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
 
