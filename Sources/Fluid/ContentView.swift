@@ -347,8 +347,15 @@ struct ContentView: View {
                 // Only sync UI with system defaults when sync is enabled
                 // When sync is disabled, keep the user's preferred device selection
                 if SettingsStore.shared.syncAudioDevicesWithSystem {
-                    // Sync mode: Update UI to match current system defaults
-                    if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
+                    // Sync mode: Update UI to match current system defaults.
+                    // Exception: when the input device is locked, keep the pinned input selection
+                    // (falling back to the system default only if the pinned device disappeared).
+                    if SettingsStore.shared.lockInputDevice,
+                       let prefIn = SettingsStore.shared.preferredInputDeviceUID,
+                       inputDevices.contains(where: { $0.uid == prefIn })
+                    {
+                        self.selectedInputUID = prefIn
+                    } else if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
                         self.selectedInputUID = sysIn
                     }
                     if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {

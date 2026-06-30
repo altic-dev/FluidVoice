@@ -566,6 +566,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func currentPreferredInputUID(defaultInputUID: String?) -> String? {
+        // When the input device is locked, reflect the pinned preferred device rather than the
+        // macOS system default so the menu check mark matches what FluidVoice will actually use.
+        if SettingsStore.shared.lockInputDevice,
+           let uid = SettingsStore.shared.preferredInputDeviceUID, !uid.isEmpty
+        {
+            return uid
+        }
         return defaultInputUID
     }
 
@@ -575,7 +582,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         SettingsStore.shared.preferredInputDeviceUID = uid
 
-        if SettingsStore.shared.syncAudioDevicesWithSystem {
+        // When locked, keep the macOS system default untouched so FluidVoice uses this device
+        // independently of the rest of the system.
+        if SettingsStore.shared.syncAudioDevicesWithSystem, SettingsStore.shared.lockInputDevice == false {
             _ = AudioDevice.setDefaultInputDevice(uid: uid)
         }
 

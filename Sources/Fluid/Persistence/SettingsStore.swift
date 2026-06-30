@@ -1615,6 +1615,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// When enabled, FluidVoice always captures from `preferredInputDeviceUID` (when available),
+    /// ignoring the macOS system default input and any automatic device switching.
+    /// Falls back to the system default only if the preferred device is unavailable.
+    /// Opt-in (default false) so existing users keep following the macOS default.
+    var lockInputDevice: Bool {
+        get { self.defaults.bool(forKey: Keys.lockInputDevice) }
+        set { self.defaults.set(newValue, forKey: Keys.lockInputDevice) }
+    }
+
     var visualizerNoiseThreshold: Double {
         get {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
@@ -4331,6 +4340,7 @@ private extension SettingsStore {
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
+        static let lockInputDevice = "LockInputDevice"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"

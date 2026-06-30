@@ -1402,7 +1402,11 @@ final class ASRService: ObservableObject {
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
 
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
+        // Bind to the preferred input when either independent (non-sync) mode is active, or the
+        // user has explicitly locked the input device. Otherwise follow the macOS system default.
+        let shouldBindPreferredInput = SettingsStore.shared.syncAudioDevicesWithSystem == false
+            || SettingsStore.shared.lockInputDevice
+        guard shouldBindPreferredInput else {
             DebugLogger.shared.info("Sync mode enabled - using system default input device", source: "ASRService")
             return true
         }
@@ -1934,6 +1938,13 @@ final class ASRService: ObservableObject {
             return
         }
 
+        // When the input device is locked, FluidVoice intentionally stays on the preferred device
+        // regardless of what macOS switches its default input to.
+        guard SettingsStore.shared.lockInputDevice == false else {
+            DebugLogger.shared.debug("Ignoring system default input change (input device locked)", source: "ASRService")
+            return
+        }
+
         self.scheduleAudioRouteRecovery(reason: "default input changed")
     }
 
@@ -2168,8 +2179,10 @@ final class ASRService: ObservableObject {
                     }
                 }
 
-                // Check for newly connected Bluetooth devices (auto-switch)
-                for device in currentDevices {
+                // Check for newly connected Bluetooth devices (auto-switch).
+                // Skip entirely when the input device is locked: the user has pinned a specific
+                // microphone and we must not silently repoint it at newly connected AirPods/BT mics.
+                for device in currentDevices where SettingsStore.shared.lockInputDevice == false {
                     if device.name.localizedCaseInsensitiveContains("airpods") ||
                         device.name.localizedCaseInsensitiveContains("bluetooth")
                     {

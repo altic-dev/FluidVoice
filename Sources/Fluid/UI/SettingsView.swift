@@ -53,6 +53,10 @@ struct SettingsView: View {
     @State private var cachedDefaultInputName: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
+    // When enabled, FluidVoice always captures from the selected input device and ignores
+    // macOS system-default input changes / Bluetooth auto-switching.
+    @State private var lockInputDevice: Bool = SettingsStore.shared.lockInputDevice
+
     // Analytics consent UI state (default ON; user can opt-out)
     @State private var shareAnonymousAnalytics: Bool = SettingsStore.shared.shareAnonymousAnalytics
     @State private var showAnalyticsPrivacy: Bool = false
@@ -1083,8 +1087,10 @@ struct SettingsView: View {
                                     }
 
                                     SettingsStore.shared.preferredInputDeviceUID = newUID
-                                    // Only change system default if sync is enabled
-                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
+                                    // Only change the macOS system default if syncing is enabled and the
+                                    // input device is not locked. When locked we keep the system default
+                                    // untouched so FluidVoice can use this device independently.
+                                    if SettingsStore.shared.syncAudioDevicesWithSystem, !self.lockInputDevice {
                                         _ = AudioDevice.setDefaultInputDevice(uid: newUID)
                                     }
                                 }
@@ -1095,6 +1101,15 @@ struct SettingsView: View {
 
                                     // If selection is empty or not found in new list, select first available
                                     if !newDevices.isEmpty {
+                                        // When locked, keep the preferred device selected as long as it's available.
+                                        if self.lockInputDevice,
+                                           let prefUID = SettingsStore.shared.preferredInputDeviceUID,
+                                           newDevices.contains(where: { $0.uid == prefUID })
+                                        {
+                                            self.selectedInputUID = prefUID
+                                            return
+                                        }
+
                                         let currentValid = newDevices.contains { $0.uid == self.selectedInputUID }
                                         if !currentValid {
                                             if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
@@ -1106,6 +1121,36 @@ struct SettingsView: View {
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // Lock input device: always capture from the selected mic regardless of
+                            // the macOS system default or Bluetooth auto-switching.
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Always use this input device when available")
+                                        .font(self.theme.typography.bodyStrong)
+                                        .foregroundStyle(self.settingsTitleText)
+                                    Text("Ignores macOS input changes. Falls back to the system default if unavailable.")
+                                        .font(self.theme.typography.bodySmall)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Toggle("", isOn: self.$lockInputDevice)
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                                    .tint(self.theme.palette.accent)
+                            }
+                            .disabled(self.asr.isRunning)
+                            .padding(.bottom, 6)
+                            .onChange(of: self.lockInputDevice) { _, locked in
+                                SettingsStore.shared.lockInputDevice = locked
+                                if locked, !self.selectedInputUID.isEmpty {
+                                    // Pin the currently selected device as the preferred input.
+                                    SettingsStore.shared.preferredInputDeviceUID = self.selectedInputUID
                                 }
                             }
 
@@ -1556,16 +1601,27 @@ struct SettingsView: View {
 
                 self.refreshDevices()
 
+                // Keep the lock toggle in sync with persisted state.
+                self.lockInputDevice = SettingsStore.shared.lockInputDevice
+
                 // Sync input device selection after refresh
                 if !self.inputDevices.isEmpty {
-                    let inputValid = self.inputDevices.contains { $0.uid == self.selectedInputUID }
-                    if !inputValid || self.selectedInputUID.isEmpty {
-                        if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                           self.inputDevices.contains(where: { $0.uid == defaultUID })
-                        {
-                            self.selectedInputUID = defaultUID
-                        } else {
-                            self.selectedInputUID = self.inputDevices.first?.uid ?? ""
+                    // When locked, restore the pinned preferred device if it's currently available.
+                    if self.lockInputDevice,
+                       let prefUID = SettingsStore.shared.preferredInputDeviceUID,
+                       self.inputDevices.contains(where: { $0.uid == prefUID })
+                    {
+                        self.selectedInputUID = prefUID
+                    } else {
+                        let inputValid = self.inputDevices.contains { $0.uid == self.selectedInputUID }
+                        if !inputValid || self.selectedInputUID.isEmpty {
+                            if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
+                               self.inputDevices.contains(where: { $0.uid == defaultUID })
+                            {
+                                self.selectedInputUID = defaultUID
+                            } else {
+                                self.selectedInputUID = self.inputDevices.first?.uid ?? ""
+                            }
                         }
                     }
                 }
@@ -1599,6 +1655,13 @@ struct SettingsView: View {
         }
         .onChange(of: self.visualizerNoiseThreshold) { _, newValue in
             SettingsStore.shared.visualizerNoiseThreshold = newValue
+        }
+        // Keep the "(System Default)" markers accurate even when only the system default changes
+        // (not the device list) — e.g. while the input device is locked and the picker selection
+        // no longer tracks the macOS default. Safe outside view-body layout, like the other handlers.
+        .onReceive(self.appServices.audioObserver.$changeTick) { _ in
+            self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+            self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
         }
     }
 
