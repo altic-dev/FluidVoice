@@ -1015,6 +1015,8 @@ final class GlobalHotkeyManager: NSObject {
             source: "GlobalHotkeyManager"
         )
 
+        self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
+
         guard self.tapRecoveryTask == nil else {
             DebugLogger.shared.debug(
                 "Event tap recovery already scheduled; ignoring duplicate disabled event (\(reason))",
@@ -1033,8 +1035,6 @@ final class GlobalHotkeyManager: NSObject {
             } catch {
                 return
             }
-
-            self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
 
             guard AXIsProcessTrusted() else {
                 DebugLogger.shared.warning(

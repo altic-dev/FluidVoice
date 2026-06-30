@@ -154,6 +154,55 @@ final class StartCueCaptureReadinessTests: XCTestCase {
         XCTAssertNil(tracker.completedSampleCount)
     }
 
+    func testStartupEngineConfigurationPolicyAcceptsInitialEngineWindow() {
+        XCTAssertTrue(
+            StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+                reason: "engine configuration changed",
+                initialEngineStartedAt: 10.0,
+                now: 10.5,
+                windowSeconds: 2.0
+            )
+        )
+    }
+
+    func testStartupEngineConfigurationPolicyRejectsNonStartupEvents() {
+        XCTAssertFalse(
+            StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+                reason: "input device changed",
+                initialEngineStartedAt: 10.0,
+                now: 10.5,
+                windowSeconds: 2.0
+            )
+        )
+        XCTAssertFalse(
+            StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+                reason: "engine configuration changed",
+                initialEngineStartedAt: nil,
+                now: 10.5,
+                windowSeconds: 2.0
+            )
+        )
+        XCTAssertFalse(
+            StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+                reason: "engine configuration changed",
+                initialEngineStartedAt: 10.0,
+                now: 12.1,
+                windowSeconds: 2.0
+            )
+        )
+    }
+
+    func testStartupEngineConfigurationPolicyDoesNotUseRouteRecoveryStartTime() {
+        XCTAssertFalse(
+            StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+                reason: "engine configuration changed",
+                initialEngineStartedAt: 0.0,
+                now: 10.1,
+                windowSeconds: 2.0
+            )
+        )
+    }
+
     func testBluetoothDeviceDetectionUsesNameFallbackForAggregateRoutes() {
         let airPods = AudioDevice.Device(
             id: AudioObjectID(kAudioObjectUnknown),

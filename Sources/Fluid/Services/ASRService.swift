@@ -586,7 +586,7 @@ final class ASRService: ObservableObject {
     private let startupCaptureReadyPollNanoseconds: UInt64 = 25_000_000
     private let startupCaptureReadyMinimumSamples = 2048
     private let stoppedEngineReuseGraceNanoseconds: UInt64 = 20_000_000_000
-    private var lastEngineStartCompletedAt: TimeInterval?
+    private var initialEngineStartCompletedAt: TimeInterval?
     private var startupRouteRecoveryTracker = StartupRouteRecoveryTracker()
     private var recordingSessionTracker = RecordingSessionTracker()
     private var stoppedEngineRetainedAt: TimeInterval?
@@ -901,7 +901,7 @@ final class ASRService: ObservableObject {
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
-        self.lastEngineStartCompletedAt = nil
+        self.initialEngineStartCompletedAt = nil
         self.startupRouteRecoveryTracker.clear()
         self.streamingChunkAnalyticsSuccessCount = 0
         self.lastStreamingChunkFailureAnalyticsAt = nil
@@ -921,7 +921,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.debug("✅ configureSession() completed", source: "ASRService")
 
             DebugLogger.shared.debug("🚀 Calling startEngine()...", source: "ASRService")
-            try self.startEngine()
+            try self.startEngine(context: .initialRecording)
             DebugLogger.shared.debug("✅ startEngine() completed", source: "ASRService")
 
             DebugLogger.shared.debug("🎧 Setting up engine tap...", source: "ASRService")
@@ -1022,7 +1022,7 @@ final class ASRService: ObservableObject {
                     startupRecoveryScheduled: self.startupRouteRecoveryTracker.isScheduled,
                     startupRecoveryCompletedAt: self.startupRouteRecoveryTracker.completedAt,
                     startupRecoveryCompletedSampleCount: self.startupRouteRecoveryTracker.completedSampleCount,
-                    engineStartedAt: self.lastEngineStartCompletedAt
+                    engineStartedAt: self.initialEngineStartCompletedAt
                 ),
                 configuration: configuration
             )
@@ -1885,7 +1885,7 @@ final class ASRService: ObservableObject {
         }
     }
 
-    private func startEngine() throws {
+    private func startEngine(context: EngineStartContext) throws {
         DebugLogger.shared.debug("🚀 startEngine() - ENTERED", source: "ASRService")
         var attempts = 0
         var lastError: Error?
@@ -1928,7 +1928,9 @@ final class ASRService: ObservableObject {
                 )
 
                 try self.engine.start()
-                self.lastEngineStartCompletedAt = Date().timeIntervalSince1970
+                if context == .initialRecording {
+                    self.initialEngineStartCompletedAt = Date().timeIntervalSince1970
+                }
                 DebugLogger.shared.info("AVAudioEngine started successfully on attempt \(attempts + 1)", source: "ASRService")
                 return
             } catch {
@@ -2076,12 +2078,12 @@ final class ASRService: ObservableObject {
     }
 
     private func isStartupEngineConfigurationRecovery(reason: String) -> Bool {
-        guard reason == "engine configuration changed",
-              let lastEngineStartCompletedAt
-        else { return false }
-
-        let startAge = Date().timeIntervalSince1970 - lastEngineStartCompletedAt
-        return startAge >= 0 && startAge <= self.startupRouteRecoveryWindowSeconds
+        StartupEngineConfigurationRecoveryPolicy.isStartupRecovery(
+            reason: reason,
+            initialEngineStartedAt: self.initialEngineStartCompletedAt,
+            now: Date().timeIntervalSince1970,
+            windowSeconds: self.startupRouteRecoveryWindowSeconds
+        )
     }
 
     private func markStartupRouteRecoveryPending(reason: String) {
@@ -2134,7 +2136,7 @@ final class ASRService: ObservableObject {
 
         do {
             try self.configureSession()
-            try self.startEngine()
+            try self.startEngine(context: .routeRecovery)
             try self.setupEngineTap()
             self.audioCapturePipeline.setRecordingEnabled(true)
 
@@ -3405,6 +3407,11 @@ private extension ASRService {
     }
 }
 
+private enum EngineStartContext {
+    case initialRecording
+    case routeRecovery
+}
+
 // MARK: - Audio capture pipeline
 
 struct RecordingSessionTracker {
@@ -3452,6 +3459,22 @@ struct StartupRouteRecoveryTracker {
         self.isScheduled = false
         self.completedAt = nil
         self.completedSampleCount = nil
+    }
+}
+
+enum StartupEngineConfigurationRecoveryPolicy {
+    static func isStartupRecovery(
+        reason: String,
+        initialEngineStartedAt: TimeInterval?,
+        now: TimeInterval,
+        windowSeconds: TimeInterval
+    ) -> Bool {
+        guard reason == "engine configuration changed",
+              let initialEngineStartedAt
+        else { return false }
+
+        let startAge = now - initialEngineStartedAt
+        return startAge >= 0 && startAge <= windowSeconds
     }
 }
 
