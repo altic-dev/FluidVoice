@@ -271,9 +271,11 @@ final class GlobalHotkeyManager: NSObject {
     private var isInitialized = false
     private var initializationTask: Task<Void, Never>?
     private var healthCheckTask: Task<Void, Never>?
+    private var tapRecoveryTask: Task<Void, Never>?
     private var maxRetryAttempts = 5
     private var retryDelay: TimeInterval = 0.5
     private var healthCheckInterval: TimeInterval = 30.0
+    private let eventTapRecoveryDelayNanoseconds: UInt64 = 250_000_000
 
     init(
         asrService: ASRService,
@@ -993,26 +995,64 @@ final class GlobalHotkeyManager: NSObject {
 
     private func handleTapDisableEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // macOS can temporarily disable event taps (e.g. timeouts, user input protection).
-        // If we don't immediately re-enable here, hotkeys will silently stop working until our
-        // periodic health check kicks in, and the OS may handle the key (e.g. system dictation).
+        // Keep this path fail-open: doing synchronous recovery work inside the event tap callback
+        // can make keyboard input feel stuck while macOS is already trying to protect user input.
         guard type == .tapDisabledByTimeout || type == .tapDisabledByUserInput else {
             return nil
         }
 
         let reason = (type == .tapDisabledByTimeout) ? "timeout" : "user input"
-        DebugLogger.shared.warning("Event tap disabled by \(reason) — attempting immediate re-enable", source: "GlobalHotkeyManager")
-        self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
-
-        if let tap = self.eventTap {
-            CGEvent.tapEnable(tap: tap, enable: true)
-        }
-
-        if !self.isEventTapEnabled() {
-            DebugLogger.shared.warning("Event tap re-enable failed — recreating tap", source: "GlobalHotkeyManager")
-            self.setupGlobalHotkeyWithRetry()
+        Task { @MainActor [weak self] in
+            self?.scheduleEventTapRecovery(reason: reason)
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    private func scheduleEventTapRecovery(reason: String) {
+        DebugLogger.shared.warning(
+            "Event tap disabled by \(reason) — scheduling async recovery and passing input through",
+            source: "GlobalHotkeyManager"
+        )
+
+        guard self.tapRecoveryTask == nil else {
+            DebugLogger.shared.debug(
+                "Event tap recovery already scheduled; ignoring duplicate disabled event (\(reason))",
+                source: "GlobalHotkeyManager"
+            )
+            return
+        }
+
+        self.isInitialized = false
+        self.tapRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.tapRecoveryTask = nil }
+
+            do {
+                try await Task.sleep(nanoseconds: self.eventTapRecoveryDelayNanoseconds)
+            } catch {
+                return
+            }
+
+            self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
+
+            guard AXIsProcessTrusted() else {
+                DebugLogger.shared.warning(
+                    "Event tap async recovery skipped because Accessibility is not trusted",
+                    source: "GlobalHotkeyManager"
+                )
+                return
+            }
+
+            if self.setupGlobalHotkey() {
+                self.isInitialized = true
+                self.startHealthCheckTimer()
+                DebugLogger.shared.info("Event tap async recovery successful", source: "GlobalHotkeyManager")
+            } else {
+                self.isInitialized = false
+                DebugLogger.shared.error("Event tap async recovery failed", source: "GlobalHotkeyManager")
+            }
+        }
     }
 
     private func synchronizedPressedModifierKeyCodes(
@@ -1809,6 +1849,8 @@ final class GlobalHotkeyManager: NSObject {
 
         self.initializationTask?.cancel()
         self.healthCheckTask?.cancel()
+        self.tapRecoveryTask?.cancel()
+        self.tapRecoveryTask = nil
         self.resetModifierOnlyShortcutTracking(reason: .reinitialize)
         self.isInitialized = false
         self.initializeWithDelay()
@@ -1823,6 +1865,7 @@ final class GlobalHotkeyManager: NSObject {
                 guard !Task.isCancelled else { break }
 
                 await MainActor.run {
+                    guard self.tapRecoveryTask == nil else { return }
                     if !self.validateEventTapHealth() {
                         DebugLogger.shared.warning("Health check failed, attempting to recover", source: "GlobalHotkeyManager")
 
@@ -1842,6 +1885,7 @@ final class GlobalHotkeyManager: NSObject {
     deinit {
         initializationTask?.cancel()
         healthCheckTask?.cancel()
+        tapRecoveryTask?.cancel()
         cleanupEventTap()
     }
 }
