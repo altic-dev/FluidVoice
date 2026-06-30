@@ -203,6 +203,25 @@ final class StartCueCaptureReadinessTests: XCTestCase {
         )
     }
 
+    func testRouteRecoveryDelayUsesCachedStartupDecision() {
+        XCTAssertEqual(
+            StartupRouteRecoveryDelay.nanoseconds(
+                isStartupEngineConfigurationRecovery: true,
+                startupDelayNanoseconds: 100,
+                defaultDelayNanoseconds: 1000
+            ),
+            100
+        )
+        XCTAssertEqual(
+            StartupRouteRecoveryDelay.nanoseconds(
+                isStartupEngineConfigurationRecovery: false,
+                startupDelayNanoseconds: 100,
+                defaultDelayNanoseconds: 1000
+            ),
+            1000
+        )
+    }
+
     func testBluetoothDeviceDetectionUsesNameFallbackForAggregateRoutes() {
         let airPods = AudioDevice.Device(
             id: AudioObjectID(kAudioObjectUnknown),

@@ -2056,7 +2056,9 @@ final class ASRService: ObservableObject {
             self.audioCapturePipeline.setRecordingEnabled(false)
             self.audioLevelSubject.send(0.0)
         }
-        let recoveryDelayNanoseconds = self.recoveryDelayNanoseconds(for: reason)
+        let recoveryDelayNanoseconds = self.recoveryDelayNanoseconds(
+            isStartupEngineConfigurationRecovery: isStartupEngineConfigurationRecovery
+        )
         DebugLogger.shared.warning(
             "Audio route changed while recording; scheduling recovery (\(reason), delayMs=\(recoveryDelayNanoseconds / 1_000_000))",
             source: "ASRService"
@@ -2071,10 +2073,12 @@ final class ASRService: ObservableObject {
         }
     }
 
-    private func recoveryDelayNanoseconds(for reason: String) -> UInt64 {
-        self.isStartupEngineConfigurationRecovery(reason: reason)
-            ? self.startupRouteRecoveryDelayNs
-            : self.audioRouteRecoveryDelayNanoseconds
+    private func recoveryDelayNanoseconds(isStartupEngineConfigurationRecovery: Bool) -> UInt64 {
+        StartupRouteRecoveryDelay.nanoseconds(
+            isStartupEngineConfigurationRecovery: isStartupEngineConfigurationRecovery,
+            startupDelayNanoseconds: self.startupRouteRecoveryDelayNs,
+            defaultDelayNanoseconds: self.audioRouteRecoveryDelayNanoseconds
+        )
     }
 
     private func isStartupEngineConfigurationRecovery(reason: String) -> Bool {
@@ -3475,6 +3479,16 @@ enum StartupEngineConfigurationRecoveryPolicy {
 
         let startAge = now - initialEngineStartedAt
         return startAge >= 0 && startAge <= windowSeconds
+    }
+}
+
+enum StartupRouteRecoveryDelay {
+    static func nanoseconds(
+        isStartupEngineConfigurationRecovery: Bool,
+        startupDelayNanoseconds: UInt64,
+        defaultDelayNanoseconds: UInt64
+    ) -> UInt64 {
+        isStartupEngineConfigurationRecovery ? startupDelayNanoseconds : defaultDelayNanoseconds
     }
 }
 
