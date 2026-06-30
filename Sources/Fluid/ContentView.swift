@@ -2288,9 +2288,10 @@ struct ContentView: View {
 
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
+        let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
         let shouldCopyToClipboard = shouldPersistOutputs &&
-            SettingsStore.shared.copyTranscriptionToClipboard &&
-            !isFluidFrontmost
+            !isFluidFrontmost &&
+            (SettingsStore.shared.copyTranscriptionToClipboard || isClipboardOnlyMode)
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
@@ -2304,7 +2305,7 @@ struct ContentView: View {
         }
 
         var didTypeExternally = false
-        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost
+        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost && !isClipboardOnlyMode
 
         DebugLogger.shared.debug(
             "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), willTypeExternally: \(shouldTypeExternally)",
@@ -2354,7 +2355,7 @@ struct ContentView: View {
                 NotchOverlayManager.shared.hide()
             }
         } else if shouldPersistOutputs,
-                  SettingsStore.shared.copyTranscriptionToClipboard == false,
+                  !shouldCopyToClipboard,
                   SettingsStore.shared.saveTranscriptionHistory
         {
             AnalyticsService.shared.capture(
