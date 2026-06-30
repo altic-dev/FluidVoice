@@ -164,11 +164,16 @@ final class RewriteModeService: ObservableObject {
         NSApp.hide(nil) // Restore focus to the previous app
         self.typingService.typeTextInstantly(self.rewrittenText)
 
+        // Clipboard-only mode routes the delivery to the pasteboard instead of typing, so report the
+        // method that actually happened rather than always claiming a typed insertion. (#481)
+        let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
         AnalyticsService.shared.capture(
             .outputDelivered,
             properties: [
                 "mode": AnalyticsMode.rewrite.rawValue,
-                "method": AnalyticsOutputMethod.typed.rawValue,
+                "method": isClipboardOnlyMode
+                    ? AnalyticsOutputMethod.clipboard.rawValue
+                    : AnalyticsOutputMethod.typed.rawValue,
             ]
         )
     }

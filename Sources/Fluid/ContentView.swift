@@ -2289,9 +2289,13 @@ struct ContentView: View {
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
         let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
+        // Clipboard-only is the primary delivery method, so it must write even when FluidVoice is
+        // frontmost — suppressing it there would leave the user with nothing on the clipboard. The
+        // backup-copy checkbox keeps its `!isFluidFrontmost` guard, since the bound editor already
+        // holds the text in that self-target case.
         let shouldCopyToClipboard = shouldPersistOutputs &&
-            !isFluidFrontmost &&
-            (SettingsStore.shared.copyTranscriptionToClipboard || isClipboardOnlyMode)
+            (isClipboardOnlyMode ||
+                (!isFluidFrontmost && SettingsStore.shared.copyTranscriptionToClipboard))
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
@@ -2679,7 +2683,10 @@ struct ContentView: View {
                 )
             }
 
-            // Type the rewritten text
+            // Deliver the rewritten text. In clipboard-only mode the insertion machinery writes to
+            // the pasteboard instead of typing, so report the matching analytics method rather than
+            // unconditionally claiming a typed insertion. (#481)
+            let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
@@ -2692,7 +2699,9 @@ struct ContentView: View {
                 .outputDelivered,
                 properties: [
                     "mode": AnalyticsMode.rewrite.rawValue,
-                    "method": AnalyticsOutputMethod.typed.rawValue,
+                    "method": isClipboardOnlyMode
+                        ? AnalyticsOutputMethod.clipboard.rawValue
+                        : AnalyticsOutputMethod.typed.rawValue,
                 ]
             )
 
