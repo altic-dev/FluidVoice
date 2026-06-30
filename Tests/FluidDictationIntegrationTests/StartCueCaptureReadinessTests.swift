@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CoreAudio
 import XCTest
 
 final class StartCueCaptureReadinessTests: XCTestCase {
@@ -103,6 +104,30 @@ final class StartCueCaptureReadinessTests: XCTestCase {
         )
 
         XCTAssertEqual(routeRecoveryPending.decision, .timedOut(ready: false))
+    }
+
+    func testBluetoothDeviceDetectionUsesNameFallbackForAggregateRoutes() {
+        let airPods = AudioDevice.Device(
+            id: AudioObjectID(kAudioObjectUnknown),
+            uid: "airpods",
+            name: "Jon's AirPods Pro",
+            hasInput: true,
+            hasOutput: true
+        )
+
+        XCTAssertTrue(AudioDevice.isBluetoothDevice(airPods))
+    }
+
+    func testBluetoothDeviceDetectionDoesNotFlagOrdinaryUnknownDeviceNames() {
+        let builtInMic = AudioDevice.Device(
+            id: AudioObjectID(kAudioObjectUnknown),
+            uid: "builtin",
+            name: "MacBook Pro Microphone",
+            hasInput: true,
+            hasOutput: false
+        )
+
+        XCTAssertFalse(AudioDevice.isBluetoothDevice(builtInMic))
     }
 
     private func snapshot(

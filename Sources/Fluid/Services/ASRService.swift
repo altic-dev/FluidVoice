@@ -1087,6 +1087,10 @@ final class ASRService: ObservableObject {
             self.benchmarkLog("engine_reuse_retained hit=false reason=\(reason)")
             return
         }
+        guard self.canRetainStoppedEngineForReuse() else {
+            self.releaseStoppedEngine(reason: "\(reason)_unsafe_route")
+            return
+        }
 
         self.cancelStoppedEngineRelease(reason: "reschedule")
         self.stoppedEngineRetainedAt = Date().timeIntervalSince1970
@@ -1115,6 +1119,26 @@ final class ASRService: ObservableObject {
                 self.releaseStoppedEngine(reason: "reuse_grace_expired")
             }
         }
+    }
+
+    private func canRetainStoppedEngineForReuse() -> Bool {
+        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
+            self.benchmarkLog("engine_reuse_retained hit=false reason=independent_device_binding")
+            return false
+        }
+
+        let routeDevices = [
+            self.getCurrentlyBoundInputDevice(),
+            AudioDevice.getDefaultInputDevice(),
+            AudioDevice.getDefaultOutputDevice(),
+        ].compactMap { $0 }
+
+        if let bluetoothDevice = routeDevices.first(where: { AudioDevice.isBluetoothDevice($0) }) {
+            self.benchmarkLog("engine_reuse_retained hit=false reason=bluetooth_device device=\(bluetoothDevice.name)")
+            return false
+        }
+
+        return true
     }
 
     /// Stops the recording session and returns the transcribed text.
@@ -2023,7 +2047,10 @@ final class ASRService: ObservableObject {
         let isStartupEngineConfigurationRecovery = self.isStartupEngineConfigurationRecovery(reason: reason)
         if isStartupEngineConfigurationRecovery {
             self.startupEngineConfigurationRecoveryScheduled = true
+            self.startupEngineConfigurationRecoveryCompletedAt = nil
+            self.startupEngineConfigurationRecoveryCompletedSampleCount = nil
         } else {
+            self.clearStartupCaptureReadiness(reason: "route_recovery_replaced_by_\(reason)")
             self.audioCapturePipeline.setRecordingEnabled(false)
             self.audioLevelSubject.send(0.0)
         }
@@ -2055,6 +2082,18 @@ final class ASRService: ObservableObject {
 
         let startAge = Date().timeIntervalSince1970 - lastEngineStartCompletedAt
         return startAge >= 0 && startAge <= self.startupEngineConfigurationRecoveryWindowSeconds
+    }
+
+    private func clearStartupCaptureReadiness(reason: String) {
+        if self.startupEngineConfigurationRecoveryScheduled ||
+            self.startupEngineConfigurationRecoveryCompletedAt != nil ||
+            self.startupEngineConfigurationRecoveryCompletedSampleCount != nil
+        {
+            self.benchmarkLog("startup_capture_readiness_reset reason=\(reason)")
+        }
+        self.startupEngineConfigurationRecoveryScheduled = false
+        self.startupEngineConfigurationRecoveryCompletedAt = nil
+        self.startupEngineConfigurationRecoveryCompletedSampleCount = nil
     }
 
     @MainActor

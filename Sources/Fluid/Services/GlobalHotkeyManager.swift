@@ -1044,13 +1044,14 @@ final class GlobalHotkeyManager: NSObject {
                 return
             }
 
-            if self.setupGlobalHotkey() {
-                self.isInitialized = true
-                self.startHealthCheckTimer()
+            self.setupGlobalHotkeyWithRetry()
+            if self.isInitialized {
                 DebugLogger.shared.info("Event tap async recovery successful", source: "GlobalHotkeyManager")
             } else {
-                self.isInitialized = false
-                DebugLogger.shared.error("Event tap async recovery failed", source: "GlobalHotkeyManager")
+                DebugLogger.shared.warning(
+                    "Event tap async recovery initial attempt failed; retry loop scheduled",
+                    source: "GlobalHotkeyManager"
+                )
             }
         }
     }

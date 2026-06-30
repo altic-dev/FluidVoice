@@ -115,6 +115,26 @@ enum AudioDevice {
         return self.listAllDevices().first { $0.uid == uid }?.id
     }
 
+    static func isBluetoothDevice(_ device: Device) -> Bool {
+        let nameLooksBluetooth = device.name.localizedCaseInsensitiveContains("airpods") ||
+            device.name.localizedCaseInsensitiveContains("bluetooth") ||
+            device.name.localizedCaseInsensitiveContains("beats")
+        if nameLooksBluetooth {
+            return true
+        }
+
+        guard device.id != kAudioObjectUnknown else { return false }
+
+        guard let transportType = self.getUInt32Property(
+            device.id,
+            selector: kAudioDevicePropertyTransportType,
+            scope: kAudioObjectPropertyScopeGlobal
+        ) else { return false }
+
+        return transportType == kAudioDeviceTransportTypeBluetooth ||
+            transportType == kAudioDeviceTransportTypeBluetoothLE
+    }
+
     private static func getDefaultDeviceId(selector: AudioObjectPropertySelector) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
@@ -171,6 +191,24 @@ enum AudioDevice {
         let status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, &value)
         guard status == noErr else { return nil }
         return value?.takeRetainedValue() as String?
+    }
+
+    private static func getUInt32Property(
+        _ devId: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope
+    ) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var value: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(devId, &address, 0, nil, &dataSize, &value)
+        guard status == noErr else { return nil }
+        return value
     }
 
     private static func hasChannels(_ devId: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
