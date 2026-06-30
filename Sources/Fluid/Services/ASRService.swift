@@ -587,6 +587,7 @@ final class ASRService: ObservableObject {
     private var lastEngineStartCompletedAt: TimeInterval?
     private var startupEngineConfigurationRecoveryScheduled = false
     private var startupEngineConfigurationRecoveryCompletedAt: TimeInterval?
+    private var startupEngineConfigurationRecoveryCompletedSampleCount: Int?
     private var stoppedEngineRetainedAt: TimeInterval?
     private var stoppedEngineReleaseTask: Task<Void, Never>?
     private var isRecoveringAudioRoute = false
@@ -894,6 +895,7 @@ final class ASRService: ObservableObject {
         self.lastEngineStartCompletedAt = nil
         self.startupEngineConfigurationRecoveryScheduled = false
         self.startupEngineConfigurationRecoveryCompletedAt = nil
+        self.startupEngineConfigurationRecoveryCompletedSampleCount = nil
         self.streamingChunkAnalyticsSuccessCount = 0
         self.lastStreamingChunkFailureAnalyticsAt = nil
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
@@ -1004,22 +1006,30 @@ final class ASRService: ObservableObject {
             } else {
                 stableEnough = false
             }
+            let readySampleCount: Int
+            if self.startupEngineConfigurationRecoveryCompletedAt != nil,
+               let recoveryCompletedSampleCount = self.startupEngineConfigurationRecoveryCompletedSampleCount
+            {
+                readySampleCount = max(0, sampleCount - recoveryCompletedSampleCount)
+            } else {
+                readySampleCount = sampleCount
+            }
 
             if routeRecoveryIdle,
                stableEnough,
-               sampleCount >= self.startupCaptureReadyMinimumSamples
+               readySampleCount >= self.startupCaptureReadyMinimumSamples
             {
                 DebugLogger.shared.info(
-                    "Capture ready for start cue (samples=\(sampleCount), waitedMs=\(Int(((now - waitStartedAt) * 1000).rounded())))",
+                    "Capture ready for start cue (samples=\(sampleCount), readySamples=\(readySampleCount), waitedMs=\(Int(((now - waitStartedAt) * 1000).rounded())))",
                     source: "ASRService"
                 )
                 return true
             }
 
             if now - waitStartedAt >= self.startupCaptureReadyTimeoutSeconds {
-                let ready = routeRecoveryIdle && sampleCount > 0
+                let ready = routeRecoveryIdle && readySampleCount > 0
                 DebugLogger.shared.warning(
-                    "Timed out waiting for capture-ready start cue (ready=\(ready), samples=\(sampleCount), routeRecoveryIdle=\(routeRecoveryIdle), stableEnough=\(stableEnough))",
+                    "Timed out waiting for capture-ready start cue (ready=\(ready), samples=\(sampleCount), readySamples=\(readySampleCount), routeRecoveryIdle=\(routeRecoveryIdle), stableEnough=\(stableEnough))",
                     source: "ASRService"
                 )
                 return ready
@@ -2000,6 +2010,9 @@ final class ASRService: ObservableObject {
         let isStartupEngineConfigurationRecovery = self.isStartupEngineConfigurationRecovery(reason: reason)
         if isStartupEngineConfigurationRecovery {
             self.startupEngineConfigurationRecoveryScheduled = true
+        } else {
+            self.audioCapturePipeline.setRecordingEnabled(false)
+            self.audioLevelSubject.send(0.0)
         }
         let recoveryDelayNanoseconds = self.recoveryDelayNanoseconds(for: reason)
         DebugLogger.shared.warning(
@@ -2068,6 +2081,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("Audio route recovery succeeded", source: "ASRService")
             if reason == "engine configuration changed", self.startupEngineConfigurationRecoveryScheduled {
                 self.startupEngineConfigurationRecoveryCompletedAt = Date().timeIntervalSince1970
+                self.startupEngineConfigurationRecoveryCompletedSampleCount = self.audioBuffer.count
             }
         } catch {
             DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
