@@ -2671,8 +2671,13 @@ struct ContentView: View {
         if !self.rewriteModeService.rewrittenText.isEmpty {
             DebugLogger.shared.info("Rewrite successful, typing result (chars: \(self.rewriteModeService.rewrittenText.count))", source: "ContentView")
 
+            // In clipboard-only mode the delivery below already writes the pasteboard and emits a
+            // single `.clipboard` event, so skip the backup copy to avoid double-counting that
+            // delivery — mirroring how the dictation path collapses these into one event. (#481)
+            let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
+
             // Copy to clipboard as backup
-            if SettingsStore.shared.copyTranscriptionToClipboard {
+            if SettingsStore.shared.copyTranscriptionToClipboard, !isClipboardOnlyMode {
                 ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
                 AnalyticsService.shared.capture(
                     .outputDelivered,
@@ -2686,7 +2691,6 @@ struct ContentView: View {
             // Deliver the rewritten text. In clipboard-only mode the insertion machinery writes to
             // the pasteboard instead of typing, so report the matching analytics method rather than
             // unconditionally claiming a typed insertion. (#481)
-            let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
