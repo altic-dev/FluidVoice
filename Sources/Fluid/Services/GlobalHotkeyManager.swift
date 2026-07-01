@@ -515,22 +515,28 @@ final class GlobalHotkeyManager: NSObject {
 
         self.eventTap = nil
         self.runLoopSource = nil
-        self.clearPrimaryShortcutPressState(removedShortcuts: nil)
+        self.clearPrimaryShortcutPressState()
     }
 
-    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut]? = nil) {
+    private nonisolated func clearPrimaryShortcutPressState() {
+        self.clearPrimaryShortcutPressState(removedShortcuts: [], forceClear: true)
+    }
+
+    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut]) {
+        self.clearPrimaryShortcutPressState(removedShortcuts: removedShortcuts, forceClear: false)
+    }
+
+    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut], forceClear: Bool) {
         let tasks = self.state.withLock { () -> [Task<Void, Never>] in
             var tasks: [Task<Void, Never>] = []
-            let forceClear = removedShortcuts == nil
-            let removedShortcuts = removedShortcuts ?? []
             let removedActiveShortcut = self.state.activePrimaryShortcutPress.map { press in
                 removedShortcuts.contains { Self.shortcut($0, matchesPrimaryPress: press) }
             } ?? false
             let pressedModifierKeyCodes = HotkeyShortcut.normalizedModifierKeyCodes(from: Array(self.state.pressedModifierKeyCodes))
-            let removedPendingTranscriptionModifierShortcut = self.state.pendingHoldModeType == .transcription && removedShortcuts.contains {
+            let removedPendingModShortcut = self.state.pendingHoldModeType == .transcription && removedShortcuts.contains {
                 $0.isModifierOnlyShortcut
             }
-            let removedModifierOnlyShortcut = removedPendingTranscriptionModifierShortcut || !pressedModifierKeyCodes.isEmpty && removedShortcuts.contains { shortcut in
+            let removedModifierOnlyShortcut = removedPendingModShortcut || !pressedModifierKeyCodes.isEmpty && removedShortcuts.contains { shortcut in
                 shortcut.isModifierOnlyShortcut && shortcut.normalizedModifierKeyCodes == pressedModifierKeyCodes
             }
             let shouldClearPrimaryPress = forceClear || removedActiveShortcut || removedModifierOnlyShortcut
