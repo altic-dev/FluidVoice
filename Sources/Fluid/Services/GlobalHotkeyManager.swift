@@ -347,6 +347,7 @@ final class GlobalHotkeyManager: NSObject {
 
     func updatePrimaryShortcuts(_ newShortcuts: [HotkeyShortcut]) {
         self.primaryShortcuts = newShortcuts
+        self.clearPrimaryShortcutPressState()
         DebugLogger.shared.info("Updated transcription hotkeys", source: "GlobalHotkeyManager")
     }
 
@@ -517,8 +518,21 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private nonisolated func clearPrimaryShortcutPressState() {
-        let task = self.state.withLock { () -> Task<Void, Never>? in
-            guard self.state.activePrimaryShortcutPress != nil || self.state.isKeyPressed else { return nil }
+        let tasks = self.state.withLock { () -> [Task<Void, Never>] in
+            var tasks: [Task<Void, Never>] = []
+
+            if self.state.pendingHoldModeType == .transcription {
+                if let task = self.state.pendingHoldModeStart {
+                    tasks.append(task)
+                }
+                self.state.pendingHoldModeStart = nil
+                self.state.pendingHoldModeType = nil
+            }
+
+            self.state.pressedModifierKeyCodes.removeAll()
+            self.state.modifierOnlyKeyDown = false
+            self.state.otherKeyPressedDuringModifier = false
+            self.state.modifierPressStartTime = nil
             self.state.activePrimaryShortcutPress = nil
             self.state.isKeyPressed = false
             self.state.holdModeStartTriggeredTypes.remove(.transcription)
@@ -526,9 +540,15 @@ final class GlobalHotkeyManager: NSObject {
             self.state.automaticPressWasTargetActive.removeValue(forKey: .transcription)
             self.state.automaticPressStartedTypes.remove(.transcription)
             _ = self.state.pendingReleaseStopTokens.removeValue(forKey: .transcription)
-            return self.state.pendingReleaseStopTasks.removeValue(forKey: .transcription)
+            if let task = self.state.pendingReleaseStopTasks.removeValue(forKey: .transcription) {
+                tasks.append(task)
+            }
+
+            return tasks
         }
-        task?.cancel()
+        for task in tasks {
+            task.cancel()
+        }
     }
 
     private func markOtherInputDuringModifierOnly() {
@@ -1930,3 +1950,46 @@ final class GlobalHotkeyManager: NSObject {
         cleanupEventTap()
     }
 }
+
+#if DEBUG
+extension GlobalHotkeyManager {
+    func debugHandlePrimaryModifierOnlyFlagsChanged(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        if HotkeyShortcut.modifierFlag(forKeyCode: keyCode) != nil {
+            self.pressedModifierKeyCodes = self.synchronizedPressedModifierKeyCodes(
+                changedKeyCode: keyCode,
+                modifiers: modifiers
+            )
+        }
+
+        for shortcut in self.primaryShortcuts where shortcut.isModifierOnlyShortcut {
+            if self.handleModifierOnlyShortcutFlagsChanged(
+                behavior: self.primaryModifierOnlyBehavior(for: shortcut),
+                keyCode: keyCode,
+                modifiers: modifiers
+            ) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    var debugPrimaryShortcutPressStateIsClear: Bool {
+        self.state.withLock {
+            self.state.activePrimaryShortcutPress == nil
+                && !self.state.isKeyPressed
+                && !self.state.modifierOnlyKeyDown
+                && !self.state.otherKeyPressedDuringModifier
+                && self.state.modifierPressStartTime == nil
+                && self.state.pendingHoldModeStart == nil
+                && self.state.pendingHoldModeType != .transcription
+                && !self.state.holdModeStartTriggeredTypes.contains(.transcription)
+                && self.state.automaticPressStartTimes[.transcription] == nil
+                && self.state.automaticPressWasTargetActive[.transcription] == nil
+                && !self.state.automaticPressStartedTypes.contains(.transcription)
+                && self.state.pendingReleaseStopTasks[.transcription] == nil
+                && self.state.pendingReleaseStopTokens[.transcription] == nil
+        }
+    }
+}
+#endif
