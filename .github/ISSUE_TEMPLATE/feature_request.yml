@@ -1,0 +1,17 @@
+name: "🚀 Feature Request"
+description: "Suggest a new capability, enhancement, or language model support"
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We are happy to receive suggestions to make FluidVoice a better local dictation app.
+  - type: textarea
+    id: details
+    attributes:
+      label: "Proposed Feature Details"
+      description: "What new shortcut, formatting capability, or model enhancement should be added?"
+      placeholder: "Add custom formatting shortcuts for Markdown editors..."
+    validations:
+      required: true
