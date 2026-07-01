@@ -211,6 +211,10 @@ open Fluid.xcodeproj
 
 Build and run in Xcode. All dependencies are managed via Swift Package Manager.
 
+> Public contributors should build with Xcode or `xcodebuild`. The top-level
+> `build.sh` script is for the private Fluid Intelligence build setup and is not
+> the public OSS build entrypoint.
+
 ### Build Only (No Signing)
 
 ```bash
