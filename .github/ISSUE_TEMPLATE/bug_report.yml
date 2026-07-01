@@ -1,0 +1,44 @@
+name: "🐛 Bug Report"
+description: "Report a bug or transcription error in FluidVoice"
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill out this form to help us diagnose the transcription or UI issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: "Bug Description"
+      description: "A clear description of what the issue is."
+      placeholder: "e.g., Application crashes when dictation key is pressed..."
+    validations:
+      required: true
+  - type: dropdown
+    id: os_version
+    attributes:
+      label: "macOS Version"
+      options:
+        - macOS 15 Sequoia
+        - macOS 14 Sonoma
+        - macOS 13 Ventura
+        - Other (specify in details)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Reproduction Steps"
+      description: "How can we reproduce the error?"
+      placeholder: |
+        1. Open FluidVoice...
+        2. Press custom trigger shortcut...
+        3. App crashes...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs and Crash Reports"
+      render: shell
