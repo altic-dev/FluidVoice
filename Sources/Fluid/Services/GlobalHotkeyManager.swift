@@ -533,9 +533,9 @@ final class GlobalHotkeyManager: NSObject {
                 removedShortcuts.contains { Self.shortcut($0, matchesPrimaryPress: press) }
             } ?? false
             let pressedModifierKeyCodes = HotkeyShortcut.normalizedModifierKeyCodes(from: Array(self.state.pressedModifierKeyCodes))
-            let removedPendingModShortcut = self.state.pendingHoldModeType == .transcription && removedShortcuts.contains {
-                $0.isModifierOnlyShortcut
-            }
+            let removedPendingModShortcut = pressedModifierKeyCodes.isEmpty
+                && self.state.pendingHoldModeType == .transcription
+                && removedShortcuts.contains { $0.isModifierOnlyShortcut }
             let removedModifierOnlyShortcut = removedPendingModShortcut || !pressedModifierKeyCodes.isEmpty && removedShortcuts.contains { shortcut in
                 shortcut.isModifierOnlyShortcut && shortcut.normalizedModifierKeyCodes == pressedModifierKeyCodes
             }
