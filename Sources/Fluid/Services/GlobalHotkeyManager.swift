@@ -346,8 +346,9 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updatePrimaryShortcuts(_ newShortcuts: [HotkeyShortcut]) {
+        let removedShortcuts = self.primaryShortcuts.filter { !newShortcuts.contains($0) }
         self.primaryShortcuts = newShortcuts
-        self.clearPrimaryShortcutPressState()
+        self.clearPrimaryShortcutPressState(removedShortcuts: removedShortcuts)
         DebugLogger.shared.info("Updated transcription hotkeys", source: "GlobalHotkeyManager")
     }
 
@@ -514,14 +515,36 @@ final class GlobalHotkeyManager: NSObject {
 
         self.eventTap = nil
         self.runLoopSource = nil
-        self.clearPrimaryShortcutPressState()
+        self.clearPrimaryShortcutPressState(removedShortcuts: nil)
     }
 
-    private nonisolated func clearPrimaryShortcutPressState() {
+    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut]? = nil) {
         let tasks = self.state.withLock { () -> [Task<Void, Never>] in
             var tasks: [Task<Void, Never>] = []
+            let forceClear = removedShortcuts == nil
+            let removedShortcuts = removedShortcuts ?? []
+            let removedActiveShortcut = self.state.activePrimaryShortcutPress.map { press in
+                removedShortcuts.contains { Self.shortcut($0, matchesPrimaryPress: press) }
+            } ?? false
+            let pressedModifierKeyCodes = HotkeyShortcut.normalizedModifierKeyCodes(from: Array(self.state.pressedModifierKeyCodes))
+            let removedPendingTranscriptionModifierShortcut = self.state.pendingHoldModeType == .transcription && removedShortcuts.contains {
+                $0.isModifierOnlyShortcut
+            }
+            let removedModifierOnlyShortcut = removedPendingTranscriptionModifierShortcut || !pressedModifierKeyCodes.isEmpty && removedShortcuts.contains { shortcut in
+                shortcut.isModifierOnlyShortcut && shortcut.normalizedModifierKeyCodes == pressedModifierKeyCodes
+            }
+            let shouldClearPrimaryPress = forceClear || removedActiveShortcut || removedModifierOnlyShortcut
 
-            if self.state.pendingHoldModeType == .transcription {
+            guard shouldClearPrimaryPress else { return tasks }
+
+            if forceClear || removedModifierOnlyShortcut {
+                self.state.pressedModifierKeyCodes.removeAll()
+                self.state.modifierOnlyKeyDown = false
+                self.state.otherKeyPressedDuringModifier = false
+                self.state.modifierPressStartTime = nil
+            }
+
+            if self.state.pendingHoldModeType == .transcription, forceClear || removedModifierOnlyShortcut {
                 if let task = self.state.pendingHoldModeStart {
                     tasks.append(task)
                 }
@@ -529,11 +552,9 @@ final class GlobalHotkeyManager: NSObject {
                 self.state.pendingHoldModeType = nil
             }
 
-            self.state.pressedModifierKeyCodes.removeAll()
-            self.state.modifierOnlyKeyDown = false
-            self.state.otherKeyPressedDuringModifier = false
-            self.state.modifierPressStartTime = nil
-            self.state.activePrimaryShortcutPress = nil
+            if forceClear || removedActiveShortcut {
+                self.state.activePrimaryShortcutPress = nil
+            }
             self.state.isKeyPressed = false
             self.state.holdModeStartTriggeredTypes.remove(.transcription)
             self.state.automaticPressStartTimes.removeValue(forKey: .transcription)
@@ -548,6 +569,15 @@ final class GlobalHotkeyManager: NSObject {
         }
         for task in tasks {
             task.cancel()
+        }
+    }
+
+    private nonisolated static func shortcut(_ shortcut: HotkeyShortcut, matchesPrimaryPress press: ActivePrimaryShortcutPress) -> Bool {
+        switch press {
+        case let .keyboard(keyCode):
+            return !shortcut.isMouseShortcut && shortcut.keyCode == keyCode
+        case let .mouse(button):
+            return shortcut.isMouseShortcut && shortcut.mouseButton == button
         }
     }
 
