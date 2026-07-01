@@ -132,6 +132,7 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
             let incoming = try self.replacementEntries(from: payload)
 
             var stored = payload.mode == .replace ? [] : SettingsStore.shared.customDictionaryEntries
+            var incomingEntries: [SettingsStore.CustomDictionaryEntry] = []
             for entry in incoming {
                 let normalized = Self.storeEntry(from: entry)
                 guard !normalized.triggers.isEmpty,
@@ -144,10 +145,14 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
                     if let id = entry.id, existing.id == id { return true }
                     return existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame
                 }
-                stored.append(normalized)
+                incomingEntries.removeAll { existing in
+                    if let id = entry.id, existing.id == id { return true }
+                    return existing.replacement.caseInsensitiveCompare(normalized.replacement) == .orderedSame
+                }
+                incomingEntries.append(normalized)
             }
 
-            SettingsStore.shared.customDictionaryEntries = stored
+            SettingsStore.shared.customDictionaryEntries = incomingEntries + stored
             ASRService.invalidateDictionaryCache()
             NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
             return self.getReplacements()

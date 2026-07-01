@@ -18,6 +18,7 @@ enum FluidButtonRole {
     case glass
     case compact
     case accent
+    case destructive
     case inline
 }
 
@@ -77,6 +78,8 @@ extension View {
             self.buttonStyle(CompactButtonStyle(height: size.controlHeight))
         case .accent:
             self.buttonStyle(AccentButtonStyle(compact: size.accentCompact))
+        case .destructive:
+            self.buttonStyle(AccentButtonStyle(compact: size.accentCompact, tone: Color(nsColor: .systemRed)))
         case .inline:
             self.buttonStyle(InlineButtonStyle())
         }
@@ -389,9 +392,10 @@ struct CompactButtonStyle: ButtonStyle {
 
 struct AccentButtonStyle: ButtonStyle {
     var compact: Bool = false
+    var tone: Color? = nil
 
     func makeBody(configuration: Configuration) -> some View {
-        AccentButton(configuration: configuration, compact: self.compact)
+        AccentButton(configuration: configuration, compact: self.compact, tone: self.tone)
     }
 
     private struct AccentButton: View {
@@ -399,12 +403,14 @@ struct AccentButtonStyle: ButtonStyle {
         @State private var isHovered = false
         let configuration: ButtonStyle.Configuration
         let compact: Bool
+        let tone: Color?
 
         private var shape: RoundedRectangle {
             RoundedRectangle(cornerRadius: self.compact ? 8 : self.theme.metrics.corners.md, style: .continuous)
         }
 
         var body: some View {
+            let tone = self.tone ?? self.theme.palette.accent
             self.configuration.label
                 .fontWeight(.semibold)
                 .padding(.horizontal, self.compact ? 12 : self.theme.metrics.spacing.lg)
@@ -416,8 +422,8 @@ struct AccentButtonStyle: ButtonStyle {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    self.theme.palette.accent,
-                                    self.theme.palette.accent.opacity(0.85),
+                                    tone,
+                                    tone.opacity(0.85),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -429,7 +435,7 @@ struct AccentButtonStyle: ButtonStyle {
                         .stroke(Color.white.opacity(self.isHovered ? 0.3 : 0.15), lineWidth: 1)
                 )
                 .shadow(
-                    color: self.theme.palette.accent.opacity(self.isHovered ? 0.5 : 0.3),
+                    color: tone.opacity(self.isHovered ? 0.5 : 0.3),
                     radius: self.isHovered ? 6 : 4,
                     x: 0,
                     y: self.isHovered ? 3 : 2

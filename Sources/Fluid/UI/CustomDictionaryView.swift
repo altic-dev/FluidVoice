@@ -12,9 +12,13 @@ import UniformTypeIdentifiers
 
 struct CustomDictionaryView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var appServices: AppServices
+
+    private var asr: ASRService { self.appServices.asr }
+
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
-    @State private var showAddSheet = false
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
     @State private var showAddBoostSheet = false
     @State private var editingBoostTerm: EditableBoostTerm?
@@ -24,23 +28,195 @@ struct CustomDictionaryView: View {
     @State private var vocabBoostingEnabled: Bool = SettingsStore.shared.vocabularyBoostingEnabled
     @State private var isBoostingInfoPresented = false
 
+    @State private var trainingReplacement = ""
+    @State private var trainingVariants: [String] = []
+    @State private var trainingSampleCount = 0
+    @State private var lastTrainingOutput = ""
+    @State private var lastTrainingOutputIsCovered = false
+    @State private var consecutiveCoveredCaptures = 0
+    @State private var trainingStatusMessage = "Type the correct text."
+    @State private var trainingHasError = false
+    @State private var isTrainingActive = false
+    @State private var isTrainingStarting = false
+    @State private var isTrainingRecording = false
+    @State private var trainingStopRequestedDuringStart = false
+    @State private var isTrainingProcessing = false
+    @State private var replacementConfirmation: ReplacementConfirmation?
+    @State private var composerMode: DictionaryComposerMode = .train
+    @State private var manualTriggersText = ""
+    @State private var manualReplacement = ""
+    @State private var isDictionaryExpanded = false
+
+    private var normalizedTrainingReplacement: String {
+        self.trainingReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trainingProgressText: String {
+        let count = self.trainingSampleCount
+        return "\(count) \(count == 1 ? "sample" : "samples") · up to \(CustomDictionaryTrainingMerge.maxSamples)"
+    }
+
+    private var shouldShowTrainingStatus: Bool {
+        self.trainingHasError || (
+            !self.trainingStatusMessage.isEmpty &&
+                self.trainingStatusMessage != "Type the correct text."
+        )
+    }
+
+    private var canUseTrainingRecorderButton: Bool {
+        guard !self.trainingStopRequestedDuringStart, !self.isTrainingProcessing else { return false }
+        return self.isTrainingRecording || self.canRecordTrainingSample
+    }
+
+    private var trainingRecorderTitle: String {
+        if self.trainingStopRequestedDuringStart {
+            return "Stopping..."
+        }
+        if self.isTrainingProcessing {
+            return "Working..."
+        }
+        if self.isTrainingStarting {
+            return "Starting..."
+        }
+        if self.isTrainingRecording {
+            return "Listening..."
+        }
+        if self.normalizedTrainingReplacement.isEmpty {
+            return "Record sample"
+        }
+        return self.trainingVariants.isEmpty ? "Say it once" : "Say it again"
+    }
+
+    private var trainingRecorderDetail: String {
+        self.normalizedTrainingReplacement.isEmpty
+            ? "Type the correct text first."
+            : "Keep trying until FluidVoice understands you 3 times in a row."
+    }
+
+    private var trainingRecorderStatusText: String {
+        guard !self.lastTrainingOutput.isEmpty else { return "Record to check" }
+        if self.trainingAlreadyCorrectWithoutReplacement {
+            return "Already correct"
+        }
+        if self.trainingFinalOutputIsReady {
+            return "Ready to add"
+        }
+        return "\(self.trainingReadinessProgress)/\(CustomDictionaryTrainingMerge.readyCoveredCount) understood"
+    }
+
+    private var trainingRecorderStatusColor: Color {
+        self.trainingFinalOutputIsReady || self.trainingAlreadyCorrectWithoutReplacement
+            ? self.theme.palette.success
+            : self.theme.palette.secondaryText
+    }
+
+    private var trainingRecorderFillColor: Color {
+        self.trainingFinalOutputIsReady || self.trainingAlreadyCorrectWithoutReplacement
+            ? self.theme.palette.success
+            : self.theme.palette.accent
+    }
+
+    private var trainingRecorderFillFraction: Double {
+        guard !self.lastTrainingOutput.isEmpty else { return 0 }
+        if self.trainingAlreadyCorrectWithoutReplacement {
+            return 1
+        }
+        return Double(self.trainingReadinessProgress) / Double(CustomDictionaryTrainingMerge.readyCoveredCount)
+    }
+
+    private var trainingFinalOutputIsReady: Bool {
+        !self.trainingAlreadyCorrectWithoutReplacement &&
+            self.trainingOutputIsCovered &&
+            self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount
+    }
+
+    private var trainingAlreadyCorrectWithoutReplacement: Bool {
+        self.trainingVariants.isEmpty &&
+            self.trainingOutputIsCovered &&
+            !self.lastTrainingOutput.isEmpty &&
+            self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
+            self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount
+    }
+
+    private var trainingReadinessProgress: Int {
+        guard !self.trainingAlreadyCorrectWithoutReplacement else {
+            return CustomDictionaryTrainingMerge.readyCoveredCount
+        }
+        guard self.trainingOutputIsCovered else { return 0 }
+        return min(self.consecutiveCoveredCaptures, CustomDictionaryTrainingMerge.readyCoveredCount)
+    }
+
+    private var trainingOutputIsCovered: Bool {
+        self.lastTrainingOutputIsCovered
+    }
+
+    private var trainingFinalOutputText: String {
+        guard !self.lastTrainingOutput.isEmpty else { return "Record to check" }
+        return self.trainingOutputIsCovered ? self.normalizedTrainingReplacement : self.lastTrainingOutput
+    }
+
+    private var canStartTraining: Bool {
+        !self.normalizedTrainingReplacement.isEmpty &&
+            !self.isTrainingRecording &&
+            !self.isTrainingProcessing
+    }
+
+    private var canRecordTrainingSample: Bool {
+        !self.normalizedTrainingReplacement.isEmpty &&
+            !self.isTrainingProcessing &&
+            !self.asr.isRunning &&
+            self.trainingSampleCount < CustomDictionaryTrainingMerge.maxSamples
+    }
+
+    private var canAddTrainedReplacement: Bool {
+        !self.normalizedTrainingReplacement.isEmpty &&
+            !self.trainingVariants.isEmpty &&
+            !self.isTrainingRecording &&
+            !self.isTrainingProcessing
+    }
+
+    private var trainedReplacementButtonTitle: String {
+        self.trainingAlreadyCorrectWithoutReplacement ? "No Replacement Needed" : "Add Replacement"
+    }
+
+    private var shouldEmphasizeTrainedReplacementButton: Bool {
+        self.trainingFinalOutputIsReady && self.canAddTrainedReplacement
+    }
+
+    private var manualTriggers: [String] {
+        CustomDictionaryManualEntry.parseTriggers(self.manualTriggersText)
+    }
+
+    private var manualDuplicateTriggers: [String] {
+        self.manualTriggers.filter { self.allExistingTriggers().contains($0) }
+    }
+
+    private var canAddManualReplacement: Bool {
+        !self.manualTriggers.isEmpty &&
+            !self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            self.manualDuplicateTriggers.isEmpty
+    }
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 self.pageHeader
 
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
-                    self.instantReplacementSection
+                    self.trainReplacementSection
+                    self.yourDictionarySection
                     self.aiPostProcessingSection
                 }
             }
             .frame(maxWidth: 860, alignment: .leading)
             .padding(self.theme.metrics.spacing.xl)
         }
-        .sheet(isPresented: self.$showAddSheet) {
-            AddDictionaryEntrySheet(existingTriggers: self.allExistingTriggers()) { newEntry in
-                self.entries.append(newEntry)
-                self.saveEntries()
+        .overlay {
+            if let confirmation = self.replacementConfirmation {
+                ReplacementConfirmationToast(confirmation: confirmation)
+                    .padding(self.theme.metrics.spacing.xl)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+                    .allowsHitTesting(false)
             }
         }
         .sheet(item: self.$editingEntry) { entry in
@@ -72,6 +248,12 @@ struct CustomDictionaryView: View {
         }
         .onAppear {
             self.loadBoostTerms()
+        }
+        .onDisappear {
+            guard self.isTrainingRecording else { return }
+            Task { @MainActor in
+                await self.stopTrainingSample()
+            }
         }
     }
 
@@ -129,17 +311,424 @@ struct CustomDictionaryView: View {
         .frame(width: 34, height: 34)
     }
 
-    // MARK: - Instant Replacement
+    // MARK: - Teach Words
 
-    private var instantReplacementSection: some View {
+    private var trainReplacementSection: some View {
         ThemedCard(style: .standard, hoverEffect: false) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                 HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
-                    self.settingsIconTile(systemName: "arrow.left.arrow.right")
+                    self.settingsIconTile(systemName: "mic.fill")
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Teach Words")
+                            .font(self.theme.typography.sectionTitle)
+                        Text("Show FluidVoice the right spelling, by voice or by typing.")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
+
+                self.dictionaryComposerModePicker
+
+                Group {
+                    switch self.composerMode {
+                    case .train:
+                        self.trainReplacementComposer
+                    case .manual:
+                        self.manualReplacementComposer
+                    }
+                }
+                .frame(minHeight: 315, alignment: .topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dictionaryComposerModePicker: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            self.dictionaryComposerModeSegmented
+
+            Text(self.composerMode.detail)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var dictionaryComposerModeSegmented: some View {
+        HStack(spacing: 2) {
+            ForEach(DictionaryComposerMode.allCases) { mode in
+                DictionaryComposerModeTab(
+                    mode: mode,
+                    isSelected: self.composerMode == mode,
+                    isDisabled: self.isTrainingRecording || self.isTrainingProcessing
+                ) {
+                    self.selectComposerMode(mode)
+                }
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
+                )
+        )
+    }
+
+    private var trainReplacementComposer: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            TextField("Type the correct text, e.g. FluidVoice", text: self.$trainingReplacement)
+                .textFieldStyle(.roundedBorder)
+                .disabled(self.isTrainingRecording || self.isTrainingProcessing)
+                .onChange(of: self.trainingReplacement) { oldValue, newValue in
+                    self.handleTrainingReplacementChange(oldValue: oldValue, newValue: newValue)
+                }
+
+            self.trainingRecorderPanel
+
+            self.trainingFinalOutputPanel
+
+            if !self.trainingVariants.isEmpty {
+                self.trainingHeardSection
+            }
+
+            self.trainingFooter
+
+            Spacer(minLength: 0)
+
+            Button {
+                self.addTrainedReplacement()
+            } label: {
+                Label(self.trainedReplacementButtonTitle, systemImage: self.trainingAlreadyCorrectWithoutReplacement ? "checkmark" : "plus")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+            }
+            .fluidButton(.accent, size: .small)
+            .disabled(!self.canAddTrainedReplacement)
+            .opacity(self.canAddTrainedReplacement ? 1 : 0.45)
+            .overlay(self.trainedReplacementButtonReadyOutline)
+            .shadow(
+                color: self.shouldEmphasizeTrainedReplacementButton ? self.theme.palette.success.opacity(0.18) : .clear,
+                radius: self.shouldEmphasizeTrainedReplacementButton ? 14 : 0,
+                x: 0,
+                y: 5
+            )
+            .scaleEffect(self.shouldEmphasizeTrainedReplacementButton ? 1.006 : 1)
+            .animation(.spring(response: 0.28, dampingFraction: 0.72), value: self.shouldEmphasizeTrainedReplacementButton)
+        }
+    }
+
+    private var trainedReplacementButtonReadyOutline: some View {
+        RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+            .stroke(
+                self.shouldEmphasizeTrainedReplacementButton ? self.theme.palette.success.opacity(0.72) : .clear,
+                lineWidth: 1.5
+            )
+            .padding(-3)
+            .allowsHitTesting(false)
+    }
+
+    private var manualReplacementComposer: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
+                    self.manualTriggerField
+                    self.manualReplacementField
+                }
+
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                    self.manualTriggerField
+                    self.manualReplacementField
+                }
+            }
+
+            if !self.manualDuplicateTriggers.isEmpty {
+                Label("Already used: \(self.manualDuplicateTriggers.joined(separator: ", "))", systemImage: "exclamationmark.triangle.fill")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
+            }
+
+            if !self.manualTriggers.isEmpty || !self.manualReplacement.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(self.manualTriggers, id: \.self) { trigger in
+                        DictionaryPreviewChip(text: trigger)
+                    }
+
+                    Image(systemName: "arrow.right")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+
+                    Text(self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines))
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.theme.palette.accent)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                self.addManualReplacementIfValid()
+            } label: {
+                Label("Add Replacement", systemImage: "plus")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+            }
+            .fluidButton(.accent, size: .small)
+            .disabled(!self.canAddManualReplacement)
+            .opacity(self.canAddManualReplacement ? 1 : 0.45)
+        }
+    }
+
+    private var manualTriggerField: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text("When FluidVoice hears")
+                .font(self.theme.typography.captionStrong)
+            TextField("fluid voice, fluid boys", text: self.$manualTriggersText)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { self.addManualReplacementIfValid() }
+            Text("Separate multiple versions with commas.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+        }
+    }
+
+    private var manualReplacementField: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text("Change it to")
+                .font(self.theme.typography.captionStrong)
+            TextField("FluidVoice", text: self.$manualReplacement)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { self.addManualReplacementIfValid() }
+            Text("This is what appears in your transcription.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+        }
+    }
+
+    private var trainingRecorderPanel: some View {
+        HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(self.trainingRecorderTitle)
+                    .font(self.theme.typography.bodySmallStrong)
+
+                Text(self.trainingRecorderDetail)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(2)
+
+                self.trainingRecorderProgressRow
+
+                HStack(spacing: 7) {
+                    Text(self.trainingRecorderStatusText)
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.trainingRecorderStatusColor)
+                        .lineLimit(1)
+
+                    Text("· \(self.trainingProgressText) recorded")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                Task {
+                    if self.isTrainingRecording {
+                        await self.stopTrainingSample()
+                    } else {
+                        await self.startTrainingSample()
+                    }
+                }
+            } label: {
+                Label(self.isTrainingRecording ? "Stop" : "Record", systemImage: self.isTrainingRecording ? "stop.fill" : "mic.fill")
+            }
+            .fluidButton(self.isTrainingRecording ? .destructive : .accent, size: .small)
+            .disabled(!self.canUseTrainingRecorderButton)
+            .opacity(self.canUseTrainingRecorderButton ? 1 : 0.45)
+        }
+        .padding(self.theme.metrics.spacing.md)
+        .background(self.trainingRecorderBackground)
+    }
+
+    private var trainingRecorderBackground: some View {
+        GeometryReader { proxy in
+            let fillWidth = proxy.size.width * min(max(self.trainingRecorderFillFraction, 0), 1)
+
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.5))
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .fill(self.trainingRecorderFillColor.opacity(0.16))
+                        .frame(width: fillWidth)
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(self.trainingRecorderBorderColor, lineWidth: 1)
+                )
+                .animation(.easeOut(duration: 0.18), value: self.trainingRecorderFillFraction)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var trainingRecorderBorderColor: Color {
+        self.trainingFinalOutputIsReady || self.trainingAlreadyCorrectWithoutReplacement
+            ? self.theme.palette.success.opacity(0.28)
+            : self.theme.palette.cardBorder.opacity(0.25)
+    }
+
+    private var trainingRecorderProgressBar: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width * min(max(self.trainingRecorderFillFraction, 0), 1)
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(self.theme.palette.cardBorder.opacity(0.35))
+
+                Capsule(style: .continuous)
+                    .fill(self.trainingRecorderFillColor)
+                    .frame(width: width)
+            }
+        }
+        .frame(height: 5)
+        .animation(.easeOut(duration: 0.18), value: self.trainingRecorderFillFraction)
+        .accessibilityHidden(true)
+    }
+
+    private var trainingRecorderProgressRow: some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            self.trainingRecorderProgressBar
+
+            Text("\(self.trainingReadinessProgress)/\(CustomDictionaryTrainingMerge.readyCoveredCount)")
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.trainingRecorderStatusColor)
+                .monospacedDigit()
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    private var trainingHeardSection: some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            Text("Captured")
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.theme.palette.secondaryText)
+
+            HStack(spacing: 6) {
+                ForEach(Array(self.trainingVariants.prefix(5).enumerated()), id: \.element) { index, variant in
+                    TrainingVariantChip(number: index + 1, variant: variant) {
+                        self.removeTrainingVariant(variant)
+                    }
+                }
+
+                if self.trainingVariants.count > 5 {
+                    Text("+\(self.trainingVariants.count - 5)")
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(self.theme.palette.cardBackground.opacity(0.65))
+                        )
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, self.theme.metrics.spacing.md)
+        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1)
+                )
+        )
+    }
+
+    private var trainingFinalOutputPanel: some View {
+        HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Final output")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+
+                Text(self.trainingFinalOutputText)
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.lastTrainingOutput.isEmpty ? self.theme.palette.tertiaryText : self.theme.palette.primaryText)
+                    .lineLimit(1)
+
+                if !self.lastTrainingOutput.isEmpty, self.lastTrainingOutput.caseInsensitiveCompare(self.trainingFinalOutputText) != .orderedSame {
+                    Text("Heard: \(self.lastTrainingOutput)")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, self.theme.metrics.spacing.md)
+        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.42))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(
+                            self.trainingFinalOutputIsReady ? self.theme.palette.success.opacity(0.28) : self.theme.palette.cardBorder.opacity(0.22),
+                            lineWidth: 1
+                        )
+                )
+        )
+    }
+
+    @ViewBuilder
+    private var trainingFooter: some View {
+        if self.shouldShowTrainingStatus || self.isTrainingActive || !self.trainingVariants.isEmpty {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                if self.trainingHasError {
+                    Label(self.trainingStatusMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.warning)
+                } else if self.shouldShowTrainingStatus {
+                    Text(self.trainingStatusMessage)
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                }
+
+                if self.isTrainingActive || !self.trainingVariants.isEmpty || !self.normalizedTrainingReplacement.isEmpty {
+                    Spacer()
+
+                    Button("Clear") {
+                        self.resetTraining()
+                    }
+                    .fluidButton(.compact, size: .compact)
+                    .disabled(self.isTrainingRecording || self.isTrainingProcessing)
+                    .opacity(self.isTrainingRecording || self.isTrainingProcessing ? 0.45 : 1)
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    // MARK: - Your Dictionary
+
+    private var yourDictionarySection: some View {
+        ThemedCard(style: .standard, hoverEffect: false) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+                    self.settingsIconTile(systemName: "book.closed.fill")
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text("Instant Replacement")
+                            Text("Your Dictionary")
                                 .font(self.theme.typography.sectionTitle)
                             if !self.entries.isEmpty {
                                 Text("(\(self.entries.count))")
@@ -147,7 +736,7 @@ struct CustomDictionaryView: View {
                                     .foregroundStyle(self.theme.palette.tertiaryText)
                             }
                         }
-                        Text("Replace phrases that are consistently transcribed incorrectly.")
+                        Text("Words and phrases FluidVoice will correct automatically.")
                             .font(self.theme.typography.caption)
                             .foregroundStyle(self.theme.palette.secondaryText)
                     }
@@ -155,22 +744,35 @@ struct CustomDictionaryView: View {
                     Spacer()
 
                     Button {
-                        self.showAddSheet = true
+                        withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                            self.isDictionaryExpanded.toggle()
+                        }
                     } label: {
-                        Label("Add Replacement", systemImage: "plus")
+                        Image(systemName: self.isDictionaryExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
+                                    .fill(self.theme.palette.contentBackground.opacity(0.45))
+                            )
                     }
-                    .fluidButton(.accent, size: .small)
+                    .buttonStyle(.plain)
+                    .help(self.isDictionaryExpanded ? "Collapse dictionary" : "Expand dictionary")
+                    .accessibilityLabel(self.isDictionaryExpanded ? "Collapse dictionary" : "Expand dictionary")
                 }
 
-                if self.entries.isEmpty {
-                    self.dictionaryEmptyState(
-                        title: "No replacements yet",
-                        detail: "Add a phrase and the text it should become."
-                    ) {
-                        self.showAddSheet = true
+                if self.isDictionaryExpanded {
+                    if self.entries.isEmpty {
+                        self.dictionaryEmptyState(
+                            title: "No replacements yet",
+                            detail: "Use Train Replacement or Manual Add above to create your first one."
+                        )
+                        .frame(maxWidth: 760)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        self.entriesListView
                     }
-                } else {
-                    self.entriesListView
                 }
             }
         }
@@ -187,6 +789,8 @@ struct CustomDictionaryView: View {
                 )
             }
         }
+        .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     // MARK: - Custom Words
@@ -290,6 +894,10 @@ struct CustomDictionaryView: View {
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
 
+            Text("It can add close to a second to transcription time.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+
             Text("If recognition gets worse, the model behaves unexpectedly, or you notice other issues after enabling it, turn Boosting off.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
@@ -301,7 +909,7 @@ struct CustomDictionaryView: View {
     private func dictionaryEmptyState(
         title: String,
         detail: String,
-        action: @escaping () -> Void
+        action: (() -> Void)? = nil
     ) -> some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
             Image(systemName: "plus.circle")
@@ -316,10 +924,12 @@ struct CustomDictionaryView: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
 
-            Spacer()
+            if let action {
+                Spacer()
 
-            Button("Add", action: action)
-                .fluidButton(.compact, size: .compact)
+                Button("Add", action: action)
+                    .fluidButton(.compact, size: .compact)
+            }
         }
         .padding(self.theme.metrics.spacing.md)
         .background(
@@ -339,6 +949,281 @@ struct CustomDictionaryView: View {
         // Invalidate cached regex patterns so changes take effect immediately
         ASRService.invalidateDictionaryCache()
         NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+    }
+
+    private func addReplacementEntry(_ entry: SettingsStore.CustomDictionaryEntry) {
+        self.entries.insert(entry, at: 0)
+        self.saveEntries()
+        self.showReplacementConfirmation(
+            title: "Replacement added",
+            detail: "It is at the top of the list."
+        )
+    }
+
+    private func selectComposerMode(_ mode: DictionaryComposerMode) {
+        guard !self.isTrainingRecording, !self.isTrainingProcessing else { return }
+        self.composerMode = mode
+    }
+
+    private func addManualReplacementIfValid() {
+        guard self.canAddManualReplacement else { return }
+        let entry = SettingsStore.CustomDictionaryEntry(
+            triggers: self.manualTriggers,
+            replacement: self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        self.addReplacementEntry(entry)
+        self.manualTriggersText = ""
+        self.manualReplacement = ""
+    }
+
+    private func beginTrainingReplacement() {
+        guard self.canStartTraining else { return }
+        self.isTrainingActive = true
+        self.trainingHasError = false
+        self.trainingStatusMessage = ""
+    }
+
+    private func startTrainingSample() async {
+        guard self.canRecordTrainingSample else { return }
+        self.isTrainingActive = true
+        self.trainingHasError = false
+        self.trainingStatusMessage = ""
+        self.trainingStopRequestedDuringStart = false
+        self.isTrainingStarting = true
+        self.isTrainingRecording = true
+
+        await self.asr.start(forDictionaryTraining: true)
+        self.isTrainingStarting = false
+        if !self.asr.isRunning {
+            self.isTrainingRecording = false
+            self.trainingStopRequestedDuringStart = false
+            self.trainingHasError = true
+            self.trainingStatusMessage = "Couldn't start recording. Check microphone access and try again."
+            return
+        }
+
+        if self.trainingStopRequestedDuringStart {
+            await self.finishTrainingSampleStop()
+        }
+    }
+
+    private func stopTrainingSample() async {
+        guard self.isTrainingRecording else { return }
+        guard !self.trainingStopRequestedDuringStart else { return }
+
+        guard !self.isTrainingStarting, self.asr.isRunning else {
+            self.trainingStopRequestedDuringStart = true
+            self.trainingHasError = false
+            self.trainingStatusMessage = "Stopping..."
+            return
+        }
+
+        await self.finishTrainingSampleStop()
+    }
+
+    private func finishTrainingSampleStop() async {
+        guard self.isTrainingRecording else { return }
+        self.isTrainingRecording = false
+        self.isTrainingStarting = false
+        self.trainingStopRequestedDuringStart = false
+        self.isTrainingProcessing = true
+        self.trainingHasError = false
+        self.trainingStatusMessage = ""
+
+        let transcript = await self.asr.stop(forDictionaryTraining: true)
+        self.isTrainingProcessing = false
+        self.addTrainingVariant(from: transcript)
+    }
+
+    private func addTrainingVariant(from transcript: String) {
+        guard let detected = CustomDictionaryTrainingMerge.normalizedTrigger(transcript) else {
+            self.lastTrainingOutput = ""
+            self.lastTrainingOutputIsCovered = false
+            self.consecutiveCoveredCaptures = 0
+            self.trainingHasError = true
+            self.trainingStatusMessage = "Nothing heard. Try again."
+            return
+        }
+
+        self.lastTrainingOutput = detected
+        self.trainingSampleCount = min(self.trainingSampleCount + 1, CustomDictionaryTrainingMerge.maxSamples)
+
+        if detected.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame {
+            self.lastTrainingOutputIsCovered = true
+            self.consecutiveCoveredCaptures += 1
+            self.trainingHasError = false
+            if self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount {
+                self.trainingStatusMessage = self.trainingVariants.isEmpty
+                    ? "Looks good already. No replacement needed."
+                    : "Looks ready. Add this replacement when you're ready."
+            } else {
+                self.trainingStatusMessage = "Covered. Try a couple more."
+            }
+            return
+        }
+
+        let wasAlreadyCaptured = self.trainingVariants.contains { $0.caseInsensitiveCompare(detected) == .orderedSame }
+        let wasAlreadySaved = self.savedDictionaryCovers(detected)
+
+        if wasAlreadyCaptured || wasAlreadySaved {
+            self.lastTrainingOutputIsCovered = true
+            self.consecutiveCoveredCaptures += 1
+            self.trainingHasError = false
+            if self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount {
+                self.trainingStatusMessage = "Looks ready. Add this replacement when you're ready."
+            } else if wasAlreadySaved {
+                self.trainingStatusMessage = "Covered by your dictionary."
+            } else {
+                self.trainingStatusMessage = "Already captured. Try a couple more."
+            }
+            return
+        }
+
+        guard self.trainingVariants.count < CustomDictionaryTrainingMerge.maxSamples else {
+            self.lastTrainingOutputIsCovered = false
+            self.consecutiveCoveredCaptures = 0
+            self.trainingHasError = false
+            self.trainingStatusMessage = "Max samples reached. Add it or clear one."
+            return
+        }
+
+        self.trainingVariants.append(detected)
+        self.lastTrainingOutputIsCovered = false
+        self.consecutiveCoveredCaptures = 0
+        self.trainingHasError = false
+        if self.trainingSampleCount >= CustomDictionaryTrainingMerge.maxSamples || self.trainingVariants.count >= CustomDictionaryTrainingMerge.maxSamples {
+            self.trainingStatusMessage = "Max samples reached. Add it or clear one."
+        } else {
+            self.trainingStatusMessage = "New pronunciation captured. Add replacement to cover it."
+        }
+    }
+
+    private func addTrainedReplacement() {
+        guard self.canAddTrainedReplacement else { return }
+        let replacementText = self.normalizedTrainingReplacement
+        let updatesExisting = self.entries.contains {
+            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
+        }
+        self.entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: self.entries,
+            replacement: replacementText,
+            triggers: self.trainingVariants
+        )
+        self.saveEntries()
+        self.resetTraining()
+        self.showReplacementConfirmation(
+            title: updatesExisting ? "Replacement updated" : "Recorded",
+            detail: updatesExisting ? "Your variants are ready." : "Replacement added at the top."
+        )
+    }
+
+    private func removeTrainingVariant(_ variant: String) {
+        self.trainingVariants.removeAll { $0 == variant }
+        self.refreshLastTrainingCoverage()
+    }
+
+    private func refreshLastTrainingCoverage() {
+        guard !self.lastTrainingOutput.isEmpty else {
+            self.lastTrainingOutputIsCovered = false
+            self.consecutiveCoveredCaptures = 0
+            return
+        }
+
+        let matchesReplacement = self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame
+        let isStillCaptured = self.trainingVariants.contains {
+            $0.caseInsensitiveCompare(self.lastTrainingOutput) == .orderedSame
+        }
+
+        if matchesReplacement || isStillCaptured || self.savedDictionaryCovers(self.lastTrainingOutput) {
+            self.lastTrainingOutputIsCovered = true
+        } else {
+            self.lastTrainingOutputIsCovered = false
+            self.consecutiveCoveredCaptures = 0
+        }
+    }
+
+    private func resetTraining(statusMessage: String = "Type the correct text.") {
+        self.trainingReplacement = ""
+        self.trainingVariants = []
+        self.trainingSampleCount = 0
+        self.lastTrainingOutput = ""
+        self.lastTrainingOutputIsCovered = false
+        self.consecutiveCoveredCaptures = 0
+        self.trainingStatusMessage = statusMessage
+        self.trainingHasError = false
+        self.isTrainingActive = false
+        self.isTrainingStarting = false
+        self.isTrainingRecording = false
+        self.trainingStopRequestedDuringStart = false
+        self.isTrainingProcessing = false
+    }
+
+    private func handleTrainingReplacementChange(oldValue: String, newValue: String) {
+        let oldKey = CustomDictionaryTrainingMerge.normalizedReplacement(oldValue).lowercased()
+        let newKey = CustomDictionaryTrainingMerge.normalizedReplacement(newValue).lowercased()
+        guard oldKey != newKey else { return }
+
+        self.trainingVariants = self.existingTrainingVariants(for: newValue)
+        self.trainingSampleCount = 0
+        self.lastTrainingOutput = ""
+        self.lastTrainingOutputIsCovered = false
+        self.consecutiveCoveredCaptures = 0
+        self.isTrainingActive = false
+        if newKey.isEmpty {
+            self.trainingStatusMessage = "Type the correct text."
+        } else if self.trainingVariants.isEmpty {
+            self.trainingStatusMessage = ""
+        } else {
+            self.trainingStatusMessage = "Loaded \(self.trainingVariants.count) saved \(self.trainingVariants.count == 1 ? "capture" : "captures")."
+        }
+        self.trainingHasError = false
+    }
+
+    private func existingTrainingVariants(for replacement: String) -> [String] {
+        let replacementText = CustomDictionaryTrainingMerge.normalizedReplacement(replacement)
+        guard !replacementText.isEmpty else { return [] }
+
+        let triggers = self.entries
+            .filter { $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame }
+            .flatMap(\.triggers)
+
+        return CustomDictionaryTrainingMerge.normalizedTriggers(
+            from: triggers,
+            intendedReplacement: replacementText
+        )
+    }
+
+    private func savedDictionaryCovers(_ trigger: String) -> Bool {
+        guard let triggerKey = CustomDictionaryTrainingMerge.normalizedTrigger(trigger),
+              !self.normalizedTrainingReplacement.isEmpty
+        else {
+            return false
+        }
+
+        return self.entries.contains { entry in
+            entry.replacement.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
+                entry.triggers.contains { savedTrigger in
+                    guard let savedKey = CustomDictionaryTrainingMerge.normalizedTrigger(savedTrigger) else { return false }
+                    return savedKey == triggerKey
+                }
+        }
+    }
+
+    private func showReplacementConfirmation(title: String, detail: String) {
+        let confirmation = ReplacementConfirmation(title: title, detail: detail)
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+
+        withAnimation(self.reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.78)) {
+            self.replacementConfirmation = confirmation
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_650_000_000)
+            guard self.replacementConfirmation?.id == confirmation.id else { return }
+            withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                self.replacementConfirmation = nil
+            }
+        }
     }
 
     private func loadBoostTerms() {
@@ -487,6 +1372,339 @@ private struct EditableBoostTerm: Identifiable {
     let id = UUID()
     let index: Int
     let term: ParakeetVocabularyStore.VocabularyConfig.Term
+}
+
+private enum DictionaryComposerMode: CaseIterable, Identifiable {
+    case train
+    case manual
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .train:
+            return "Train by Voice"
+        case .manual:
+            return "Add Manually"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .train:
+            return "mic.fill"
+        case .manual:
+            return "keyboard"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .train:
+            return "Say it a few times so FluidVoice can catch the versions it hears."
+        case .manual:
+            return "Type the misheard text and the spelling you want."
+        }
+    }
+}
+
+private struct DictionaryComposerModeTab: View {
+    let mode: DictionaryComposerMode
+    let isSelected: Bool
+    let isDisabled: Bool
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: self.action) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Image(systemName: self.mode.systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(self.mode.title)
+                    .font(self.theme.typography.bodySmallStrong)
+            }
+            .foregroundStyle(self.foreground)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 30)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .background(self.background)
+            .contentShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(self.isDisabled)
+        .opacity(self.isDisabled ? 0.55 : 1)
+        .onHover { hovering in
+            guard !self.reduceMotion else {
+                self.isHovered = hovering
+                return
+            }
+            withAnimation(.easeOut(duration: 0.14)) {
+                self.isHovered = hovering
+            }
+        }
+        .accessibilityAddTraits(self.isSelected ? .isSelected : [])
+    }
+
+    private var foreground: Color {
+        self.isSelected ? Color.white : self.theme.palette.primaryText
+    }
+
+    private var background: some View {
+        RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
+            .fill(
+                self.isSelected
+                    ? self.theme.palette.accent
+                    : (self.isHovered ? self.theme.palette.cardBackground.opacity(0.6) : Color.clear)
+            )
+    }
+}
+
+private enum CustomDictionaryManualEntry {
+    static func parseTriggers(_ text: String) -> [String] {
+        text
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+}
+
+enum CustomDictionaryTrainingMerge {
+    static let recommendedSamples = 5
+    static let maxSamples = 20
+    static let readyCoveredCount = 3
+
+    private static let edgePunctuation = CharacterSet(charactersIn: ".,!?;:\"'“”‘’")
+
+    static func normalizedReplacement(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func normalizedTrigger(_ value: String) -> String? {
+        let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(self.edgePunctuation)
+        let trimmed = value.trimmingCharacters(in: edgeCharacters).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func normalizedTriggers(from values: [String], intendedReplacement: String) -> [String] {
+        let replacement = self.normalizedReplacement(intendedReplacement)
+        var seen: Set<String> = []
+        var result: [String] = []
+        result.reserveCapacity(values.count)
+
+        for value in values {
+            guard let trigger = self.normalizedTrigger(value),
+                  trigger.caseInsensitiveCompare(replacement) != .orderedSame,
+                  !seen.contains(trigger)
+            else {
+                continue
+            }
+            seen.insert(trigger)
+            result.append(trigger)
+            if result.count >= self.maxSamples {
+                break
+            }
+        }
+
+        return result
+    }
+
+    static func mergedEntries(
+        current entries: [SettingsStore.CustomDictionaryEntry],
+        replacement: String,
+        triggers: [String]
+    ) -> [SettingsStore.CustomDictionaryEntry] {
+        let replacementText = self.normalizedReplacement(replacement)
+        let incomingTriggers = self.normalizedTriggers(from: triggers, intendedReplacement: replacementText)
+        guard !replacementText.isEmpty, !incomingTriggers.isEmpty else { return entries }
+
+        let matchingIndex = entries.firstIndex {
+            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
+        }
+        let replacementID = matchingIndex.map { entries[$0].id }
+        let storedReplacementText = matchingIndex.map { entries[$0].replacement } ?? replacementText
+        let matchingEntries = entries.filter {
+            $0.replacement.caseInsensitiveCompare(storedReplacementText) == .orderedSame
+        }
+        let existingTriggers = matchingEntries.flatMap(\.triggers)
+        let combinedTriggers = self.normalizedTriggers(
+            from: existingTriggers + incomingTriggers,
+            intendedReplacement: storedReplacementText
+        )
+        let triggerKeys = Set(combinedTriggers)
+
+        let mergedEntry = replacementID.map {
+            SettingsStore.CustomDictionaryEntry(
+                id: $0,
+                triggers: combinedTriggers,
+                replacement: storedReplacementText
+            )
+        } ?? SettingsStore.CustomDictionaryEntry(
+            triggers: combinedTriggers,
+            replacement: storedReplacementText
+        )
+
+        var didInsertMergedEntry = false
+        var updatedEntries: [SettingsStore.CustomDictionaryEntry] = []
+        updatedEntries.reserveCapacity(entries.count + (matchingIndex == nil ? 1 : 0))
+
+        for entry in entries {
+            if entry.replacement.caseInsensitiveCompare(storedReplacementText) == .orderedSame {
+                if !didInsertMergedEntry {
+                    updatedEntries.append(mergedEntry)
+                    didInsertMergedEntry = true
+                }
+                continue
+            }
+
+            let remainingTriggers = entry.triggers.filter { trigger in
+                guard let key = self.normalizedTrigger(trigger) else { return false }
+                return !triggerKeys.contains(key)
+            }
+            guard !remainingTriggers.isEmpty else { continue }
+            updatedEntries.append(
+                SettingsStore.CustomDictionaryEntry(
+                    id: entry.id,
+                    triggers: remainingTriggers,
+                    replacement: entry.replacement
+                )
+            )
+        }
+
+        if !didInsertMergedEntry {
+            updatedEntries.insert(mergedEntry, at: 0)
+        }
+
+        return updatedEntries
+    }
+}
+
+private struct ReplacementConfirmation: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let detail: String
+}
+
+private struct ReplacementConfirmationToast: View {
+    let confirmation: ReplacementConfirmation
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: self.theme.metrics.spacing.sm) {
+            ZStack {
+                Circle()
+                    .fill(self.theme.palette.accent.opacity(0.14))
+                    .frame(width: 58, height: 58)
+
+                Circle()
+                    .stroke(self.theme.palette.accent.opacity(0.24), lineWidth: 1)
+                    .frame(width: 58, height: 58)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 25, weight: .bold))
+                    .foregroundStyle(self.theme.palette.accent)
+            }
+
+            VStack(spacing: 3) {
+                Text(self.confirmation.title)
+                    .font(self.theme.typography.sectionTitle)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text(self.confirmation.detail)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(minWidth: 220)
+        .padding(.horizontal, self.theme.metrics.spacing.xl)
+        .padding(.vertical, self.theme.metrics.spacing.lg)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
+                .fill(self.theme.palette.cardBackground.opacity(0.96))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
+                        .stroke(self.theme.palette.accent.opacity(0.3), lineWidth: 1)
+                )
+                .shadow(
+                    color: self.theme.palette.accent.opacity(0.24),
+                    radius: 24,
+                    x: 0,
+                    y: 10
+                )
+                .shadow(
+                    color: Color.black.opacity(0.16),
+                    radius: 18,
+                    x: 0,
+                    y: 8
+                )
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct TrainingVariantChip: View {
+    let number: Int
+    let variant: String
+    let onDelete: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("\(self.number)")
+                .font(self.theme.typography.captionSmall)
+                .foregroundStyle(self.theme.palette.accent)
+                .frame(minWidth: 11)
+
+            Text(self.variant)
+                .font(self.theme.typography.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Button(action: self.onDelete) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
+            .buttonStyle(.plain)
+            .help("Remove \(self.variant)")
+        }
+        .frame(maxWidth: 165)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(self.theme.palette.cardBackground.opacity(0.85))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct DictionaryPreviewChip: View {
+    let text: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(self.text)
+            .font(self.theme.typography.caption)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(self.theme.palette.cardBackground.opacity(0.85))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                    )
+            )
+    }
 }
 
 private enum BoostStrengthPreset: String, CaseIterable, Identifiable {
@@ -954,7 +2172,7 @@ struct AddDictionaryEntrySheet: View {
             // Save button
             HStack {
                 Spacer()
-                Button("Add Entry") { self.saveIfValid() }
+                Button("Add Replacement") { self.saveIfValid() }
                     .buttonStyle(.borderedProminent)
                     .tint(self.theme.palette.accent)
                     .disabled(!self.canSave)

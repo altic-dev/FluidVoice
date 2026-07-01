@@ -11,11 +11,12 @@ final class TranscriptionSoundPlayer {
 
     private init() {}
 
-    func playStartSound() {
-        guard SettingsStore.shared.enableTranscriptionSounds else { return }
+    @discardableResult
+    func playStartSound() -> TimeInterval {
+        guard SettingsStore.shared.enableTranscriptionSounds else { return 0 }
         let selected = SettingsStore.shared.transcriptionStartSound
-        guard let soundName = selected.startSoundFileName else { return }
-        self.play(soundName: soundName)
+        guard let soundName = selected.startSoundFileName else { return 0 }
+        return self.play(soundName: soundName)
     }
 
     func playStopSound() {
@@ -38,10 +39,11 @@ final class TranscriptionSoundPlayer {
         self.play(soundName: soundName, overrideVolume: volume)
     }
 
-    private func play(soundName: String, overrideVolume: Float? = nil) {
+    @discardableResult
+    private func play(soundName: String, overrideVolume: Float? = nil) -> TimeInterval {
         guard let url = Bundle.main.url(forResource: soundName, withExtension: "m4a") else {
             DebugLogger.shared.error("Missing sound resource: \(soundName).m4a", source: "TranscriptionSoundPlayer")
-            return
+            return 0
         }
 
         let settings = SettingsStore.shared
@@ -49,7 +51,7 @@ final class TranscriptionSoundPlayer {
 
         if settings.transcriptionSoundIndependentVolume {
             let currentSystemVol = Self.getSystemVolume()
-            guard currentSystemVol > 0.001 else { return }
+            guard currentSystemVol > 0.001 else { return 0 }
             // Save current system volume and temporarily set it to desired level
             self.savedSystemVolume = currentSystemVol
             Self.setSystemVolume(desiredVolume)
@@ -71,16 +73,17 @@ final class TranscriptionSoundPlayer {
             } else {
                 player.volume = desiredVolume
             }
-            player.play()
+            guard player.play() else { return 0 }
+            let duration = player.duration
 
             // Restore system volume after the sound finishes
             if settings.transcriptionSoundIndependentVolume, let saved = self.savedSystemVolume {
-                let duration = player.duration
                 DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
                     Self.setSystemVolume(saved)
                     self?.savedSystemVolume = nil
                 }
             }
+            return duration
         } catch {
             // Restore system volume on error
             if let saved = self.savedSystemVolume {
@@ -91,6 +94,7 @@ final class TranscriptionSoundPlayer {
                 "Failed to play sound \(soundName).m4a: \(error.localizedDescription)",
                 source: "TranscriptionSoundPlayer"
             )
+            return 0
         }
     }
 

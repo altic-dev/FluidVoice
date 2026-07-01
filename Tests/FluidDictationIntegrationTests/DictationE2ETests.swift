@@ -254,6 +254,56 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testDictionaryTrainingNormalizesSamplesAndIgnoresIntendedText() {
+        let triggers = CustomDictionaryTrainingMerge.normalizedTriggers(
+            from: [" Fluid Voice. ", "FluidVoice", "fluid voice", " "],
+            intendedReplacement: "FluidVoice"
+        )
+
+        XCTAssertEqual(triggers, ["fluid voice"])
+    }
+
+    func testDictionaryTrainingMergeDedupesAndMovesDuplicateTriggers() {
+        let oldReplacement = SettingsStore.CustomDictionaryEntry(
+            triggers: ["Fluid Voice.", "old trigger"],
+            replacement: "Old"
+        )
+        let existingReplacement = SettingsStore.CustomDictionaryEntry(
+            triggers: ["fluid boys"],
+            replacement: "FluidVoice"
+        )
+
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [existingReplacement, oldReplacement],
+            replacement: " fluidvoice ",
+            triggers: ["Fluid Voice.", "fluid boys", "FluidVoice", ""]
+        )
+
+        let fluidVoiceEntry = entries.first { $0.replacement == "FluidVoice" }
+        let oldEntry = entries.first { $0.replacement == "Old" }
+
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Old"])
+        XCTAssertEqual(Set(fluidVoiceEntry?.triggers ?? []), Set(["fluid voice", "fluid boys"]))
+        XCTAssertEqual(oldEntry?.triggers, ["old trigger"])
+    }
+
+    func testDictionaryTrainingNewReplacementPrependsEntry() {
+        let existingReplacement = SettingsStore.CustomDictionaryEntry(
+            triggers: ["existing trigger"],
+            replacement: "Existing"
+        )
+
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [existingReplacement],
+            replacement: "FluidVoice",
+            triggers: ["fluid voice"]
+        )
+
+        XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Existing"])
+        XCTAssertEqual(entries.first?.triggers, ["fluid voice"])
+    }
+
     func testDictionaryTransferImport_rejectsInvalidReplacementTriggerType() {
         let json = """
         {

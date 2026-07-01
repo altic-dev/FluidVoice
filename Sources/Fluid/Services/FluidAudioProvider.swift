@@ -201,6 +201,10 @@ final class FluidAudioProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
     }
 
+    func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        try await self.transcribeStreaming(samples)
+    }
+
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         guard let manager = self.finalAsrManager ?? self.streamingAsrManager else {
             throw NSError(
