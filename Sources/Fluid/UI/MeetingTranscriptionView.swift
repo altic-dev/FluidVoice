@@ -5,7 +5,7 @@ struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
-    @State private var selectedFileURL: URL?
+    @State private var selectedFileURLs: [URL] = []
     @Environment(\.theme) private var theme
 
     init(asrService: ASRService) {
@@ -20,6 +20,7 @@ struct MeetingTranscriptionView: View {
     @State private var showingCopyConfirmation = false
     @State private var isDropTargeted = false
     @State private var dropErrorMessage: String?
+    @State private var batchStatusMessage: String?
 
     enum ExportFormat: String, CaseIterable {
         case text = "Text (.txt)"
@@ -127,58 +128,31 @@ struct MeetingTranscriptionView: View {
 
     private var fileSelectionCard: some View {
         VStack(spacing: 16) {
-            if let fileURL = selectedFileURL {
-                // Show selected file
-                HStack {
-                    Image(systemName: "doc.fill")
-                        .font(.title2)
-                        .foregroundColor(Color.fluidGreen)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(fileURL.lastPathComponent)
-                            .font(.headline)
-
-                        Text(self.formatFileSize(fileURL: fileURL))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    Button(action: {
-                        self.selectedFileURL = nil
-                        self.transcriptionService.reset()
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.theme.palette.cardBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
-                        )
-                )
+            if !self.selectedFileURLs.isEmpty {
+                self.selectedFilesSummary
 
                 // Transcribe Button
                 Button(action: {
                     Task {
-                        await self.transcribeFile()
+                        await self.transcribeSelectedFiles()
                     }
                 }) {
                     HStack {
                         Image(systemName: "waveform")
-                        Text("Transcribe")
+                        Text(self.selectedFileURLs.count == 1 ? "Transcribe" : "Transcribe \(self.selectedFileURLs.count) Files")
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(self.transcriptionService.isTranscribing)
+
+                if let batchStatusMessage {
+                    Text(batchStatusMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
             } else {
                 // File picker button – whole area is tappable; supports drag-and-drop
@@ -214,7 +188,18 @@ struct MeetingTranscriptionView: View {
                         .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
                         .foregroundColor(Color.fluidGreen.opacity(self.isDropTargeted ? 0.7 : 0.3))
                 )
-                .onDrop(of: [.fileURL], isTargeted: self.$isDropTargeted) { providers in
+                .background(
+                    MeetingTranscriptionFileDropTarget(
+                        isTargeted: self.$isDropTargeted,
+                        onResolved: { urls in
+                            self.addFileURLs(urls)
+                        },
+                        onRejected: {
+                            self.showDropError()
+                        }
+                    )
+                )
+                .onDrop(of: MeetingTranscriptionFileImport.dropContentTypes, isTargeted: self.$isDropTargeted) { providers in
                     self.handleDrop(providers: providers)
                 }
             }
@@ -222,18 +207,80 @@ struct MeetingTranscriptionView: View {
         .fileImporter(
             isPresented: self.$showingFilePicker,
             allowedContentTypes: MeetingTranscriptionService.allowedContentTypes,
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             switch result {
             case let .success(urls):
-                if let url = urls.first {
-                    self.selectedFileURL = url
-                    self.transcriptionService.reset()
-                }
+                self.selectFileURLs(urls)
             case let .failure(error):
                 DebugLogger.shared.error("File picker error: \(error)", source: "MeetingTranscriptionView")
             }
         }
+    }
+
+    private var selectedFilesSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: self.selectedFileURLs.count == 1 ? "doc.fill" : "doc.on.doc.fill")
+                    .font(.title2)
+                    .foregroundColor(Color.fluidGreen)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(self.selectedFilesTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    Text(self.selectedFilesSubtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button(action: {
+                    self.clearSelectedFiles()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if self.selectedFileURLs.count > 1 {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(self.selectedFileURLs.prefix(4).enumerated()), id: \.element) { _, fileURL in
+                        HStack(spacing: 8) {
+                            Image(systemName: "waveform")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(fileURL.lastPathComponent)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(self.formatFileSize(fileURL: fileURL))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if self.selectedFileURLs.count > 4 {
+                        Text("+ \(self.selectedFileURLs.count - 4) more")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(self.theme.palette.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Progress Card
@@ -541,37 +588,102 @@ struct MeetingTranscriptionView: View {
 
     private static let dropErrorCopy = MeetingTranscriptionService.dropErrorCopy
 
+    private var selectedFilesTitle: String {
+        if self.selectedFileURLs.count == 1 {
+            return self.selectedFileURLs[0].lastPathComponent
+        }
+        return "\(self.selectedFileURLs.count) files selected"
+    }
+
+    private var selectedFilesSubtitle: String {
+        if self.selectedFileURLs.count == 1 {
+            return self.formatFileSize(fileURL: self.selectedFileURLs[0])
+        }
+
+        let totalBytes = self.selectedFileURLs.reduce(Int64(0)) { total, fileURL in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            return total + ((attributes?[.size] as? Int64) ?? 0)
+        }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: totalBytes)
+    }
+
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
-            guard let url = url else { return }
-            let ext = url.pathExtension.lowercased()
-            guard Self.supportedFileExtensions.contains(ext) else {
-                DispatchQueue.main.async {
-                    self.dropErrorMessage = Self.dropErrorCopy
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        self.dropErrorMessage = nil
-                    }
-                }
-                return
-            }
-            DispatchQueue.main.async {
-                self.selectedFileURL = url
-                self.transcriptionService.reset()
-                self.dropErrorMessage = nil
+        guard !providers.isEmpty else { return false }
+        MeetingTranscriptionFileImport.loadURLs(from: providers) { urls in
+            if urls.isEmpty {
+                self.showDropError()
+            } else {
+                self.selectFileURLs(urls)
             }
         }
         return true
     }
 
-    private func transcribeFile() async {
-        guard let fileURL = selectedFileURL else { return }
+    private func selectFileURLs(_ urls: [URL]) {
+        let supportedURLs = MeetingTranscriptionFileImport.supportedURLs(from: urls)
+        guard !supportedURLs.isEmpty else {
+            self.showDropError()
+            return
+        }
 
-        do {
-            _ = try await self.transcriptionService.transcribeFile(fileURL)
-        } catch {
-            DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
+        self.selectedFileURLs = supportedURLs
+        self.batchStatusMessage = nil
+        self.transcriptionService.reset()
+        self.dropErrorMessage = nil
+    }
+
+    private func addFileURLs(_ urls: [URL]) {
+        let supportedURLs = MeetingTranscriptionFileImport.supportedURLs(from: urls)
+        guard !supportedURLs.isEmpty else {
+            self.showDropError()
+            return
+        }
+
+        self.selectedFileURLs = MeetingTranscriptionFileImport.supportedURLs(from: self.selectedFileURLs + supportedURLs)
+        self.batchStatusMessage = nil
+        self.transcriptionService.reset()
+        self.dropErrorMessage = nil
+    }
+
+    private func clearSelectedFiles() {
+        self.selectedFileURLs = []
+        self.batchStatusMessage = nil
+        self.transcriptionService.reset()
+    }
+
+    private func showDropError() {
+        self.dropErrorMessage = Self.dropErrorCopy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            self.dropErrorMessage = nil
+        }
+    }
+
+    private func transcribeSelectedFiles() async {
+        let urls = self.selectedFileURLs
+        guard !urls.isEmpty else { return }
+
+        var completedCount = 0
+        var failedCount = 0
+        for (index, fileURL) in urls.enumerated() {
+            if urls.count > 1 {
+                self.batchStatusMessage = "Transcribing \(index + 1) of \(urls.count): \(fileURL.lastPathComponent)"
+            }
+
+            do {
+                _ = try await self.transcriptionService.transcribeFile(fileURL)
+                completedCount += 1
+            } catch {
+                failedCount += 1
+                DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
+            }
+        }
+
+        if urls.count > 1 {
+            self.batchStatusMessage = failedCount == 0
+                ? "Finished \(completedCount) files. Recent transcriptions are listed below."
+                : "Finished \(completedCount) of \(urls.count) files. \(failedCount) failed."
         }
     }
 
