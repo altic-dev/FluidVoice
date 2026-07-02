@@ -28,6 +28,16 @@
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>FluidVoice needs permission to control system events for managing launch at startup settings.</string>
+	<!-- Custom AI providers are user-configured at runtime (local proxies such as
+	     Ollama, LM Studio, cliproxyapi often run plain HTTP on LAN hosts), so their
+	     domains cannot be enumerated as ATS exceptions at build time. All bundled
+	     endpoints remain HTTPS; the provider settings UI warns before using a
+	     non-loopback HTTP endpoint. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>POSTHOG_API_KEY</key>
 	<string>phc_coNu37345O2bgaAeQMD3tezkg1rDCbDS9Y3pOVvp2VM</string>
 	<key>POSTHOG_HOST</key>

@@ -152,6 +152,22 @@ final class ModelRepository {
         return false
     }
 
+    /// Check if a URL sends traffic unencrypted beyond this machine: plain HTTP
+    /// to any non-loopback host. Loopback (localhost/127.x/::1) never leaves the
+    /// device, so it is exempt; other LAN hosts are not, since that traffic is
+    /// observable on the network.
+    func isInsecureRemoteEndpoint(_ urlString: String) -> Bool {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "http",
+              let host = url.host?.lowercased()
+        else { return false }
+        if host == "localhost" || host == "::1" || host.hasPrefix("127.") {
+            return false
+        }
+        return true
+    }
+
     /// Returns the list of built-in providers for UI pickers
     /// - Parameter includeAppleIntelligence: Whether to include Apple Intelligence
     /// - Parameter appleIntelligenceAvailable: Whether Apple Intelligence is available on this device

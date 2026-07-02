@@ -1232,6 +1232,9 @@ extension AIEnhancementSettingsView {
                         TextField("https://api.yourprovider.com/v1", text: baseURLBinding)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 13, design: .monospaced))
+                        if ModelRepository.shared.isInsecureRemoteEndpoint(baseURLBinding.wrappedValue) {
+                            self.insecureEndpointWarning
+                        }
                     }
                 }
 
@@ -2429,6 +2432,9 @@ extension AIEnhancementSettingsView {
                     TextField("https://api.yourprovider.com/v1", text: self.$viewModel.newProviderBaseURL)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 13, design: .monospaced))
+                    if ModelRepository.shared.isInsecureRemoteEndpoint(self.viewModel.newProviderBaseURL) {
+                        self.insecureEndpointWarning
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -2491,5 +2497,17 @@ extension AIEnhancementSettingsView {
 
     func saveNewProvider() {
         self.viewModel.saveNewProvider()
+    }
+
+    var insecureEndpointWarning: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Text("Unencrypted HTTP endpoint — prompts, transcripts, and the API key are sent as plain text. Use only on networks you trust.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
