@@ -1931,6 +1931,9 @@ extension AIEnhancementSettingsView {
                             TextField("e.g., http://localhost:11434/v1", text: self.$viewModel.editProviderBaseURL)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 13, design: .monospaced))
+                            if ModelRepository.shared.isInsecureRemoteEndpoint(self.viewModel.editProviderBaseURL) {
+                                self.insecureEndpointWarning
+                            }
                         }
                     }
                 }
