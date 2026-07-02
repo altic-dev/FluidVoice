@@ -157,8 +157,23 @@ final class TranscriptionHistoryStore: ObservableObject {
     @Published private(set) var entries: [TranscriptionHistoryEntry] = []
     @Published var selectedEntryID: UUID?
 
+    private var dayChangeObserver: NSObjectProtocol?
+
     private init() {
         self.loadEntries()
+        self.pruneExpiredEntries()
+
+        // Re-check retention at midnight so long-running sessions honor
+        // the "End of Day" interval without waiting for the next dictation.
+        self.dayChangeObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                TranscriptionHistoryStore.shared.pruneExpiredEntries()
+            }
+        }
     }
 
     // MARK: - Public Methods
@@ -184,6 +199,8 @@ final class TranscriptionHistoryStore: ObservableObject {
     ) {
         // Skip empty transcriptions
         guard !processedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        self.pruneExpiredEntries()
 
         let entry = TranscriptionHistoryEntry(
             id: id,
@@ -238,6 +255,33 @@ final class TranscriptionHistoryStore: ObservableObject {
         }
 
         self.saveEntries()
+    }
+
+    /// Delete entries older than the auto-clear retention window, including
+    /// their saved audio. No-op when the interval is set to Never.
+    @discardableResult
+    func pruneExpiredEntries(reference now: Date = Date()) -> Int {
+        guard let cutoff = SettingsStore.shared.historyAutoClearInterval.cutoffDate(relativeTo: now) else {
+            return 0
+        }
+
+        let expired = self.entries.filter { $0.timestamp < cutoff }
+        guard !expired.isEmpty else { return 0 }
+
+        for entry in expired {
+            if let audio = entry.audio {
+                DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+            }
+        }
+        self.entries.removeAll { $0.timestamp < cutoff }
+
+        if let selected = selectedEntryID, !self.entries.contains(where: { $0.id == selected }) {
+            self.selectedEntryID = self.entries.first?.id
+        }
+
+        self.saveEntries()
+        DebugLogger.shared.info("Auto-cleared \(expired.count) expired transcription history entries", source: "TranscriptionHistoryStore")
+        return expired.count
     }
 
     /// Clear all history
