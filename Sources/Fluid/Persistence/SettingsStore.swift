@@ -2869,6 +2869,7 @@ final class SettingsStore: ObservableObject {
             saveTranscriptionHistory: self.saveTranscriptionHistory,
             saveAudioWithTranscriptionHistory: self.saveAudioWithTranscriptionHistory,
             audioHistoryBudgetGB: self.audioHistoryBudgetGB,
+            historyAutoClearInterval: self.historyAutoClearInterval,
             notifyAIProcessingFailures: self.notifyAIProcessingFailures,
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
@@ -2970,6 +2971,9 @@ final class SettingsStore: ObservableObject {
         }
         if let audioHistoryBudgetGB = payload.audioHistoryBudgetGB {
             self.audioHistoryBudgetGB = audioHistoryBudgetGB
+        }
+        if let historyAutoClearInterval = payload.historyAutoClearInterval {
+            self.historyAutoClearInterval = historyAutoClearInterval
         }
         if let notifyAIProcessingFailures = payload.notifyAIProcessingFailures {
             self.notifyAIProcessingFailures = notifyAIProcessingFailures
