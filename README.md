@@ -139,16 +139,17 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
 ## Supported Models
 
-| Model | Best for | Language support | Download size | Hardware |
-| --- | --- | --- | --- | --- |
-| Nemotron Speech 3.5 — Ultra Fast Low Latency | Streaming-capable multilingual dictation | ~40 languages | ~670 MB | Apple Silicon |
-| Nemotron 3.5 Multilingual | Higher-accuracy multilingual dictation | ~40 languages | ~530 MB | Apple Silicon |
-| [Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | Lowest-latency live English dictation | English | ~250 MB | Apple Silicon |
-| Parakeet TDT v3 | Fast default multilingual dictation | [25 languages](#parakeet-tdt-v3-languages) | ~500 MB | Apple Silicon |
-| Parakeet TDT v2 | Fastest English-only dictation | [English](#parakeet-tdt-v2-languages) | ~500 MB | Apple Silicon |
-| Cohere Transcribe | High-accuracy multilingual dictation | [14 languages](#cohere-transcribe-languages) | ~1.4 GB | Apple Silicon |
-| Apple Speech | Zero-download native macOS speech | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
-| Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
+<!-- prettier-ignore -->
+| Model                                                                                | Best for                                  | Language support                             | Download size     | Hardware              |
+| ------------------------------------------------------------------------------------ | ----------------------------------------- | -------------------------------------------- | ----------------- | --------------------- |
+| Nemotron Speech 3.5 — Ultra Fast Low Latency                                         | Streaming-capable multilingual dictation  | ~40 languages                                | ~670 MB           | Apple Silicon         |
+| Nemotron 3.5 Multilingual                                                            | Higher-accuracy multilingual dictation    | ~40 languages                                | ~530 MB           | Apple Silicon         |
+| [Parakeet Flash (Beta)](https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1) | Lowest-latency live English dictation     | English                                      | ~250 MB           | Apple Silicon         |
+| Parakeet TDT v3                                                                      | Fast default multilingual dictation       | [25 languages](#parakeet-tdt-v3-languages)   | ~500 MB           | Apple Silicon         |
+| Parakeet TDT v2                                                                      | Fastest English-only dictation            | [English](#parakeet-tdt-v2-languages)        | ~500 MB           | Apple Silicon         |
+| Cohere Transcribe                                                                    | High-accuracy multilingual dictation      | [14 languages](#cohere-transcribe-languages) | ~1.4 GB           | Apple Silicon         |
+| Apple Speech                                                                         | Zero-download native macOS speech         | [System languages](#apple-speech-languages)  | Built-in          | Apple Silicon + Intel |
+| Whisper Tiny / Base / Small / Medium / Large                                         | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support)    | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
 
 ### Parakeet TDT v3 Languages
 
@@ -170,14 +171,46 @@ System language support depends on the macOS speech recognition languages availa
 
 Whisper supports up to 99 languages, depending on the model size you choose.
 
+### Manual offline model installation
+
+FluidVoice can use models that you download on another network and copy into its local model cache. The exact folder depends on the speech model:
+
+<!-- prettier-ignore -->
+| Model | Hugging Face repository | Local folder | Required contents |
+| --- | --- | --- | --- |
+| Nemotron Speech 3.5 — Ultra Fast Low Latency | [`BarathwajAnandan/nemotron-3.5-asr-streaming320-int8-CoreML`](https://huggingface.co/BarathwajAnandan/nemotron-3.5-asr-streaming320-int8-CoreML) | `~/Library/Caches/nemotron-3.5-asr-streaming320-int8-CoreML/` | `metadata.json`, `preprocessor.mlpackage`, `encoder.mlpackage`, `decoder.mlpackage`, `joint.mlpackage`, `joint_decision.mlpackage`, `tokenizer.model` |
+| Nemotron 3.5 Multilingual | [`BarathwajAnandan/nemotron-3.5-asr-offline-6bit-CoreML`](https://huggingface.co/BarathwajAnandan/nemotron-3.5-asr-offline-6bit-CoreML) | `~/Library/Caches/nemotron-3.5-asr-offline-6bit-CoreML/` | same as above |
+| Parakeet TDT v3 | [`FluidInference/parakeet-tdt-0.6b-v3-coreml`](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) | `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3-coreml/` | `Preprocessor.mlmodelc`, `Encoder.mlmodelc`, `Decoder.mlmodelc`, `JointDecision.mlmodelc`, `parakeet_vocab.json` |
+| Parakeet TDT v2 | [`FluidInference/parakeet-tdt-0.6b-v2-coreml`](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml) | `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v2-coreml/` | same as Parakeet TDT v3 |
+| Parakeet Flash (Beta) | [`FluidInference/parakeet-realtime-eou-120m-coreml`](https://huggingface.co/FluidInference/parakeet-realtime-eou-120m-coreml) | `~/Library/Application Support/FluidAudio/Models/parakeet-eou-streaming/160ms/` | copy the repository's `160ms` folder contents here: `streaming_encoder.mlmodelc`, `decoder.mlmodelc`, `joint_decision.mlmodelc`, `vocab.json` |
+| Cohere Transcribe | [`BarathwajAnandan/cohere-transcribe-03-2026-CoreML-6bit`](https://huggingface.co/BarathwajAnandan/cohere-transcribe-03-2026-CoreML-6bit) | `~/Library/Caches/cohere-transcribe-03-2026-CoreML-6bit/` | `coreml_manifest.json`, `cohere_frontend.mlpackage`, `cohere_encoder.mlpackage`, `cohere_cross_kv_projector.mlpackage`, `cohere_decoder_fullseq_masked.mlpackage`, `cohere_decoder_cached.mlpackage` |
+| Whisper | [`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp/tree/main) | `~/Library/Caches/WhisperModels/` | the selected `ggml-*.bin` file, for example `ggml-base.bin` |
+
+For a Nemotron offline install, the model files should be directly inside the cache folder, for example:
+
+```text
+~/Library/Caches/nemotron-3.5-asr-streaming320-int8-CoreML/
+├── metadata.json
+├── preprocessor.mlpackage/
+├── encoder.mlpackage/
+├── decoder.mlpackage/
+├── joint.mlpackage/
+├── joint_decision.mlpackage/
+└── tokenizer.model
+```
+
+Do not place Nemotron models under `~/Library/Application Support/`; FluidVoice checks `~/Library/Caches/` for Nemotron and Whisper models. After copying files, restart FluidVoice or reopen Voice Engine settings so the model status refreshes. If FluidVoice still reports `Models exist on disk: false`, check that the folder name and every required file above match exactly.
+
 ---
 
 ## Quick Start
 
 1. **Install** with Homebrew:
+
    ```bash
    brew install --cask fluidvoice
    ```
+
    Or download the [latest release](https://github.com/altic-dev/FluidVoice/releases/latest).
 
 2. **Grant permissions** — FluidVoice will ask for microphone and accessibility access. Both are required for dictation and typing into other apps.
