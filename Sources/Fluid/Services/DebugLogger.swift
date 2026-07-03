@@ -92,12 +92,10 @@ class DebugLogger: ObservableObject {
 
             let formattedLine = self.formatLogLine(timestamp: timestampString, level: level, source: source, message: message)
 
-            // Always persist diagnostics so issues can be debugged even if UI debug mode is off.
+            guard loggingEnabled else { return }
+
             FileLogger.shared.append(line: formattedLine)
             print(formattedLine)
-
-            // UI log panel still respects the in-app debug toggle.
-            guard loggingEnabled else { return }
 
             let entry = LogEntry(
                 timestamp: timestamp,
