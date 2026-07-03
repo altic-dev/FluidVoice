@@ -106,7 +106,7 @@ enum LocalAPI {
             return false
         }
         guard scheme == "http" || scheme == "https" else { return false }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
     static func boundedLimit(from request: Request, default defaultValue: Int = 100, maximum: Int = 1000) -> Int {
