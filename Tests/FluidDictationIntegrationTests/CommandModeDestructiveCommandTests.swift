@@ -152,6 +152,8 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
             "grep foo bar.txt 2>&1",
             "cat file.txt",
             "git log >&2",
+            "echo hi 1>&2",
+            "cmd >&-",
             "cat data.txt | shuf",
             "shasum -a 256 file | /usr/bin/shasum",
             "cat data.txt | ssh user@host",
@@ -162,6 +164,27 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
             XCTAssertFalse(
                 CommandModeService.isDestructiveCommand(command),
                 "Expected safe command to not be flagged: \(command)"
+            )
+        }
+    }
+
+    // The zsh/bash `>& file` (and `>>& file`) form redirects both stdout and
+    // stderr to a file, overwriting or truncating it, when the target is not a
+    // file descriptor. TerminalService runs commands through `/bin/zsh`, so
+    // `echo x >&~/.zshrc` truncates the file and must trip the confirm gate,
+    // even though the `&`-target exclusion in the plain redirect check skips it.
+    func testFlagsRedirectBothStreamsToFile() {
+        let commands = [
+            "echo hi >&/tmp/target",
+            "echo x >& ~/.zshrc",
+            "cmd >&log",
+            "echo x >&~/.zshrc",
+            "cat data >>& out.txt",
+        ]
+        for command in commands {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "Expected destructive command to be flagged: \(command)"
             )
         }
     }

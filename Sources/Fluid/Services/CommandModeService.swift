@@ -621,6 +621,17 @@ final class CommandModeService: ObservableObject {
             return true
         }
 
+        // A `>&`/`>>&` redirect to a *file* sends both stdout and stderr to that
+        // file in zsh/bash (TerminalService runs commands via `/bin/zsh`),
+        // overwriting or truncating it, for example `echo x >& ~/.zshrc` or
+        // `cmd >&log`. The redirect check above skips any `>` whose target starts
+        // with `&`, so this catches the file form while keeping `>&1`/`>&2`
+        // (file-descriptor duplication) and `>&-` (fd close) safe by requiring a
+        // target that is not a digit or `-`.
+        if cmd.range(of: #"(?<![-=])>>?&\s*[^0-9\s&-]"#, options: .regularExpression) != nil {
+            return true
+        }
+
         // rm with flags like -rf, -r, -f anywhere
         if cmd.contains("rm -") {
             return true
