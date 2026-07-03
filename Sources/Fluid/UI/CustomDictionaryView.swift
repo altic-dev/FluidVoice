@@ -192,8 +192,8 @@ struct CustomDictionaryView: View {
     }
 
     private var canAddManualReplacement: Bool {
+        // An empty replacement is allowed: it deletes the trigger from the transcript.
         !self.manualTriggers.isEmpty &&
-            !self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             self.manualDuplicateTriggers.isEmpty
     }
 
@@ -2221,8 +2221,8 @@ struct EditDictionaryEntrySheet: View {
     }
 
     private var canSave: Bool {
+        // An empty replacement is allowed: it deletes the trigger from the transcript.
         !self.parseTriggers().isEmpty &&
-            !self.replacement.trimmingCharacters(in: .whitespaces).isEmpty &&
             self.duplicateTriggers.isEmpty
     }
 

@@ -2982,8 +2982,13 @@ final class ASRService: ObservableObject {
                 guard !trigger.isEmpty else { continue }
 
                 let escapedTrigger = NSRegularExpression.escapedPattern(for: trigger)
+                // Only apply `\b` word boundaries where the trigger edge is a word
+                // character. Punctuation-only triggers (e.g. "¿") have no adjacent
+                // word boundary, so `\b…\b` would never match them.
+                let leadingBoundary = (trigger.first?.isWordCharacter ?? false) ? "\\b" : ""
+                let trailingBoundary = (trigger.last?.isWordCharacter ?? false) ? "\\b" : ""
                 guard let regex = try? NSRegularExpression(
-                    pattern: "\\b" + escapedTrigger + "\\b",
+                    pattern: leadingBoundary + escapedTrigger + trailingBoundary,
                     options: .caseInsensitive
                 ) else { continue }
 
@@ -3130,6 +3135,12 @@ private extension Character {
         default:
             return false
         }
+    }
+
+    /// Matches the regex `\w` class (letters, digits, or underscore) so we only
+    /// wrap dictionary triggers in `\b` boundaries where they actually apply.
+    var isWordCharacter: Bool {
+        self == "_" || self.isLetter || self.isNumber
     }
 }
 
