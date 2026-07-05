@@ -18,6 +18,10 @@ final class SettingsStore: ObservableObject {
     static let privateAIContextTokenLimitRange: ClosedRange<Int> = 2048...8192
     static let privateAIContextTokenLimitStep = 512
     static let defaultPrivateAIContextTokenLimit = 4096
+    static let slowTypeWarmupMsRange: ClosedRange<Double> = 0...2000
+    static let slowTypeRampCharCountRange: ClosedRange<Int> = 0...30
+    static let slowTypeRampDelayMsRange: ClosedRange<Double> = 0...200
+    static let slowTypeSteadyDelayMsRange: ClosedRange<Double> = 0...100
     static let privateAIDictationSystemOverheadTokens = 1280
     static let privateAIDictationMinimumOutputTokens = 256
     static let privateAIDictationRoundTripTokenCost = 2.75
@@ -4477,6 +4481,10 @@ private extension SettingsStore {
         static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
+        static let slowTypeWarmupMs = "SlowTypeWarmupMs"
+        static let slowTypeRampCharCount = "SlowTypeRampCharCount"
+        static let slowTypeRampDelayMs = "SlowTypeRampDelayMs"
+        static let slowTypeSteadyDelayMs = "SlowTypeSteadyDelayMs"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let betaReleasesEnabled = "BetaReleasesEnabled"
         static let lastUpdateCheckDate = "LastUpdateCheckDate"
@@ -4601,6 +4609,7 @@ extension SettingsStore {
     enum TextInsertionMode: String, CaseIterable, Identifiable, Codable {
         case standard
         case reliablePaste
+        case slowType
 
         var id: String {
             self.rawValue
@@ -4612,6 +4621,8 @@ extension SettingsStore {
                 return "Clipboard Free Insert"
             case .reliablePaste:
                 return "Clipboard Paste"
+            case .slowType:
+                return "Retype Mode"
             }
         }
 
@@ -4621,6 +4632,8 @@ extension SettingsStore {
                 return "Fastest path. Inserts text without changing the clipboard, with paste fallback if direct insertion is unavailable."
             case .reliablePaste:
                 return "Compatibility path. Uses a temporary clipboard paste, so clipboard history apps may briefly record dictated text."
+            case .slowType:
+                return "Types one character at a time with a short warm-up and per-character delay. Slower, but more reliable with remote-desktop, VDI, or virtualization apps that garble fast text insertion or block the clipboard."
             }
         }
     }
@@ -4637,6 +4650,59 @@ extension SettingsStore {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.textInsertionMode)
+        }
+    }
+
+    /// Warm-up delay (ms) before Retype Mode sends its first keystroke, letting a
+    /// remote session finish syncing. Only used in `.slowType` mode.
+    var slowTypeWarmupMs: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.slowTypeWarmupMs) as? NSNumber
+            return stored?.doubleValue ?? 350.0
+        }
+        set {
+            objectWillChange.send()
+            let clamped = min(max(newValue, Self.slowTypeWarmupMsRange.lowerBound), Self.slowTypeWarmupMsRange.upperBound)
+            self.defaults.set(clamped, forKey: Keys.slowTypeWarmupMs)
+        }
+    }
+
+    /// Number of leading characters typed at the slower ramp pace in Retype Mode.
+    var slowTypeRampCharCount: Int {
+        get {
+            let stored = self.defaults.object(forKey: Keys.slowTypeRampCharCount) as? NSNumber
+            return stored?.intValue ?? 6
+        }
+        set {
+            objectWillChange.send()
+            let clamped = min(max(newValue, Self.slowTypeRampCharCountRange.lowerBound), Self.slowTypeRampCharCountRange.upperBound)
+            self.defaults.set(clamped, forKey: Keys.slowTypeRampCharCount)
+        }
+    }
+
+    /// Per-character delay (ms) during Retype Mode's ramp phase.
+    var slowTypeRampDelayMs: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.slowTypeRampDelayMs) as? NSNumber
+            return stored?.doubleValue ?? 45.0
+        }
+        set {
+            objectWillChange.send()
+            let clamped = min(max(newValue, Self.slowTypeRampDelayMsRange.lowerBound), Self.slowTypeRampDelayMsRange.upperBound)
+            self.defaults.set(clamped, forKey: Keys.slowTypeRampDelayMs)
+        }
+    }
+
+    /// Per-character delay (ms) after Retype Mode's ramp phase.
+    var slowTypeSteadyDelayMs: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.slowTypeSteadyDelayMs) as? NSNumber
+            return stored?.doubleValue ?? 18.0
+        }
+        set {
+            objectWillChange.send()
+            let clamped = min(max(newValue, Self.slowTypeSteadyDelayMsRange.lowerBound), Self.slowTypeSteadyDelayMsRange.upperBound)
+            self.defaults.set(clamped, forKey: Keys.slowTypeSteadyDelayMs)
         }
     }
 

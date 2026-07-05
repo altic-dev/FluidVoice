@@ -259,6 +259,22 @@ final class TypingService {
         self.typeOutputPlanInstantly(.plain(text), preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
     }
 
+    /// How long to wait, before attempting insertion, for macOS to finish restoring focus
+    /// to the real target app. Needed whenever `preferredTargetPID` is nil, since the PID
+    /// is then resolved from whatever is *currently* focused — if that resolution runs too
+    /// soon (e.g. right after we hide our own window), it can capture a stale app instead.
+    /// Retype Mode's own warm-up delay (see `insertTextSlowly`) happens *after* PID
+    /// resolution, so it does not substitute for this pre-capture settle.
+    /// Internal (not `private`) so regression tests can exercise it directly — see
+    /// `RetypeModeChunkingTests`.
+    static func settleDelayMs(mode: SettingsStore.TextInsertionMode, preferredTargetPID: pid_t?) -> Int {
+        guard preferredTargetPID == nil else { return 0 }
+        switch mode {
+        case .reliablePaste: return 80
+        case .slowType, .standard: return 200
+        }
+    }
+
     func typeOutputPlanInstantly(
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
@@ -267,12 +283,7 @@ final class TypingService {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let text = plan.plainText
         let mode = self.textInsertionMode
-        let settleDelayMs: Int = {
-            if mode == .reliablePaste {
-                return preferredTargetPID == nil ? 80 : 0
-            }
-            return preferredTargetPID == nil ? 200 : 0
-        }()
+        let settleDelayMs = Self.settleDelayMs(mode: mode, preferredTargetPID: preferredTargetPID)
         let textReadyAge = textReadyAt.map { Self.elapsedMs(from: $0, to: requestedAt) }
         self.bench(
             "request chars=\(text.count) mode=\(mode.rawValue) autocompleteSteps=\(plan.steps.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")"
@@ -349,6 +360,15 @@ final class TypingService {
     private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+
+        if self.textInsertionMode == .slowType {
+            self.log("[TypingService] Slow/compatibility typing mode enabled")
+            if self.insertTextSlowly(text, preferredTargetPID: preferredTargetPID) {
+                self.log("[TypingService] SUCCESS: Slow typing completed")
+                return
+            }
+            self.log("[TypingService] Slow typing fell through to standard pipeline")
+        }
 
         if self.textInsertionMode == .reliablePaste {
             self.log("[TypingService] Reliable Paste mode enabled")
@@ -684,9 +704,61 @@ final class TypingService {
         }
     }
 
+    // MARK: - Retype Mode (remote-desktop compatibility)
+
+    // Remote-desktop keyboard channels need a moment
+    // to sync session/layout state; sending the whole string instantly garbles the
+    // leading characters. Warm-up delay and per-character pacing are user-tunable in
+    // Settings (see `SettingsStore.slowTypeWarmupMs` and friends) since the right values
+    // depend on the remote session's own latency.
+
+    /// Types text one character at a time with a warm-up delay and a slow-then-normal
+    /// ramp, for apps that garble fast unicode insertion (remote-desktop/VDI targets).
+    private func insertTextSlowly(_ text: String, preferredTargetPID: pid_t?) -> Bool {
+        let targetPID = preferredTargetPID.flatMap { $0 > 0 ? $0 : nil }
+            ?? self.getSystemFocusedElementAndPID()?.pid
+
+        guard let targetPID, targetPID > 0 else {
+            self.log("[TypingService] Slow typing: no target PID available, deferring to fallback pipeline")
+            return false
+        }
+
+        let settings = SettingsStore.shared
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != targetPID {
+            _ = Self.activateApp(pid: targetPID)
+            usleep(80_000)
+        }
+        usleep(useconds_t(settings.slowTypeWarmupMs * 1000))
+
+        let utf16Array = Array(text.utf16)
+        self.log("[TypingService] Starting slow typing (\(utf16Array.count) UTF16 units) to PID \(targetPID)")
+
+        let rampEnd = Self.rampEnd(for: utf16Array, rampCharCount: settings.slowTypeRampCharCount)
+        let rampSucceeded = self.postUnicodeChunks(
+            Array(utf16Array[0..<rampEnd]),
+            destinationDescription: "PID \(targetPID) (ramp)",
+            chunkSize: 1,
+            interChunkDelayMicros: useconds_t(settings.slowTypeRampDelayMs * 1000)
+        ) { $0.postToPid(targetPID) }
+
+        var steadySucceeded = true
+        if rampEnd < utf16Array.count {
+            steadySucceeded = self.postUnicodeChunks(
+                Array(utf16Array[rampEnd...]),
+                destinationDescription: "PID \(targetPID) (steady)",
+                chunkSize: 1,
+                interChunkDelayMicros: useconds_t(settings.slowTypeSteadyDelayMs * 1000)
+            ) { $0.postToPid(targetPID) }
+        }
+
+        return rampSucceeded && steadySucceeded
+    }
+
     private func postUnicodeChunks(
         _ utf16Array: [UInt16],
         destinationDescription: String,
+        chunkSize: Int = TypingService.cgEventUnicodeChunkSize,
+        interChunkDelayMicros: useconds_t = 0,
         post: (CGEvent) -> Void
     ) -> Bool {
         guard utf16Array.isEmpty == false else { return true }
@@ -697,7 +769,7 @@ final class TypingService {
             var chunkStart = 0
             var chunkCount = 0
             while chunkStart < buffer.count {
-                let chunkEnd = Self.unicodeChunkEnd(in: utf16Array, start: chunkStart)
+                let chunkEnd = Self.unicodeChunkEnd(in: utf16Array, start: chunkStart, chunkSize: chunkSize)
                 let chunkLength = chunkEnd - chunkStart
 
                 guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
@@ -713,6 +785,9 @@ final class TypingService {
 
                 post(keyDown)
                 post(keyUp)
+                if interChunkDelayMicros > 0 {
+                    usleep(interChunkDelayMicros)
+                }
 
                 chunkStart = chunkEnd
                 chunkCount += 1
@@ -722,18 +797,40 @@ final class TypingService {
 
         guard chunkCount >= 0 else { return false }
 
-        self.log("[TypingService] Posted \(chunkCount) unicode CGEvent chunk(s) to \(destinationDescription) with chunkSize=\(Self.cgEventUnicodeChunkSize) interChunkDelayMs=0")
+        self.log("[TypingService] Posted \(chunkCount) unicode CGEvent chunk(s) to \(destinationDescription) with chunkSize=\(chunkSize) interChunkDelayMs=\(Double(interChunkDelayMicros) / 1000)")
         return true
     }
 
-    private static func unicodeChunkEnd(in utf16Array: [UInt16], start: Int) -> Int {
-        var end = min(start + Self.cgEventUnicodeChunkSize, utf16Array.count)
+    /// Boundary between Retype Mode's ramp and steady phases. `unicodeChunkEnd` always
+    /// advances by at least one unit (it's built for chunking loops that must make forward
+    /// progress), so a ramp length of 0 would still floor to a 1-unit ramp slice instead of
+    /// skipping the ramp phase entirely — and if that lone unit were a high surrogate, it'd
+    /// split the pair at this boundary before `postUnicodeChunks` ever sees it. A ramp
+    /// length of 0 means "no ramp phase," so skip straight to 0 rather than chunking.
+    /// Internal (not `private`) so regression tests can exercise it directly — see
+    /// `RetypeModeChunkingTests`.
+    static func rampEnd(for utf16Array: [UInt16], rampCharCount: Int) -> Int {
+        rampCharCount > 0 ? Self.unicodeChunkEnd(in: utf16Array, start: 0, chunkSize: rampCharCount) : 0
+    }
+
+    /// Internal (not `private`) so regression tests can exercise the surrogate-pair
+    /// chunking logic directly — see `RetypeModeChunkingTests`.
+    static func unicodeChunkEnd(in utf16Array: [UInt16], start: Int, chunkSize: Int = TypingService.cgEventUnicodeChunkSize) -> Int {
+        var end = min(start + chunkSize, utf16Array.count)
         if end < utf16Array.count,
            end > start,
            Self.isHighSurrogate(utf16Array[end - 1]),
            Self.isLowSurrogate(utf16Array[end])
         {
-            end -= 1
+            // Backing off keeps the pair intact for the *next* chunk, but only if that
+            // leaves this chunk non-empty. At chunkSize 1 (Retype Mode) the pair's high
+            // surrogate IS the whole chunk, so back off would produce an empty chunk;
+            // widen forward instead to keep both surrogate halves together here.
+            if end - 1 > start {
+                end -= 1
+            } else {
+                end += 1
+            }
         }
         return max(end, start + 1)
     }

@@ -861,6 +861,12 @@ struct SettingsView: View {
                                         .pickerStyle(.menu)
                                         .frame(width: 170, alignment: .trailing)
                                     }
+
+                                    if SettingsStore.shared.textInsertionMode == .slowType {
+                                        Divider().opacity(0.2)
+                                        self.slowTypeTuningControls()
+                                            .padding(.top, 2)
+                                    }
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
@@ -2520,6 +2526,107 @@ struct FlowLayout: Layout {
 }
 
 private extension SettingsView {
+    func slowTypeTuningControls() -> some View {
+        VStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Warm-up Delay")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Text("Pause before the first keystroke, letting the remote session sync.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+                Spacer(minLength: 16)
+                HStack(spacing: 6) {
+                    Slider(value: self.$settings.slowTypeWarmupMs, in: SettingsStore.slowTypeWarmupMsRange, step: 50)
+                        .frame(width: 110)
+                        .controlSize(.small)
+                    Text("\(Int(self.settings.slowTypeWarmupMs)) ms")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(self.settingsTertiaryText)
+                        .frame(width: 56, alignment: .trailing)
+                }
+            }
+
+            Divider().opacity(0.2)
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ramp Length")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Text("Leading characters typed at the slower ramp pace.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+                Spacer(minLength: 16)
+                HStack(spacing: 6) {
+                    Slider(
+                        value: Binding(
+                            get: { Double(self.settings.slowTypeRampCharCount) },
+                            set: { self.settings.slowTypeRampCharCount = Int($0.rounded()) }
+                        ),
+                        in: Double(SettingsStore.slowTypeRampCharCountRange.lowerBound)...Double(SettingsStore.slowTypeRampCharCountRange.upperBound),
+                        step: 1
+                    )
+                    .frame(width: 110)
+                    .controlSize(.small)
+                    Text("\(self.settings.slowTypeRampCharCount) chars")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(self.settingsTertiaryText)
+                        .frame(width: 56, alignment: .trailing)
+                }
+            }
+
+            Divider().opacity(0.2)
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ramp Pace")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Text("Per-character delay during the ramp.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+                Spacer(minLength: 16)
+                HStack(spacing: 6) {
+                    Slider(value: self.$settings.slowTypeRampDelayMs, in: SettingsStore.slowTypeRampDelayMsRange, step: 5)
+                        .frame(width: 110)
+                        .controlSize(.small)
+                    Text("\(Int(self.settings.slowTypeRampDelayMs)) ms")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(self.settingsTertiaryText)
+                        .frame(width: 56, alignment: .trailing)
+                }
+            }
+
+            Divider().opacity(0.2)
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Steady Pace")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Text("Per-character delay after the ramp.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+                Spacer(minLength: 16)
+                HStack(spacing: 6) {
+                    Slider(value: self.$settings.slowTypeSteadyDelayMs, in: SettingsStore.slowTypeSteadyDelayMsRange, step: 2)
+                        .frame(width: 110)
+                        .controlSize(.small)
+                    Text("\(Int(self.settings.slowTypeSteadyDelayMs)) ms")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(self.settingsTertiaryText)
+                        .frame(width: 56, alignment: .trailing)
+                }
+            }
+        }
+    }
+
     var lowLatencyAudioCaptureToggle: some View {
         Group {
             self.settingsToggleRow(
