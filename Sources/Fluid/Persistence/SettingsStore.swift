@@ -5068,7 +5068,7 @@ extension SettingsStore {
             case .standard:
                 return "Fastest path. Inserts text without changing the clipboard, with paste fallback if direct insertion is unavailable."
             case .reliablePaste:
-                return "Compatibility path. Uses a temporary clipboard paste, so clipboard history apps may briefly record dictated text."
+                return "Compatibility path. Uses a temporary clipboard paste and restores your previous clipboard after insertion."
             }
         }
     }
