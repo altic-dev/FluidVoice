@@ -290,6 +290,18 @@ Anonymous analytics are enabled by default to track app health and feature usage
 
 ---
 
+## Developer Tools
+
+FluidVoice exposes a **Local API** for scripting and automation. Enable it in **Settings → Advanced → Local API**.
+
+Community companion CLI (MIT-licensed, separate from the app):
+
+- **[fluidvoice-cli](https://github.com/EBay1992/fluidvoice-cli)** — batch transcription, history export, dictionary management, and `--json` output for CI. Install from [releases](https://github.com/EBay1992/fluidvoice-cli/releases/latest).
+
+Discussion: [#529](https://github.com/altic-dev/FluidVoice/issues/529)
+
+---
+
 ## Community
 
 Join our Discord: https://discord.gg/VUPHaKSvYV
