@@ -207,6 +207,21 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 ---
 
+## Windows Support
+
+FluidVoice is natively exclusive to macOS, but you can run the Python-based Windows port of this project here:
+
+👉 **[huslermaniac/fluidvoice-windows](https://github.com/huslermaniac/fluidvoice-windows)**
+
+### Features of the Windows Port:
+* **Dynamic Overlay**: Transparent dictation overlay that wraps text and resizes height dynamically.
+* **On-Demand Downloader**: Integrated GUI to download and switch Whisper models inside settings.
+* **Optimized CPU Path**: Runs Whisper with AMD/Intel optimizations (AVX2/AVX-512) and supports NVIDIA/AMD graphic drivers.
+* **Bilingual Support**: Developed with ⚜️ in Québec, Canada.
+
+---
+
+
 ## Building from Source
 
 ```bash
