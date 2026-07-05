@@ -209,6 +209,31 @@ final class GlobalHotkeyManagerShortcutTests: XCTestCase {
         XCTAssertEqual(startProbe.count, 0)
         XCTAssertTrue(manager.debugPrimaryShortcutPressStateIsClear)
     }
+
+    func testDeletingInactivePrimaryShortcutWithSameKeyDoesNotClearActivePress() {
+        let commandK = HotkeyShortcut(keyCode: 40, modifierFlags: [.command])
+        let optionK = HotkeyShortcut(keyCode: 40, modifierFlags: [.option])
+        let manager = GlobalHotkeyManager(
+            asrService: ASRService(),
+            primaryShortcuts: [commandK, optionK],
+            promptModeShortcut: HotkeyShortcut(keyCode: 12, modifierFlags: [.option]),
+            commandModeShortcut: nil,
+            rewriteModeShortcut: HotkeyShortcut(keyCode: 14, modifierFlags: [.option]),
+            promptModeShortcutEnabled: false,
+            commandModeShortcutEnabled: false,
+            rewriteModeShortcutEnabled: false,
+            isDictateRecordingProvider: { true },
+            isShortcutCaptureActiveProvider: { false }
+        )
+
+        XCTAssertTrue(manager.debugHandlePrimaryShortcutKeyDown(keyCode: 40, modifiers: [.command]))
+
+        manager.updatePrimaryShortcuts([commandK])
+
+        XCTAssertTrue(manager.debugHasActivePrimaryShortcutPress)
+        XCTAssertTrue(manager.debugHandlePrimaryShortcutKeyUp(keyCode: 40))
+        XCTAssertTrue(manager.debugPrimaryShortcutPressStateIsClear)
+    }
 }
 
 @MainActor
