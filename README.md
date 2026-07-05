@@ -292,7 +292,14 @@ Anonymous analytics are enabled by default to track app health and feature usage
 
 ## Developer Tools
 
-FluidVoice exposes a **Local API** for scripting and automation. Enable it in **Settings → Advanced → Local API**.
+FluidVoice includes a loopback-only **Local API** at `http://127.0.0.1:47733/v1/` for scripting and automation (see `Sources/Fluid/Services/LocalAPI/`).
+
+The server starts only when the `LocalAPIEnabled` UserDefaults key is set for bundle ID `com.FluidApp.app`. **There is currently no Settings UI toggle** for this flag in 1.6.x — enable it from Terminal, then restart FluidVoice:
+
+```bash
+defaults write com.FluidApp.app LocalAPIEnabled -bool true
+curl http://127.0.0.1:47733/v1/health
+```
 
 Community companion CLI (MIT-licensed, separate from the app):
 
