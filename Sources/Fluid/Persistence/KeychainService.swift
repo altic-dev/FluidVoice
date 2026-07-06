@@ -20,7 +20,15 @@ enum KeychainServiceError: Error, LocalizedError {
 
 /// Lightweight helper for storing provider API keys in the system Keychain.
 /// Keys are stored as generic passwords scoped to the FluidVoice service.
-final class KeychainService {
+protocol ProviderKeychain {
+    func storeKey(_ key: String, for providerID: String) throws
+    func fetchAllKeys() throws -> [String: String]
+    func storeAllKeys(_ values: [String: String]) throws
+    func legacyProviderEntries() throws -> [String: String]
+    func removeLegacyEntries(providerIDs: [String]) throws
+}
+
+final class KeychainService: ProviderKeychain {
     static let shared = KeychainService()
 
     private let service = "com.fluidvoice.provider-api-keys"
@@ -168,7 +176,6 @@ final class KeychainService {
 
         switch status {
         case errSecSuccess:
-            try self.removeLegacyEntries()
             return
         case errSecDuplicateItem:
             let updateAttributes: [String: Any] = [
@@ -181,7 +188,6 @@ final class KeychainService {
             guard updateStatus == errSecSuccess else {
                 throw KeychainServiceError.unhandled(updateStatus)
             }
-            try self.removeLegacyEntries()
         default:
             throw KeychainServiceError.unhandled(status)
         }

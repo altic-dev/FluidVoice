@@ -25,14 +25,20 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationRoundTripTokenCost = 2.75
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
-    private let defaults = UserDefaults.standard
-    private let keychain = KeychainService.shared
+    private let defaults: UserDefaults
+    private var keychain: ProviderKeychain
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
         "FluidVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
 
-    private init() {
+    private init(
+        defaults: UserDefaults = .standard,
+        keychain: ProviderKeychain = KeychainService.shared
+    ) {
+        self.defaults = defaults
+        self.keychain = keychain
+
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
         self.migrateProviderAPIKeysIfNeeded()
@@ -1491,7 +1497,34 @@ final class SettingsStore: ObservableObject {
     func saveProviderAPIKeys(_ values: [String: String]) throws -> [String: String] {
         let trimmed = self.sanitizeAPIKeys(values)
         try self.keychain.storeAllKeys(trimmed)
+        self.purgeRemovedProvidersFromLegacySources(keeping: trimmed)
         return try self.keychain.fetchAllKeys()
+    }
+
+    /// While migration is incomplete, legacy plaintext defaults and per-provider Keychain
+    /// entries still exist. A provider removed from the consolidated store must also leave
+    /// those sources, or a later migration pass would resurrect the deleted key.
+    private func purgeRemovedProvidersFromLegacySources(keeping stored: [String: String]) {
+        guard self.defaults.bool(forKey: Keys.providerAPIKeyMigrationCompleted) == false else { return }
+
+        var legacyDefaults = (self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]) ?? [:]
+        let legacyKeychainIDs = (try? self.keychain.legacyProviderEntries().keys).map(Array.init) ?? []
+        let removed = Set(legacyDefaults.keys).union(legacyKeychainIDs).filter { stored[$0] == nil }
+        guard removed.isEmpty == false else { return }
+
+        let removedFromDefaults = removed.filter { legacyDefaults[$0] != nil }
+        if removedFromDefaults.isEmpty == false {
+            for providerID in removedFromDefaults {
+                legacyDefaults.removeValue(forKey: providerID)
+            }
+            if legacyDefaults.isEmpty {
+                self.defaults.removeObject(forKey: Keys.providerAPIKeys)
+            } else {
+                self.defaults.set(legacyDefaults, forKey: Keys.providerAPIKeys)
+            }
+        }
+
+        try? self.keychain.removeLegacyEntries(providerIDs: Array(removed))
     }
 
     /// Securely retrieve API key for a provider, handling custom prefix logic
@@ -3450,31 +3483,63 @@ final class SettingsStore: ObservableObject {
     private func migrateProviderAPIKeysIfNeeded() {
         self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
 
-        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
-        var didMutate = false
-
-        if let legacyDefaults = defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String],
-           legacyDefaults.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyDefaults)) { _, new in new }
-            didMutate = true
-        }
-        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
-
-        if let legacyKeychain = try? keychain.legacyProviderEntries(),
-           legacyKeychain.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyKeychain)) { _, new in new }
-            didMutate = true
-            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
-        }
-
-        if didMutate {
+        if self.defaults.bool(forKey: Keys.providerAPIKeyMigrationCompleted) {
+            self.defaults.removeObject(forKey: Keys.providerAPIKeys)
             do {
-                _ = try self.saveProviderAPIKeys(merged)
+                let legacyKeychain = try self.keychain.legacyProviderEntries()
+                if legacyKeychain.isEmpty == false {
+                    try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
+                }
             } catch {
                 self.logProviderAPIKeyPersistenceFailure(error)
             }
+            return
+        }
+
+        let legacyKeychain: [String: String]
+        let didReadLegacyKeychain: Bool
+        do {
+            legacyKeychain = try self.keychain.legacyProviderEntries()
+            didReadLegacyKeychain = true
+        } catch {
+            self.logProviderAPIKeyPersistenceFailure(error)
+            legacyKeychain = [:]
+            didReadLegacyKeychain = false
+        }
+
+        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
+        let legacyDefaults = (self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]) ?? [:]
+        let sanitizedLegacyDefaults = self.sanitizeAPIKeys(legacyDefaults)
+        let hasLegacySources = legacyDefaults.isEmpty == false || legacyKeychain.isEmpty == false
+
+        if legacyKeychain.isEmpty == false {
+            for (provider, key) in self.sanitizeAPIKeys(legacyKeychain) {
+                guard merged[provider] == nil || merged[provider] == sanitizedLegacyDefaults[provider] else {
+                    continue
+                }
+                merged[provider] = key
+            }
+        }
+
+        if legacyDefaults.isEmpty == false {
+            merged.merge(sanitizedLegacyDefaults) { current, _ in current }
+        }
+
+        guard hasLegacySources else { return }
+
+        do {
+            _ = try self.saveProviderAPIKeys(merged)
+        } catch {
+            self.logProviderAPIKeyPersistenceFailure(error)
+            return
+        }
+
+        guard didReadLegacyKeychain else { return }
+
+        self.defaults.set(true, forKey: Keys.providerAPIKeyMigrationCompleted)
+        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
+        if legacyKeychain.isEmpty == false {
+            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
         }
     }
 
@@ -3730,6 +3795,13 @@ final class SettingsStore: ObservableObject {
             do {
                 try self.keychain.storeKey(trimmed, for: keyID)
                 didModify = true
+                decoded[index] = SavedProvider(
+                    id: provider.id,
+                    name: provider.name,
+                    baseURL: provider.baseURL,
+                    apiKey: "",
+                    models: provider.models
+                )
             } catch {
                 DebugLogger.shared
                     .error(
@@ -3737,14 +3809,6 @@ final class SettingsStore: ObservableObject {
                         source: "SettingsStore"
                     )
             }
-
-            decoded[index] = SavedProvider(
-                id: provider.id,
-                name: provider.name,
-                baseURL: provider.baseURL,
-                apiKey: "",
-                models: provider.models
-            )
         }
 
         if didModify,
@@ -5210,6 +5274,27 @@ final class SettingsStore: ObservableObject {
     }
 }
 
+#if DEBUG
+extension SettingsStore {
+    static func makeForTesting(defaults: UserDefaults, keychain: ProviderKeychain) -> SettingsStore {
+        SettingsStore(defaults: defaults, keychain: keychain)
+    }
+
+    func replaceKeychainForTesting(_ keychain: ProviderKeychain) {
+        self.keychain = keychain
+    }
+
+    func migrateProviderAPIKeysForTesting() {
+        self.migrateProviderAPIKeysIfNeeded()
+    }
+
+    func scrubSavedProviderAPIKeysForTesting() {
+        self.scrubSavedProviderAPIKeys()
+    }
+
+}
+#endif
+
 // swiftlint:enable type_body_length
 
 private extension SettingsStore {
@@ -5233,6 +5318,7 @@ private extension SettingsStore {
         static let privateAIContextDefaultMigratedTo4K = "PrivateAIProviderContextDefaultMigratedTo4K"
         static let providerAPIKeys = "ProviderAPIKeys"
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
+        static let providerAPIKeyMigrationCompleted = "ProviderAPIKeyMigrationCompleted"
         static let savedProviders = "SavedProviders"
         static let verifiedProviderFingerprints = "VerifiedProviderFingerprints"
         static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
