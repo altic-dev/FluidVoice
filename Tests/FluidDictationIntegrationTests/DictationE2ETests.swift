@@ -3,6 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
+// swiftlint:disable:next type_body_length
 final class DictationE2ETests: XCTestCase {
     private let enableTranscriptionSoundsKey = "EnableTranscriptionSounds"
     private let transcriptionStartSoundKey = "TranscriptionStartSound"
@@ -2230,9 +2231,11 @@ final class DictationE2ETests: XCTestCase {
         // waitUntilExit() before draining stdout, so a command writing more than
         // the ~64KB pipe buffer blocked on write() until the 30s timeout fired,
         // returning truncated output with success == false. Draining stdout and
-        // stderr concurrently lets the command run to completion.
+        // stderr concurrently lets the command run to completion. The output
+        // is large enough to exceed the pipe buffer but small enough to stay
+        // under TerminalService's captured-output cap.
         let service = TerminalService()
-        let lineCount = 200_000
+        let lineCount = 100_000
 
         let result = await service.execute(command: "seq 1 \(lineCount)")
 
@@ -2240,6 +2243,7 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertGreaterThan(result.output.utf8.count, 64 * 1024, "Output should exceed the 64KB pipe buffer")
         XCTAssertTrue(result.output.hasSuffix("\(lineCount)"), "Last line should be complete, output was truncated")
+        XCTAssertFalse(result.output.contains("truncated after"))
         XCTAssertEqual(result.output.split(separator: "\n").count, lineCount)
         XCTAssertLessThan(result.executionTimeMs, 15000, "Should return promptly, not after the ~30s timeout")
     }
@@ -2247,7 +2251,7 @@ final class DictationE2ETests: XCTestCase {
     func testTerminalServiceExecute_largeStderrIsNotTruncated() async throws {
         // The same deadlock applied to stderr; both pipes must be drained concurrently.
         let service = TerminalService()
-        let lineCount = 200_000
+        let lineCount = 100_000
 
         let result = await service.execute(command: "seq 1 \(lineCount) 1>&2")
 
@@ -2255,7 +2259,105 @@ final class DictationE2ETests: XCTestCase {
         let stderr = try XCTUnwrap(result.error)
         XCTAssertGreaterThan(stderr.utf8.count, 64 * 1024, "Stderr should exceed the 64KB pipe buffer")
         XCTAssertTrue(stderr.hasSuffix("\(lineCount)"), "Last stderr line should be complete, output was truncated")
+        XCTAssertFalse(stderr.contains("truncated after"))
         XCTAssertLessThan(result.executionTimeMs, 15000, "Should return promptly, not after the ~30s timeout")
+    }
+
+    func testTerminalServiceExecute_largeStdoutCaptureIsBoundedAndMarked() async {
+        let service = TerminalService()
+        let requestedBytes = TerminalService.maxCapturedOutputBytes + (128 * 1024)
+
+        let result = await service.execute(command: "yes stdout | head -c \(requestedBytes)")
+
+        XCTAssertTrue(result.success, "Expected success, got exitCode \(result.exitCode) error \(result.error ?? "nil")")
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(
+            result.output.contains("[stdout truncated after \(TerminalService.maxCapturedOutputBytes) bytes]"),
+            "Expected stdout truncation notice"
+        )
+        XCTAssertLessThan(
+            result.output.utf8.count,
+            TerminalService.maxCapturedOutputBytes + 128,
+            "Captured stdout should stay close to the configured cap"
+        )
+        XCTAssertLessThan(result.executionTimeMs, 15000, "Should drain without waiting for timeout")
+    }
+
+    func testTerminalServiceExecute_largeStderrCaptureIsBoundedAndMarked() async throws {
+        let service = TerminalService()
+        let requestedBytes = TerminalService.maxCapturedOutputBytes + (128 * 1024)
+
+        let result = await service.execute(command: "yes stderr | head -c \(requestedBytes) 1>&2")
+
+        XCTAssertTrue(result.success, "Expected success, got exitCode \(result.exitCode)")
+        let stderr = try XCTUnwrap(result.error)
+        XCTAssertTrue(
+            stderr.contains("[stderr truncated after \(TerminalService.maxCapturedOutputBytes) bytes]"),
+            "Expected stderr truncation notice"
+        )
+        XCTAssertLessThan(
+            stderr.utf8.count,
+            TerminalService.maxCapturedOutputBytes + 128,
+            "Captured stderr should stay close to the configured cap"
+        )
+        XCTAssertLessThan(result.executionTimeMs, 15000, "Should drain without waiting for timeout")
+    }
+
+    func testTerminalServiceExecute_multibyteStdoutSplitAtCapKeepsTruncationNotice() async {
+        let service = TerminalService()
+        let requestedBytes = TerminalService.maxCapturedOutputBytes + 64
+
+        let result = await service.execute(command: "yes é | head -c \(requestedBytes)")
+
+        XCTAssertTrue(result.success, "Expected success, got exitCode \(result.exitCode) error \(result.error ?? "nil")")
+        XCTAssertTrue(
+            result.output.contains("[stdout truncated after \(TerminalService.maxCapturedOutputBytes) bytes]"),
+            "Truncation notice should survive even when the cap splits a UTF-8 scalar"
+        )
+        XCTAssertLessThan(
+            result.output.utf8.count,
+            TerminalService.maxCapturedOutputBytes + 128,
+            "Captured stdout should stay close to the configured cap"
+        )
+    }
+
+    func testTerminalServiceExecute_unboundedStdoutTimesOutWithBoundedCapture() async {
+        let service = TerminalService()
+
+        let result = await service.execute(command: "yes stdout", timeout: 1)
+
+        XCTAssertFalse(result.success, "Unbounded command should be terminated by timeout")
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertTrue(
+            result.output.contains("[stdout truncated after \(TerminalService.maxCapturedOutputBytes) bytes]"),
+            "Expected stdout truncation notice"
+        )
+        XCTAssertLessThan(
+            result.output.utf8.count,
+            TerminalService.maxCapturedOutputBytes + 128,
+            "Captured stdout should stay close to the configured cap"
+        )
+        XCTAssertLessThan(result.executionTimeMs, 5000, "Should return shortly after timeout")
+    }
+
+    func testTerminalServiceExecute_unboundedStderrTimesOutWithBoundedCapture() async throws {
+        let service = TerminalService()
+
+        let result = await service.execute(command: "yes stderr 1>&2", timeout: 1)
+
+        XCTAssertFalse(result.success, "Unbounded command should be terminated by timeout")
+        XCTAssertNotEqual(result.exitCode, 0)
+        let stderr = try XCTUnwrap(result.error)
+        XCTAssertTrue(
+            stderr.contains("[stderr truncated after \(TerminalService.maxCapturedOutputBytes) bytes]"),
+            "Expected stderr truncation notice"
+        )
+        XCTAssertLessThan(
+            stderr.utf8.count,
+            TerminalService.maxCapturedOutputBytes + 128,
+            "Captured stderr should stay close to the configured cap"
+        )
+        XCTAssertLessThan(result.executionTimeMs, 5000, "Should return shortly after timeout")
     }
 
     private static func modelDirectoryForRun() -> URL {
