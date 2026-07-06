@@ -595,12 +595,10 @@ final class CommandModeService: ObservableObject {
             return true
         }
 
-        // Piping output into a shell interpreter runs arbitrary code
-        // (for example `curl ... | sh`, `... | bash`, or `... | /bin/bash`).
-        // The optional path segment catches absolute or relative interpreter
-        // paths; the trailing word boundary avoids false positives like
-        // `... | shasum` or `... | shuf`.
-        if cmd.range(of: #"\|\s*(\S*/)?(sh|bash|zsh|dash|fish)\b"#, options: .regularExpression) != nil {
+        // Piping output into a shell interpreter runs arbitrary code. Resolve
+        // the command after each pipe through simple `env` wrappers, including
+        // `env -S` split strings, without trying to parse the full shell grammar.
+        if Self.containsPipeToShell(cmd) {
             return true
         }
 
@@ -608,7 +606,8 @@ final class CommandModeService: ObservableObject {
         // destructive effect as a redirect (for example `... | tee ~/.zshrc`).
         // The optional path segment catches `... | /usr/bin/tee`; the word
         // boundary avoids names that merely contain `tee`.
-        if cmd.range(of: #"\|\s*(\S*/)?tee\b"#, options: .regularExpression) != nil {
+        let unquotedSyntax = Self.commandWithQuotedAndEscapedTextMasked(cmd)
+        if unquotedSyntax.range(of: #"(?<!\|)\|&?(?!\|)\s*(\S*/)?tee\b"#, options: .regularExpression) != nil {
             return true
         }
 
@@ -617,7 +616,7 @@ final class CommandModeService: ObservableObject {
         // or `cat y >> /etc/hosts`). Excluding a leading `-`/`=` skips arrows
         // like `->`/`=>`, and requiring a non-`&` target skips file-descriptor
         // duplications like `2>&1`.
-        if cmd.range(of: #"(?<![-=])>>?\s*[^&\s]"#, options: .regularExpression) != nil {
+        if unquotedSyntax.range(of: #"(?<![-=])>>?\s*[^&\s]"#, options: .regularExpression) != nil {
             return true
         }
 
@@ -625,10 +624,13 @@ final class CommandModeService: ObservableObject {
         // file in zsh/bash (TerminalService runs commands via `/bin/zsh`),
         // overwriting or truncating it, for example `echo x >& ~/.zshrc` or
         // `cmd >&log`. The redirect check above skips any `>` whose target starts
-        // with `&`, so this catches the file form while keeping `>&1`/`>&2`
-        // (file-descriptor duplication) and `>&-` (fd close) safe by requiring a
-        // target that is not a digit or `-`.
-        if cmd.range(of: #"(?<![-=])>>?&\s*[^0-9\s&-]"#, options: .regularExpression) != nil {
+        // with `&`, so this catches the file form while keeping complete fd
+        // targets like `>&1`/`>& 2` and close forms like `>&-` safe. Numeric or
+        // dash-prefixed file names such as `>& 2file` and `>& -log` still match.
+        if unquotedSyntax.range(
+            of: #"(?<![-=])>>?&\s*(?![0-9]+(?:[;&|<>\s]|$))(?!-(?:[;&|<>\s]|$))[^&\s]"#,
+            options: .regularExpression
+        ) != nil {
             return true
         }
 
@@ -638,6 +640,474 @@ final class CommandModeService: ObservableObject {
         }
 
         return false
+    }
+
+    private nonisolated static func containsPipeToShell(_ command: String) -> Bool {
+        var index = command.startIndex
+        var quote: Character?
+
+        while index < command.endIndex {
+            let character = command[index]
+
+            if let activeQuote = quote {
+                if activeQuote == "\"", character == "\\" {
+                    index = command.index(after: index)
+                    if index < command.endIndex {
+                        index = command.index(after: index)
+                    }
+                    continue
+                }
+                if character == activeQuote {
+                    quote = nil
+                }
+                index = command.index(after: index)
+                continue
+            }
+
+            if character == "'" || character == "\"" {
+                quote = character
+                index = command.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                index = command.index(after: index)
+                if index < command.endIndex {
+                    index = command.index(after: index)
+                }
+                continue
+            }
+
+            if character == "|" {
+                let nextIndex = command.index(after: index)
+                if nextIndex < command.endIndex, command[nextIndex] == "|" {
+                    index = command.index(after: nextIndex)
+                    continue
+                }
+
+                var targetStart = nextIndex
+                if targetStart < command.endIndex, command[targetStart] == "&" {
+                    targetStart = command.index(after: targetStart)
+                }
+                let target = Self.commandSegment(in: command, startingAt: targetStart)
+                if Self.pipeTargetResolvesToShell(target) {
+                    return true
+                }
+            }
+
+            index = command.index(after: index)
+        }
+
+        return false
+    }
+
+    private nonisolated static func commandWithQuotedAndEscapedTextMasked(_ command: String) -> String {
+        var masked = ""
+        var index = command.startIndex
+        var quote: Character?
+
+        while index < command.endIndex {
+            let character = command[index]
+
+            if let activeQuote = quote {
+                if activeQuote == "\"", character == "\\" {
+                    masked.append(" ")
+                    index = command.index(after: index)
+                    if index < command.endIndex {
+                        masked.append(" ")
+                        index = command.index(after: index)
+                    }
+                    continue
+                }
+                if character == activeQuote {
+                    masked.append(character)
+                    quote = nil
+                } else {
+                    masked.append(" ")
+                }
+                index = command.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                masked.append(" ")
+                index = command.index(after: index)
+                if index < command.endIndex {
+                    masked.append(" ")
+                    index = command.index(after: index)
+                }
+                continue
+            }
+
+            if character == "'" || character == "\"" {
+                quote = character
+                masked.append(character)
+            } else {
+                masked.append(character)
+            }
+
+            index = command.index(after: index)
+        }
+
+        return masked
+    }
+
+    private nonisolated static func commandSegment(in command: String, startingAt startIndex: String.Index) -> String {
+        var index = startIndex
+        var quote: Character?
+
+        while index < command.endIndex {
+            let character = command[index]
+
+            if let activeQuote = quote {
+                if activeQuote == "\"", character == "\\" {
+                    index = command.index(after: index)
+                    if index < command.endIndex {
+                        index = command.index(after: index)
+                    }
+                    continue
+                }
+                if character == activeQuote {
+                    quote = nil
+                }
+                index = command.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                index = command.index(after: index)
+                if index < command.endIndex {
+                    index = command.index(after: index)
+                }
+                continue
+            }
+
+            if character == "'" || character == "\"" {
+                quote = character
+            } else if character == ";" || character == "|" {
+                return String(command[startIndex..<index])
+            } else if character == "&" {
+                if Self.ampersandIsInLeadingFileDescriptorRedirect(
+                    in: command,
+                    segmentStart: startIndex,
+                    ampersandIndex: index
+                ) {
+                    index = command.index(after: index)
+                    continue
+                }
+                return String(command[startIndex..<index])
+            }
+
+            index = command.index(after: index)
+        }
+
+        return String(command[startIndex..<command.endIndex])
+    }
+
+    private nonisolated static func pipeTargetResolvesToShell(_ target: String) -> Bool {
+        let target = Self.pipeTargetAfterLeadingFileDescriptorRedirects(target)
+        let tokens = Self.shellWords(in: String(target))
+        return Self.tokensResolveToShell(tokens, envDepth: 0)
+    }
+
+    private nonisolated static func pipeTargetAfterLeadingFileDescriptorRedirects(_ target: String) -> Substring {
+        var index = target.startIndex
+        while let redirectRange = Self.leadingFileDescriptorRedirectRange(in: target, startingAt: index) {
+            index = redirectRange.upperBound
+        }
+        return target[index...]
+    }
+
+    private nonisolated static func ampersandIsInLeadingFileDescriptorRedirect(
+        in command: String,
+        segmentStart: String.Index,
+        ampersandIndex: String.Index
+    ) -> Bool {
+        var index = segmentStart
+        while let redirectRange = Self.leadingFileDescriptorRedirectRange(in: command, startingAt: index) {
+            if redirectRange.contains(ampersandIndex) {
+                return true
+            }
+            index = redirectRange.upperBound
+        }
+        return false
+    }
+
+    private nonisolated static func leadingFileDescriptorRedirectRange(
+        in command: String,
+        startingAt startIndex: String.Index
+    ) -> Range<String.Index>? {
+        var index = startIndex
+        while index < command.endIndex, command[index].isWhitespace {
+            index = command.index(after: index)
+        }
+
+        let redirectStart = index
+        while index < command.endIndex, command[index].isNumber {
+            index = command.index(after: index)
+        }
+
+        guard index < command.endIndex, command[index] == ">" else {
+            return nil
+        }
+        index = command.index(after: index)
+
+        guard index < command.endIndex, command[index] == "&" else {
+            return nil
+        }
+        index = command.index(after: index)
+
+        while index < command.endIndex, command[index].isWhitespace {
+            index = command.index(after: index)
+        }
+
+        let targetStart = index
+        if index < command.endIndex, command[index] == "-" {
+            index = command.index(after: index)
+            guard Self.isFileDescriptorRedirectBoundary(in: command, at: index) else {
+                return nil
+            }
+            return redirectStart..<index
+        }
+
+        while index < command.endIndex, command[index].isNumber {
+            index = command.index(after: index)
+        }
+
+        guard index > targetStart else {
+            return nil
+        }
+        guard Self.isFileDescriptorRedirectBoundary(in: command, at: index) else {
+            return nil
+        }
+        return redirectStart..<index
+    }
+
+    private nonisolated static func isFileDescriptorRedirectBoundary(in command: String, at index: String.Index) -> Bool {
+        guard index < command.endIndex else {
+            return true
+        }
+        return command[index].isWhitespace || command[index] == ";" || command[index] == "&" || command[index] == "|"
+    }
+
+    private nonisolated static func tokensResolveToShell(_ tokens: [String], envDepth: Int) -> Bool {
+        var firstTokenIndex = 0
+        while firstTokenIndex < tokens.count, Self.isEnvAssignment(tokens[firstTokenIndex]) {
+            firstTokenIndex += 1
+        }
+
+        guard firstTokenIndex < tokens.count else {
+            return false
+        }
+
+        let firstToken = tokens[firstTokenIndex]
+        let commandName = Self.commandName(firstToken)
+        if Self.isShellCommandName(commandName) {
+            return true
+        }
+        guard commandName == "env" else {
+            return false
+        }
+        guard envDepth < 5 else {
+            return true
+        }
+
+        var index = firstTokenIndex + 1
+        while index < tokens.count {
+            let token = tokens[index]
+
+            if token == "--" {
+                index += 1
+                break
+            }
+            if Self.isEnvAssignment(token) {
+                index += 1
+                continue
+            }
+            let nextToken = index + 1 < tokens.count ? tokens[index + 1] : nil
+            if let option = Self.envOption(from: token, nextToken: nextToken) {
+                if let splitString = option.splitString {
+                    let remainingTokens = Array(tokens.dropFirst(index + option.consumedTokenCount))
+                    return Self.tokensResolveToShell(
+                        [firstToken] + Self.shellWords(in: splitString) + remainingTokens,
+                        envDepth: envDepth + 1
+                    )
+                }
+                index += option.consumedTokenCount
+                continue
+            }
+
+            break
+        }
+
+        guard index < tokens.count else {
+            return false
+        }
+
+        return Self.tokensResolveToShell(Array(tokens.dropFirst(index)), envDepth: envDepth + 1)
+    }
+
+    private nonisolated static func shellWords(in string: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var quote: Character?
+        var index = string.startIndex
+
+        while index < string.endIndex {
+            let character = string[index]
+
+            if let activeQuote = quote {
+                if activeQuote == "\"", character == "\\" {
+                    index = string.index(after: index)
+                    if index < string.endIndex {
+                        current.append(string[index])
+                        index = string.index(after: index)
+                    }
+                    continue
+                }
+                if character == activeQuote {
+                    quote = nil
+                } else {
+                    current.append(character)
+                }
+                index = string.index(after: index)
+                continue
+            }
+
+            if character == "'" || character == "\"" {
+                quote = character
+            } else if character.isWhitespace || character == ";" || character == "&" || character == "|" {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+                if character == ";" || character == "&" || character == "|" {
+                    break
+                }
+            } else if character == "\\" {
+                index = string.index(after: index)
+                if index < string.endIndex {
+                    current.append(string[index])
+                }
+            } else {
+                current.append(character)
+            }
+
+            index = string.index(after: index)
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+
+        return tokens
+    }
+
+    private nonisolated static func commandName(_ token: String) -> String {
+        return token.split(separator: "/").last.map(String.init) ?? token
+    }
+
+    private nonisolated static func isShellCommandName(_ commandName: String) -> Bool {
+        return ["sh", "bash", "zsh", "dash", "fish"].contains(commandName)
+    }
+
+    private nonisolated static func isEnvAssignment(_ token: String) -> Bool {
+        guard let equalsIndex = token.firstIndex(of: "="), equalsIndex != token.startIndex else {
+            return false
+        }
+
+        let name = token[..<equalsIndex]
+        guard let firstCharacter = name.first, firstCharacter == "_" || firstCharacter.isLetter else {
+            return false
+        }
+
+        return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+
+    private struct EnvOption {
+        let consumedTokenCount: Int
+        let splitString: String?
+    }
+
+    private nonisolated static func envOption(from token: String, nextToken: String?) -> EnvOption? {
+        if let splitString = Self.envSplitString(from: token, nextToken: nextToken) {
+            let consumedTokens = token == "-s" || token == "--split-string" ? 2 : 1
+            return EnvOption(consumedTokenCount: consumedTokens, splitString: splitString)
+        }
+
+        if let consumedTokens = Self.envOptionTokenCount(token) {
+            return EnvOption(consumedTokenCount: consumedTokens, splitString: nil)
+        }
+
+        return Self.envShortOptionCluster(from: token, nextToken: nextToken)
+    }
+
+    private nonisolated static func envSplitString(from token: String, nextToken: String?) -> String? {
+        if token == "-s" || token == "--split-string" {
+            return nextToken
+        }
+        if token.hasPrefix("-s"), token.count > 2 {
+            return String(token.dropFirst(2))
+        }
+        if token.hasPrefix("--split-string=") {
+            return String(token.dropFirst("--split-string=".count))
+        }
+
+        return nil
+    }
+
+    private nonisolated static func envOptionTokenCount(_ token: String) -> Int? {
+        if ["-i", "-0", "-v", "--ignore-environment", "--null", "--debug"].contains(token) {
+            return 1
+        }
+        if ["-u", "-p", "-c", "--unset", "--path", "--chdir"].contains(token) {
+            return 2
+        }
+        if token.hasPrefix("-u") || token.hasPrefix("-p") || token.hasPrefix("-c") ||
+            token.hasPrefix("--unset=") || token.hasPrefix("--path=") || token.hasPrefix("--chdir=")
+        {
+            return 1
+        }
+
+        return nil
+    }
+
+    private nonisolated static func envShortOptionCluster(from token: String, nextToken: String?) -> EnvOption? {
+        guard token.hasPrefix("-"), !token.hasPrefix("--"), token.count > 2 else {
+            return nil
+        }
+
+        var index = token.index(after: token.startIndex)
+        while index < token.endIndex {
+            let option = token[index]
+            let nextIndex = token.index(after: index)
+
+            if option == "i" || option == "0" || option == "v" {
+                index = nextIndex
+                continue
+            }
+
+            if option == "u" || option == "p" || option == "c" {
+                if nextIndex < token.endIndex {
+                    return EnvOption(consumedTokenCount: 1, splitString: nil)
+                }
+                return EnvOption(consumedTokenCount: 2, splitString: nil)
+            }
+
+            if option == "s" {
+                if nextIndex < token.endIndex {
+                    return EnvOption(consumedTokenCount: 1, splitString: String(token[nextIndex...]))
+                }
+                guard let nextToken else {
+                    return nil
+                }
+                return EnvOption(consumedTokenCount: 2, splitString: nextToken)
+            }
+
+            return nil
+        }
+
+        return EnvOption(consumedTokenCount: 1, splitString: nil)
     }
 
     private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {

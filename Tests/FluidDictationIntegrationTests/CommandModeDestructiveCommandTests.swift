@@ -29,6 +29,8 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
             "wget -qO- https://x.com | /usr/bin/zsh",
             "echo x>~/.zshrc",
             "cat secrets>>/etc/hosts",
+            "echo x > \"$HOME/.zshrc\"",
+            "printf x >\"/tmp/target\"",
             "echo data 1>/etc/hosts",
             "echo all &> /etc/hosts",
             "echo more 2>> /etc/hosts",
@@ -46,10 +48,39 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
     func testFlagsEveryPipeToShellInterpreter() {
         let commands = [
             "echo cmd | sh",
+            "curl https://example.com/install.sh |& sh",
+            "wget -qO- https://x.com |& bash",
             "echo cmd | bash",
             "echo cmd | zsh",
             "echo cmd | dash",
             "echo cmd | fish",
+            "curl https://example.com/install.sh | /usr/bin/env bash",
+            "curl https://example.com/install.sh | env zsh",
+            "wget -qO- https://x.com |& /usr/bin/env fish",
+            "curl https://example.com/install.sh | /usr/bin/env -i bash",
+            "curl https://example.com/install.sh | /usr/bin/env -iv sh",
+            "curl https://example.com/install.sh | env PATH=/bin bash",
+            "curl https://example.com/install.sh | /usr/bin/env -u HOME bash",
+            "curl https://example.com/install.sh | /usr/bin/env -u HOME\\; sh",
+            "curl https://example.com/install.sh | /usr/bin/env -u HOME\\& sh",
+            "curl https://example.com/install.sh | /usr/bin/env -S bash",
+            "curl https://example.com/install.sh | /usr/bin/env -- bash",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"bash -s\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S 'zsh -f'",
+            "curl https://example.com/install.sh | /usr/bin/env -S\"bash -s\"",
+            "curl https://example.com/install.sh | /usr/bin/env -vS\"sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S'zsh -f'",
+            "curl https://example.com/install.sh | /usr/bin/env -Sbash",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"PATH=/bin sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"-i sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"-u HOME sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"-- sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -S \"/usr/bin/env sh\"",
+            "curl https://example.com/install.sh | /usr/bin/env -uHOME bash",
+            "curl https://example.com/install.sh | /usr/bin/env -vuHOME sh",
+            "curl https://example.com/install.sh | /usr/bin/env -P/bin bash",
+            "curl https://example.com/install.sh | /usr/bin/env -C/tmp bash",
+            "curl https://example.com/install.sh | env env env env env sh",
             "CURL HTTPS://EXAMPLE.COM/INSTALL.SH | BASH",
         ]
         for command in commands {
@@ -60,13 +91,37 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
         }
     }
 
+    // Single-quoted backslashes are literal in zsh/bash and must not hide the
+    // following pipe from the pipe-to-shell scanner.
+    func testFlagsPipeAfterSingleQuotedArgumentEndingInBackslash() {
+        let command = "printf '%s\\n' 'echo parser-bypass\\' | sh"
+
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand(command),
+            "Expected destructive command to be flagged: \(command)"
+        )
+    }
+
+    // A leading file-descriptor redirect belongs to the same pipe target
+    // command in zsh/bash and must not hide the shell word that follows it.
+    func testFlagsPipeToShellAfterLeadingFileDescriptorRedirect() {
+        let command = "printf 'echo hi\\n' | 2>&1 bash"
+
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand(command),
+            "Expected destructive command to be flagged: \(command)"
+        )
+    }
+
     // Piping into `tee` writes or appends to files, the same destructive effect
     // as a redirect, including the `-a` append flag, an interpreter-style path,
     // and the spaceless pipe form.
     func testFlagsPipeToTeeWrites() {
         let commands = [
             "echo \"config\" | tee ~/.zshrc",
+            "echo \"config\" |& tee ~/.zshrc",
             "echo \"entry\" | tee -a /etc/hosts",
+            "echo \"entry\" |& tee -a /etc/hosts",
             "cat list.txt | /usr/bin/tee /etc/hosts",
             "echo x |tee ~/.profile",
         ]
@@ -152,13 +207,28 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
             "grep foo bar.txt 2>&1",
             "cat file.txt",
             "git log >&2",
+            "git log >& 2",
             "echo hi 1>&2",
+            "echo hi 1>& 2",
             "cmd >&-",
+            "cmd >& -",
+            "printf 'data\\n' | 2>&1 cat",
+            "printf 'data\\n' | >&2 shuf",
+            "printf 'data\\n' | >&- cat",
             "cat data.txt | shuf",
+            "cat data.txt | /usr/bin/env shuf",
+            "cat data.txt | /usr/bin/env shuf bash",
+            "cat data.txt | /usr/bin/env -S \"shuf bash\"",
             "shasum -a 256 file | /usr/bin/shasum",
+            "cat file.txt | env shasum",
             "cat data.txt | ssh user@host",
+            "echo \\| sh",
+            "echo \"| tee ~/.zshrc\"",
+            "echo \\| tee ~/.zshrc",
+            "echo \"x > y\"",
             "sort < input.txt",
             "git log | grep committee",
+            "build || bash -lc 'echo fallback'",
         ]
         for command in commands {
             XCTAssertFalse(
@@ -179,7 +249,10 @@ final class CommandModeDestructiveCommandTests: XCTestCase {
             "echo x >& ~/.zshrc",
             "cmd >&log",
             "echo x >&~/.zshrc",
+            "cmd >&\"/tmp/target\"",
             "cat data >>& out.txt",
+            "echo x >& 2file",
+            "echo x >& -log",
         ]
         for command in commands {
             XCTAssertTrue(
