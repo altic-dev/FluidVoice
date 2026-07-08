@@ -343,6 +343,11 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.entries = payload.sorted { $0.timestamp > $1.timestamp }
         self.selectedEntryID = self.entries.first?.id
         self.saveEntries()
+
+        // The restored settings can carry a tighter retention window than the
+        // restored history; prune immediately so expired entries (and their
+        // saved audio) don't linger until the next dictation or day change.
+        self.pruneExpiredEntries()
     }
 
     func attachAudio(_ audio: DictationAudioMetadata, to entryID: UUID) {
