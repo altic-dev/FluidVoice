@@ -757,6 +757,19 @@ struct ContentView: View {
         let newShortcut = HotkeyShortcut(keyCode: keyCode, modifierFlags: self.pendingModifierFlags.union(eventModifiers))
         DebugLogger.shared.debug("NSEvent monitor: Recording new shortcut: \(newShortcut.displayString)", source: "ContentView")
 
+        // A bare key with no modifiers (e.g. "F") registers as a global hotkey and would
+        // intercept that key everywhere, breaking normal typing in every app. Require at
+        // least one modifier for global keyboard shortcuts, mirroring the guard the mouse
+        // recorder already applies (isUnmodifiedLeftOrRightClick "needs a modifier key").
+        // The cancel shortcut is exempt: it only applies while recording is active and
+        // legitimately defaults to a bare Escape.
+        if let recordingTarget, recordingTarget != .cancel, newShortcut.relevantModifierFlags.isEmpty {
+            self.shortcutRecordingMessage = "\(newShortcut.displayString) needs a modifier key"
+            self.resetPendingShortcutState()
+            DebugLogger.shared.debug("NSEvent monitor: Rejected modifier-less keyboard shortcut while recording", source: "ContentView")
+            return nil
+        }
+
         if let recordingTarget,
            let conflictMessage = self.shortcutConflictMessage(for: newShortcut, target: recordingTarget)
         {
