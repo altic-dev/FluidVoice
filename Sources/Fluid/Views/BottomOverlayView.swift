@@ -37,6 +37,11 @@ final class BottomOverlayWindowController {
     private var targetScreen: NSScreen?
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
+    private var presentationGeneration: UInt64 = 0
+    private let presentationDuration: TimeInterval = 0.05
+    private let dismissalDuration: TimeInterval = 0.02
+    private var isHideInProgress = false
+    private var hideWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init() {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayOffsetChanged"), object: nil, queue: .main) { [weak self] _ in
@@ -54,6 +59,8 @@ final class BottomOverlayWindowController {
     func show(audioPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
         let startedAt = ProcessInfo.processInfo.systemUptime
         Self.overlayBench("bottom_show_start mode=\(mode.rawValue) windowExists=\(self.window != nil)")
+        self.presentationGeneration &+= 1
+        let currentGeneration = self.presentationGeneration
 
         self.endReleaseTransition(flushDeferredUpdate: false)
         self.pendingResizeWorkItem?.cancel()
@@ -91,18 +98,115 @@ final class BottomOverlayWindowController {
         self.targetScreen = OverlayScreenResolver.screenForCurrentPointer()
         self.positionWindow()
 
-        // Show immediately; ASR startup can delay AppKit animation completions.
-        self.window?.alphaValue = 1
+        // Order the panel immediately, then use a very short fade so the first
+        // response is instant without the overlay visually popping into place.
+        self.window?.alphaValue = 0
         self.window?.orderFrontRegardless()
         Self.overlayBench("bottom_order_front elapsedMs=\(Self.elapsedMs(since: startedAt))")
-        Self.overlayBench("bottom_fade_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = self.presentationDuration
+            context.allowsImplicitAnimation = true
+            self.window?.animator().alphaValue = 1
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + self.presentationDuration) { [weak self] in
+            guard let self, self.presentationGeneration == currentGeneration else { return }
+            Self.overlayBench("bottom_fade_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
+        }
     }
 
     func hide() {
+        guard !self.isHideInProgress else { return }
+        self.isHideInProgress = true
+        self.presentationGeneration &+= 1
+        let currentGeneration = self.presentationGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            await self.performHideAndWait(generation: currentGeneration)
+            self.completeHideOperation()
+        }
+    }
+
+    /// Performs the brief exit animation and returns after the panel is fully
+    /// ordered out, allowing callers to deliver text only after it disappears.
+    func hideAndWait() async {
+        if self.isHideInProgress {
+            await withCheckedContinuation { continuation in
+                self.hideWaiters.append(continuation)
+            }
+            return
+        }
+
+        self.isHideInProgress = true
+        self.presentationGeneration &+= 1
+        let currentGeneration = self.presentationGeneration
+        await self.performHideAndWait(generation: currentGeneration)
+        self.completeHideOperation()
+    }
+
+    private func completeHideOperation() {
+        self.isHideInProgress = false
+        let waiters = self.hideWaiters
+        self.hideWaiters.removeAll(keepingCapacity: true)
+        waiters.forEach { $0.resume() }
+    }
+
+    private func performHideAndWait(generation currentGeneration: UInt64) async {
         let startedAt = ProcessInfo.processInfo.systemUptime
         Self.overlayBench("bottom_hide_start windowExists=\(self.window != nil)")
+        guard self.presentationGeneration == currentGeneration else {
+            Self.overlayBench("bottom_hide_return reason=stale_generation")
+            return
+        }
 
-        // Cancel audio subscription
+        guard let window = self.window, window.isVisible else {
+            self.clearPresentationResources()
+            self.endReleaseTransition(flushDeferredUpdate: false)
+            NotchContentState.shared.setBottomOverlayDismissing(false)
+            NotchContentState.shared.targetAppIcon = nil
+            Self.overlayBench("bottom_hide_return reason=no_window")
+            return
+        }
+
+        NotchContentState.shared.setBottomOverlayReleaseTransitioning(true)
+        NotchContentState.shared.setBottomOverlayDismissOffsetY(8)
+        NotchContentState.shared.setBottomOverlayDismissing(true)
+
+        // Start the visual response first. Resource cleanup then happens inside
+        // this same short budget instead of delaying the beginning of the fade.
+        let animationStartedAt = ProcessInfo.processInfo.systemUptime
+        Self.overlayBench("bottom_hide_animation_start")
+        await NSAnimationContext.runAnimationGroup { context in
+            context.duration = self.dismissalDuration
+            context.allowsImplicitAnimation = true
+            window.animator().alphaValue = 0
+        }
+        await Task.yield()
+        guard self.presentationGeneration == currentGeneration else {
+            Self.overlayBench("bottom_hide_return reason=stale_generation")
+            return
+        }
+        self.clearPresentationResources()
+
+        let elapsed = ProcessInfo.processInfo.systemUptime - animationStartedAt
+        let remainingDuration = max(0, self.dismissalDuration - elapsed)
+        if remainingDuration > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
+        }
+
+        guard self.presentationGeneration == currentGeneration else {
+            Self.overlayBench("bottom_hide_return reason=stale_generation")
+            return
+        }
+
+        window.orderOut(nil)
+        window.alphaValue = 1
+        self.endReleaseTransition(flushDeferredUpdate: false)
+        NotchContentState.shared.setBottomOverlayDismissing(false)
+        NotchContentState.shared.targetAppIcon = nil
+        Self.overlayBench("bottom_hide_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
+    }
+
+    private func clearPresentationResources() {
         self.audioSubscription?.cancel()
         self.audioSubscription = nil
         self.pendingResizeWorkItem?.cancel()
@@ -113,28 +217,8 @@ final class BottomOverlayWindowController {
         BottomOverlayPromptMenuController.shared.hide()
         BottomOverlayModeMenuController.shared.hide()
         BottomOverlayActionsMenuController.shared.hide()
-
-        // Reset state
         NotchContentState.shared.setProcessing(false)
         NotchContentState.shared.bottomOverlayAudioLevel = 0
-        NotchContentState.shared.targetAppIcon = nil
-
-        guard let window = window else {
-            self.endReleaseTransition(flushDeferredUpdate: false)
-            NotchContentState.shared.setBottomOverlayDismissing(false)
-            Self.overlayBench("bottom_hide_return reason=no_window")
-            return
-        }
-
-        NotchContentState.shared.setBottomOverlayReleaseTransitioning(true)
-        NotchContentState.shared.setBottomOverlayDismissOffsetY(28)
-        NotchContentState.shared.setBottomOverlayDismissing(true)
-
-        window.alphaValue = 0
-        window.orderOut(nil)
-        self.endReleaseTransition(flushDeferredUpdate: false)
-        NotchContentState.shared.setBottomOverlayDismissing(false)
-        Self.overlayBench("bottom_hide_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
     }
 
     func setProcessing(_ processing: Bool) {
@@ -1533,10 +1617,7 @@ private struct BottomOverlayActionsMenuView: View {
 
     private var canCopyLast: Bool {
         guard !self.contentState.isProcessing else { return false }
-        guard let latest = self.latestEntry else { return false }
-        let processed = latest.processedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let raw = latest.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !(processed.isEmpty && raw.isEmpty)
+        return self.latestEntry?.clipboardText != nil
     }
 
     private var canPasteLast: Bool {
@@ -2244,7 +2325,7 @@ struct BottomOverlayView: View {
     }
 
     private var overlayAnimatedScale: CGFloat {
-        self.contentState.isBottomOverlayDismissing ? 0.97 : 1.0
+        self.contentState.isBottomOverlayDismissing ? 0.985 : 1.0
     }
 
     private var overlayAnimatedOpacity: Double {
@@ -2905,7 +2986,7 @@ struct BottomOverlayView: View {
         .scaleEffect(self.overlayAnimatedScale, anchor: .center)
         .offset(y: self.overlayAnimatedOffsetY)
         .opacity(self.overlayAnimatedOpacity)
-        .animation(.timingCurve(0.22, 0.0, 0.2, 1.0, duration: 0.28), value: self.contentState.isBottomOverlayDismissing)
+        .animation(.timingCurve(0.22, 0.0, 0.2, 1.0, duration: 0.02), value: self.contentState.isBottomOverlayDismissing)
         .onChange(of: self.settings.overlaySize) { _, _ in
             self.dynamicPreviewResizeBucket = self.previewResizeBucket(for: self.currentPreviewSizingText)
             self.frozenDynamicPreviewHeight = nil

@@ -18,9 +18,6 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var latestStreamingPreviewText: String = ""
     private var latestStreamingPreviewSampleCount: Int = 0
     private var latestStreamingPreviewFinishedAt: TimeInterval?
-    private let fastPreviewMinimumSamples = 32_000
-    private let fastPreviewTailSilenceRMS: Float = 0.002
-    private let fastPreviewTailAudioToleranceMs = 300
     private(set) var isReady: Bool = false
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
@@ -35,7 +32,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = configureWordBoosting
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
@@ -58,15 +55,17 @@ final class FluidAudioProvider: TranscriptionProvider {
             try FileManager.default.removeItem(at: modelCacheDirectory)
         }
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
-        progressRelay.report(0.0)
+        progressRelay.report(.preparingDownload)
         let fluidAudioProgressHandler: DownloadUtils.ProgressHandler = { progress in
             switch progress.phase {
             case .listing:
-                progressRelay.report(0.0)
+                progressRelay.report(.preparingDownload)
             case .downloading:
-                progressRelay.report(max(0.0, min(1.0, progress.fractionCompleted * 2.0)))
+                // FluidAudio reserves 0.0-0.5 for transfer bytes. Show percent only for that
+                // real download phase, not for later Core ML work.
+                progressRelay.report(.downloading(progress.fractionCompleted / 0.5))
             case .compiling:
-                progressRelay.report(1.0)
+                progressRelay.report(.optimizing)
             }
         }
 
@@ -154,7 +153,7 @@ final class FluidAudioProvider: TranscriptionProvider {
 
         try Task.checkCancellation()
         self.isReady = true
-        progressRelay.report(1.0)
+        progressRelay.report(.loading)
         DebugLogger.shared.info(
             "FluidAudioProvider: Models ready [isWordBoostingActive=\(self.isWordBoostingActive), terms=\(self.boostedVocabularyTermsCount)]",
             source: "FluidAudioProvider"
@@ -189,12 +188,11 @@ final class FluidAudioProvider: TranscriptionProvider {
         let elapsedMs = Int(((Date().timeIntervalSince1970 - startedAt) * 1000).rounded())
         let audioMs = Int((Double(samples.count) / 16_000.0 * 1000).rounded())
         let rtf = audioMs > 0 ? Double(elapsedMs) / Double(audioMs) : 0
-        let finalizationMode = SettingsStore.shared.parakeetFinalizationMode.rawValue
         DebugLogger.shared.info(
             """
             ASR_BENCH provider_streaming_done samples=\(samples.count) audioMs=\(audioMs) \
             elapsedMs=\(elapsedMs) textChars=\(text.trimmingCharacters(in: .whitespacesAndNewlines).count) \
-            rtf=\(String(format: "%.3f", rtf)) finalizationMode=\(finalizationMode)
+            rtf=\(String(format: "%.3f", rtf))
             """,
             source: "ASRBenchmark"
         )
@@ -212,13 +210,6 @@ final class FluidAudioProvider: TranscriptionProvider {
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
             )
-        }
-
-        let startedAt = Date().timeIntervalSince1970
-        if SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge {
-            if let previewResult = await self.cachedStreamingPreviewResult(for: samples, startedAt: startedAt) {
-                return previewResult
-            }
         }
 
         // If the boosted final manager fails, fall back to the unboosted streaming
@@ -243,100 +234,6 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
     }
 
-    func transcribeCachedStreamingPreviewIfAvailable(_ samples: [Float]) async -> ASRTranscriptionResult? {
-        guard SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge else {
-            return nil
-        }
-        let startedAt = Date().timeIntervalSince1970
-        return await self.cachedStreamingPreviewResult(for: samples, startedAt: startedAt)
-    }
-
-    private func cachedStreamingPreviewResult(for samples: [Float], startedAt: TimeInterval) async -> ASRTranscriptionResult? {
-        let text = self.latestStreamingPreviewText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalSampleCount = samples.count
-        let previewSampleCount = min(self.latestStreamingPreviewSampleCount, finalSampleCount)
-        let tailSamples = max(0, finalSampleCount - previewSampleCount)
-        let tailMs = Int((Double(tailSamples) / 16_000.0 * 1000).rounded())
-        let tailRMS = self.rms(samples: samples, startIndex: previewSampleCount)
-        let coverage = finalSampleCount > 0 ? Double(previewSampleCount) / Double(finalSampleCount) : 0
-        let ageMs: Int
-        if let latestStreamingPreviewFinishedAt {
-            ageMs = Int(((Date().timeIntervalSince1970 - latestStreamingPreviewFinishedAt) * 1000).rounded())
-        } else {
-            ageMs = Int.max
-        }
-
-        DebugLogger.shared.info(
-            """
-            ASR_BENCH provider_fast_preview_check finalSamples=\(finalSampleCount) previewSamples=\(previewSampleCount) \
-            tailMs=\(tailMs) coverage=\(String(format: "%.3f", coverage)) ageMs=\(ageMs) \
-            tailRMS=\(String(format: "%.5f", tailRMS)) textChars=\(text.count) wordBoosting=\(self.isWordBoostingActive)
-            """,
-            source: "ASRBenchmark"
-        )
-
-        guard !text.isEmpty else {
-            self.logFastPreviewMiss(reason: "empty", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard self.latestStreamingPreviewFinishedAt != nil, self.latestStreamingPreviewSampleCount > 0 else {
-            self.logFastPreviewMiss(reason: "missing_preview", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard ageMs <= 3000 else {
-            self.logFastPreviewMiss(reason: "stale", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard finalSampleCount >= self.fastPreviewMinimumSamples else {
-            self.logFastPreviewMiss(reason: "short_recording", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard coverage >= 0.88 else {
-            self.logFastPreviewMiss(reason: "low_coverage", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard tailMs <= 1800 else {
-            self.logFastPreviewMiss(reason: "large_tail", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard tailSamples == 0 || tailMs <= self.fastPreviewTailAudioToleranceMs || tailRMS <= self.fastPreviewTailSilenceRMS else {
-            self.logFastPreviewMiss(reason: "tail_has_audio", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-
-        DebugLogger.shared.info(
-            """
-            ASR_BENCH provider_fast_preview_hit tailMs=\(tailMs) coverage=\(String(format: "%.3f", coverage)) \
-            ageMs=\(ageMs) tailRMS=\(String(format: "%.5f", tailRMS)) textChars=\(text.count)
-            """,
-            source: "ASRBenchmark"
-        )
-        self.logFinalBenchmark(samples: samples, text: text, startedAt: startedAt, usedFallback: false, source: "livePreview")
-        return ASRTranscriptionResult(text: text, confidence: 0.95)
-    }
-
-    private func rms(samples: [Float], startIndex: Int) -> Float {
-        guard startIndex < samples.count else { return 0 }
-        var sum: Float = 0
-        var count: Float = 0
-        for sample in samples[startIndex...] {
-            sum += sample * sample
-            count += 1
-        }
-        guard count > 0 else { return 0 }
-        return sqrt(sum / count)
-    }
-
-    private func logFastPreviewMiss(reason: String, tailMs: Int, coverage: Double, ageMs: Int, tailRMS: Float) {
-        DebugLogger.shared.info(
-            """
-            ASR_BENCH provider_fast_preview_miss reason=\(reason) tailMs=\(tailMs) \
-            coverage=\(String(format: "%.3f", coverage)) ageMs=\(ageMs) tailRMS=\(String(format: "%.5f", tailRMS))
-            """,
-            source: "ASRBenchmark"
-        )
-    }
-
     private func logFinalBenchmark(
         samples: [Float],
         text: String,
@@ -347,12 +244,11 @@ final class FluidAudioProvider: TranscriptionProvider {
         let elapsedMs = Int(((Date().timeIntervalSince1970 - startedAt) * 1000).rounded())
         let audioMs = Int((Double(samples.count) / 16_000.0 * 1000).rounded())
         let rtf = audioMs > 0 ? Double(elapsedMs) / Double(audioMs) : 0
-        let finalizationMode = SettingsStore.shared.parakeetFinalizationMode.rawValue
         DebugLogger.shared.info(
             """
             ASR_BENCH provider_final_done samples=\(samples.count) audioMs=\(audioMs) \
             elapsedMs=\(elapsedMs) textChars=\(text.trimmingCharacters(in: .whitespacesAndNewlines).count) \
-            rtf=\(String(format: "%.3f", rtf)) fallback=\(usedFallback) finalizationMode=\(finalizationMode) source=\(source)
+            rtf=\(String(format: "%.3f", rtf)) fallback=\(usedFallback) source=\(source)
             """,
             source: "ASRBenchmark"
         )
@@ -472,7 +368,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Intel stub - parameter ignored
     }
 
-    func prepare(progressHandler: ((Double) -> Void)?) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         throw NSError(
             domain: "FluidAudioProvider",
             code: -1,
@@ -493,9 +389,5 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func resetStreamingPreviewCache() {}
-
-    func transcribeCachedStreamingPreviewIfAvailable(_ samples: [Float]) async -> ASRTranscriptionResult? {
-        nil
-    }
 }
 #endif

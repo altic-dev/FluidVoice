@@ -323,7 +323,11 @@ extension AIEnhancementSettingsView {
 
             self.allProvidersSection
 
-            if self.viewModel.showingEditProvider { self.editProviderSection }
+            if self.viewModel.showingEditProvider,
+               self.viewModel.selectedProviderID != PrivateAIProviderFeature.shared.providerID
+            {
+                self.editProviderSection
+            }
         }
         .padding(.top, 4)
     }
@@ -691,6 +695,7 @@ extension AIEnhancementSettingsView {
             }
 
             self.privateAIPrefixCacheRow(isBusy: isBusy)
+            self.privateAIBoostRow(isBusy: isBusy)
 
             if self.viewModel.connectionStatus(for: PrivateAIProviderFeature.shared.providerID) == .failed,
                !self.viewModel.connectionErrorMessage.isEmpty
@@ -753,13 +758,41 @@ extension AIEnhancementSettingsView {
     }
 
     private func privateAIPrefixCacheRow(isBusy: Bool) -> some View {
-        HStack(spacing: 8) {
-            Toggle("Fast startup", isOn: self.privateAIPrefixCacheBinding)
+        HStack(alignment: .center, spacing: 8) {
+            Text("Faster first result")
+                .font(.caption)
+                .frame(width: 124, alignment: .leading)
+
+            Toggle("", isOn: self.privateAIPrefixCacheBinding)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .font(.caption)
+                .labelsHidden()
                 .disabled(isBusy)
-                .help("Keeps a reusable local prompt cache for faster first dictation.")
+                .help("Keeps Fluid-1 ready so your first dictation finishes sooner.")
+                .accessibilityLabel("Faster first result")
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func privateAIBoostRow(isBusy: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("Faster results")
+                .font(.caption)
+                .frame(width: 124, alignment: .leading)
+
+            Toggle("", isOn: self.privateAIBoostBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .disabled(isBusy)
+                .help("Uses extra local acceleration so Fluid-1 finishes faster.")
+                .accessibilityLabel("Faster results")
+
+            Text("Finishes dictation up to 15% faster. Uses about 100 MB more memory.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
 
             Spacer(minLength: 0)
         }
@@ -824,6 +857,41 @@ extension AIEnhancementSettingsView {
                 Task { @MainActor in
                     await PrivateAIIntegrationService.shared.unloadCachedRuntime(
                         reason: enabled ? "prefix cache enabled" : "prefix cache disabled"
+                    )
+                    self.viewModel.refreshProviderItems()
+                }
+            }
+        )
+    }
+
+    private var privateAIBoostBinding: Binding<Bool> {
+        Binding(
+            get: { self.settings.privateAIBoostEnabled },
+            set: { enabled in
+                guard self.settings.privateAIBoostEnabled != enabled else { return }
+                self.settings.privateAIBoostEnabled = enabled
+                self.privateAILoadState = .idle
+                Task { @MainActor in
+                    await PrivateAIIntegrationService.shared.unloadCachedRuntime(
+                        reason: enabled ? "Fluid-1 Boost enabled" : "Fluid-1 Boost disabled"
+                    )
+                    self.viewModel.refreshProviderItems()
+                }
+            }
+        )
+    }
+
+    private var privateAIContextTokenLimitBinding: Binding<Int> {
+        Binding(
+            get: { self.settings.privateAIContextTokenLimit },
+            set: { value in
+                let clamped = SettingsStore.clampPrivateAIContextTokenLimit(value)
+                guard self.settings.privateAIContextTokenLimit != clamped else { return }
+                self.settings.privateAIContextTokenLimit = clamped
+                self.privateAILoadState = .idle
+                Task { @MainActor in
+                    await PrivateAIIntegrationService.shared.unloadCachedRuntime(
+                        reason: "Fluid Intelligence context changed"
                     )
                     self.viewModel.refreshProviderItems()
                 }
@@ -958,7 +1026,7 @@ extension AIEnhancementSettingsView {
 
         if self.privateAILoadState.isLoaded(model.id) {
             return PrivateAIProviderModelStatus(
-                detail: "Dictation-only model.",
+                detail: "For dictation only.",
                 color: Color.fluidGreen
             )
         }
@@ -972,7 +1040,7 @@ extension AIEnhancementSettingsView {
 
         if self.isPrivateAIModelVerified(model) {
             return PrivateAIProviderModelStatus(
-                detail: "Dictation-only model.",
+                detail: "For dictation only.",
                 color: Color.fluidGreen
             )
         }
@@ -1060,6 +1128,39 @@ extension AIEnhancementSettingsView {
                 )
             }
             self.viewModel.refreshProviderItems()
+        }
+    }
+
+    private func resetPrivateAIVerification(for model: PrivateAIRegisteredModel) {
+        self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
+        self.privateAILoadState = .idle
+        Task { @MainActor in
+            await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "Fluid Intelligence verification reset")
+            if PrivateAIIntegrationService.isModelInstalled(model) {
+                self.privateAILoadState = .idle
+            }
+            self.viewModel.refreshProviderItems()
+        }
+    }
+
+    private func deletePrivateAIModel(_ model: PrivateAIRegisteredModel) {
+        guard PrivateAIIntegrationService.canRemoveInstalledModel(model) else { return }
+        self.privateAILoadState = .loading(modelID: model.id)
+        Task { @MainActor in
+            do {
+                try await PrivateAIIntegrationService.shared.unloadAndRemoveInstalledModel(
+                    model,
+                    reason: "settings-delete"
+                )
+                self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
+                if self.privateAISelectedModelID == model.id {
+                    self.privateAILoadState = .idle
+                }
+                self.viewModel.refreshProviderItems()
+            } catch {
+                guard self.privateAISelectedModelID == model.id else { return }
+                self.privateAILoadState = .failed(modelID: model.id, message: Self.errorMessage(for: error))
+            }
         }
     }
 
@@ -1537,44 +1638,21 @@ extension AIEnhancementSettingsView {
                         Color.clear
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
-                        ZStack {
-                            if isFluidDownloading || !isFluidInstalled {
-                                Button(action: { self.downloadPrivateAIModel(fluidModel) }) {
-                                    HStack(spacing: 4) {
-                                        if isFluidDownloading {
-                                            ProgressView()
-                                                .controlSize(.mini)
-                                                .fixedSize()
-                                        }
-                                        Text(isFluidDownloading ? Self.downloadButtonText(progress: fluidDownloadProgress) : "Download")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .fluidButton(.accent, size: .small)
-                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
-                                .disabled(!fluidModel.canDownload || isFluidBusy)
-                                .help(fluidModel.canDownload ? "Download and verify selected model" : "Download URL is not configured yet")
-                            } else if !isFluidVerified || hasFluidLoadFailure {
-                                Button(action: { self.verifyPrivateAIConnection(fluidModel) }) {
-                                    HStack(spacing: 4) {
-                                        if isFluidLoading || isFluidTesting {
-                                            ProgressView()
-                                                .controlSize(.mini)
-                                                .fixedSize()
-                                        }
-                                        Text((isFluidLoading || isFluidTesting) ? "Loading" : "Verify")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .fluidButton(.accent, size: .small)
-                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
-                                .disabled(isFluidBusy)
-                                .help("Verify selected model")
+                        Button(action: {
+                            self.activateProvider(item.id)
+                            if isEditing {
+                                self.viewModel.clearEditProviderDraft()
+                            } else {
+                                self.viewModel.startEditingProvider()
                             }
+                        }) {
+                            Text("Edit")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
+                        .buttonStyle(SquareIconButtonStyle())
                         .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        .help("Edit provider")
                     } else {
                         SearchableModelPicker(
                             models: models,
@@ -1630,7 +1708,18 @@ extension AIEnhancementSettingsView {
                 .padding(.top, 8)
             }
 
-            if !isPrivateAIProvider, isEditing {
+            if isPrivateAIProvider, isEditing {
+                Divider()
+                    .background(self.theme.palette.separator.opacity(0.5))
+                    .padding(.vertical, 10)
+
+                self.privateAIEditProviderSection(
+                    model: fluidModel,
+                    isInstalled: isFluidInstalled,
+                    isBusy: isFluidBusy,
+                    isVerified: isFluidVerified
+                )
+            } else if !isPrivateAIProvider, isEditing {
                 Divider()
                     .background(self.theme.palette.separator.opacity(0.5))
                     .padding(.vertical, 10)
@@ -1878,6 +1967,180 @@ extension AIEnhancementSettingsView {
             includeAppleIntelligence: true,
             appleIntelligenceAvailable: self.viewModel.appleIntelligenceAvailable
         )
+    }
+
+    func privateAIEditProviderSection(
+        model: PrivateAIRegisteredModel,
+        isInstalled: Bool,
+        isBusy: Bool,
+        isVerified: Bool
+    ) -> some View {
+        let canDelete = isInstalled && PrivateAIIntegrationService.canRemoveInstalledModel(model)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(self.theme.palette.accent)
+                Text("Edit Provider")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Model", systemImage: "cube.box")
+
+                    SearchableModelPicker(
+                        models: PrivateAIModelRegistry.modelIDs(),
+                        selectedModel: self.privateAIModelBinding,
+                        selectionEnabled: !isBusy,
+                        controlWidth: 260,
+                        controlHeight: AISettingsLayout.providerRowControlHeight
+                    )
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    self.privateAISettingLabel("Dictation window", systemImage: "memorychip")
+
+                    self.privateAIContextControl(isBusy: isBusy)
+
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .padding(.top, 1)
+                        Text("\(self.privateAIContextCueText). Higher values help long transcripts but use more RAM.")
+                            .font(.caption2)
+                            .lineLimit(2)
+                    }
+                    .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 0)
+                }
+
+                self.privateAIPrefixCacheRow(isBusy: isBusy)
+                self.privateAIBoostRow(isBusy: isBusy)
+            }
+
+            HStack(spacing: 8) {
+                if isVerified {
+                    Button {
+                        self.resetPrivateAIVerification(for: model)
+                        self.viewModel.clearEditProviderDraft()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Reset Verification")
+                        }
+                        .font(.caption)
+                    }
+                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                }
+
+                if canDelete {
+                    Button(role: .destructive) {
+                        self.deletePrivateAIModel(model)
+                        self.viewModel.clearEditProviderDraft()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "trash")
+                            Text("Delete Model")
+                        }
+                        .font(.caption)
+                    }
+                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    .disabled(isBusy)
+                }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    self.viewModel.clearEditProviderDraft()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark")
+                        Text("Done")
+                    }
+                }
+                .fluidButton(.glass, size: .compact)
+            }
+        }
+    }
+
+    private func privateAISettingLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 110, alignment: .leading)
+    }
+
+    private func privateAIContextControl(isBusy: Bool) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                self.decreasePrivateAIContextTokenLimit()
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 32, height: AISettingsLayout.providerRowControlHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || self.settings.privateAIContextTokenLimit <= SettingsStore.privateAIContextTokenLimitRange.lowerBound)
+
+            Text("\(self.settings.privateAIContextTokenLimit.formatted())")
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .frame(width: 74, height: AISettingsLayout.providerRowControlHeight)
+
+            Text("tokens")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 48, height: AISettingsLayout.providerRowControlHeight, alignment: .leading)
+
+            Button {
+                self.increasePrivateAIContextTokenLimit()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 32, height: AISettingsLayout.providerRowControlHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || self.settings.privateAIContextTokenLimit >= SettingsStore.privateAIContextTokenLimitRange.upperBound)
+        }
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(self.theme.palette.elevatedCardBackground.opacity(0.9))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 0.8)
+        )
+        .fixedSize()
+        .help("How much raw dictation Fluid-1 can clean at once. Higher values help long transcripts but use more RAM and can slow first response.")
+    }
+
+    private func decreasePrivateAIContextTokenLimit() {
+        self.privateAIContextTokenLimitBinding.wrappedValue = self.settings.privateAIContextTokenLimit - SettingsStore.privateAIContextTokenLimitStep
+    }
+
+    private func increasePrivateAIContextTokenLimit() {
+        self.privateAIContextTokenLimitBinding.wrappedValue = self.settings.privateAIContextTokenLimit + SettingsStore.privateAIContextTokenLimitStep
+    }
+
+    private var privateAIContextCueText: String {
+        let estimatedWords = SettingsStore.estimatedPrivateAIDictationWords(for: self.settings.privateAIContextTokenLimit)
+        let estimatedMinutes = max(1, Int((Double(estimatedWords) / 150.0).rounded()))
+        let minuteText = estimatedMinutes == 1 ? "1 minute" : "\(estimatedMinutes) minutes"
+        return "Good for about \(estimatedWords.formatted()) words or \(minuteText) of dictation"
     }
 
     var editProviderSection: some View {

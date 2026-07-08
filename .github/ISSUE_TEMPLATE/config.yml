@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Start a discussion or ask a question
+    url: https://github.com/altic-dev/FluidVoice/discussions
+    about: Use Discussions for support questions, unclear reports, ideas, and open-ended design conversations.
+  - name: Propose a feature idea
+    url: https://github.com/altic-dev/FluidVoice/discussions/new?category=ideas
+    about: Feature ideas should start as Discussions before they become prioritized issues.

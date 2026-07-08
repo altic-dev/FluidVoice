@@ -387,7 +387,7 @@ struct TranscriptionHistoryView: View {
                                 Label("Both", systemImage: "doc.on.doc")
                                     .font(.system(size: 12, weight: .medium))
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
                     }

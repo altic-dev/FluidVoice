@@ -15,6 +15,13 @@ final class SettingsStore: ObservableObject {
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
+    static let privateAIContextTokenLimitRange: ClosedRange<Int> = 2048...8192
+    static let privateAIContextTokenLimitStep = 512
+    static let defaultPrivateAIContextTokenLimit = 4096
+    static let privateAIDictationSystemOverheadTokens = 1280
+    static let privateAIDictationMinimumOutputTokens = 256
+    static let privateAIDictationRoundTripTokenCost = 2.75
+    private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
     private(set) var launchAtStartupEnabled = false
@@ -33,9 +40,34 @@ final class SettingsStore: ObservableObject {
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
         self.normalizeProviderSelectionForCurrentVerificationState()
-        self.enforceOnboardingGenerationIfNeeded()
+        self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
+        self.migratePrivateAIContextDefaultTo4KIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+    }
+
+    static func clampPrivateAIContextTokenLimit(_ value: Int) -> Int {
+        min(max(value, self.privateAIContextTokenLimitRange.lowerBound), self.privateAIContextTokenLimitRange.upperBound)
+    }
+
+    static func estimatedPrivateAIDictationWords(for contextTokenLimit: Int) -> Int {
+        let availableTokens = max(0, Self.clampPrivateAIContextTokenLimit(contextTokenLimit) - Self.privateAIDictationSystemOverheadTokens)
+        let inputTokens = Double(availableTokens) / Self.privateAIDictationRoundTripTokenCost
+        return max(100, Int((inputTokens * 0.75 / 50).rounded(.up)) * 50)
+    }
+
+    static func privateAIMaxOutputTokens(forInputText inputText: String, contextTokenLimit: Int) -> Int {
+        let wordCount = inputText.split { $0.isWhitespace || $0.isNewline }.count
+        let estimatedInputTokens = max(1, Int((Double(wordCount) / 0.75).rounded(.up)))
+        let requestedOutputTokens = max(
+            Self.privateAIDictationMinimumOutputTokens,
+            Int((Double(estimatedInputTokens) * 1.15).rounded(.up)) + 64
+        )
+        let availableOutputTokens = max(
+            Self.privateAIDictationMinimumOutputTokens,
+            Self.clampPrivateAIContextTokenLimit(contextTokenLimit) - Self.privateAIDictationSystemOverheadTokens - estimatedInputTokens
+        )
+        return min(requestedOutputTokens, availableOutputTokens)
     }
 
     // MARK: - Prompt Profiles (Unified)
@@ -1406,6 +1438,34 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var privateAIBoostEnabled: Bool {
+        get { self.defaults.object(forKey: PrivateAIProviderFeature.shared.boostDefaultsKey) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: PrivateAIProviderFeature.shared.boostDefaultsKey)
+        }
+    }
+
+    var privateAIContextTokenLimit: Int {
+        get {
+            let value = self.defaults.integer(forKey: Keys.privateAIContextTokenLimit)
+            return Self.clampPrivateAIContextTokenLimit(value == 0 ? Self.defaultPrivateAIContextTokenLimit : value)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(Self.clampPrivateAIContextTokenLimit(newValue), forKey: Keys.privateAIContextTokenLimit)
+        }
+    }
+
+    private func migratePrivateAIContextDefaultTo4KIfNeeded() {
+        guard self.defaults.bool(forKey: Keys.privateAIContextDefaultMigratedTo4K) == false else { return }
+        let storedValue = self.defaults.object(forKey: Keys.privateAIContextTokenLimit) as? Int
+        if storedValue == nil || storedValue == Self.privateAIContextTokenLimitRange.lowerBound {
+            self.defaults.set(Self.defaultPrivateAIContextTokenLimit, forKey: Keys.privateAIContextTokenLimit)
+        }
+        self.defaults.set(true, forKey: Keys.privateAIContextDefaultMigratedTo4K)
+    }
+
     var savedProviders: [SavedProvider] {
         get {
             guard let data = defaults.data(forKey: Keys.savedProviders),
@@ -1576,13 +1636,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var parakeetFinalizationMode: ParakeetFinalizationMode {
+    /// Direct Core Audio capture is enabled by default for faster recording
+    /// startup, while preserving explicit user opt-out.
+    var experimentalDirectAudioCaptureEnabled: Bool {
         get {
-            self.defaults.string(forKey: Keys.parakeetFinalizationMode).flatMap(ParakeetFinalizationMode.init(rawValue:)) ?? .stableFullFinal
+            let value = self.defaults.object(forKey: Keys.experimentalDirectAudioCaptureEnabled)
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.parakeetFinalizationMode)
+            self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
     }
 
@@ -2099,27 +2162,6 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.playgroundUsed) }
     }
 
-    /// Bump this when shipping a version that should force all users (new + existing) through
-    /// onboarding again. The user's stored generation is compared on init; if it's below this
-    /// value, onboarding is reset. Each forced ship increments this by 1.
-    private static let currentOnboardingGeneration: Int = 2
-
-    /// Force onboarding reset for users whose stored generation is below the current one.
-    /// Called during init() so it takes effect before any UI decision.
-    private func enforceOnboardingGenerationIfNeeded() {
-        let storedGeneration = self.defaults.integer(forKey: Keys.onboardingGeneration)
-        guard storedGeneration < Self.currentOnboardingGeneration else { return }
-
-        // Reset onboarding state and bump the stored generation so this is a one-time reset.
-        objectWillChange.send()
-        self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-        self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
-    }
-
     var onboardingCompleted: Bool {
         get {
             if self.defaults.object(forKey: Keys.onboardingCompleted) == nil {
@@ -2131,7 +2173,7 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.onboardingCompleted)
             if newValue {
-                self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
+                self.defaults.set(false, forKey: Keys.manualOnboardingResetRequested)
             }
         }
     }
@@ -2246,13 +2288,34 @@ final class SettingsStore: ObservableObject {
     func resetOnboardingProgress() {
         objectWillChange.send()
         self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
+        self.defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
         self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
         self.defaults.set(false, forKey: Keys.onboardingAISkipped)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
         self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
         self.defaults.set(false, forKey: Keys.playgroundUsed)
+    }
+
+    private func repairForcedOnboardingResetIfNeeded() {
+        // 1.6.2 briefly used OnboardingGeneration to force every install through onboarding.
+        // Restore existing users who were reset by that migration while keeping fresh installs intact.
+        let hadOpenedBeforeForcedReset = AnalyticsIdentityStore.shared.firstOpenAt.map {
+            $0 < Self.forcedOnboardingResetIntroducedAt
+        } ?? false
+        let hasExistingInstallSignal = self.hasLegacyUsageSignals() || hadOpenedBeforeForcedReset
+        guard self.defaults.object(forKey: Keys.onboardingGeneration) != nil,
+              self.defaults.bool(forKey: Keys.onboardingCompleted) == false,
+              self.defaults.bool(forKey: Keys.manualOnboardingResetRequested) == false,
+              hasExistingInstallSignal
+        else { return }
+
+        objectWillChange.send()
+        self.defaults.set(true, forKey: Keys.onboardingCompleted)
+        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
+        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
     }
 
     private func hasLegacyUsageSignals() -> Bool {
@@ -2604,11 +2667,17 @@ final class SettingsStore: ObservableObject {
 
     /// Whether the model rejects the `temperature` parameter.
     /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Claude Opus 4.7+, which use extended thinking by default).
+    /// (Opus 4.7+, Sonnet 5, Fable/Mythos 5 — Sonnet 4.6 and older still accept it).
     func isTemperatureUnsupported(_ model: String) -> Bool {
         if self.isReasoningModel(model) { return true }
-        let modelLower = model.lowercased()
+        // Normalize version separators so dotted IDs (e.g. OpenRouter's
+        // anthropic/claude-opus-4.8) match the hyphenated forms below.
+        let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
         return modelLower.contains("claude-opus-4-7")
+            || modelLower.contains("claude-opus-4-8")
+            || modelLower.contains("claude-sonnet-5")
+            || modelLower.contains("claude-fable")
+            || modelLower.contains("claude-mythos")
     }
 
     /// Whether to display thinking tokens in the UI (Command Mode, Rewrite Mode)
@@ -2817,6 +2886,8 @@ final class SettingsStore: ObservableObject {
             savedProviders: self.savedProviders,
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
+            privateAIBoostEnabled: self.privateAIBoostEnabled,
+            privateAIContextTokenLimit: self.privateAIContextTokenLimit,
             selectedSpeechModel: self.selectedSpeechModel,
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
@@ -2874,6 +2945,7 @@ final class SettingsStore: ObservableObject {
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
+            autoConvertPunctuationEnabled: self.autoConvertPunctuationEnabled,
             gaavModeEnabled: self.gaavModeEnabled,
             gaavLowercaseFirstLetterEnabled: self.gaavLowercaseFirstLetterEnabled,
             gaavRemoveTrailingPeriodEnabled: self.gaavRemoveTrailingPeriodEnabled,
@@ -2909,6 +2981,12 @@ final class SettingsStore: ObservableObject {
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {
             self.privateAIPrefixKVCacheEnabled = privateAIPrefixKVCacheEnabled
+        }
+        if let privateAIBoostEnabled = payload.privateAIBoostEnabled {
+            self.privateAIBoostEnabled = privateAIBoostEnabled
+        }
+        if let privateAIContextTokenLimit = payload.privateAIContextTokenLimit {
+            self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
         self.selectedSpeechModel = payload.selectedSpeechModel
         self.selectedCohereLanguage = payload.selectedCohereLanguage
@@ -2981,6 +3059,9 @@ final class SettingsStore: ObservableObject {
         self.weekendsDontBreakStreak = payload.weekendsDontBreakStreak
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
+        if let autoConvertPunctuationEnabled = payload.autoConvertPunctuationEnabled {
+            self.autoConvertPunctuationEnabled = autoConvertPunctuationEnabled
+        }
         let restoredGaavModeEnabled = payload.gaavModeEnabled
         let restoredContinuousDictationModeEnabled = payload.continuousDictationModeEnabled ?? false
         self.gaavModeEnabled = restoredGaavModeEnabled
@@ -3581,6 +3662,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var autoConvertPunctuationEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.autoConvertPunctuationEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.autoConvertPunctuationEnabled)
+        }
+    }
+
     // MARK: - GAAV Mode
 
     /// Legacy combined GAAV setting. New behavior uses the split formatting toggles below.
@@ -4142,15 +4231,6 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        var supportsFastDictationProcessing: Bool {
-            switch self {
-            case .parakeetTDT, .parakeetTDTv2:
-                return true
-            default:
-                return false
-            }
-        }
-
         /// Whether this model supports real-time streaming/chunk processing.
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
@@ -4448,6 +4528,9 @@ private extension SettingsStore {
         static let selectedModelByProvider = "SelectedModelByProvider"
         static let selectedProviderID = "SelectedProviderID"
         static let privateAIPrefixKVCacheEnabled = "PrivateAIProviderPrefixKVCacheEnabled"
+        static let privateAIBoostEnabled = "PrivateAIProviderBoostEnabled"
+        static let privateAIContextTokenLimit = "PrivateAIProviderContextTokenLimit"
+        static let privateAIContextDefaultMigratedTo4K = "PrivateAIProviderContextDefaultMigratedTo4K"
         static let providerAPIKeys = "ProviderAPIKeys"
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
@@ -4472,7 +4555,7 @@ private extension SettingsStore {
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
-        static let parakeetFinalizationMode = "ParakeetFinalizationMode"
+        static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
@@ -4483,6 +4566,7 @@ private extension SettingsStore {
         static let playgroundUsed = "PlaygroundUsed"
         static let onboardingCompleted = "OnboardingCompleted"
         static let onboardingGeneration = "OnboardingGeneration"
+        static let manualOnboardingResetRequested = "ManualOnboardingResetRequested"
         static let onboardingCurrentStep = "OnboardingCurrentStep"
         static let onboardingAISkipped = "OnboardingAISkipped"
         static let onboardingPlaygroundValidated = "OnboardingPlaygroundValidated"
@@ -4531,6 +4615,7 @@ private extension SettingsStore {
         // Filler Words
         static let fillerWords = "FillerWords"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
+        static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
 
         /// GAAV Mode (removes capitalization and trailing punctuation)
         static let gaavModeEnabled = "GAAVModeEnabled"

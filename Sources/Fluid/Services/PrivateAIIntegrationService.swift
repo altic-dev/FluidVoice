@@ -19,6 +19,8 @@ actor PrivateAIIntegrationService {
         let apiKey: String
         let localModelPath: String?
         let usesStablePromptPrefixKVCache: Bool
+        let usesFluid1Boost: Bool
+        let contextTokenLimit: Int
     }
 
     struct AppContext: Sendable, Equatable {

@@ -99,6 +99,15 @@ final class SimpleUpdater {
         let url: URL
     }
 
+    struct ReleaseNote: Codable, Hashable {
+        let version: String
+        let title: String
+        let notes: String
+        let publishedAt: Date?
+        let url: URL?
+        let isPrerelease: Bool
+    }
+
     static let shared = SimpleUpdater()
     private init() {}
 
@@ -175,11 +184,62 @@ final class SimpleUpdater {
         }
     }
 
+    func fetchRecentReleaseNotes(
+        owner: String,
+        repo: String,
+        limit: Int = 6,
+        includePrerelease: Bool = false
+    ) async throws -> [ReleaseNote] {
+        let releases = try await self.fetchReleases(owner: owner, repo: repo)
+        let count = max(1, limit)
+
+        return self.sortedCandidateReleases(
+            releases,
+            includePrerelease: includePrerelease
+        )
+        .prefix(count)
+        .map { entry in
+            let release = entry.release
+            return ReleaseNote(
+                version: release.tag_name,
+                title: Self.nonEmpty(release.name) ?? release.tag_name,
+                notes: Self.nonEmpty(release.body) ?? "No release notes available.",
+                publishedAt: Self.parseGitHubDate(release.published_at),
+                url: release.html_url,
+                isPrerelease: release.prerelease
+            )
+        }
+    }
+
     // Allowed Apple Developer Team IDs for code-sign validation
     // Configured per your request; restrict to your actual Team ID only.
     private let allowedTeamIDs: Set<String> = [
         "V4J43B279J",
     ]
+
+    private static let githubDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let githubFractionalDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static func parseGitHubDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return self.githubDateFormatter.date(from: value) ??
+            self.githubFractionalDateFormatter.date(from: value)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
 
     // Fetch latest release notes from GitHub
     func fetchLatestReleaseNotes(

@@ -38,7 +38,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
 
     // MARK: - Lifecycle
 
-    func prepare(progressHandler: ((Double) -> Void)?) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         try Task.checkCancellation()
         let locale = self.selectedSpeechLocale()
         let localeID = self.normalizedIdentifier(for: locale)
@@ -72,11 +72,12 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
         if !isInstalled {
             DebugLogger.shared.info("Downloading speech model for locale: \(localeID)", source: "AppleSpeechAnalyzerProvider")
             if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                progressHandler?(.preparingDownload)
                 // Report progress periodically during download
                 let progress = downloader.progress
                 let progressTask = Task {
                     while !Task.isCancelled, !progress.isFinished, !progress.isCancelled {
-                        progressHandler?(progress.fractionCompleted)
+                        progressHandler?(.downloading(progress.fractionCompleted))
                         try? await Task.sleep(for: .milliseconds(100))
                     }
                 }
@@ -99,11 +100,12 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
                     throw error
                 }
                 try Task.checkCancellation()
-                progressHandler?(1.0)
+                progressHandler?(.optimizing)
             }
         }
 
         // 4. Get the best available audio format for conversion
+        progressHandler?(.loading)
         self.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
         try Task.checkCancellation()
         self.converter = BufferConverter()

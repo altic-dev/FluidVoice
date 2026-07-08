@@ -1055,6 +1055,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func startEditingProvider() {
+        if PrivateFeatures.privateAIProvider, self.selectedProviderID == PrivateAIProviderFeature.shared.providerID {
+            self.editProviderName = PrivateAIProviderFeature.displayName
+            self.editProviderBaseURL = ""
+            self.editProviderApiKey = ""
+            self.showingEditProvider = true
+            return
+        }
+
         // Handle built-in providers
         if ModelRepository.shared.isBuiltIn(self.selectedProviderID) {
             self.editProviderName = ModelRepository.shared.displayName(for: self.selectedProviderID)

@@ -106,6 +106,13 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         return text
     }
 
+    var clipboardText: String? {
+        let processed = self.processedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = self.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = processed.isEmpty ? raw : processed
+        return text.isEmpty ? nil : text
+    }
+
     /// Relative time string for display
     var relativeTimeString: String {
         let formatter = RelativeDateTimeFormatter()
@@ -182,6 +189,10 @@ final class TranscriptionHistoryStore: ObservableObject {
     var selectedEntry: TranscriptionHistoryEntry? {
         guard let id = selectedEntryID else { return nil }
         return self.entries.first(where: { $0.id == id })
+    }
+
+    var latestClipboardText: String? {
+        self.entries.first?.clipboardText
     }
 
     /// Add a new transcription entry

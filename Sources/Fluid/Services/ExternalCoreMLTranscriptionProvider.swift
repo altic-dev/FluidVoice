@@ -22,7 +22,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         self.modelOverride = modelOverride
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
@@ -71,6 +71,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                 "ExternalCoreML: loading Cohere models [splitCompute=\(computeSummary), maxAudioSamples=\(self.loadedManifest?.maxAudioSamples ?? 0)]",
                 source: "ExternalCoreML"
             )
+            progressHandler?(.loading)
             try await manager.loadModels(from: directory, computeConfiguration: spec.computeConfiguration)
             try Task.checkCancellation()
             self.cohereManager = manager
@@ -225,7 +226,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         for model: SettingsStore.SpeechModel,
         spec: ExternalCoreMLASRModelSpec,
         at directory: URL,
-        progressHandler: ((Double) -> Void)?
+        progressHandler: ((ModelPreparationProgress) -> Void)?
     ) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let isManagedDirectory = spec.isAppManagedArtifactsDirectory(directory)
@@ -278,6 +279,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             "ExternalCoreML: downloading missing artifacts from \(owner)/\(repo)",
             source: "ExternalCoreML"
         )
+        progressHandler?(.preparingDownload)
 
         let downloader = HuggingFaceModelDownloader(
             owner: owner,
@@ -292,10 +294,11 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             )
             // The managed-cache stamp below is part of installation truth. Keep the transfer
             // below 100% until structural validation succeeds and that stamp is persisted.
-            progressHandler?(min(progress, 0.999))
+            progressHandler?(.downloading(progress))
         }
         try Task.checkCancellation()
 
+        progressHandler?(.optimizing)
         do {
             try spec.validateArtifactsOrThrow(at: directory)
         } catch {
@@ -306,7 +309,6 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             spec.persistArtifactBundleStamp(at: directory)
         }
         SettingsStore.shared.setExternalCoreMLArtifactsDirectory(directory, for: model)
-        progressHandler?(1.0)
     }
 
     private static func artifactsDirectory(
@@ -453,7 +455,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
 
     init(modelOverride: SettingsStore.SpeechModel? = nil) {}
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         throw NSError(
             domain: "ExternalCoreMLTranscriptionProvider",
             code: -1,

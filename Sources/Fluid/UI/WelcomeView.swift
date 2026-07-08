@@ -1567,10 +1567,12 @@ struct OnboardingFlowView: View {
                             .frame(width: 608)
 
                             if self.isModelPreparationInProgress {
-                                Label("First setup can take a few minutes. Too long? Cancel and retry.", systemImage: "clock.arrow.circlepath")
+                                Label("Initial preparation can take a while to get your Mac ready for near-instant transcription.", systemImage: "clock.arrow.circlepath")
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(Color.white.opacity(0.58))
                                     .labelStyle(.titleAndIcon)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.86)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
                                     .background(
@@ -2167,12 +2169,15 @@ struct OnboardingFlowView: View {
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(Color.white.opacity(0.62))
                 }
-            } else if self.asr.isDownloadingModel, let progress = self.asr.downloadProgress {
+            } else if self.asr.isDownloadingModel,
+                      self.asr.modelPreparationPhase == .downloading,
+                      let progress = self.asr.downloadProgress
+            {
                 ProgressView(value: progress)
                     .tint(FluidOnboardingLandingColors.blue)
 
                 HStack(spacing: 6) {
-                    Text("Downloading \(Int(progress * 100))%")
+                    Text(self.asr.modelPreparationStatusText)
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(Color.white.opacity(0.56))
                         .lineLimit(1)
@@ -2187,7 +2192,7 @@ struct OnboardingFlowView: View {
                     Text(
                         isUninstalling
                             ? "Deleting..."
-                            : "Loading model..."
+                            : self.asr.modelPreparationStatusText
                     )
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(Color.white.opacity(0.62))

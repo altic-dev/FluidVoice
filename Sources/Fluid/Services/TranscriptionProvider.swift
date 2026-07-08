@@ -1,15 +1,40 @@
 import Foundation
 
+enum ModelPreparationPhase: Sendable, Equatable {
+    case preparingDownload
+    case downloading
+    case optimizing
+    case loading
+}
+
+struct ModelPreparationProgress: Sendable, Equatable {
+    let phase: ModelPreparationPhase
+    let fractionCompleted: Double?
+
+    init(phase: ModelPreparationPhase, fractionCompleted: Double? = nil) {
+        self.phase = phase
+        self.fractionCompleted = fractionCompleted.map { max(0.0, min(1.0, $0)) }
+    }
+
+    static let preparingDownload = ModelPreparationProgress(phase: .preparingDownload)
+    static let optimizing = ModelPreparationProgress(phase: .optimizing)
+    static let loading = ModelPreparationProgress(phase: .loading)
+
+    static func downloading(_ fractionCompleted: Double) -> ModelPreparationProgress {
+        ModelPreparationProgress(phase: .downloading, fractionCompleted: fractionCompleted)
+    }
+}
+
 /// Bridges provider callbacks into dependencies whose progress handlers are `@Sendable`.
 /// The callback is immutable; callers remain responsible for hopping to their UI actor.
 final class ModelPreparationProgressRelay: @unchecked Sendable {
-    private let handler: ((Double) -> Void)?
+    private let handler: ((ModelPreparationProgress) -> Void)?
 
-    init(_ handler: ((Double) -> Void)?) {
+    init(_ handler: ((ModelPreparationProgress) -> Void)?) {
         self.handler = handler
     }
 
-    func report(_ progress: Double) {
+    func report(_ progress: ModelPreparationProgress) {
         self.handler?(progress)
     }
 }
@@ -42,9 +67,8 @@ protocol TranscriptionProvider {
     /// Whether models are downloaded and ready
     var isReady: Bool { get }
 
-    /// Download/prepare models for transcription
-    /// - Parameter progressHandler: Optional callback for download progress (0.0 to 1.0)
-    func prepare(progressHandler: ((Double) -> Void)?) async throws
+    /// Download/prepare models for transcription.
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws
 
     /// Transcribe audio samples
     /// - Parameter samples: 16kHz mono PCM float samples
@@ -58,6 +82,10 @@ protocol TranscriptionProvider {
     /// Transcribe audio for final output when recording stops.
     /// Providers can use higher-quality passes (e.g., vocabulary rescoring) here.
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult
+
+    /// Transcribe audio captured while training dictionary replacements.
+    /// Providers can bypass final-output transforms that would distort the saved phrase.
+    func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult
 
     /// Whether this provider prefers to handle long-form file transcription itself.
     /// This is useful when the backend already has model-native long-audio chunking/reassembly.
@@ -89,6 +117,10 @@ extension TranscriptionProvider {
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         try await self.transcribe(samples)
+    }
+
+    func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        try await self.transcribeFinal(samples)
     }
 
     func transcribeFile(at fileURL: URL) async throws -> ASRTranscriptionResult {

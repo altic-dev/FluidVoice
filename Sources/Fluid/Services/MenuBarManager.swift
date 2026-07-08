@@ -17,6 +17,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     // Cached menu items to avoid rebuilding entire menu
     private var statusMenuItem: NSMenuItem?
+    private var copyLastTranscriptMenuItem: NSMenuItem?
     private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
     private var microphoneSubmenu: NSMenu?
@@ -48,9 +49,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var pendingProcessingShowOperation: DispatchWorkItem?
     /// Show immediately so users see the processing state right away.
     private let processingVisualDelay: DispatchTimeInterval = .milliseconds(0)
-    /// Debounce the hide so a fast transcription doesn't flash the processing
-    /// overlay for a single frame. 80ms is under the perception threshold but
-    /// long enough to coalesce a quick show->hide cycle.
+    /// Legacy debounce used by generic processing callers. Successful dictation
+    /// completion dispatches output first, then hides the overlay asynchronously.
     private let processingHideDelay: DispatchTimeInterval = .milliseconds(80)
 
     /// Subscription for forwarding audio levels to expanded command notch
@@ -303,6 +303,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Track processing state to prevent hide during AI refinement
         self.isProcessingActive = processing
+        self.updateMenuItemsText()
 
         if processing {
             self.pendingProcessingShowOperation?.cancel()
@@ -356,6 +357,44 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
+    /// Ends processing and waits for the recording overlay's exit transition.
+    /// Output paths normally call this asynchronously after insertion dispatch
+    /// so the exit animation cannot delay text delivery.
+    func finishProcessingAndHideOverlay() async {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        self.cancelPendingProcessingCompletionOperations()
+        self.isProcessingActive = false
+        self.overlayVisible = false
+
+        NotchOverlayManager.shared.setProcessing(false)
+        self.overlayBench("finish_hide_request")
+        await NotchOverlayManager.shared.hideAndWait()
+        self.overlayBench(
+            "finish_hide_complete elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))"
+        )
+    }
+
+    /// Ends processing without dismissing an actionable overlay, such as the
+    /// AI fallback state that offers reprocessing and settings actions.
+    func finishProcessingKeepingOverlayVisible() {
+        self.cancelPendingProcessingCompletionOperations()
+        self.isProcessingActive = false
+        // Keep the physical overlay visible, but release recording/processing
+        // ownership so the next recording can establish a fresh lifecycle.
+        self.overlayVisible = false
+        NotchOverlayManager.shared.setProcessing(false)
+        self.overlayBench("finish_keep_visible")
+    }
+
+    private func cancelPendingProcessingCompletionOperations() {
+        self.pendingProcessingShowOperation?.cancel()
+        self.pendingProcessingShowOperation = nil
+        self.pendingHideOperation?.cancel()
+        self.pendingHideOperation = nil
+        self.pendingShowOperation?.cancel()
+        self.pendingShowOperation = nil
+    }
+
     private func overlayBench(_ message: String) {
         DebugLogger.shared.benchmark("OVERLAY_BENCH", message: "manager \(message)", source: "OverlayBenchmark")
     }
@@ -389,6 +428,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Create menu
         self.menu = NSMenu()
+        self.menu?.autoenablesItems = false
         self.menu?.delegate = self
         statusItem.menu = self.menu
 
@@ -416,6 +456,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         if let statusItem = statusMenuItem {
             menu.addItem(statusItem)
         }
+
+        let copyLastTranscriptItem = NSMenuItem(
+            title: "Copy Last Transcript",
+            action: #selector(copyLastTranscript(_:)),
+            keyEquivalent: ""
+        )
+        copyLastTranscriptItem.target = self
+        menu.addItem(copyLastTranscriptItem)
+        self.copyLastTranscriptMenuItem = copyLastTranscriptItem
 
         menu.addItem(.separator())
 
@@ -497,6 +546,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         let hotkeyInfo = hotkeyDisplay.isEmpty ? "" : " (\(hotkeyDisplay))"
         let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
         self.statusMenuItem?.title = statusTitle
+        self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
         self.microphoneMenuItem?.isEnabled = true
 
         // Update rollback availability text
@@ -567,6 +617,22 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     private func currentPreferredInputUID(defaultInputUID: String?) -> String? {
         return defaultInputUID
+    }
+
+    private var canCopyLastTranscript: Bool {
+        !self.isProcessingActive && TranscriptionHistoryStore.shared.latestClipboardText != nil
+    }
+
+    @objc private func copyLastTranscript(_ sender: Any?) {
+        guard self.canCopyLastTranscript,
+              let text = TranscriptionHistoryStore.shared.latestClipboardText
+        else {
+            DebugLogger.shared.info("Menu action: Copy last transcript requested but history is empty", source: "MenuBarManager")
+            return
+        }
+
+        _ = ClipboardService.copyToClipboard(text)
+        DebugLogger.shared.info("Menu action: Copied latest transcription to clipboard", source: "MenuBarManager")
     }
 
     @objc private func selectMicrophone(_ sender: NSMenuItem) {

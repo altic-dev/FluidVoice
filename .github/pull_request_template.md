@@ -1,25 +1,33 @@
+<!--
+PRs that do not follow this template will be blocked by the PR Policy check.
+If the missing information is not fixed after 48 hours, the PR may be closed.
+-->
+
 ## Description
-Brief description of what this PR does.
+Brief description of what this PR does and why it is needed.
 
 ## Type of Change
-- [ ] 🐞 Bug fix (non-breaking change which fixes an issue)
-- [ ] ✨ New feature (non-breaking change which adds functionality)
-- [ ] 💥 Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [ ] 🐞 Bug fix
+- [ ] ✨ New feature
+- [ ] 💥 Breaking change
 - [ ] 🧹 Chore
 - [ ] 📝 Documentation update
 
-## Related Issues
-- Closes #(issue number if applicable)
+## Related Issue or Discussion
+Closes #(issue number), or links to an accepted Discussion/roadmap item.
 
 ## Testing
 - [ ] Tested on Intel Mac
 - [ ] Tested on Apple Silicon Mac
-- [ ] Tested on macOS [version]
+- [ ] Tested on macOS version:
 - [ ] Ran linter locally: `swiftlint --strict --config .swiftlint.yml Sources`
 - [ ] Ran formatter locally: `swiftformat --config .swiftformat Sources`
+- [ ] Ran tests locally:
+
+## Screenshots / Video
+Attach screenshots or a video for UI, UX, settings, onboarding, overlay, menu bar, or visual behavior changes.
+
+- [ ] No UI/visual changes; screenshots/video are not applicable.
 
 ## Notes
-- Add any important reviewer context, rollout notes, or known tradeoffs here.
-
-## Screenshots / Video 
-Add screenshots or Video recording of the app after you have made your changes 
+Add reviewer context, rollout notes, or known tradeoffs here.

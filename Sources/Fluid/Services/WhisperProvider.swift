@@ -74,7 +74,7 @@ final class WhisperProvider: TranscriptionProvider {
         return expectedBytes.map { sizeBytes == $0 } ?? false
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         // CRITICAL: Capture the target model at start to use consistently throughout this method.
         // This prevents race conditions where SettingsStore could change after await points.
@@ -109,7 +109,10 @@ final class WhisperProvider: TranscriptionProvider {
         // Download model if not present
         if !FileManager.default.fileExists(atPath: self.modelURL.path) {
             DebugLogger.shared.info("WhisperProvider: Downloading Whisper model...", source: "WhisperProvider")
-            try await self.downloadModel(progressHandler: progressHandler)
+            progressHandler?(.preparingDownload)
+            try await self.downloadModel { progress in
+                progressHandler?(.downloading(progress))
+            }
         }
 
         guard self.isModelFileValid(at: self.modelURL) else {
@@ -150,6 +153,7 @@ final class WhisperProvider: TranscriptionProvider {
 
         // Load the model
         DebugLogger.shared.info("WhisperProvider: Loading Whisper model...", source: "WhisperProvider")
+        progressHandler?(.loading)
         self.whisper = Whisper(fromFileURL: self.modelURL)
 
         try Task.checkCancellation()

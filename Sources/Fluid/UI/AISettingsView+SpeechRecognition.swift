@@ -369,11 +369,19 @@ extension VoiceEngineSettingsView {
                             Text("Cancelling…")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
-                        } else {
-                            ProgressView(value: self.viewModel.downloadProgress)
+                        } else if self.viewModel.asr.modelPreparationPhase == .downloading,
+                                  let progress = self.viewModel.asr.downloadProgress
+                        {
+                            ProgressView(value: progress)
                                 .progressViewStyle(.linear)
                                 .frame(width: 90)
-                            Text("\(Int(self.viewModel.downloadProgress * 100))%")
+                            Text("\(Int(progress * 100))%")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        } else {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text(self.viewModel.asr.modelPreparationStatusText)
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
@@ -401,7 +409,10 @@ extension VoiceEngineSettingsView {
                             Text("Cancelling…")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
-                        } else if let progress = self.viewModel.asr.downloadProgress, self.viewModel.asr.isDownloadingModel {
+                        } else if self.viewModel.asr.isDownloadingModel,
+                                  self.viewModel.asr.modelPreparationPhase == .downloading,
+                                  let progress = self.viewModel.asr.downloadProgress
+                        {
                             ProgressView(value: progress)
                                 .progressViewStyle(.linear)
                                 .frame(width: 90)
@@ -411,7 +422,7 @@ extension VoiceEngineSettingsView {
                         } else {
                             ProgressView()
                                 .controlSize(.mini)
-                            Text(self.viewModel.asr.isLoadingModel ? "Loading…" : "Downloading…")
+                            Text(self.viewModel.asr.modelPreparationStatusText)
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
@@ -713,6 +724,27 @@ extension VoiceEngineSettingsView {
 
     var fillerWordsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Auto-Convert Punctuation")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.voiceEngineTitleText)
+                    Text("Turn spoken punctuation like comma, slash, and at sign into symbols before AI cleanup")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.voiceEngineSecondaryText)
+                }
+                Spacer()
+                Toggle("", isOn: self.$viewModel.autoConvertPunctuationEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .onChange(of: self.viewModel.autoConvertPunctuationEnabled) { _, newValue in
+                        self.settings.autoConvertPunctuationEnabled = newValue
+                    }
+            }
+
+            Divider()
+                .opacity(0.2)
+
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Remove Filler Words")

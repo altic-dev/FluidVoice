@@ -112,7 +112,7 @@ final class NemotronProvider: TranscriptionProvider {
         return true
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
         guard let dir = self.cacheDirectory else {
@@ -144,6 +144,7 @@ final class NemotronProvider: TranscriptionProvider {
                 "Nemotron: artifacts missing; downloading from \(self.repositoryOwner)/\(self.repositoryName)",
                 source: "Nemotron"
             )
+            progressHandler?(.preparingDownload)
             let downloader = HuggingFaceModelDownloader(
                 owner: self.repositoryOwner,
                 repo: self.repositoryName,
@@ -153,18 +154,19 @@ final class NemotronProvider: TranscriptionProvider {
                 }
             )
             try await downloader.ensureModelsPresent(at: dir) { progress, _ in
-                progressHandler?(min(progress, 0.999))
+                progressHandler?(.downloading(progress))
             }
             try Task.checkCancellation()
             guard self.modelsExistOnDisk() else {
                 throw Self.makeError("Nemotron artifacts incomplete after download at \(dir.path).")
             }
-            progressHandler?(1.0)
+            progressHandler?(.optimizing)
         }
 
         self.maxTranscriptionSamples = Self.loadMaxAudioSamples(from: dir) ?? self.maxTranscriptionSamples
         let manager: NemotronStreamingAsrManager
         do {
+            progressHandler?(.loading)
             manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndNeuralEngine)
         } catch {
             guard Self.shouldRetryWithoutNeuralEngine(error) else {
@@ -667,7 +669,7 @@ final class NemotronProvider: TranscriptionProvider {
         self.mode = mode
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         throw Self.makeError("Nemotron requires Apple Silicon.")
     }
 

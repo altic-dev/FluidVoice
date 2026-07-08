@@ -2,52 +2,97 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-@MainActor
 final class TranscriptionSoundPlayer {
     static let shared = TranscriptionSoundPlayer()
 
+    private let playbackQueue = DispatchQueue(label: "app.fluidvoice.transcription-sounds", qos: .userInteractive)
     private var players: [String: AVAudioPlayer] = [:]
     private var savedSystemVolume: Float?
 
     private init() {}
 
     func playStartSound() {
-        guard SettingsStore.shared.enableTranscriptionSounds else { return }
-        let selected = SettingsStore.shared.transcriptionStartSound
+        let settings = SettingsStore.shared
+        guard settings.enableTranscriptionSounds else { return }
+        let selected = settings.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
-        self.play(soundName: soundName)
+        self.play(
+            soundName: soundName,
+            desiredVolume: settings.transcriptionSoundVolume,
+            independentVolume: settings.transcriptionSoundIndependentVolume
+        )
     }
 
     func playStopSound() {
-        guard SettingsStore.shared.enableTranscriptionSounds else { return }
-        let selected = SettingsStore.shared.transcriptionStartSound
+        let settings = SettingsStore.shared
+        guard settings.enableTranscriptionSounds else { return }
+        let selected = settings.transcriptionStartSound
         guard let soundName = selected.stopSoundFileName else { return }
-        self.play(soundName: soundName)
+        self.play(
+            soundName: soundName,
+            desiredVolume: settings.transcriptionSoundVolume,
+            independentVolume: settings.transcriptionSoundIndependentVolume
+        )
     }
 
     /// Preview a specific sound at the current volume setting (used in Settings UI).
     func playPreview(sound: SettingsStore.TranscriptionStartSound) {
         guard let soundName = sound.startSoundFileName else { return }
-        self.play(soundName: soundName)
+        let settings = SettingsStore.shared
+        self.play(
+            soundName: soundName,
+            desiredVolume: settings.transcriptionSoundVolume,
+            independentVolume: settings.transcriptionSoundIndependentVolume
+        )
     }
 
     /// Preview current sound at a specific volume (used when slider is released).
     func playPreviewAtVolume(_ volume: Float) {
         let selected = SettingsStore.shared.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
-        self.play(soundName: soundName, overrideVolume: volume)
+        self.play(
+            soundName: soundName,
+            desiredVolume: volume,
+            independentVolume: SettingsStore.shared.transcriptionSoundIndependentVolume
+        )
     }
 
-    private func play(soundName: String, overrideVolume: Float? = nil) {
+    private func play(
+        soundName: String,
+        desiredVolume: Float,
+        independentVolume: Bool
+    ) {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        DebugLogger.shared.benchmark(
+            "APP_BENCH",
+            message: "sound_play_request sound=\(soundName)",
+            source: "AppBenchmark"
+        )
+
         guard let url = Bundle.main.url(forResource: soundName, withExtension: "m4a") else {
             DebugLogger.shared.error("Missing sound resource: \(soundName).m4a", source: "TranscriptionSoundPlayer")
             return
         }
 
-        let settings = SettingsStore.shared
-        let desiredVolume = overrideVolume ?? settings.transcriptionSoundVolume
+        self.playbackQueue.async { [weak self] in
+            self?.playOnPlaybackQueue(
+                soundName: soundName,
+                url: url,
+                desiredVolume: desiredVolume,
+                independentVolume: independentVolume,
+                startedAt: startedAt
+            )
+        }
+    }
 
-        if settings.transcriptionSoundIndependentVolume {
+    private func playOnPlaybackQueue(
+        soundName: String,
+        url: URL,
+        desiredVolume: Float,
+        independentVolume: Bool,
+        startedAt: TimeInterval
+    ) {
+        if independentVolume {
             let currentSystemVol = Self.getSystemVolume()
             guard currentSystemVol > 0.001 else { return }
             // Save current system volume and temporarily set it to desired level
@@ -66,17 +111,22 @@ final class TranscriptionSoundPlayer {
             }
 
             player.currentTime = 0
-            if settings.transcriptionSoundIndependentVolume {
+            if independentVolume {
                 player.volume = 1.0
             } else {
                 player.volume = desiredVolume
             }
             player.play()
+            DebugLogger.shared.benchmark(
+                "APP_BENCH",
+                message: "sound_play_dispatched sound=\(soundName) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                source: "AppBenchmark"
+            )
 
             // Restore system volume after the sound finishes
-            if settings.transcriptionSoundIndependentVolume, let saved = self.savedSystemVolume {
+            if independentVolume, let saved = self.savedSystemVolume {
                 let duration = player.duration
-                DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
+                self.playbackQueue.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
                     Self.setSystemVolume(saved)
                     self?.savedSystemVolume = nil
                 }

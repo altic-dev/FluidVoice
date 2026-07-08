@@ -943,6 +943,16 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
+                                        title: "Auto-Convert Punctuation",
+                                        description: "Turn spoken punctuation like comma, question mark, slash, and at sign into symbols before AI cleanup.",
+                                        isOn: Binding(
+                                            get: { SettingsStore.shared.autoConvertPunctuationEnabled },
+                                            set: { SettingsStore.shared.autoConvertPunctuationEnabled = $0 }
+                                        )
+                                    )
+                                    Divider().opacity(0.2)
+
+                                    self.optionToggleRow(
                                         title: "Space Between Dictations",
                                         description: "Add spacing so consecutive dictations chain without manually pressing the spacebar.",
                                         isOn: Binding(
@@ -1514,39 +1524,7 @@ struct SettingsView: View {
                             .foregroundStyle(.primary)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Dictation Processing Speed")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                }
-
-                                Spacer()
-
-                                Picker("", selection: Binding(
-                                    get: {
-                                        self.settings.selectedSpeechModel.supportsFastDictationProcessing
-                                            ? self.settings.parakeetFinalizationMode
-                                            : .stableFullFinal
-                                    },
-                                    set: { mode in
-                                        if self.settings.selectedSpeechModel.supportsFastDictationProcessing {
-                                            self.settings.parakeetFinalizationMode = mode
-                                        }
-                                    }
-                                )) {
-                                    ForEach(ParakeetFinalizationMode.allCases) { mode in
-                                        Text(mode.displayName).tag(mode)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 170, alignment: .trailing)
-                                .disabled(self.asr.isRunning || !self.settings.selectedSpeechModel.supportsFastDictationProcessing)
-                            }
-
-                            Text(self.settings.selectedSpeechModel.supportsFastDictationProcessing ? "Standard: most reliable. Fast: faster, but maybe inaccurate." : "Fast processing is available for Parakeet TDT v2 and v3.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
+                            self.lowLatencyAudioCaptureToggle
 
                             if self.asr.isRunning {
                                 Text("Settings are disabled during active recording")
@@ -2591,6 +2569,28 @@ struct FlowLayout: Layout {
 
         cache.containerSize = CGSize(width: maxWidth, height: y + rowHeight)
         cache.lastWidth = maxWidth
+    }
+}
+
+private extension SettingsView {
+    var lowLatencyAudioCaptureToggle: some View {
+        Group {
+            self.settingsToggleRow(
+                title: "Faster Recording Start",
+                description: "FluidVoice starts listening sooner, so your first word is less likely to be missed.",
+                footnote: "If your microphone does not work correctly, turn this off.",
+                isOn: Binding(
+                    get: { self.settings.experimentalDirectAudioCaptureEnabled },
+                    set: { enabled in
+                        self.settings.experimentalDirectAudioCaptureEnabled = enabled
+                        self.asr.refreshAudioCaptureBackendPreference()
+                    }
+                )
+            )
+            .disabled(self.asr.isRunning)
+
+            Divider().padding(.vertical, 8)
+        }
     }
 }
 

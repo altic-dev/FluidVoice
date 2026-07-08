@@ -1,0 +1,33 @@
+name: Issue Intake
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  issue-intake:
+    name: Issue Intake
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout policy from default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate issue intake
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/policy/enforce-issue-intake.mjs

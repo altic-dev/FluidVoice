@@ -16,6 +16,10 @@ Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 
 **Manual download:** [latest release](https://github.com/altic-dev/FluidVoice/releases/latest)
 
+> [!NOTE]
+> FluidVoice is on macOS today. **iOS and Windows are on the way** — join the waitlist to get notified when we launch: **[altic.dev/fluid/waitlist](https://www.altic.dev/fluid/waitlist)**
+
+
 > [!IMPORTANT]
 > This project is free and open source under GPLv3. If FluidVoice is useful to you, please star the repository — it helps visibility and keeps development going.
 
@@ -213,10 +217,10 @@ open Fluid.xcodeproj
 
 Build and run in Xcode. All dependencies are managed via Swift Package Manager.
 
-### Build Only (No Signing)
+Run the build using the script: `./build.sh`
 
 ```bash
-xcodebuild -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO
+./build.sh
 ```
 
 ---

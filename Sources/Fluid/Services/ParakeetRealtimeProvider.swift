@@ -20,7 +20,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         self.chunkSize = chunkSize
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
@@ -65,11 +65,13 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
             try await engine.loadModelsFromHuggingFace(progressHandler: { progress in
                 switch progress.phase {
                 case .listing:
-                    progressRelay.report(0.0)
+                    progressRelay.report(.preparingDownload)
                 case .downloading:
-                    progressRelay.report(max(0.0, min(1.0, progress.fractionCompleted * 2.0)))
+                    // FluidAudio reserves 0.0-0.5 for transfer bytes. Show percent only for that
+                    // real download phase, not for later Core ML work.
+                    progressRelay.report(.downloading(progress.fractionCompleted / 0.5))
                 case .compiling:
-                    progressRelay.report(1.0)
+                    progressRelay.report(.optimizing)
                 }
             })
         } catch {
@@ -262,7 +264,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
     var isAvailable: Bool { false }
     var isReady: Bool { false }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         throw NSError(domain: "ParakeetRealtimeProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Parakeet Flash requires Apple Silicon"])
     }
 

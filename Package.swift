@@ -17,10 +17,18 @@ let package = Package(
         .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.0.0"),
     ],
     targets: [
+        .target(
+            name: "CoreAudioCaptureSupport",
+            path: "Sources/CoreAudioCaptureSupport",
+            linkerSettings: [
+                .linkedFramework("CoreAudio"),
+            ]
+        ),
         .executableTarget(
             name: "FluidVoice",
             dependencies: [
                 "AppUpdater",
+                "CoreAudioCaptureSupport",
                 "FluidAudio",
                 "PromiseKit",
                 "DynamicNotchKit",

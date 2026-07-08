@@ -165,6 +165,7 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
     var selectedModelDefaultsKey: String { get }
     var localModelPathDefaultsKey: String { get }
     var prefixCacheDefaultsKey: String { get }
+    var boostDefaultsKey: String { get }
     var modelDirectoryName: String { get }
 
     func modelIDs() -> [String]
@@ -331,6 +332,7 @@ private struct UnavailablePrivateAIProviderFeature: PrivateAIProviderFeatureProv
     let selectedModelDefaultsKey = "PrivateAIProviderSelectedModelID"
     let localModelPathDefaultsKey = "PrivateAIProviderLocalModelPath"
     let prefixCacheDefaultsKey = "PrivateAIProviderPrefixKVCacheEnabled"
+    let boostDefaultsKey = "PrivateAIProviderBoostEnabled"
     let modelDirectoryName = "PrivateAIProvider"
 
     func modelIDs() -> [String] { [] }

@@ -1,0 +1,47 @@
+name: Close Stale Issues and PRs
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark and close stale issues and PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          days-before-stale: 14
+          days-before-close: 7
+          start-date: "2026-07-08T00:00:00Z"
+
+          stale-issue-label: stale
+          stale-pr-label: stale
+
+          stale-issue-message: >
+            This issue has been marked stale because it has had no activity for
+            21 days. It will be closed in 7 days if there is no further activity.
+            Add the `keep-open` or `pinned` label to prevent automatic closure.
+          stale-pr-message: >
+            This pull request has been marked stale because it has had no activity
+            for 21 days. It will be closed in 7 days if there is no further activity.
+            Add the `keep-open` or `pinned` label to prevent automatic closure.
+
+          close-issue-message: >
+            Closing this issue because it remained inactive for 7 days after
+            being marked stale.
+          close-pr-message: >
+            Closing this pull request because it remained inactive for 7 days
+            after being marked stale.
+
+          exempt-issue-labels: keep-open,pinned,needs reproduction
+          exempt-pr-labels: keep-open,pinned,needs PR template,needs screenshots
+          exempt-draft-pr: true
+          remove-stale-when-updated: true
+          close-issue-reason: not_planned
+          delete-branch: false
