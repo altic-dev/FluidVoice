@@ -220,6 +220,29 @@ extension HotkeyShortcut {
         return (mouseButton == 0 || mouseButton == 1) && self.relevantModifierFlags.isEmpty
     }
 
+    /// Key codes in the keyboard's function section (F-keys, navigation keys, arrows).
+    /// macOS auto-sets the `.function` modifier flag on key events for these keys even
+    /// when the Fn key is not held, so that flag alone does not indicate a real modifier.
+    static let functionSectionKeyCodes: Set<UInt16> = [
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, // F1–F12
+        105, 107, 113, 106, 64, 79, 80, 90, // F13–F20
+        114, 115, 116, 117, 119, 121, // Help, Home, Page Up, Forward Delete, End, Page Down
+        123, 124, 125, 126, // Left, Right, Down, Up
+    ]
+
+    /// True for a keyboard shortcut that would fire on a bare key press with no real
+    /// modifier held — the keyboard analogue of `isUnmodifiedLeftOrRightClick`. The
+    /// auto-injected `.function` flag on function-section keys does not count as a
+    /// modifier; modifier-only shortcuts (e.g. Right ⌥) are never bare.
+    var isUnmodifiedKeyboardKey: Bool {
+        guard !self.isMouseShortcut, self.modifierTriggerFlag == nil else { return false }
+        var meaningfulModifiers = self.relevantModifierFlags
+        if Self.functionSectionKeyCodes.contains(self.keyCode) {
+            meaningfulModifiers.subtract(.function)
+        }
+        return meaningfulModifiers.isEmpty
+    }
+
     var normalizedModifierKeyCodes: [UInt16] {
         guard !self.isMouseShortcut else { return [] }
         let normalized = Self.normalizedModifierKeyCodes(from: self.modifierKeyCodes)

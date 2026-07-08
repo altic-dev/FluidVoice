@@ -60,6 +60,43 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertTrue(modifiedLeftClick.matchesMouse(button: 0, modifiers: [.control]))
     }
 
+    func testUnmodifiedKeyboardKeysRequireModifiers() {
+        let bareLetter = HotkeyShortcut(keyCode: 3, modifierFlags: []) // F
+        let commandLetter = HotkeyShortcut(keyCode: 3, modifierFlags: [.command]) // ⌘F
+        let fnLetter = HotkeyShortcut(keyCode: 3, modifierFlags: [.function]) // real Fn + F
+        let bareSpace = HotkeyShortcut(keyCode: 49, modifierFlags: []) // Space
+
+        XCTAssertTrue(bareLetter.isUnmodifiedKeyboardKey)
+        XCTAssertFalse(commandLetter.isUnmodifiedKeyboardKey)
+        XCTAssertFalse(fnLetter.isUnmodifiedKeyboardKey)
+        XCTAssertTrue(bareSpace.isUnmodifiedKeyboardKey)
+    }
+
+    func testAutoInjectedFunctionFlagDoesNotCountAsModifier() {
+        // macOS sets .function automatically on events for function-section keys, so a
+        // bare arrow, F-key, or navigation key press arrives carrying that flag even
+        // though no modifier is held.
+        let bareLeftArrow = HotkeyShortcut(keyCode: 123, modifierFlags: [.function])
+        let bareF5 = HotkeyShortcut(keyCode: 96, modifierFlags: [.function])
+        let bareHome = HotkeyShortcut(keyCode: 115, modifierFlags: [.function])
+        let shiftedArrow = HotkeyShortcut(keyCode: 123, modifierFlags: [.function, .shift])
+
+        XCTAssertTrue(bareLeftArrow.isUnmodifiedKeyboardKey)
+        XCTAssertTrue(bareF5.isUnmodifiedKeyboardKey)
+        XCTAssertTrue(bareHome.isUnmodifiedKeyboardKey)
+        XCTAssertFalse(shiftedArrow.isUnmodifiedKeyboardKey)
+    }
+
+    func testModifierOnlyAndMouseShortcutsAreNeverUnmodifiedKeyboardKeys() {
+        let optionOnly = HotkeyShortcut(keyCode: 61, modifierFlags: []) // Right ⌥
+        let fnOnly = HotkeyShortcut(keyCode: 63, modifierFlags: []) // Fn
+        let mouseClick = HotkeyShortcut(mouseButton: 0, modifierFlags: [])
+
+        XCTAssertFalse(optionOnly.isUnmodifiedKeyboardKey)
+        XCTAssertFalse(fnOnly.isUnmodifiedKeyboardKey)
+        XCTAssertFalse(mouseClick.isUnmodifiedKeyboardKey)
+    }
+
     func testMouseShortcutDisplayIncludesModifiers() {
         let shortcut = HotkeyShortcut(mouseButton: 0, modifierFlags: [.control, .shift])
 
