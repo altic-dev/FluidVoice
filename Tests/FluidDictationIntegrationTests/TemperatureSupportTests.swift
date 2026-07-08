@@ -2,8 +2,8 @@
 import XCTest
 
 // Regression tests for the Anthropic `temperature` deprecation handling.
-// Newer Anthropic models (Opus 4.7+, Sonnet 5, Fable/Mythos 5) reject the `temperature`
-// parameter with HTTP 400 "`temperature` is deprecated for this model."
+// Newer Anthropic models (Opus 4.7+, Sonnet 5, Haiku 4.5, Fable/Mythos 5) reject the
+// `temperature` parameter with HTTP 400 "`temperature` is deprecated for this model."
 // See https://github.com/altic-dev/FluidVoice/issues/285 (Opus 4.7) — the same failure
 // recurred for Sonnet 5 because the check only matched claude-opus-4-7.
 // Sonnet 4.6 and older still accept `temperature` (verified against the live API)
@@ -18,8 +18,11 @@ final class TemperatureSupportTests: XCTestCase {
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-mythos-5",
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
             // Provider-prefixed and dotted IDs (e.g. OpenRouter) must match too
             "anthropic/claude-sonnet-5",
+            "anthropic/claude-haiku-4.5",
             "anthropic/claude-opus-4.7",
             "anthropic/claude-opus-4.8",
             "anthropic/claude-opus-4.8-fast",
@@ -46,6 +49,8 @@ final class TemperatureSupportTests: XCTestCase {
             "gpt-4.1",
             "claude-sonnet-4-6",
             "claude-sonnet-4-20250514",
+            // Haiku 3.5 uses the older claude-3-5-haiku naming and still accepts temperature
+            "claude-3-5-haiku-20241022",
             "gemini-2.5-flash",
             "llama3",
             // Dotted OpenRouter IDs for models that still accept temperature
