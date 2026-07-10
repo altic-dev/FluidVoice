@@ -67,16 +67,16 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
 
 <table>
   <tr>
+    <td width="50%" align="center"><b>Change Time & Name</b></td>
     <td width="50%" align="center"><b>Email Template</b></td>
-    <td width="50%" align="center"><b>Flowers</b></td>
   </tr>
   <tr>
     <td width="50%"><video src="https://github.com/user-attachments/assets/6c7a7c4c-17a8-453d-8eff-1aa1fa9f6077" width="100%"></video></td>
     <td width="50%"><video src="https://github.com/user-attachments/assets/36747e9d-1ea3-4d27-8d38-eaacb6d57285" width="100%"></video></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><b>Change Time & Name</b></td>
     <td width="50%" align="center"><b>Emoji</b></td>
+    <td width="50%" align="center"><b>Flowers</b></td>
   </tr>
   <tr>
     <td width="50%"><video src="https://github.com/user-attachments/assets/04e00f3d-a602-448d-9bde-50b5e8f61ac6" width="100%"></video></td>
