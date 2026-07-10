@@ -80,6 +80,47 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertNil(entry.clipboardText)
     }
 
+    // MARK: - HistoryCopy (copy-gesture text selection for the History list)
+
+    private func makeHistoryEntry(raw: String, processed: String, aiProcessed: Bool) -> TranscriptionHistoryEntry {
+        TranscriptionHistoryEntry(
+            rawText: raw,
+            processedText: processed,
+            appName: "Notes",
+            windowTitle: "Draft",
+            wasAIProcessed: aiProcessed
+        )
+    }
+
+    func testHistoryCopyTextPrefersProcessedText() {
+        let entry = self.makeHistoryEntry(raw: " raw ", processed: " processed ", aiProcessed: true)
+        XCTAssertEqual(HistoryCopy.text(for: entry), "processed")
+    }
+
+    func testHistoryCopyTextFallsBackToRawWhenProcessedEmpty() {
+        let entry = self.makeHistoryEntry(raw: " raw ", processed: "   ", aiProcessed: false)
+        XCTAssertEqual(HistoryCopy.text(for: entry), "raw")
+    }
+
+    func testHistoryCopyTextIsNilWhenBothEmpty() {
+        let entry = self.makeHistoryEntry(raw: "  ", processed: "  ", aiProcessed: false)
+        XCTAssertNil(HistoryCopy.text(for: entry))
+    }
+
+    func testHistoryCopyItemProvidersEmptyForNilSelection() {
+        XCTAssertTrue(HistoryCopy.itemProviders(for: nil).isEmpty)
+    }
+
+    func testHistoryCopyItemProvidersEmptyForEmptyEntry() {
+        let entry = self.makeHistoryEntry(raw: "  ", processed: "  ", aiProcessed: false)
+        XCTAssertTrue(HistoryCopy.itemProviders(for: entry).isEmpty)
+    }
+
+    func testHistoryCopyItemProvidersHasOneProviderForNonEmptyEntry() {
+        let entry = self.makeHistoryEntry(raw: " raw ", processed: " processed ", aiProcessed: true)
+        XCTAssertEqual(HistoryCopy.itemProviders(for: entry).count, 1)
+    }
+
     func testTranscriptionStartSound_noneOptionHasNoFile() {
         XCTAssertEqual(SettingsStore.TranscriptionStartSound.none.displayName, "None")
         XCTAssertNil(SettingsStore.TranscriptionStartSound.none.startSoundFileName)
