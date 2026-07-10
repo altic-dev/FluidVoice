@@ -11,7 +11,6 @@ struct TranscriptionHistoryView: View {
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
     @State private var selectedEntryID: UUID?
-    @State private var recentlyCopiedEntryID: UUID?
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
         self.historyStore.search(query: self.searchQuery)
@@ -179,19 +178,6 @@ struct TranscriptionHistoryView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(isSelected ? .white : Color.orange)
                             .help(entry.aiProcessingError ?? "")
-                    }
-
-                    if self.recentlyCopiedEntryID == entry.id {
-                        Text("Copied")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(isSelected ? .white : self.theme.palette.accent)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(isSelected ? .white.opacity(0.2) : self.theme.palette.accent.opacity(0.15))
-                            )
-                            .transition(.opacity)
                     }
 
                     Spacer()
@@ -362,19 +348,6 @@ struct TranscriptionHistoryView: View {
                     HStack(spacing: 8) {
                         Text("Transcription Details")
                             .font(.system(size: 18, weight: .semibold))
-
-                        if self.recentlyCopiedEntryID == entry.id {
-                            Text("Copied")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(self.theme.palette.accent)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(self.theme.palette.accent.opacity(0.15))
-                                )
-                                .transition(.opacity)
-                        }
 
                         Spacer()
 
@@ -613,14 +586,8 @@ struct TranscriptionHistoryView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func flashCopied(_ id: UUID) {
-        self.recentlyCopiedEntryID = id
-        Task {
-            try? await Task.sleep(for: .seconds(1.2))
-            if self.recentlyCopiedEntryID == id {
-                self.recentlyCopiedEntryID = nil
-            }
-        }
+    private func flashCopied(_: UUID) {
+        CursorCopyToast.shared.show()
     }
 
     private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
