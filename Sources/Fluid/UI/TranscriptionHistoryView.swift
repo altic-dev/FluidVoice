@@ -217,14 +217,14 @@ struct TranscriptionHistoryView: View {
                 self.listFocused = true
                 if let text = HistoryCopy.text(for: entry) {
                     self.copyToClipboard(text)
-                    self.flashCopied(entry.id)
+                    self.flashCopied()
                 }
             }
         )
         .contextMenu {
             Button {
                 self.copyToClipboard(entry.processedText)
-                self.flashCopied(entry.id)
+                self.flashCopied()
             } label: {
                 Label(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text", systemImage: "doc.on.doc")
             }
@@ -232,14 +232,14 @@ struct TranscriptionHistoryView: View {
             if entry.wasAIProcessed {
                 Button {
                     self.copyToClipboard(entry.rawText)
-                    self.flashCopied(entry.id)
+                    self.flashCopied()
                 } label: {
                     Label("Copy Raw Text", systemImage: "doc.on.doc.fill")
                 }
 
                 Button {
                     self.copyToClipboard(self.combinedText(for: entry))
-                    self.flashCopied(entry.id)
+                    self.flashCopied()
                 } label: {
                     Label("Copy Both", systemImage: "doc.on.doc")
                 }
@@ -361,7 +361,7 @@ struct TranscriptionHistoryView: View {
 
                         Button {
                             self.copyToClipboard(entry.processedText)
-                            self.flashCopied(entry.id)
+                            self.flashCopied()
                         } label: {
                             Label(entry.wasAIProcessed ? "Copy AI" : "Copy", systemImage: "doc.on.doc")
                                 .font(.system(size: 12, weight: .medium))
@@ -402,7 +402,7 @@ struct TranscriptionHistoryView: View {
                         if entry.wasAIProcessed {
                             Button {
                                 self.copyToClipboard(entry.rawText)
-                                self.flashCopied(entry.id)
+                                self.flashCopied()
                             } label: {
                                 Label("Raw", systemImage: "doc.on.doc.fill")
                                     .font(.system(size: 12, weight: .medium))
@@ -412,7 +412,7 @@ struct TranscriptionHistoryView: View {
 
                             Button {
                                 self.copyToClipboard(self.combinedText(for: entry))
-                                self.flashCopied(entry.id)
+                                self.flashCopied()
                             } label: {
                                 Label("Both", systemImage: "doc.on.doc")
                                     .font(.system(size: 12, weight: .medium))
@@ -594,7 +594,7 @@ struct TranscriptionHistoryView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func flashCopied(_: UUID) {
+    private func flashCopied() {
         CursorCopyToast.shared.show()
     }
 
@@ -623,8 +623,10 @@ struct TranscriptionHistoryView: View {
     }
 
     private func copyCommandProviders() -> [NSItemProvider] {
-        guard let entry = self.selectedEntry, let text = HistoryCopy.text(for: entry) else { return [] }
-        self.flashCopied(entry.id)
+        guard self.selectedEntryID != nil,
+              let entry = self.selectedEntry,
+              let text = HistoryCopy.text(for: entry) else { return [] }
+        self.flashCopied()
         return [NSItemProvider(object: text as NSString)]
     }
 

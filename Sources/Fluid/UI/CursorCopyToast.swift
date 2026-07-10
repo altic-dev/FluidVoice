@@ -15,6 +15,7 @@ final class CursorCopyToast {
 
     private var panel: NSPanel?
     private var dismissTask: Task<Void, Never>?
+    private var generation = 0
 
     private init() {}
 
@@ -23,6 +24,7 @@ final class CursorCopyToast {
     func show(_ text: String = "Copied") {
         let panel = self.panel ?? self.makePanel()
         self.panel = panel
+        self.generation &+= 1
 
         let host = NSHostingView(rootView: CursorCopyToastView(text: text))
         host.layout()
@@ -57,10 +59,13 @@ final class CursorCopyToast {
 
     private func dismiss() {
         guard let panel = self.panel else { return }
+        let dismissGeneration = self.generation
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             panel.animator().alphaValue = 0
-        } completionHandler: {
+        } completionHandler: { [weak self] in
+            // Skip hiding if a newer show() re-displayed the toast during the fade.
+            guard let self, self.generation == dismissGeneration else { return }
             panel.orderOut(nil)
         }
     }
