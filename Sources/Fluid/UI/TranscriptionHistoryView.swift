@@ -197,6 +197,14 @@ struct TranscriptionHistoryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                self.selectedEntryID = entry.id
+                if let text = HistoryCopy.text(for: entry) {
+                    self.copyToClipboard(text)
+                }
+            }
+        )
         .contextMenu {
             Button {
                 self.copyToClipboard(entry.processedText)
