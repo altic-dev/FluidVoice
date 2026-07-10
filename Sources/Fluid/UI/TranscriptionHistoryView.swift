@@ -11,6 +11,7 @@ struct TranscriptionHistoryView: View {
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
     @State private var selectedEntryID: UUID?
+    @State private var recentlyCopiedEntryID: UUID?
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
         self.historyStore.search(query: self.searchQuery)
@@ -130,7 +131,11 @@ struct TranscriptionHistoryView: View {
             .padding(.vertical, 6)
         }
         .onCopyCommand {
-            HistoryCopy.itemProviders(for: self.selectedEntry)
+            let providers = HistoryCopy.itemProviders(for: self.selectedEntry)
+            if !providers.isEmpty, let id = self.selectedEntry?.id {
+                self.flashCopied(id)
+            }
+            return providers
         }
     }
 
@@ -176,6 +181,19 @@ struct TranscriptionHistoryView: View {
                             .help(entry.aiProcessingError ?? "")
                     }
 
+                    if self.recentlyCopiedEntryID == entry.id {
+                        Text("Copied")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(isSelected ? .white : self.theme.palette.accent)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(isSelected ? .white.opacity(0.2) : self.theme.palette.accent.opacity(0.15))
+                            )
+                            .transition(.opacity)
+                    }
+
                     Spacer()
 
                     Text(entry.relativeTimeString)
@@ -205,6 +223,7 @@ struct TranscriptionHistoryView: View {
                 self.selectedEntryID = entry.id
                 if let text = HistoryCopy.text(for: entry) {
                     self.copyToClipboard(text)
+                    self.flashCopied(entry.id)
                 }
             }
         )
@@ -573,6 +592,16 @@ struct TranscriptionHistoryView: View {
     private func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func flashCopied(_ id: UUID) {
+        self.recentlyCopiedEntryID = id
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if self.recentlyCopiedEntryID == id {
+                self.recentlyCopiedEntryID = nil
+            }
+        }
     }
 
     private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
