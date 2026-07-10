@@ -129,13 +129,6 @@ struct TranscriptionHistoryView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
-        .onCopyCommand {
-            let providers = HistoryCopy.itemProviders(for: self.selectedEntry)
-            if !providers.isEmpty, let id = self.selectedEntry?.id {
-                self.flashCopied(id)
-            }
-            return providers
-        }
     }
 
     private func entryRow(_ entry: TranscriptionHistoryEntry) -> some View {

@@ -107,20 +107,6 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertNil(HistoryCopy.text(for: entry))
     }
 
-    func testHistoryCopyItemProvidersEmptyForNilSelection() {
-        XCTAssertTrue(HistoryCopy.itemProviders(for: nil).isEmpty)
-    }
-
-    func testHistoryCopyItemProvidersEmptyForEmptyEntry() {
-        let entry = self.makeHistoryEntry(raw: "  ", processed: "  ", aiProcessed: false)
-        XCTAssertTrue(HistoryCopy.itemProviders(for: entry).isEmpty)
-    }
-
-    func testHistoryCopyItemProvidersHasOneProviderForNonEmptyEntry() {
-        let entry = self.makeHistoryEntry(raw: " raw ", processed: " processed ", aiProcessed: true)
-        XCTAssertEqual(HistoryCopy.itemProviders(for: entry).count, 1)
-    }
-
     func testTranscriptionStartSound_noneOptionHasNoFile() {
         XCTAssertEqual(SettingsStore.TranscriptionStartSound.none.displayName, "None")
         XCTAssertNil(SettingsStore.TranscriptionStartSound.none.startSoundFileName)
