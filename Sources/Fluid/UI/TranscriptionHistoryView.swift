@@ -230,6 +230,7 @@ struct TranscriptionHistoryView: View {
         .contextMenu {
             Button {
                 self.copyToClipboard(entry.processedText)
+                self.flashCopied(entry.id)
             } label: {
                 Label(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text", systemImage: "doc.on.doc")
             }
@@ -237,12 +238,14 @@ struct TranscriptionHistoryView: View {
             if entry.wasAIProcessed {
                 Button {
                     self.copyToClipboard(entry.rawText)
+                    self.flashCopied(entry.id)
                 } label: {
                     Label("Copy Raw Text", systemImage: "doc.on.doc.fill")
                 }
 
                 Button {
                     self.copyToClipboard(self.combinedText(for: entry))
+                    self.flashCopied(entry.id)
                 } label: {
                     Label("Copy Both", systemImage: "doc.on.doc")
                 }
@@ -360,10 +363,24 @@ struct TranscriptionHistoryView: View {
                         Text("Transcription Details")
                             .font(.system(size: 18, weight: .semibold))
 
+                        if self.recentlyCopiedEntryID == entry.id {
+                            Text("Copied")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(self.theme.palette.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(self.theme.palette.accent.opacity(0.15))
+                                )
+                                .transition(.opacity)
+                        }
+
                         Spacer()
 
                         Button {
                             self.copyToClipboard(entry.processedText)
+                            self.flashCopied(entry.id)
                         } label: {
                             Label(entry.wasAIProcessed ? "Copy AI" : "Copy", systemImage: "doc.on.doc")
                                 .font(.system(size: 12, weight: .medium))
@@ -404,6 +421,7 @@ struct TranscriptionHistoryView: View {
                         if entry.wasAIProcessed {
                             Button {
                                 self.copyToClipboard(entry.rawText)
+                                self.flashCopied(entry.id)
                             } label: {
                                 Label("Raw", systemImage: "doc.on.doc.fill")
                                     .font(.system(size: 12, weight: .medium))
@@ -413,6 +431,7 @@ struct TranscriptionHistoryView: View {
 
                             Button {
                                 self.copyToClipboard(self.combinedText(for: entry))
+                                self.flashCopied(entry.id)
                             } label: {
                                 Label("Both", systemImage: "doc.on.doc")
                                     .font(.system(size: 12, weight: .medium))
