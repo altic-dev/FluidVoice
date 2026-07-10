@@ -107,6 +107,34 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertNil(HistoryCopy.text(for: entry))
     }
 
+    func testHistoryNextIndexDownFromNilSelectsFirst() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: nil, count: 3, moveUp: false), 0)
+    }
+
+    func testHistoryNextIndexUpFromNilSelectsFirst() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: nil, count: 3, moveUp: true), 0)
+    }
+
+    func testHistoryNextIndexDownMovesToNext() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: 0, count: 3, moveUp: false), 1)
+    }
+
+    func testHistoryNextIndexUpMovesToPrevious() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: 2, count: 3, moveUp: true), 1)
+    }
+
+    func testHistoryNextIndexDownClampsAtEnd() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: 2, count: 3, moveUp: false), 2)
+    }
+
+    func testHistoryNextIndexUpClampsAtStart() {
+        XCTAssertEqual(HistoryCopy.nextIndex(current: 0, count: 3, moveUp: true), 0)
+    }
+
+    func testHistoryNextIndexEmptyListIsNil() {
+        XCTAssertNil(HistoryCopy.nextIndex(current: nil, count: 0, moveUp: false))
+    }
+
     func testTranscriptionStartSound_noneOptionHasNoFile() {
         XCTAssertEqual(SettingsStore.TranscriptionStartSound.none.displayName, "None")
         XCTAssertNil(SettingsStore.TranscriptionStartSound.none.startSoundFileName)

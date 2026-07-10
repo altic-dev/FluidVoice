@@ -11,6 +11,7 @@ struct TranscriptionHistoryView: View {
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
     @State private var selectedEntryID: UUID?
+    @FocusState private var listFocused: Bool
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
         self.historyStore.search(query: self.searchQuery)
@@ -120,14 +121,26 @@ struct TranscriptionHistoryView: View {
     // MARK: - Entry List
 
     private var entryListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                ForEach(self.filteredEntries) { entry in
-                    self.entryRow(entry)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(self.filteredEntries) { entry in
+                        self.entryRow(entry)
+                            .id(entry.id)
+                    }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .focusable()
+            .focusEffectDisabled()
+            .focused(self.$listFocused)
+            .onMoveCommand { direction in
+                self.moveSelection(direction, scrollProxy: proxy)
+            }
+            .onCopyCommand {
+                self.copyCommandProviders()
+            }
         }
     }
 
@@ -138,6 +151,7 @@ struct TranscriptionHistoryView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 self.selectedEntryID = entry.id
             }
+            self.listFocused = true
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 // Top row: App name and time
@@ -200,6 +214,7 @@ struct TranscriptionHistoryView: View {
         .simultaneousGesture(
             TapGesture(count: 2).onEnded {
                 self.selectedEntryID = entry.id
+                self.listFocused = true
                 if let text = HistoryCopy.text(for: entry) {
                     self.copyToClipboard(text)
                     self.flashCopied(entry.id)
@@ -581,6 +596,36 @@ struct TranscriptionHistoryView: View {
 
     private func flashCopied(_: UUID) {
         CursorCopyToast.shared.show()
+    }
+
+    private func moveSelection(_ direction: MoveCommandDirection, scrollProxy: ScrollViewProxy) {
+        let entries = self.filteredEntries
+        let currentIndex = self.selectedEntry.flatMap { selected in
+            entries.firstIndex(where: { $0.id == selected.id })
+        }
+        let moveUp: Bool
+        switch direction {
+        case .up:
+            moveUp = true
+        case .down:
+            moveUp = false
+        default:
+            return
+        }
+        guard let newIndex = HistoryCopy.nextIndex(current: currentIndex, count: entries.count, moveUp: moveUp) else {
+            return
+        }
+        let id = entries[newIndex].id
+        self.selectedEntryID = id
+        withAnimation(.easeInOut(duration: 0.15)) {
+            scrollProxy.scrollTo(id, anchor: .center)
+        }
+    }
+
+    private func copyCommandProviders() -> [NSItemProvider] {
+        guard let entry = self.selectedEntry, let text = HistoryCopy.text(for: entry) else { return [] }
+        self.flashCopied(entry.id)
+        return [NSItemProvider(object: text as NSString)]
     }
 
     private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
