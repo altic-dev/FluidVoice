@@ -223,7 +223,7 @@ struct TranscriptionHistoryView: View {
         )
         .contextMenu {
             Button {
-                self.copyToClipboard(entry.processedText)
+                self.copyToClipboard(entry.clipboardText ?? entry.processedText)
                 self.flashCopied()
             } label: {
                 Label(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text", systemImage: "doc.on.doc")
@@ -360,7 +360,7 @@ struct TranscriptionHistoryView: View {
                         Spacer()
 
                         Button {
-                            self.copyToClipboard(entry.processedText)
+                            self.copyToClipboard(entry.clipboardText ?? entry.processedText)
                             self.flashCopied()
                         } label: {
                             Label(entry.wasAIProcessed ? "Copy AI" : "Copy", systemImage: "doc.on.doc")
@@ -600,8 +600,8 @@ struct TranscriptionHistoryView: View {
 
     private func moveSelection(_ direction: MoveCommandDirection, scrollProxy: ScrollViewProxy) {
         let entries = self.filteredEntries
-        let currentIndex = self.selectedEntry.flatMap { selected in
-            entries.firstIndex(where: { $0.id == selected.id })
+        let currentIndex = self.selectedEntryID.flatMap { id in
+            entries.firstIndex(where: { $0.id == id })
         }
         let moveUp: Bool
         switch direction {
