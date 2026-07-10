@@ -129,6 +129,9 @@ struct TranscriptionHistoryView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
+        .onCopyCommand {
+            HistoryCopy.itemProviders(for: self.selectedEntry)
+        }
     }
 
     private func entryRow(_ entry: TranscriptionHistoryEntry) -> some View {
