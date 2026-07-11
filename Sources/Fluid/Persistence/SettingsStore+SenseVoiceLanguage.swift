@@ -3,7 +3,9 @@ import Foundation
 extension SettingsStore {
     /// Language selection for the SenseVoiceSmall model. The raw values are stable
     /// persistence keys; `embedIndex` maps to the model's `lid_int_dict` language
-    /// embedding input (auto = 0, Mandarin/zh = 3, Cantonese/yue = 13).
+    /// embedding input (auto = 0, Mandarin/zh = 3, Cantonese/yue = 7). Verified
+    /// against vocab.json: token `<|yue|>` → embed index 7 (index 13 is
+    /// `<|nospeech|>`, not Cantonese).
     enum SenseVoiceLanguage: String, CaseIterable, Identifiable, Codable {
         case cantonese
         case mandarin
@@ -16,7 +18,7 @@ extension SettingsStore {
             switch self {
             case .auto: return 0
             case .mandarin: return 3
-            case .cantonese: return 13
+            case .cantonese: return 7
             }
         }
 
