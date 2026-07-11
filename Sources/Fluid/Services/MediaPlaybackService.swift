@@ -306,11 +306,14 @@ final class MediaPlaybackService {
         case let .ducked(original, applied):
             // Only restore if the volume is still roughly where we left it. If the
             // user adjusted it during dictation, respect their choice and leave it.
-            if let current = self.volumeController.reread(applied)?.averageLevel,
-               abs(current - applied.averageLevel) > 0.02
-            {
+            // Mute is checked separately from the tolerance: a deeply ducked level can
+            // sit within 0.02 of zero, and restoring over a mute would turn the user's
+            // audio back on against their explicit intent.
+            let current = self.volumeController.reread(applied)?.averageLevel
+            let userMuted = current.map { $0 <= 0.001 && applied.averageLevel > 0.001 } ?? false
+            if let current, userMuted || abs(current - applied.averageLevel) > 0.02 {
                 DebugLogger.shared.info(
-                    "MediaPlaybackService: Output volume changed during dictation (\(applied.averageLevel) -> \(current)), leaving as-is",
+                    "MediaPlaybackService: Output volume changed during dictation (\(applied.averageLevel) -> \(current)\(userMuted ? ", muted" : "")), leaving as-is",
                     source: "MediaPlaybackService"
                 )
             } else {
