@@ -11,6 +11,7 @@
 		7C1C72F22EECBD1300E3BF4D /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = 7C1C72F12EECBD1300E3BF4D /* SwiftWhisper */; };
 		7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
 		7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		7C5AF14C2F15041600DE21B0 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
 		7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */; };
 		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
@@ -73,6 +74,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		7C5AF14D2F15041600DE21B0 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				7C5AF14C2F15041600DE21B0 /* MediaRemoteAdapter in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXGroup section */
 		7C078D862E3B339200FB7CAC = {
@@ -148,6 +163,7 @@
 				7C078D8B2E3B339200FB7CAC /* Sources */,
 				7C078D8C2E3B339200FB7CAC /* Frameworks */,
 				7C078D8D2E3B339200FB7CAC /* Resources */,
+				7C5AF14D2F15041600DE21B0 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
