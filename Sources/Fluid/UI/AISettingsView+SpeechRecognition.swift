@@ -569,6 +569,25 @@ extension VoiceEngineSettingsView {
             .buttonStyle(.plain)
         } else if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
             self.nemotronLanguagePickerButton
+        } else if model == .senseVoiceSmall {
+            Menu {
+                ForEach(SettingsStore.SenseVoiceLanguage.allCases) { language in
+                    Button {
+                        guard language != self.settings.senseVoiceLanguage else { return }
+                        self.settings.senseVoiceLanguage = language
+                    } label: {
+                        HStack {
+                            Text(language.displayName)
+                            if language == self.settings.senseVoiceLanguage {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                self.languageChipLabel(self.settings.senseVoiceLanguage.displayName)
+            }
+            .buttonStyle(.plain)
         }
     }
 
