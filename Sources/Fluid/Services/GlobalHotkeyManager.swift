@@ -592,6 +592,19 @@ final class GlobalHotkeyManager: NSObject {
             return tapRecoveryResult
         }
 
+        // Fast path: pass through system shortcuts (Cmd+Tab, Cmd+Shift+Tab, Cmd+Space, etc.)
+        // to avoid adding latency to app switching, especially with VoiceOver.
+        if type == .keyDown || type == .keyUp {
+            let flags = event.flags
+            if flags.contains(.maskCommand) {
+                let kc = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                // Tab(48), Space(49), Backtick(50 — Cmd+` for window cycling)
+                if kc == 48 || kc == 49 || kc == 50 {
+                    return Unmanaged.passUnretained(event)
+                }
+            }
+        }
+
         if self.isShortcutCaptureActiveProvider?() ?? false {
             self.resetModifierOnlyShortcutTracking()
             return Unmanaged.passUnretained(event)

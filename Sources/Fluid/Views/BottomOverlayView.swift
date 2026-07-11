@@ -339,6 +339,8 @@ final class BottomOverlayWindowController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayView()
         let hostingView = BottomOverlayHostingView(rootView: contentView)
@@ -611,6 +613,8 @@ final class BottomOverlayPromptMenuController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayPromptMenuView(
             promptMode: self.resolvedPromptMode(),
@@ -888,6 +892,8 @@ final class BottomOverlayModeMenuController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayModeMenuView(
             maxWidth: self.menuMaxWidth,
@@ -1152,6 +1158,8 @@ final class BottomOverlayActionsMenuController {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
+        panel.setAccessibilityElement(false)
+        panel.setAccessibilityRole(.unknown)
 
         let contentView = BottomOverlayActionsMenuView(
             maxWidth: self.menuMaxWidth,
@@ -3088,6 +3096,7 @@ struct BottomOverlayView: View {
         //         NotchOverlayManager.shared.onNotchClicked?()
         //     }
         // }
+        .accessibilityHidden(true)
     }
 }
 
