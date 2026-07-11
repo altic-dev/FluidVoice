@@ -249,8 +249,17 @@ final class ModelRepository {
 
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")
 
-        // Construct the models endpoint URL
-        let urlString = baseURL.hasSuffix("/") ? "\(baseURL)models" : "\(baseURL)/models"
+        // Construct the models endpoint URL. Users frequently paste the full chat
+        // endpoint (…/chat/completions or …/responses) as the base URL; append `/models`
+        // to that verbatim and it 404s. Strip a trailing endpoint segment (and slash) so
+        // the list resolves to <root>/models.
+        var normalizedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        for suffix in ["/chat/completions", "/responses"] where normalizedBase.hasSuffix(suffix) {
+            normalizedBase = String(normalizedBase.dropLast(suffix.count))
+            break
+        }
+        while normalizedBase.hasSuffix("/") { normalizedBase = String(normalizedBase.dropLast()) }
+        let urlString = "\(normalizedBase)/models"
         guard let url = URL(string: urlString) else {
             DebugLogger.shared.error(
                 "fetchModels: Invalid URL constructed from baseURL='\(baseURL)' -> '\(urlString)'",
