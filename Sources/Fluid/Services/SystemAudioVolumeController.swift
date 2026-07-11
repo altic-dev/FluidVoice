@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreAudio
 import Foundation
 
@@ -13,6 +14,8 @@ import Foundation
 /// expose no settable master volume — only per-channel scalars — and a user may have
 /// a non-centered left/right balance that must survive a duck/restore cycle
 /// unchanged, so the snapshot records each element rather than a single scalar.
+/// When neither the master nor the per-channel scalars are settable, it falls back
+/// to the HAL's virtual main volume (the control the macOS volume HUD drives).
 struct SystemAudioVolumeController {
     /// Captures the default output device's current volume so it can later be
     /// restored exactly, preserving per-channel balance.
@@ -25,24 +28,41 @@ struct SystemAudioVolumeController {
         // Prefer the single master element, but only when it is *settable* — otherwise we
         // could capture a read-only master and then fail to restore it on a device whose
         // per-channel volumes are the ones that are actually settable.
-        if self.isVolumeSettable(device: device, element: kAudioObjectPropertyElementMain),
-           let master = self.scalarVolume(device: device, element: kAudioObjectPropertyElementMain)
+        if self.isVolumeSettable(device: device, selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain),
+           let master = self.volume(device: device, selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain)
         {
             return OutputVolumeSnapshot(
                 deviceID: device,
-                channels: [.init(element: kAudioObjectPropertyElementMain, volume: master)]
+                channels: [.init(selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain, volume: master)]
             )
         }
 
         // Otherwise capture each *settable* stereo channel individually so balance is retained.
         let channels = self.stereoChannels(device: device).compactMap { element -> OutputVolumeSnapshot.Channel? in
-            guard self.isVolumeSettable(device: device, element: element),
-                  let volume = self.scalarVolume(device: device, element: element)
+            guard self.isVolumeSettable(device: device, selector: kAudioDevicePropertyVolumeScalar, element: element),
+                  let volume = self.volume(device: device, selector: kAudioDevicePropertyVolumeScalar, element: element)
             else { return nil }
-            return .init(element: element, volume: volume)
+            return .init(selector: kAudioDevicePropertyVolumeScalar, element: element, volume: volume)
         }
-        guard !channels.isEmpty else { return nil }
-        return OutputVolumeSnapshot(deviceID: device, channels: channels)
+        if !channels.isEmpty {
+            return OutputVolumeSnapshot(deviceID: device, channels: channels)
+        }
+
+        // Last resort: the HAL's *virtual* main volume — the control the macOS volume
+        // HUD drives — which CoreAudio synthesizes for devices whose raw volume scalars
+        // are not settable (some Bluetooth routes, devices with volume on non-stereo
+        // elements). It applies volume while preserving the device's balance itself,
+        // so a single-element snapshot is sufficient.
+        if self.isVolumeSettable(device: device, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, element: kAudioObjectPropertyElementMain),
+           let virtualMain = self.volume(device: device, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, element: kAudioObjectPropertyElementMain)
+        {
+            return OutputVolumeSnapshot(
+                deviceID: device,
+                channels: [.init(selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, element: kAudioObjectPropertyElementMain, volume: virtualMain)]
+            )
+        }
+
+        return nil
     }
 
     /// Writes every channel captured in `snapshot` back to its recorded level.
@@ -52,7 +72,7 @@ struct SystemAudioVolumeController {
     func apply(_ snapshot: OutputVolumeSnapshot) -> Bool {
         var didSet = false
         for channel in snapshot.channels {
-            if self.setScalarVolume(channel.volume, device: snapshot.deviceID, element: channel.element) {
+            if self.setVolume(channel.volume, device: snapshot.deviceID, selector: channel.selector, element: channel.element) {
                 didSet = true
             }
         }
@@ -68,8 +88,8 @@ struct SystemAudioVolumeController {
     /// - Returns: An updated snapshot, or `nil` if a captured element is no longer readable.
     func reread(_ snapshot: OutputVolumeSnapshot) -> OutputVolumeSnapshot? {
         let channels = snapshot.channels.compactMap { channel -> OutputVolumeSnapshot.Channel? in
-            guard let volume = self.scalarVolume(device: snapshot.deviceID, element: channel.element) else { return nil }
-            return .init(element: channel.element, volume: volume)
+            guard let volume = self.volume(device: snapshot.deviceID, selector: channel.selector, element: channel.element) else { return nil }
+            return .init(selector: channel.selector, element: channel.element, volume: volume)
         }
         guard channels.count == snapshot.channels.count else { return nil }
         return OutputVolumeSnapshot(deviceID: snapshot.deviceID, channels: channels)
@@ -112,9 +132,9 @@ struct SystemAudioVolumeController {
         return channels
     }
 
-    private func scalarVolume(device: AudioDeviceID, element: AudioObjectPropertyElement) -> Float? {
+    private func volume(device: AudioDeviceID, selector: AudioObjectPropertySelector, element: AudioObjectPropertyElement) -> Float? {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: element
         )
@@ -127,10 +147,10 @@ struct SystemAudioVolumeController {
         return volume
     }
 
-    /// Whether the volume scalar for `element` exists and can be written.
-    private func isVolumeSettable(device: AudioDeviceID, element: AudioObjectPropertyElement) -> Bool {
+    /// Whether the volume property for `selector`/`element` exists and can be written.
+    private func isVolumeSettable(device: AudioDeviceID, selector: AudioObjectPropertySelector, element: AudioObjectPropertyElement) -> Bool {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: element
         )
@@ -140,13 +160,14 @@ struct SystemAudioVolumeController {
         return AudioObjectIsPropertySettable(device, &address, &settable) == noErr && settable.boolValue
     }
 
-    private func setScalarVolume(
+    private func setVolume(
         _ volume: Float,
         device: AudioDeviceID,
+        selector: AudioObjectPropertySelector,
         element: AudioObjectPropertyElement
     ) -> Bool {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: element
         )
@@ -168,6 +189,7 @@ struct SystemAudioVolumeController {
 /// device's original per-channel (left/right) balance.
 struct OutputVolumeSnapshot {
     fileprivate struct Channel {
+        let selector: AudioObjectPropertySelector
         let element: AudioObjectPropertyElement
         let volume: Float
     }
@@ -189,7 +211,7 @@ struct OutputVolumeSnapshot {
         OutputVolumeSnapshot(
             deviceID: self.deviceID,
             channels: self.channels.map {
-                Channel(element: $0.element, volume: max(0.0, min(1.0, $0.volume * factor)))
+                Channel(selector: $0.selector, element: $0.element, volume: max(0.0, min(1.0, $0.volume * factor)))
             }
         )
     }
