@@ -41,10 +41,10 @@ final class SenseVoiceProvider: TranscriptionProvider {
 
     // MARK: - Long-audio chunking (samples @ 16 kHz)
 
-    /// Hard cap per encoder pass. The int8 encoder tops out at 1800 LFR frames
-    /// (~960 samples/frame ≈ 108 s); staying at 100 s keeps a safety margin below
-    /// the truncation clamp in `SenseVoiceEngine.runEncoder`.
-    private static let maxChunkSamples = 1_600_000
+    /// Hard cap per pass. The CoreML preprocessor's waveform input is constrained to
+    /// 3200…480000 samples (0.2…30 s); anything longer is rejected outright, so this
+    /// sits safely below 480000 rather than at the encoder's ~108 s frame limit.
+    private static let maxChunkSamples = 460_000
     /// Never emit a chunk shorter than this (1 s), so a silence-seek can't collapse.
     private static let minChunkSamples = 16_000
     /// How far back from the hard cap to hunt for a quiet cut point (2 s).
@@ -273,6 +273,8 @@ actor SenseVoiceEngine {
         static let defaultTextNorm: Int32 = 15  // woitn (no inverse text-norm)
         static let waveformScale: Float = 32_768.0
         static let sentencePieceWordBoundary = "\u{2581}"  // "▁"
+        /// Preprocessor waveform input floor (0.2 s); shorter audio is zero-padded up to it.
+        static let minWaveformSamples = 3_200
         static var maxFrames: Int { buckets.last ?? 1800 }
         static func pickBucket(forFrames frames: Int) -> Int {
             for b in buckets where b >= frames { return b }
@@ -310,11 +312,14 @@ actor SenseVoiceEngine {
     // MARK: - Pipeline
 
     private func runPreprocessor(audio: [Float]) throws -> MLMultiArray {
-        let n = audio.count
+        // The preprocessor rejects waveforms below its 3200-sample (0.2 s) floor, so a very
+        // short recording or a small trailing chunk is zero-padded (silence) up to it.
+        let n = max(audio.count, Config.minWaveformSamples)
         let waveform = try MLMultiArray(shape: [1, n as NSNumber], dataType: .float32)
         let wptr = waveform.dataPointer.assumingMemoryBound(to: Float32.self)
+        memset(wptr, 0, n * MemoryLayout<Float32>.size)
         let scale = Config.waveformScale
-        for i in 0..<n { wptr[i] = audio[i] * scale }
+        for i in 0..<audio.count { wptr[i] = audio[i] * scale }
 
         let input = try MLDictionaryFeatureProvider(
             dictionary: ["waveform": MLFeatureValue(multiArray: waveform)])
