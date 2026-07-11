@@ -321,7 +321,12 @@ final class MediaPlaybackService {
                     "MediaPlaybackService: Restoring output volume to \(original.averageLevel) (we ducked it)",
                     source: "MediaPlaybackService"
                 )
-                self.volumeController.apply(original)
+                if !self.volumeController.apply(original) {
+                    DebugLogger.shared.warning(
+                        "MediaPlaybackService: Failed to restore output volume — the ducked output device may no longer be available",
+                        source: "MediaPlaybackService"
+                    )
+                }
             }
 
         case .none:
