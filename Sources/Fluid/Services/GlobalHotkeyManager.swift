@@ -556,6 +556,11 @@ final class GlobalHotkeyManager: NSObject {
         if self.promptShortcutAssignments.contains(where: { $0.shortcut.matches(keyCode: keyCode, modifiers: modifiers) }) {
             return true
         }
+        if self.promptModeShortcutEnabled,
+           self.promptModeShortcut.matches(keyCode: keyCode, modifiers: modifiers)
+        {
+            return true
+        }
         if self.commandModeShortcutEnabled,
            let commandModeShortcut = self.commandModeShortcut,
            commandModeShortcut.matches(keyCode: keyCode, modifiers: modifiers)
