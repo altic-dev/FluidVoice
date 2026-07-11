@@ -23,7 +23,10 @@ final class SenseVoiceProvider: TranscriptionProvider {
 
     private let repositoryOwner = "FluidInference"
     private let repositoryName = "sensevoice-small-coreml"
-    private let repositoryRevision = "main"
+    // Pinned to a specific commit for reproducibility: tracking `main` would let an
+    // upstream re-upload silently deliver a different (possibly incompatible) encoder to
+    // fresh installs. Bump this deliberately when adopting a new model revision.
+    private let repositoryRevision = "cdea3526163035c19915d4a10268992d018ebd46"
 
     static let preprocessorFile = "SenseVoicePreprocessor.mlmodelc"
     static let encoderFile = "SenseVoiceSmall_int8.mlmodelc"
@@ -155,14 +158,16 @@ final class SenseVoiceProvider: TranscriptionProvider {
         if samples.count <= Self.maxChunkSamples {
             text = try await engine.transcribe(audio: samples, language: language)
         } else {
-            // SenseVoice is non-streaming with a fixed max input; split long audio at
-            // quiet points and stitch the pieces so nothing past ~108 s is dropped.
+            // SenseVoice is non-streaming with a fixed ~30 s max input; split long audio
+            // at quiet points and stitch the pieces so nothing past the cap is dropped.
             text = try await self.transcribeChunked(samples, language: language, engine: engine)
         }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         self.logBenchmark(samples: samples, text: trimmed, startedAt: startedAt)
-        return ASRTranscriptionResult(text: text, confidence: trimmed.isEmpty ? 0 : 1)
+        // Return the trimmed text so downstream consumers get the same clean string used
+        // for the confidence check — matching the other providers' contract.
+        return ASRTranscriptionResult(text: trimmed, confidence: trimmed.isEmpty ? 0 : 1)
     }
 
     /// Transcribe audio longer than one encoder pass by cutting it into
@@ -183,7 +188,42 @@ final class SenseVoiceProvider: TranscriptionProvider {
             }
             offset = end
         }
-        return pieces.joined(separator: " ")
+        return Self.joinChunks(pieces)
+    }
+
+    /// Join chunk transcripts, inserting a space **only** at Latin-script boundaries.
+    /// SentencePiece already spaces words within a chunk (via `▁`); CJK text has no
+    /// inter-character spaces, so a blanket `" "` separator would inject a spurious space
+    /// at every silence cut (e.g. `喺度 做嘢`). Decide per boundary from the adjacent
+    /// characters, which also handles the auto-detect case correctly.
+    static func joinChunks(_ pieces: [String]) -> String {
+        var result = ""
+        for piece in pieces where piece.isEmpty == false {
+            if let last = result.unicodeScalars.last,
+               let first = piece.unicodeScalars.first,
+               !isCJKScalar(last), !isCJKScalar(first)
+            {
+                result += " "
+            }
+            result += piece
+        }
+        return result
+    }
+
+    /// Whether a scalar belongs to a script written without inter-word spaces
+    /// (CJK ideographs + Kana + Hangul), used to pick the chunk-join separator.
+    static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3040...0x30FF,  // Hiragana, Katakana
+             0x3400...0x4DBF,  // CJK Extension A
+             0x4E00...0x9FFF,  // CJK Unified Ideographs
+             0xAC00...0xD7A3,  // Hangul syllables
+             0xF900...0xFAFF,  // CJK Compatibility Ideographs
+             0x20000...0x2FA1F:  // CJK Extensions B–F + Supplement
+            return true
+        default:
+            return false
+        }
     }
 
     /// End index (exclusive) of the chunk starting at `offset`. For a non-final
