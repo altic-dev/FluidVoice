@@ -3737,6 +3737,7 @@ final class SettingsStore: ObservableObject {
         case parakeetRealtime = "parakeet-realtime"
         case qwen3Asr = "qwen3-asr"
         case cohereTranscribeSixBit = "cohere-transcribe-6bit"
+        case senseVoiceSmall = "sensevoice-small"
         case nemotronOffline = "nemotron-3.5-offline"
         case nemotronStreaming = "nemotron-3.5-streaming"
         case nemotronStreaming320 = "nemotron-3.5-streaming-320"
@@ -3768,6 +3769,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
             case .cohereTranscribeSixBit: return "Cohere Transcribe"
+            case .senseVoiceSmall: return "SenseVoice Small"
             case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
@@ -3790,6 +3792,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "English Only (Live Streaming)"
             case .qwen3Asr: return "30 Languages"
             case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
+            case .senseVoiceSmall: return "Cantonese, Mandarin & 50+ (Select Manually)"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Around 40 Languages"
             case .appleSpeech: return "System Languages"
             case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
@@ -3805,6 +3808,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
             case .cohereTranscribeSixBit: return "~1.54 GiB"
+            case .senseVoiceSmall: return "~215 MiB"
             case .nemotronOffline: return "~530.8 MiB"
             case .nemotronStreaming: return "~668.2 MiB"
             case .nemotronStreaming320: return "~668.2 MiB"
@@ -3826,6 +3830,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return 449_190_189
             case .qwen3Asr: return 2000 * 1024 * 1024
             case .cohereTranscribeSixBit: return 1_650_748_785
+            case .senseVoiceSmall: return 225_000_000
             case .nemotronOffline: return 556_552_620
             case .nemotronStreaming, .nemotronStreaming320: return 700_685_415
             case .whisperTiny: return 77_691_713
@@ -3840,14 +3845,14 @@ final class SettingsStore: ObservableObject {
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech, .appleSpeechAnalyzer: return false
+            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech, .appleSpeechAnalyzer: return false
             default: return true
             }
         }
@@ -3943,6 +3948,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
             case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
+            case .senseVoiceSmall: return "Cantonese - Fast & Accurate"
             case .nemotronOffline: return "Nemotron 3.5 Multilingual"
             case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
             case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
@@ -3973,6 +3979,8 @@ final class SettingsStore: ObservableObject {
                 return "Qwen3 multilingual ASR via FluidAudio. Higher quality, heavier memory footprint."
             case .cohereTranscribeSixBit:
                 return "High-accuracy multilingual transcription. Select the language manually before dictation for best results."
+            case .senseVoiceSmall:
+                return "Non-autoregressive FunASR model with state-of-the-art Cantonese accuracy. Runs on the Neural Engine with a tiny memory footprint. Select Cantonese, Mandarin, or auto-detect."
             case .nemotronOffline:
                 return "Slower but more accurate NVIDIA Nemotron 3.5 transcription. Supports 40 language-locales with auto or manual language selection."
             case .nemotronStreaming:
@@ -4007,6 +4015,8 @@ final class SettingsStore: ObservableObject {
                 return 8.0
             case .cohereTranscribeSixBit:
                 return 8.0
+            case .senseVoiceSmall:
+                return 2.0
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return 8.0
             case .appleSpeech, .appleSpeechAnalyzer:
@@ -4050,6 +4060,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return 5
             case .qwen3Asr: return 3
             case .cohereTranscribeSixBit: return 3
+            case .senseVoiceSmall: return 5
             case .nemotronOffline: return 3
             case .nemotronStreaming, .nemotronStreaming320: return 4
             case .appleSpeech: return 4
@@ -4071,6 +4082,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return 4
             case .qwen3Asr: return 4
             case .cohereTranscribeSixBit: return 5
+            case .senseVoiceSmall: return 4
             case .nemotronOffline: return 5
             case .nemotronStreaming, .nemotronStreaming320: return 4
             case .appleSpeech: return 4
@@ -4092,6 +4104,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return 1.0
             case .qwen3Asr: return 0.45
             case .cohereTranscribeSixBit: return 0.85
+            case .senseVoiceSmall: return 0.95
             case .nemotronOffline: return 0.85
             case .nemotronStreaming, .nemotronStreaming320: return 1.0
             case .appleSpeech: return 0.60
@@ -4113,6 +4126,7 @@ final class SettingsStore: ObservableObject {
             case .parakeetRealtime: return 0.75
             case .qwen3Asr: return 0.90
             case .cohereTranscribeSixBit: return 0.98
+            case .senseVoiceSmall: return 0.90
             case .nemotronOffline: return 0.90
             case .nemotronStreaming, .nemotronStreaming320: return 0.85
             case .appleSpeech: return 0.60
@@ -4143,7 +4157,7 @@ final class SettingsStore: ObservableObject {
         /// Optimization level for Apple Silicon (for display)
         var appleSiliconOptimized: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
+            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .senseVoiceSmall, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
                 return true
             default:
                 return false
@@ -4154,8 +4168,8 @@ final class SettingsStore: ObservableObject {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
-            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return false // Too slow for real-time chunk processing
+            case .qwen3Asr, .senseVoiceSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+                return false // Non-streaming / too slow for real-time chunk processing
             default:
                 return true // All other models support streaming
             }
@@ -4198,6 +4212,7 @@ final class SettingsStore: ObservableObject {
             case openai = "OpenAI"
             case qwen = "Qwen"
             case cohere = "Cohere"
+            case funasr = "FunASR"
         }
 
         /// Which provider this model belongs to
@@ -4211,6 +4226,8 @@ final class SettingsStore: ObservableObject {
                 return .qwen
             case .cohereTranscribeSixBit:
                 return .cohere
+            case .senseVoiceSmall:
+                return .funasr
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return .openai
             }
@@ -4261,6 +4278,13 @@ final class SettingsStore: ObservableObject {
                     return false
                 }
                 return spec.validatesInstalledArtifacts(at: directory)
+            case .senseVoiceSmall:
+                #if arch(arm64)
+                guard let directory = SenseVoiceProvider.cacheDirectory() else { return false }
+                return SenseVoiceProvider.artifactsAreComplete(at: directory)
+                #else
+                return false
+                #endif
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 let hint: String
                 switch self {
@@ -4338,6 +4362,8 @@ final class SettingsStore: ObservableObject {
                 return "Qwen"
             case .cohereTranscribeSixBit:
                 return "Cohere"
+            case .senseVoiceSmall:
+                return "FunASR"
             case .appleSpeech, .appleSpeechAnalyzer:
                 return "Apple"
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
@@ -4362,6 +4388,8 @@ final class SettingsStore: ObservableObject {
                 return "#E67E22"
             case .cohereTranscribeSixBit:
                 return "#FA6B3C"
+            case .senseVoiceSmall:
+                return "#FF6A00" // Alibaba Orange
             case .appleSpeech, .appleSpeechAnalyzer:
                 return "#A2AAAD" // Apple Gray
             case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
@@ -4557,6 +4585,7 @@ private extension SettingsStore {
         static let selectedSpeechModel = "SelectedSpeechModel"
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
+        static let senseVoiceLanguage = "SenseVoiceLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
         static let externalCoreMLArtifactsDirectories = "ExternalCoreMLArtifactsDirectories"
 
@@ -4696,6 +4725,8 @@ extension SettingsStore.SpeechModel {
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
+        case .senseVoiceSmall:
+            return "YUE, ZH, EN, JA, KO + 50 more"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "40 language-locales"
         case .appleSpeechAnalyzer:
@@ -4835,6 +4866,21 @@ extension SettingsStore {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.selectedNemotronLanguage)
+        }
+    }
+
+    var senseVoiceLanguage: SenseVoiceLanguage {
+        get {
+            if let rawValue = self.defaults.string(forKey: Keys.senseVoiceLanguage),
+               let language = SenseVoiceLanguage(rawValue: rawValue)
+            {
+                return language
+            }
+            return .cantonese
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.senseVoiceLanguage)
         }
     }
 
