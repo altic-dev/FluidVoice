@@ -365,10 +365,11 @@ final class HuggingFaceModelDownloader {
             }
         }
         if url.pathExtension == "mlmodelc" {
-            // `model.mil` is optional in valid compiled bundles (the Flash preprocessor ships
-            // without it), so installation truth comes from compiled metadata plus weights.
+            // `model.mil` and `metadata.json` are descriptive and absent from some valid
+            // compiled bundles (the Flash preprocessor omits `model.mil`; the SenseVoice
+            // export omits `metadata.json`). Load-critical truth is the compiled index plus
+            // weights, so require only those two.
             return self.fileHasContents(at: url.appendingPathComponent("coremldata.bin"))
-                && self.fileHasContents(at: url.appendingPathComponent("metadata.json"))
                 && self.fileHasContents(
                     at: url
                         .appendingPathComponent("weights", isDirectory: true)
