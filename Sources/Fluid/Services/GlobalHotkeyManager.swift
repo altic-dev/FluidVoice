@@ -528,6 +528,51 @@ final class GlobalHotkeyManager: NSObject {
         self.otherKeyPressedDuringModifier = true
     }
 
+    /// Maps a `CGEventFlags` bitmask to the `NSEvent.ModifierFlags` used for shortcut
+    /// matching. Single source of truth for the flag translation.
+    private static func modifierFlags(from flags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var modifiers: NSEvent.ModifierFlags = []
+        if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
+        if flags.contains(.maskCommand) { modifiers.insert(.command) }
+        if flags.contains(.maskAlternate) { modifiers.insert(.option) }
+        if flags.contains(.maskControl) { modifiers.insert(.control) }
+        if flags.contains(.maskShift) { modifiers.insert(.shift) }
+        return modifiers
+    }
+
+    /// Whether a key event matches any shortcut the user has configured. The
+    /// system-shortcut fast-path consults this so it never silently swallows a real
+    /// binding that happens to use the same chord (e.g. Cmd+Space bound to a Fluid action).
+    private func eventMatchesAnyConfiguredShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        if SettingsStore.shared.cancelRecordingHotkeyShortcut.matches(keyCode: keyCode, modifiers: modifiers) {
+            return true
+        }
+        if SettingsStore.shared.pasteLastTranscriptionShortcutEnabled,
+           let paste = SettingsStore.shared.pasteLastTranscriptionHotkeyShortcut,
+           paste.matches(keyCode: keyCode, modifiers: modifiers)
+        {
+            return true
+        }
+        if self.promptShortcutAssignments.contains(where: { $0.shortcut.matches(keyCode: keyCode, modifiers: modifiers) }) {
+            return true
+        }
+        if self.commandModeShortcutEnabled,
+           let commandModeShortcut = self.commandModeShortcut,
+           commandModeShortcut.matches(keyCode: keyCode, modifiers: modifiers)
+        {
+            return true
+        }
+        if self.rewriteModeShortcutEnabled,
+           self.rewriteModeShortcut.matches(keyCode: keyCode, modifiers: modifiers)
+        {
+            return true
+        }
+        if self.primaryShortcuts.contains(where: { $0.matches(keyCode: keyCode, modifiers: modifiers) }) {
+            return true
+        }
+        return false
+    }
+
     private func mouseButton(from event: CGEvent) -> Int {
         Int(event.getIntegerValueField(.mouseEventButtonNumber))
     }
@@ -592,15 +637,28 @@ final class GlobalHotkeyManager: NSObject {
             return tapRecoveryResult
         }
 
-        // Fast path: pass through system shortcuts (Cmd+Tab, Cmd+Shift+Tab, Cmd+Space, etc.)
-        // to avoid adding latency to app switching, especially with VoiceOver.
+        // Fast path: pass the macOS system shortcuts Cmd+Tab (app switcher) and
+        // Cmd+Space (Spotlight / input-source) straight through with minimal work, to
+        // avoid adding latency to app/space switching — especially with VoiceOver, whose
+        // event handling is latency-sensitive. Skipped when the user has bound one of
+        // Fluid's own shortcuts to the same chord, so real bindings are never swallowed.
+        //
+        // Only Tab(48) and Space(49) are handled: both are layout-stable hardware
+        // keycodes. Cmd+` is deliberately excluded because its keycode differs across
+        // ANSI/ISO keyboard layouts, so a hardcoded value would match the wrong key.
         if type == .keyDown || type == .keyUp {
             let flags = event.flags
             if flags.contains(.maskCommand) {
                 let kc = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-                // Tab(48), Space(49), Backtick(50 — Cmd+` for window cycling)
-                if kc == 48 || kc == 49 || kc == 50 {
-                    return Unmanaged.passUnretained(event)
+                if kc == 48 || kc == 49 {
+                    let modifiers = Self.modifierFlags(from: flags)
+                    if !self.eventMatchesAnyConfiguredShortcut(keyCode: kc, modifiers: modifiers) {
+                        // Preserve modifier-only bookkeeping: a system chord pressed while
+                        // a modifier-only Fluid shortcut is held must count as "other input"
+                        // so the later modifier release isn't mistaken for a clean tap.
+                        if type == .keyDown { self.markOtherInputDuringModifierOnly() }
+                        return Unmanaged.passUnretained(event)
+                    }
                 }
             }
         }
@@ -613,12 +671,7 @@ final class GlobalHotkeyManager: NSObject {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
 
-        var eventModifiers: NSEvent.ModifierFlags = []
-        if flags.contains(.maskSecondaryFn) { eventModifiers.insert(.function) }
-        if flags.contains(.maskCommand) { eventModifiers.insert(.command) }
-        if flags.contains(.maskAlternate) { eventModifiers.insert(.option) }
-        if flags.contains(.maskControl) { eventModifiers.insert(.control) }
-        if flags.contains(.maskShift) { eventModifiers.insert(.shift) }
+        let eventModifiers = Self.modifierFlags(from: flags)
 
         switch type {
         case .keyDown:
