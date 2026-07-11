@@ -2499,6 +2499,49 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    // MARK: - Smart Notes Settings
+
+    /// Smart Notes is opt-in so existing shortcut configurations cannot gain a collision on upgrade.
+    var smartNotesShortcutEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.smartNotesShortcutEnabled)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.smartNotesShortcutEnabled)
+        }
+    }
+
+    var smartNotesHotkeyShortcut: HotkeyShortcut? {
+        get {
+            guard let data = defaults.data(forKey: Keys.smartNotesHotkeyShortcut) else { return nil }
+            return try? JSONDecoder().decode(HotkeyShortcut.self, from: data)
+        }
+        set {
+            objectWillChange.send()
+            guard let newValue else {
+                self.defaults.removeObject(forKey: Keys.smartNotesHotkeyShortcut)
+                return
+            }
+            if let data = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(data, forKey: Keys.smartNotesHotkeyShortcut)
+            }
+        }
+    }
+
+    /// AI enrichment is deliberately independent from capture and off by default.
+    var smartNotesAIEnhancementEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.smartNotesAIEnhancementEnabled)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.smartNotesAIEnhancementEnabled)
+        }
+    }
+
     var commandModeConfirmBeforeExecute: Bool {
         get {
             // Default to true (safer - ask before running commands)
@@ -4500,6 +4543,9 @@ private extension SettingsStore {
         static let cancelRecordingHotkeyShortcut = "CancelRecordingHotkeyShortcut"
         static let pasteLastTranscriptionHotkeyShortcut = "PasteLastTranscriptionHotkeyShortcut"
         static let pasteLastTranscriptionShortcutEnabled = "PasteLastTranscriptionShortcutEnabled"
+        static let smartNotesHotkeyShortcut = "SmartNotesHotkeyShortcut"
+        static let smartNotesShortcutEnabled = "SmartNotesShortcutEnabled"
+        static let smartNotesAIEnhancementEnabled = "SmartNotesAIEnhancementEnabled"
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
         static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
 

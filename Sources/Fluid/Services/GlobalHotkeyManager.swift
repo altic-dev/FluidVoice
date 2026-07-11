@@ -6,6 +6,7 @@ private nonisolated enum HotkeyHoldModeType: Hashable {
     case promptMode
     case commandMode
     case rewriteMode
+    case smartNotes
     case promptAssignment
 }
 
@@ -20,6 +21,7 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
     var isPromptModeKeyPressed = false
     var isCommandModeKeyPressed = false
     var isRewriteKeyPressed = false
+    var isSmartNotesKeyPressed = false
     var isPromptAssignmentKeyPressed = false
     var pressedModifierKeyCodes: Set<UInt16> = []
     var modifierOnlyKeyDown = false
@@ -51,10 +53,12 @@ final class GlobalHotkeyManager: NSObject {
     private var promptModeShortcut: HotkeyShortcut
     private var commandModeShortcut: HotkeyShortcut?
     private var rewriteModeShortcut: HotkeyShortcut
+    private var smartNotesShortcut: HotkeyShortcut?
     private var promptShortcutAssignments: [(selection: SettingsStore.DictationPromptSelection, shortcut: HotkeyShortcut)]
     private var promptModeShortcutEnabled: Bool
     private var commandModeShortcutEnabled: Bool
     private var rewriteModeShortcutEnabled: Bool
+    private var smartNotesShortcutEnabled: Bool
     private var startRecordingCallback: (() async -> Void)?
     private var dictationModeCallback: (() async -> Void)?
     private var stopAndProcessCallback: (() async -> Void)?
@@ -62,10 +66,12 @@ final class GlobalHotkeyManager: NSObject {
     private var promptSelectionCallback: ((SettingsStore.DictationPromptSelection) async -> Void)?
     private var commandModeCallback: (() async -> Void)?
     private var rewriteModeCallback: (() async -> Void)?
+    private var smartNotesCallback: (() async -> Void)?
     private var isDictateRecordingProvider: (() -> Bool)?
     private var isPromptModeRecordingProvider: (() -> Bool)?
     private var isCommandRecordingProvider: (() -> Bool)?
     private var isRewriteRecordingProvider: (() -> Bool)?
+    private var isSmartNotesRecordingProvider: (() -> Bool)?
     private var isShortcutCaptureActiveProvider: (() -> Bool)?
     private var cancelCallback: (() -> Bool)? // Returns true if handled
     private var pasteLastTranscriptionCallback: (() -> Void)?
@@ -110,6 +116,11 @@ final class GlobalHotkeyManager: NSObject {
     private nonisolated var isRewriteKeyPressed: Bool {
         get { self.state.withLock { self.state.isRewriteKeyPressed } }
         set { self.state.withLock { self.state.isRewriteKeyPressed = newValue } }
+    }
+
+    private nonisolated var isSmartNotesKeyPressed: Bool {
+        get { self.state.withLock { self.state.isSmartNotesKeyPressed } }
+        set { self.state.withLock { self.state.isSmartNotesKeyPressed = newValue } }
     }
 
     private nonisolated var isPromptAssignmentKeyPressed: Bool {
@@ -274,10 +285,12 @@ final class GlobalHotkeyManager: NSObject {
         promptModeShortcut: HotkeyShortcut,
         commandModeShortcut: HotkeyShortcut?,
         rewriteModeShortcut: HotkeyShortcut,
+        smartNotesShortcut: HotkeyShortcut?,
         promptShortcutAssignments: [(selection: SettingsStore.DictationPromptSelection, shortcut: HotkeyShortcut)] = [],
         promptModeShortcutEnabled: Bool,
         commandModeShortcutEnabled: Bool,
         rewriteModeShortcutEnabled: Bool,
+        smartNotesShortcutEnabled: Bool,
         startRecordingCallback: (() async -> Void)? = nil,
         dictationModeCallback: (() async -> Void)? = nil,
         stopAndProcessCallback: (() async -> Void)? = nil,
@@ -285,10 +298,12 @@ final class GlobalHotkeyManager: NSObject {
         promptSelectionCallback: ((SettingsStore.DictationPromptSelection) async -> Void)? = nil,
         commandModeCallback: (() async -> Void)? = nil,
         rewriteModeCallback: (() async -> Void)? = nil,
+        smartNotesCallback: (() async -> Void)? = nil,
         isDictateRecordingProvider: (() -> Bool)? = nil,
         isPromptModeRecordingProvider: (() -> Bool)? = nil,
         isCommandRecordingProvider: (() -> Bool)? = nil,
         isRewriteRecordingProvider: (() -> Bool)? = nil,
+        isSmartNotesRecordingProvider: (() -> Bool)? = nil,
         isShortcutCaptureActiveProvider: (() -> Bool)? = nil
     ) {
         self.asrService = asrService
@@ -296,10 +311,12 @@ final class GlobalHotkeyManager: NSObject {
         self.promptModeShortcut = promptModeShortcut
         self.commandModeShortcut = commandModeShortcut
         self.rewriteModeShortcut = rewriteModeShortcut
+        self.smartNotesShortcut = smartNotesShortcut
         self.promptShortcutAssignments = promptShortcutAssignments
         self.promptModeShortcutEnabled = promptModeShortcutEnabled
         self.commandModeShortcutEnabled = commandModeShortcutEnabled
         self.rewriteModeShortcutEnabled = rewriteModeShortcutEnabled
+        self.smartNotesShortcutEnabled = smartNotesShortcutEnabled
         self.startRecordingCallback = startRecordingCallback
         self.dictationModeCallback = dictationModeCallback
         self.stopAndProcessCallback = stopAndProcessCallback
@@ -307,10 +324,12 @@ final class GlobalHotkeyManager: NSObject {
         self.promptSelectionCallback = promptSelectionCallback
         self.commandModeCallback = commandModeCallback
         self.rewriteModeCallback = rewriteModeCallback
+        self.smartNotesCallback = smartNotesCallback
         self.isDictateRecordingProvider = isDictateRecordingProvider
         self.isPromptModeRecordingProvider = isPromptModeRecordingProvider
         self.isCommandRecordingProvider = isCommandRecordingProvider
         self.isRewriteRecordingProvider = isRewriteRecordingProvider
+        self.isSmartNotesRecordingProvider = isSmartNotesRecordingProvider
         self.isShortcutCaptureActiveProvider = isShortcutCaptureActiveProvider
         super.init()
 
@@ -356,6 +375,11 @@ final class GlobalHotkeyManager: NSObject {
         DebugLogger.shared.info("Updated rewrite mode hotkey", source: "GlobalHotkeyManager")
     }
 
+    func updateSmartNotesShortcut(_ newShortcut: HotkeyShortcut?) {
+        self.smartNotesShortcut = newShortcut
+        DebugLogger.shared.info("Updated Smart Notes hotkey", source: "GlobalHotkeyManager")
+    }
+
     func updateCommandModeShortcutEnabled(_ enabled: Bool) {
         self.commandModeShortcutEnabled = enabled
         if !enabled {
@@ -374,6 +398,17 @@ final class GlobalHotkeyManager: NSObject {
         }
         DebugLogger.shared.info(
             "Rewrite mode shortcut \(enabled ? "enabled" : "disabled")",
+            source: "GlobalHotkeyManager"
+        )
+    }
+
+    func updateSmartNotesShortcutEnabled(_ enabled: Bool) {
+        self.smartNotesShortcutEnabled = enabled
+        if !enabled {
+            self.isSmartNotesKeyPressed = false
+        }
+        DebugLogger.shared.info(
+            "Smart Notes shortcut \(enabled ? "enabled" : "disabled")",
             source: "GlobalHotkeyManager"
         )
     }
@@ -754,6 +789,52 @@ final class GlobalHotkeyManager: NSObject {
                 return nil
             }
 
+            // Check Smart Notes hotkey
+            if self.smartNotesShortcutEnabled,
+               let smartNotesShortcut = self.smartNotesShortcut,
+               smartNotesShortcut.matches(keyCode: keyCode, modifiers: eventModifiers)
+            {
+                switch self.hotkeyMode {
+                case .hold:
+                    if !self.isSmartNotesKeyPressed {
+                        self.cancelPendingReleaseStop(for: .smartNotes)
+                        self.clearHoldModeStartTriggered(for: .smartNotes)
+                        self.isSmartNotesKeyPressed = true
+                        DebugLogger.shared.info("Smart Notes shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                        self.triggerSmartNotes()
+                        self.markHoldModeStartTriggered(for: .smartNotes)
+                    }
+                case .automatic:
+                    if !self.isSmartNotesKeyPressed {
+                        self.isSmartNotesKeyPressed = true
+                        let isSameMode = self.asrService.isRunning && (self.isSmartNotesRecordingProvider?() ?? false)
+                        self.beginAutomaticPress(for: .smartNotes, wasTargetActive: isSameMode)
+                        if self.asrService.isRunning {
+                            if isSameMode {
+                                DebugLogger.shared.info("Smart Notes shortcut pressed (automatic, same mode) - waiting for release", source: "GlobalHotkeyManager")
+                            } else {
+                                self.triggerSmartNotes()
+                                self.markAutomaticPressStarted(for: .smartNotes)
+                            }
+                        } else {
+                            self.triggerSmartNotes()
+                            self.markAutomaticPressStarted(for: .smartNotes)
+                        }
+                    }
+                case .toggle:
+                    if self.asrService.isRunning {
+                        if self.isSmartNotesRecordingProvider?() ?? false {
+                            self.stopRecordingIfNeeded()
+                        } else {
+                            self.triggerSmartNotes()
+                        }
+                    } else {
+                        self.triggerSmartNotes()
+                    }
+                }
+                return nil
+            }
+
             // Check dedicated rewrite mode hotkey
             if self.rewriteModeShortcutEnabled {
                 if self.rewriteModeShortcut.matches(keyCode: keyCode, modifiers: eventModifiers) {
@@ -833,6 +914,26 @@ final class GlobalHotkeyManager: NSObject {
                 case .automatic:
                     self.isCommandModeKeyPressed = false
                     self.handleAutomaticKeyRelease(for: .commandMode, label: "Command mode")
+                case .toggle:
+                    break
+                }
+                return nil
+            }
+
+            // Smart Notes key up
+            if self.smartNotesShortcutEnabled,
+               self.isSmartNotesKeyPressed,
+               let smartNotesShortcut = self.smartNotesShortcut,
+               keyCode == smartNotesShortcut.keyCode
+            {
+                switch self.hotkeyMode {
+                case .hold:
+                    self.isSmartNotesKeyPressed = false
+                    _ = self.finishHoldModeStartTriggered(for: .smartNotes)
+                    self.stopRecordingAfterRelease(for: .smartNotes, label: "Smart Notes")
+                case .automatic:
+                    self.isSmartNotesKeyPressed = false
+                    self.handleAutomaticKeyRelease(for: .smartNotes, label: "Smart Notes")
                 case .toggle:
                     break
                 }
@@ -943,6 +1044,36 @@ final class GlobalHotkeyManager: NSObject {
                            }
                        },
                        isTargetModeActive: { self.isCommandRecordingProvider?() ?? false }
+                   ),
+                   keyCode: keyCode,
+                   modifiers: eventModifiers
+               )
+            { return nil }
+
+            if let smartNotesShortcut = self.smartNotesShortcut,
+               self.handleModifierOnlyShortcutFlagsChanged(
+                   behavior: .init(
+                       shortcut: smartNotesShortcut,
+                       isEnabled: self.smartNotesShortcutEnabled,
+                       holdModeType: .smartNotes,
+                       holdStartMessage: "Smart Notes modifier held (hold mode) - starting",
+                       holdReleaseMessage: "Smart Notes modifier released (hold mode) - stopping",
+                       toggleIgnoredMessage: "Smart Notes modifier released but another key was pressed - ignoring",
+                       isModeKeyPressed: { self.isSmartNotesKeyPressed },
+                       setModeKeyPressed: { self.isSmartNotesKeyPressed = $0 },
+                       onHoldStart: { self.triggerSmartNotes() },
+                       onToggleRelease: {
+                           if self.asrService.isRunning {
+                               if self.isSmartNotesRecordingProvider?() ?? false {
+                                   self.stopRecordingIfNeeded()
+                               } else {
+                                   self.triggerSmartNotes()
+                               }
+                           } else {
+                               self.triggerSmartNotes()
+                           }
+                       },
+                       isTargetModeActive: { self.isSmartNotesRecordingProvider?() ?? false }
                    ),
                    keyCode: keyCode,
                    modifiers: eventModifiers
@@ -1198,6 +1329,9 @@ final class GlobalHotkeyManager: NSObject {
         case .rewriteMode:
             guard let provider = self.isRewriteRecordingProvider else { return true }
             return provider()
+        case .smartNotes:
+            guard let provider = self.isSmartNotesRecordingProvider else { return true }
+            return provider()
         case .promptAssignment:
             guard let provider = self.isPromptModeRecordingProvider else { return true }
             return provider()
@@ -1259,6 +1393,8 @@ final class GlobalHotkeyManager: NSObject {
             return "Command mode"
         case .rewriteMode:
             return "Rewrite mode"
+        case .smartNotes:
+            return "Smart Notes"
         case .promptAssignment:
             return "Prompt shortcut"
         }
@@ -1332,7 +1468,7 @@ final class GlobalHotkeyManager: NSObject {
     func resetModifierOnlyShortcutTracking(reason: ModifierTrackingResetReason = .shortcutCapture) {
         let shouldStopActiveHold = self.hotkeyMode != .toggle
             && self.asrService.isRunning
-            && (self.isKeyPressed || self.isPromptModeKeyPressed || self.isCommandModeKeyPressed || self.isRewriteKeyPressed || self.isPromptAssignmentKeyPressed)
+            && (self.isKeyPressed || self.isPromptModeKeyPressed || self.isCommandModeKeyPressed || self.isRewriteKeyPressed || self.isSmartNotesKeyPressed || self.isPromptAssignmentKeyPressed)
 
         self.pressedModifierKeyCodes = []
         self.modifierOnlyKeyDown = false
@@ -1344,6 +1480,7 @@ final class GlobalHotkeyManager: NSObject {
         self.isPromptModeKeyPressed = false
         self.isCommandModeKeyPressed = false
         self.isRewriteKeyPressed = false
+        self.isSmartNotesKeyPressed = false
         self.isPromptAssignmentKeyPressed = false
         self.activePrimaryShortcutPress = nil
 
@@ -1635,6 +1772,15 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
+    private func triggerSmartNotes() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard self.canTriggerRecordingAction("Smart Notes hotkey") else { return }
+            DebugLogger.shared.info("Smart Notes hotkey triggered", source: "GlobalHotkeyManager")
+            await self.smartNotesCallback?()
+        }
+    }
+
     /// Handles a mouse-button down event against the configured mouse shortcuts. Returns true when
     /// the event was consumed. "Paste Last Transcription" is a one-shot trigger (mirrors the keyboard
     /// path); primary dictation begins a press here and ends it on mouse-up.
@@ -1727,7 +1873,7 @@ final class GlobalHotkeyManager: NSObject {
     func setHotkeyMode(_ mode: HotkeyActivationMode) {
         let shouldStopActivePress = self.hotkeyMode != .toggle
             && self.asrService.isRunning
-            && (self.isKeyPressed || self.isPromptModeKeyPressed || self.isCommandModeKeyPressed || self.isRewriteKeyPressed || self.isPromptAssignmentKeyPressed)
+            && (self.isKeyPressed || self.isPromptModeKeyPressed || self.isCommandModeKeyPressed || self.isRewriteKeyPressed || self.isSmartNotesKeyPressed || self.isPromptAssignmentKeyPressed)
 
         self.hotkeyMode = mode
         self.clearAutomaticPressTracking()
@@ -1735,6 +1881,7 @@ final class GlobalHotkeyManager: NSObject {
         self.isPromptModeKeyPressed = false
         self.isCommandModeKeyPressed = false
         self.isRewriteKeyPressed = false
+        self.isSmartNotesKeyPressed = false
         self.isPromptAssignmentKeyPressed = false
         self.activePrimaryShortcutPress = nil
 

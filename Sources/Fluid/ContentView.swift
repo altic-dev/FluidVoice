@@ -56,6 +56,7 @@ enum SidebarItem: Hashable {
     case customDictionary
     case stats
     case history
+    case smartNotes
     case changelog
     case feedback
     case commandMode
@@ -79,6 +80,7 @@ enum ShortcutRecordingTarget: Hashable {
     case edit
     case cancel
     case pasteLast
+    case smartNotes
     case dictationPrompt(String)
     case newPrompt
 
@@ -96,6 +98,8 @@ enum ShortcutRecordingTarget: Hashable {
             return "Cancel Recording"
         case .pasteLast:
             return "Paste Last Transcription"
+        case .smartNotes:
+            return "Smart Notes"
         case .dictationPrompt:
             return "Prompt Shortcut"
         case .newPrompt:
@@ -105,7 +109,7 @@ enum ShortcutRecordingTarget: Hashable {
 
     var enablesFeatureOnAssignment: Bool {
         switch self {
-        case .secondaryDictation, .command, .edit, .pasteLast:
+        case .secondaryDictation, .command, .edit, .pasteLast, .smartNotes:
             return true
         case .primaryDictation, .cancel, .dictationPrompt, .newPrompt:
             return false
@@ -121,7 +125,7 @@ enum ShortcutRecordingTarget: Hashable {
         switch self {
         case .primaryDictation, .pasteLast:
             return true
-        case .secondaryDictation, .command, .edit, .cancel, .dictationPrompt, .newPrompt:
+        case .secondaryDictation, .command, .edit, .cancel, .smartNotes, .dictationPrompt, .newPrompt:
             return false
         }
     }
@@ -155,6 +159,7 @@ struct ContentView: View {
         case promptMode
         case edit
         case command
+        case smartNotes
     }
 
     private enum DictationOutputRoute: String {
@@ -192,7 +197,9 @@ struct ContentView: View {
     @State private var rewriteModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.rewriteModeHotkeyShortcut
     @State private var cancelRecordingHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.cancelRecordingHotkeyShortcut
     @State private var pasteLastTranscriptionHotkeyShortcut: HotkeyShortcut? = SettingsStore.shared.pasteLastTranscriptionHotkeyShortcut
+    @State private var smartNotesHotkeyShortcut: HotkeyShortcut? = SettingsStore.shared.smartNotesHotkeyShortcut
     @State private var isPasteLastTranscriptionShortcutEnabled: Bool = SettingsStore.shared.pasteLastTranscriptionShortcutEnabled
+    @State private var isSmartNotesShortcutEnabled: Bool = SettingsStore.shared.smartNotesShortcutEnabled
     @State private var isPromptModeShortcutEnabled: Bool = SettingsStore.shared.promptModeShortcutEnabled
     @State private var isCommandModeShortcutEnabled: Bool = SettingsStore.shared.commandModeShortcutEnabled
     @State private var isRewriteModeShortcutEnabled: Bool = SettingsStore.shared.rewriteModeShortcutEnabled
@@ -475,12 +482,34 @@ struct ContentView: View {
             .onChange(of: self.isPasteLastTranscriptionShortcutEnabled) { newValue in
                 self.handlePasteLastTranscriptionShortcutEnabledChange(newValue)
             }
+            .onChange(of: self.smartNotesHotkeyShortcut) { _, newValue in
+                SettingsStore.shared.smartNotesHotkeyShortcut = newValue
+                self.hotkeyManager?.updateSmartNotesShortcut(newValue)
+            }
+            .onChange(of: self.isSmartNotesShortcutEnabled) { newValue in
+                self.handleSmartNotesShortcutEnabledChange(newValue)
+            }
     }
 
     private func handlePasteLastTranscriptionShortcutEnabledChange(_ isEnabled: Bool) {
         SettingsStore.shared.pasteLastTranscriptionShortcutEnabled = isEnabled
         if !isEnabled, self.activeShortcutRecordingTarget == .pasteLast {
             self.clearShortcutRecordingMode()
+        }
+    }
+
+    private func handleSmartNotesShortcutEnabledChange(_ isEnabled: Bool) {
+        SettingsStore.shared.smartNotesShortcutEnabled = isEnabled
+        self.hotkeyManager?.updateSmartNotesShortcutEnabled(isEnabled)
+        if !isEnabled, self.activeShortcutRecordingTarget == .smartNotes {
+            self.clearShortcutRecordingMode()
+        }
+        if !isEnabled, self.activeRecordingMode == .smartNotes {
+            if self.asr.isRunning {
+                Task { await self.asr.stopWithoutTranscription() }
+            }
+            self.clearActiveRecordingMode()
+            self.menuBarManager.setOverlayMode(.dictation)
         }
     }
 
@@ -1028,6 +1057,7 @@ struct ContentView: View {
         let optionalConfiguredShortcuts: [(ShortcutRecordingTarget, HotkeyShortcut?)] = [
             (.command, self.commandModeHotkeyShortcut),
             (.pasteLast, self.pasteLastTranscriptionHotkeyShortcut),
+            (.smartNotes, self.smartNotesHotkeyShortcut),
         ]
 
         for (otherTarget, configuredShortcut) in configuredShortcuts where otherTarget != target {
@@ -1097,6 +1127,10 @@ struct ContentView: View {
             // The hotkey manager reads this shortcut directly from SettingsStore, so no manager update is needed.
             self.pasteLastTranscriptionHotkeyShortcut = shortcut
             SettingsStore.shared.pasteLastTranscriptionHotkeyShortcut = shortcut
+        case .smartNotes:
+            self.smartNotesHotkeyShortcut = shortcut
+            SettingsStore.shared.smartNotesHotkeyShortcut = shortcut
+            self.hotkeyManager?.updateSmartNotesShortcut(shortcut)
         case let .dictationPrompt(key):
             guard let selection = SettingsStore.shared.dictationPromptSelection(forConfigurationKey: key) else { return }
             var configuration = SettingsStore.shared.dictationPromptConfiguration(for: selection)
@@ -1144,6 +1178,10 @@ struct ContentView: View {
         case .pasteLast:
             self.isPasteLastTranscriptionShortcutEnabled = enabled
             SettingsStore.shared.pasteLastTranscriptionShortcutEnabled = enabled
+        case .smartNotes:
+            self.isSmartNotesShortcutEnabled = enabled
+            SettingsStore.shared.smartNotesShortcutEnabled = enabled
+            self.hotkeyManager?.updateSmartNotesShortcutEnabled(enabled)
         case .primaryDictation, .cancel, .dictationPrompt, .newPrompt:
             break
         }
@@ -1181,6 +1219,7 @@ struct ContentView: View {
 
             Section {
                 self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
+                self.sidebarNavigationLink(.smartNotes, title: "Smart Notes", systemImage: "note.text")
                 self.sidebarNavigationLink(.meetingTools, title: "File Transcription", systemImage: "doc.text.fill")
             } header: {
                 self.sidebarSectionHeader("Use")
@@ -1295,6 +1334,8 @@ struct ContentView: View {
             return AnyView(self.rewriteModeView)
         case .history:
             return AnyView(TranscriptionHistoryView())
+        case .smartNotes:
+            return AnyView(SmartNotesView())
         }
     }
 
@@ -1475,9 +1516,11 @@ struct ContentView: View {
             rewriteShortcut: self.$rewriteModeHotkeyShortcut,
             cancelRecordingShortcut: self.$cancelRecordingHotkeyShortcut,
             pasteLastTranscriptionShortcut: self.$pasteLastTranscriptionHotkeyShortcut,
+            smartNotesShortcut: self.$smartNotesHotkeyShortcut,
             commandModeShortcutEnabled: self.$isCommandModeShortcutEnabled,
             rewriteShortcutEnabled: self.$isRewriteModeShortcutEnabled,
             pasteLastTranscriptionShortcutEnabled: self.$isPasteLastTranscriptionShortcutEnabled,
+            smartNotesShortcutEnabled: self.$isSmartNotesShortcutEnabled,
             hotkeyManagerInitialized: self.$hotkeyManagerInitialized,
             hotkeyMode: self.$hotkeyMode,
             enableStreamingPreview: self.$enableStreamingPreview,
@@ -2064,10 +2107,11 @@ struct ContentView: View {
         DebugLogger.shared.info("Output route selected: \(route.rawValue)", source: "ContentView")
         self.appBench("stop_path_enter route=\(route.rawValue)")
 
-        // Check if we're in rewrite or command mode
+        // Check if we're in a routed recording mode.
         let modeAtStop = self.activeRecordingMode
         let wasRewriteMode = modeAtStop == .edit || self.isRecordingForRewrite
         let wasCommandMode = modeAtStop == .command || self.isRecordingForCommand
+        let wasSmartNotesMode = modeAtStop == .smartNotes
         let activeDictationSlot = self.currentDictationShortcutSlot(for: modeAtStop)
         let promptOverride = self.promptModeOverrideText
         let promptTest = DictationPromptTestCoordinator.shared
@@ -2077,6 +2121,7 @@ struct ContentView: View {
         let shouldHideOverlayOnStop = route == .normal &&
             !wasRewriteMode &&
             !wasCommandMode &&
+            !wasSmartNotesMode &&
             !promptTest.isActive &&
             !shouldUseAIOnStop
         var didRequestOverlayHideOnStop = false
@@ -2130,6 +2175,13 @@ struct ContentView: View {
             if !didRequestOverlayHideOnStop {
                 await self.menuBarManager.finishProcessingAndHideOverlay()
             }
+            return
+        }
+
+        // Smart Notes is a dedicated output route and must never be redirected into
+        // prompt testing, typing, clipboard, or transcription history.
+        if wasSmartNotesMode {
+            await self.captureSmartNote(from: transcribedText)
             return
         }
 
@@ -2955,13 +3007,62 @@ struct ContentView: View {
         }
     }
 
+    private func captureSmartNote(from transcript: String) async {
+        self.menuBarManager.setProcessing(true)
+        NotchOverlayManager.shared.updateTranscriptionText("Saving note")
+
+        do {
+            let note = try SmartNotesStore.shared.capture(rawText: transcript)
+
+            if SettingsStore.shared.smartNotesAIEnhancementEnabled {
+                NotchOverlayManager.shared.updateTranscriptionText("Organizing note")
+                do {
+                    let response = try await self.processTextWithAI(
+                        transcript,
+                        overrideSystemPrompt: Self.smartNotesEnhancementPrompt
+                    )
+                    let enhancement = try SmartNoteEnhancement.parseAIResponse(response)
+                    try SmartNotesStore.shared.apply(enhancement, to: note.id)
+                } catch {
+                    DebugLogger.shared.error(
+                        "Smart Notes AI enrichment failed; raw note preserved: \(error.localizedDescription)",
+                        source: "ContentView"
+                    )
+                    NotificationService.showSmartNotesFallback(error: error.localizedDescription)
+                }
+            }
+
+            NotchOverlayManager.shared.updateTranscriptionText("Note saved")
+            try? await Task.sleep(nanoseconds: 450_000_000)
+        } catch {
+            DebugLogger.shared.error(
+                "Smart Note save failed: \(error.localizedDescription)",
+                source: "ContentView"
+            )
+            NotchOverlayManager.shared.updateTranscriptionText("Note could not be saved")
+            try? await Task.sleep(nanoseconds: 900_000_000)
+        }
+
+        await self.menuBarManager.finishProcessingAndHideOverlay()
+    }
+
+    private static let smartNotesEnhancementPrompt = """
+    Turn the voice transcript into a useful structured note without inventing facts or adding advice.
+    Remove fillers and false starts, preserve the speaker's meaning, and use concise Markdown in the body.
+    Choose one short category and up to eight lowercase tags.
+
+    Return only valid JSON with exactly this shape:
+    {"title":"Short descriptive title","category":"Category","tags":["tag"],"body":"Markdown note body"}
+    Do not wrap the JSON in a code fence.
+    """
+
     private func setActiveRecordingMode(_ mode: ActiveRecordingMode) {
         if mode != .dictate, mode != .promptMode {
             self.clearActiveDictationShortcutState()
         }
         self.activeRecordingMode = mode
         switch mode {
-        case .none, .dictate, .promptMode:
+        case .none, .dictate, .promptMode, .smartNotes:
             self.isRecordingForCommand = false
             self.isRecordingForRewrite = false
         case .edit:
@@ -3282,10 +3383,12 @@ struct ContentView: View {
             promptModeShortcut: self.promptModeHotkeyShortcut,
             commandModeShortcut: self.commandModeHotkeyShortcut,
             rewriteModeShortcut: self.rewriteModeHotkeyShortcut,
+            smartNotesShortcut: self.smartNotesHotkeyShortcut,
             promptShortcutAssignments: SettingsStore.shared.dictationPromptShortcutAssignments(),
             promptModeShortcutEnabled: self.isPromptModeShortcutEnabled,
             commandModeShortcutEnabled: self.isCommandModeShortcutEnabled,
             rewriteModeShortcutEnabled: self.isRewriteModeShortcutEnabled,
+            smartNotesShortcutEnabled: self.isSmartNotesShortcutEnabled,
             startRecordingCallback: {
                 DebugLogger.shared.debug("ContentView: startRecordingCallback invoked by hotkey", source: "ContentView")
                 self.startRecording()
@@ -3372,6 +3475,23 @@ struct ContentView: View {
                     await self.asr.start()
                 }
             },
+            smartNotesCallback: {
+                self.captureRecordingContext()
+                self.setActiveRecordingMode(.smartNotes)
+                self.menuBarManager.setOverlayMode(.dictation)
+
+                guard !self.asr.isRunning else { return }
+                self.advanceOverlayLifecycle()
+                TranscriptionSoundPlayer.shared.playStartSound()
+                Task {
+                    await self.asr.start(onCaptureStarted: {
+                        self.menuBarManager.showRecordingOverlayImmediately()
+                    })
+                    if !self.asr.isRunning {
+                        self.menuBarManager.hideRecordingOverlayImmediately(reason: "smart_notes_start_failed")
+                    }
+                }
+            },
             isDictateRecordingProvider: {
                 self.activeRecordingMode == .dictate
             },
@@ -3383,6 +3503,9 @@ struct ContentView: View {
             },
             isRewriteRecordingProvider: {
                 self.activeRecordingMode == .edit
+            },
+            isSmartNotesRecordingProvider: {
+                self.activeRecordingMode == .smartNotes
             },
             isShortcutCaptureActiveProvider: {
                 self.isRecordingAnyShortcutCapture
@@ -3616,7 +3739,7 @@ extension ContentView {
             return self.activeDictationShortcutSlot ?? .primary
         case .promptMode:
             return self.activeDictationShortcutSlot ?? .secondary
-        case .none, .edit, .command:
+        case .none, .edit, .command, .smartNotes:
             return nil
         }
     }

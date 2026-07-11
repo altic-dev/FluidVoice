@@ -41,9 +41,11 @@ struct SettingsView: View {
     @Binding var rewriteShortcut: HotkeyShortcut
     @Binding var cancelRecordingShortcut: HotkeyShortcut
     @Binding var pasteLastTranscriptionShortcut: HotkeyShortcut?
+    @Binding var smartNotesShortcut: HotkeyShortcut?
     @Binding var commandModeShortcutEnabled: Bool
     @Binding var rewriteShortcutEnabled: Bool
     @Binding var pasteLastTranscriptionShortcutEnabled: Bool
+    @Binding var smartNotesShortcutEnabled: Bool
     @Binding var hotkeyManagerInitialized: Bool
     @Binding var hotkeyMode: HotkeyActivationMode
     @Binding var enableStreamingPreview: Bool
@@ -738,6 +740,34 @@ struct SettingsView: View {
                                             DebugLogger.shared.debug("Starting to record new write mode shortcut", source: "SettingsView")
                                             self.shortcutRecordingMessage = nil
                                             self.activeShortcutRecordingTarget = .edit
+                                        }
+                                    )
+                                    Divider().opacity(0.2).padding(.vertical, 4)
+
+                                    self.shortcutRow(
+                                        content: .init(
+                                            icon: "note.text",
+                                            iconColor: .secondary,
+                                            title: "Smart Notes",
+                                            description: "Dictate a Markdown note without typing into the active app"
+                                        ),
+                                        shortcut: self.smartNotesShortcut,
+                                        isRecording: self.isRecording(.smartNotes),
+                                        isAnyRecordingActive: self.isRecordingAnyShortcut,
+                                        recordingMessage: self.isRecording(.smartNotes) ? self.shortcutRecordingMessage : nil,
+                                        isEnabled: self.$smartNotesShortcutEnabled,
+                                        requiresShortcutToEnable: true,
+                                        onChangePressed: {
+                                            self.shortcutRecordingMessage = nil
+                                            self.activeShortcutRecordingTarget = .smartNotes
+                                        },
+                                        onRemovePressed: {
+                                            if self.activeShortcutRecordingTarget == .smartNotes {
+                                                self.shortcutRecordingMessage = nil
+                                                self.activeShortcutRecordingTarget = nil
+                                            }
+                                            self.smartNotesShortcut = nil
+                                            self.smartNotesShortcutEnabled = false
                                         }
                                     )
                                     Divider().opacity(0.2).padding(.vertical, 4)

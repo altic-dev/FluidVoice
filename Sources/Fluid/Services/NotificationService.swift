@@ -9,6 +9,7 @@ enum NotificationService {
     enum Kind {
         static let aiProcessingFallback = "aiProcessingFallback"
         static let commandModeFailure = "commandModeFailure"
+        static let smartNotesFallback = "smartNotesFallback"
     }
 
     static func showAIProcessingFallback(error: String) {
@@ -71,6 +72,33 @@ enum NotificationService {
         }
     }
 
+    static func showSmartNotesFallback(error: String) {
+        guard SettingsStore.shared.notifyAIProcessingFailures else { return }
+
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.deliverSmartNotesFallback(error: error, using: center)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert]) { granted, requestError in
+                    if let requestError {
+                        DebugLogger.shared.warning(
+                            "Notification permission request failed: \(requestError.localizedDescription)",
+                            source: "NotificationService"
+                        )
+                    }
+                    guard granted else { return }
+                    self.deliverSmartNotesFallback(error: error, using: center)
+                }
+            case .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
     private static func deliverAIProcessingFallback(error: String, using center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = "AI Enhancement failed"
@@ -112,6 +140,29 @@ enum NotificationService {
             if let addError {
                 DebugLogger.shared.warning(
                     "Failed to show Command Mode notification: \(addError.localizedDescription)",
+                    source: "NotificationService"
+                )
+            }
+        }
+    }
+
+    private static func deliverSmartNotesFallback(error: String, using center: UNUserNotificationCenter) {
+        let content = UNMutableNotificationContent()
+        content.title = "Smart Note saved without AI"
+        content.body = "The raw transcript is safe in your notes folder."
+        content.subtitle = error
+        content.sound = nil
+        content.userInfo = [UserInfoKey.kind: Kind.smartNotesFallback]
+
+        let request = UNNotificationRequest(
+            identifier: "smart-notes-fallback-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        center.add(request) { addError in
+            if let addError {
+                DebugLogger.shared.warning(
+                    "Failed to show Smart Notes fallback notification: \(addError.localizedDescription)",
                     source: "NotificationService"
                 )
             }
