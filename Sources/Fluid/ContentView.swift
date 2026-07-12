@@ -3147,9 +3147,9 @@ struct ContentView: View {
             if shouldPlayStartSound, !self.asr.isRunning {
                 TranscriptionSoundPlayer.shared.playStartSound()
             }
+            self.captureRecordingContext()
+            self.prewarmPrivateAIDictationIfNeeded(for: .primary)
             await self.asr.start(onCaptureStarted: {
-                self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: .primary)
                 if shouldShowDictationOverlay {
                     self.menuBarManager.showRecordingOverlayImmediately()
                 }
@@ -3758,14 +3758,14 @@ extension ContentView {
             if SettingsStore.shared.enableTranscriptionSounds, !self.asr.isRunning {
                 TranscriptionSoundPlayer.shared.playStartSound()
             }
+            self.captureRecordingContext()
+            self.prewarmPrivateAIDictationIfNeeded(for: slot)
+            self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
             await self.asr.start(onCaptureStarted: {
-                self.captureRecordingContext()
-                self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
                 self.appBench("overlay_mode_request mode=Dictation")
                 self.menuBarManager.setOverlayMode(.dictation)
                 self.menuBarManager.showRecordingOverlayImmediately()
                 self.appBench("overlay_mode_requested mode=Dictation")
-                self.prewarmPrivateAIDictationIfNeeded(for: slot)
             })
             if !self.asr.isRunning {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
