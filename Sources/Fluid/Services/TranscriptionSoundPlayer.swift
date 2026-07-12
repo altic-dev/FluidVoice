@@ -17,6 +17,7 @@ final class TranscriptionSoundPlayer {
     private init() {}
 
     func playStartSound() {
+        self.sessionDuckingPrecedence = nil
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
@@ -31,6 +32,8 @@ final class TranscriptionSoundPlayer {
     }
 
     func playStopSound() {
+        let sessionDuckingPrecedence = self.sessionDuckingPrecedence
+        self.sessionDuckingPrecedence = nil
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
@@ -38,8 +41,7 @@ final class TranscriptionSoundPlayer {
         // Reuse the decision captured at session start: the ducking revert is keyed to
         // what MediaPlaybackService actually did when the session began, so a settings
         // toggle mid-dictation must not re-enable the cue's system-volume override here.
-        let duckingPrecedence = self.sessionDuckingPrecedence ?? self.duckingOwnsSystemVolume(settings)
-        self.sessionDuckingPrecedence = nil
+        let duckingPrecedence = sessionDuckingPrecedence ?? self.duckingOwnsSystemVolume(settings)
         self.play(
             soundName: soundName,
             desiredVolume: settings.transcriptionSoundVolume,

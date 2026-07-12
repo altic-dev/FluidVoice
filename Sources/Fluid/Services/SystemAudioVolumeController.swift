@@ -2,6 +2,13 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
+protocol SystemAudioVolumeControlling {
+    func captureOutputVolume() -> OutputVolumeSnapshot?
+    func apply(_ snapshot: OutputVolumeSnapshot) -> SystemAudioVolumeController.ApplyOutcome
+    func applyVirtualMainVolume(_ snapshot: OutputVolumeSnapshot) -> Bool
+    func reread(_ snapshot: OutputVolumeSnapshot) -> OutputVolumeSnapshot?
+}
+
 /// Thin CoreAudio wrapper for reading and adjusting the **default output device's**
 /// output volume, used to "duck" (temporarily lower) system audio while dictation
 /// is active, as a gentler alternative to fully pausing media.
@@ -16,7 +23,7 @@ import Foundation
 /// unchanged, so the snapshot records each element rather than a single scalar.
 /// When neither the main volume nor the per-channel scalars are settable, it falls back
 /// to the HAL's virtual main volume (the control the macOS volume HUD drives).
-struct SystemAudioVolumeController {
+struct SystemAudioVolumeController: SystemAudioVolumeControlling {
     /// Captures the default output device's current volume so it can later be
     /// restored exactly, preserving per-channel balance.
     ///
@@ -37,14 +44,18 @@ struct SystemAudioVolumeController {
             )
         }
 
-        // Otherwise capture each *settable* stereo channel individually so balance is retained.
-        let channels = self.stereoChannels(device: device).compactMap { element -> OutputVolumeSnapshot.Channel? in
+        // Otherwise capture each settable stereo channel individually so balance is
+        // retained — but only when the *whole* preferred pair is capturable. A partial
+        // pair would duck one channel and leave the other at full volume, with the
+        // all-captured-channels-written check reporting the duck as fully applied.
+        let stereo = self.stereoChannels(device: device)
+        let channels = stereo.compactMap { element -> OutputVolumeSnapshot.Channel? in
             guard self.isVolumeSettable(device: device, selector: kAudioDevicePropertyVolumeScalar, element: element),
                   let volume = self.volume(device: device, selector: kAudioDevicePropertyVolumeScalar, element: element)
             else { return nil }
             return .init(selector: kAudioDevicePropertyVolumeScalar, element: element, volume: volume)
         }
-        if !channels.isEmpty {
+        if channels.count == stereo.count {
             return OutputVolumeSnapshot(deviceID: device, channels: channels)
         }
 

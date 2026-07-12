@@ -27,6 +27,13 @@ final class MediaPlaybackService {
         _ action: @escaping @MainActor @Sendable () -> Void
     ) -> Void
 
+    struct SuppressionConfiguration {
+        let duckInsteadOfPausing: Bool
+        let duckVolumeLevel: Float
+    }
+
+    typealias SuppressionConfigurationProvider = @MainActor () -> SuppressionConfiguration
+
     /// The pinned adapter's two-second deadline can occupy roughly 2.1 seconds
     /// in run-loop slices. Leave additional time for process and callback delivery.
     static let nowPlayingQueryTimeoutSeconds: TimeInterval = 2.5
@@ -37,12 +44,21 @@ final class MediaPlaybackService {
 
     static let shared = MediaPlaybackService(
         mediaController: MediaController(),
+        volumeController: SystemAudioVolumeController(),
+        suppressionConfigurationProvider: {
+            let settings = SettingsStore.shared
+            return SuppressionConfiguration(
+                duckInsteadOfPausing: settings.duckMediaInsteadOfPausing,
+                duckVolumeLevel: Float(settings.duckMediaVolumeLevel)
+            )
+        },
         queryTimeoutSeconds: MediaPlaybackService.nowPlayingQueryTimeoutSeconds,
         timeoutScheduler: MediaPlaybackService.productionTimeoutScheduler
     )
 
     private let mediaController: any MediaPlaybackControlling
-    private let volumeController: SystemAudioVolumeController
+    private let volumeController: any SystemAudioVolumeControlling
+    private let suppressionConfigurationProvider: SuppressionConfigurationProvider
     private let queryTimeoutSeconds: TimeInterval
     private let timeoutScheduler: TimeoutScheduler
 
@@ -62,12 +78,14 @@ final class MediaPlaybackService {
     /// Creates an isolated service with injectable dependencies for deterministic tests.
     init(
         mediaController: any MediaPlaybackControlling,
-        volumeController: SystemAudioVolumeController = SystemAudioVolumeController(),
+        volumeController: any SystemAudioVolumeControlling,
+        suppressionConfigurationProvider: @escaping SuppressionConfigurationProvider,
         queryTimeoutSeconds: TimeInterval,
         timeoutScheduler: @escaping TimeoutScheduler
     ) {
         self.mediaController = mediaController
         self.volumeController = volumeController
+        self.suppressionConfigurationProvider = suppressionConfigurationProvider
         self.queryTimeoutSeconds = queryTimeoutSeconds
         self.timeoutScheduler = timeoutScheduler
     }
@@ -109,6 +127,10 @@ final class MediaPlaybackService {
             )
             return false
         }
+
+        // Keep the action stable for this request even if Settings changes while
+        // MediaRemoteAdapter's asynchronous Now Playing query is in flight.
+        let suppressionConfiguration = self.suppressionConfigurationProvider()
 
         return await withCheckedContinuation { continuation in
             let queryStartedAt = DispatchTime.now().uptimeNanoseconds
@@ -224,7 +246,9 @@ final class MediaPlaybackService {
                     // MediaRemoteAdapter can fire this callback more than once, and ducking
                     // is not idempotent (it reads the current volume as the "original"), so a
                     // duplicate must not re-duck or overwrite `activeSuppression`.
-                    resumeOnce(true) { self.applySuppression() }
+                    resumeOnce(true) {
+                        self.applySuppression(configuration: suppressionConfiguration)
+                    }
                 } else {
                     DebugLogger.shared.debug(
                         """
@@ -259,13 +283,12 @@ final class MediaPlaybackService {
 
     /// Either pauses playback or ducks the system output volume, based on the
     /// user's setting, and records what was done in `activeSuppression`.
-    private func applySuppression() {
+    private func applySuppression(configuration: SuppressionConfiguration) {
         // Ducking: lower the output volume instead of stopping playback entirely.
-        if SettingsStore.shared.duckMediaInsteadOfPausing,
+        if configuration.duckInsteadOfPausing,
            let original = self.volumeController.captureOutputVolume()
         {
-            let level = Float(SettingsStore.shared.duckMediaVolumeLevel)
-            let target = original.scaled(by: level)
+            let target = original.scaled(by: configuration.duckVolumeLevel)
             switch self.volumeController.apply(target) {
             case .applied:
                 // Re-read what the device actually snapped to (volume can be quantized to
@@ -326,11 +349,10 @@ final class MediaPlaybackService {
             // Mute is checked separately from the tolerance: a deeply ducked level can
             // sit within 0.02 of zero, and restoring over a mute would turn the user's
             // audio back on against their explicit intent.
-            let current = self.volumeController.reread(applied)?.averageLevel
-            let userMuted = current.map { $0 <= 0.001 && applied.averageLevel > 0.001 } ?? false
-            if let current, userMuted || abs(current - applied.averageLevel) > 0.02 {
+            let currentSnapshot = self.volumeController.reread(applied)
+            if let currentSnapshot, self.userChangedVolume(currentSnapshot, from: applied) {
                 DebugLogger.shared.info(
-                    "MediaPlaybackService: Output volume changed during dictation (\(applied.averageLevel) -> \(current)\(userMuted ? ", muted" : "")), leaving as-is",
+                    "MediaPlaybackService: Output volume changed during dictation (\(applied.averageLevel) -> \(currentSnapshot.averageLevel)), leaving as-is",
                     source: "MediaPlaybackService"
                 )
             } else {
@@ -363,6 +385,22 @@ final class MediaPlaybackService {
         }
 
         self.activeSuppression = nil
+    }
+
+    private func userChangedVolume(
+        _ current: OutputVolumeSnapshot,
+        from applied: OutputVolumeSnapshot
+    ) -> Bool {
+        guard current.channels.count == applied.channels.count else { return true }
+
+        return zip(current.channels, applied.channels).contains { currentChannel, appliedChannel in
+            guard currentChannel.selector == appliedChannel.selector,
+                  currentChannel.element == appliedChannel.element
+            else { return true }
+
+            let userMuted = currentChannel.volume <= 0.001 && appliedChannel.volume > 0.001
+            return userMuted || abs(currentChannel.volume - appliedChannel.volume) > 0.02
+        }
     }
     #else
     // Intel Mac stub - media control not available
