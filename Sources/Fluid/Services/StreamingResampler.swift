@@ -25,6 +25,9 @@ final class StreamingResampler {
         }
 
         if sourceRate == self.targetRate {
+            if abs(self.lastSourceRate - sourceRate) > 0.5 {
+                self.state?.converter.reset()
+            }
             return samples
         }
         guard samples.isEmpty == false, sourceRate > 0 else { return [] }
@@ -57,6 +60,7 @@ final class StreamingResampler {
 
         let inputBuffer = state.inputBuffer
         let outputBuffer = state.outputBuffer
+        outputBuffer.frameLength = 0
         inputBuffer.frameLength = inputFrameCount
 
         guard let inputChannel = inputBuffer.floatChannelData?[0] else { return [] }

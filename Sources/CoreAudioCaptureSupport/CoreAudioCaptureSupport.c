@@ -224,7 +224,7 @@ static OSStatus fv_io_proc(
         !atomic_load_explicit(&capture->running, memory_order_relaxed)) {
         return noErr;
     }
-    if (atomic_load_explicit(&capture->formatChanged, memory_order_relaxed)) {
+    if (atomic_load_explicit(&capture->formatChanged, memory_order_acquire)) {
         atomic_fetch_add_explicit(&capture->droppedPackets, 1, memory_order_relaxed);
         return noErr;
     }
@@ -508,6 +508,7 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
             capture
         );
     }
+    dispatch_sync(capture->listenerQueue, ^{});
     capture->format = format;
     capture->bytesPerSample = bytesPerSample;
     capture->bufferFrameSize = bufferFrameSize;
