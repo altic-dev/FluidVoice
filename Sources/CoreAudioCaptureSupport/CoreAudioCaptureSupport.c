@@ -454,6 +454,8 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
     if (atomic_load_explicit(&capture->running, memory_order_acquire)) {
         return noErr;
     }
+    dispatch_sync(capture->listenerQueue, ^{});
+    atomic_store_explicit(&capture->formatChanged, false, memory_order_release);
 
     AudioStreamBasicDescription format;
     uint32_t bytesPerSample = 0;
@@ -494,6 +496,17 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
             kAudioStreamPropertyVirtualFormat,
             capture
         );
+        status = fv_get_input_stream_format(
+            capture->deviceID,
+            &format,
+            NULL
+        );
+        if (status == noErr && !fv_format_is_supported(&format, &bytesPerSample)) {
+            status = kAudioHardwareUnsupportedOperationError;
+        }
+        if (status != noErr) {
+            return status;
+        }
     } else if (!capture->virtualFormatListenerInstalled) {
         capture->virtualFormatListenerInstalled = fv_install_format_listener(
             capture->inputStreamID,
@@ -508,11 +521,9 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
             capture
         );
     }
-    dispatch_sync(capture->listenerQueue, ^{});
     capture->format = format;
     capture->bytesPerSample = bytesPerSample;
     capture->bufferFrameSize = bufferFrameSize;
-    atomic_store_explicit(&capture->formatChanged, false, memory_order_release);
 
     atomic_store_explicit(&capture->running, true, memory_order_release);
     status = AudioDeviceStart(capture->deviceID, capture->ioProcID);
