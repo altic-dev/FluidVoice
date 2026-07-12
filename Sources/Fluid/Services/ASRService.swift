@@ -1285,11 +1285,11 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
+            self.installCaptureStartedGate(onCaptureStarted)
             try self.startPreferredAudioCapture()
             self.isRunning = true
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             DebugLogger.shared.info("✅ Audio capture running", source: "ASRService")
-            self.installCaptureStartedGate(onCaptureStarted)
 
             // Pause only after capture is live so media control cannot delay the
             // first PCM packet. A quick stop while this await is in flight is
