@@ -735,7 +735,8 @@ final class ASRService: ObservableObject {
         }
 
         if let directAudioInput = self.directAudioInput,
-           directAudioInput.deviceID == device.id
+           directAudioInput.deviceID == device.id,
+           directAudioInput.formatChanged == false
         {
             return true
         }
@@ -745,7 +746,14 @@ final class ASRService: ObservableObject {
 
         let pipeline = self.audioCapturePipeline
         do {
-            let directAudioInput = try DirectCoreAudioInput(deviceID: device.id) { samples, frameCount, sampleRate, inputHostTime, inputSampleTime in
+            let directAudioInput = try DirectCoreAudioInput(
+                deviceID: device.id,
+                onFormatChange: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.handleDirectInputFormatChanged()
+                    }
+                }
+            ) { samples, frameCount, sampleRate, inputHostTime, inputSampleTime in
                 pipeline.handle(
                     samples: samples,
                     frameCount: frameCount,
@@ -813,6 +821,14 @@ final class ASRService: ObservableObject {
         try self.startEngine()
         try self.setupEngineTap()
         self.activeAudioCaptureBackend = .audioEngine
+    }
+
+    private func handleDirectInputFormatChanged() {
+        DebugLogger.shared.warning(
+            "Direct capture input format changed (Bluetooth route transition); rebuilding capture",
+            source: "ASRService"
+        )
+        self.scheduleAudioRouteRecovery(reason: "input stream format changed")
     }
 
     private func stopActiveAudioCapture() {
@@ -899,6 +915,8 @@ final class ASRService: ObservableObject {
     private var engineConfigurationChangeObserver: NSObjectProtocol?
     private var audioRouteRecoveryTask: Task<Void, Never>?
     private let audioRouteRecoveryDelayNanoseconds: UInt64 = 1_000_000_000
+    private var pendingCaptureStartedCallback: (@MainActor () -> Void)?
+    private var captureStartedTimeoutTask: Task<Void, Never>?
     private var audioEngineStandbyTask: Task<Void, Never>?
     private let audioEngineStandbyNanoseconds: UInt64 = 8_000_000_000
     private var isEngineTapInstalled = false
@@ -931,14 +949,15 @@ final class ASRService: ObservableObject {
     /// from CoreAudio's realtime callback thread.
     private lazy var audioCapturePipeline: AudioCapturePipeline = .init(
         audioBuffer: self.audioBuffer,
-        onFirstAudio: { sessionID, sampleCount, frameLength, sampleRate, acquisitionMs, elapsedMs in
-            DispatchQueue.main.async {
+        onFirstAudio: { [weak self] sessionID, sampleCount, frameLength, sampleRate, acquisitionMs, elapsedMs in
+            DispatchQueue.main.async { [weak self] in
                 let bufferMs = Int((Double(frameLength) / sampleRate * 1000).rounded())
                 DebugLogger.shared.benchmark(
                     "ASR_BENCH",
                     message: "session=\(sessionID) first_audio sampleCount=\(sampleCount) frameLength=\(frameLength) sampleRate=\(Int(sampleRate.rounded())) bufferMs=\(bufferMs) acquisitionMs=\(acquisitionMs) elapsedMs=\(elapsedMs)",
                     source: "ASRBenchmark"
                 )
+                self?.fireCaptureStartedGate(timedOut: false)
             }
         },
         onLevel: { [weak self] level in
@@ -948,6 +967,44 @@ final class ASRService: ObservableObject {
             }
         }
     )
+
+    private func installCaptureStartedGate(_ callback: (@MainActor () -> Void)?) {
+        guard let callback else { return }
+
+        self.pendingCaptureStartedCallback = callback
+        self.captureStartedTimeoutTask?.cancel()
+        self.captureStartedTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 2_500_000_000)
+            } catch {
+                return
+            }
+            await MainActor.run { [weak self] in
+                self?.fireCaptureStartedGate(timedOut: true)
+            }
+        }
+    }
+
+    private func fireCaptureStartedGate(timedOut: Bool) {
+        guard let callback = self.pendingCaptureStartedCallback else { return }
+
+        self.pendingCaptureStartedCallback = nil
+        self.captureStartedTimeoutTask?.cancel()
+        self.captureStartedTimeoutTask = nil
+        if timedOut {
+            DebugLogger.shared.warning(
+                "Capture-start gate timed out waiting for first audio; proceeding",
+                source: "ASRService"
+            )
+        }
+        callback()
+    }
+
+    private func cancelCaptureStartedGate() {
+        self.pendingCaptureStartedCallback = nil
+        self.captureStartedTimeoutTask?.cancel()
+        self.captureStartedTimeoutTask = nil
+    }
 
     init() {
         // CRITICAL FIX: Do NOT call any framework-triggering APIs here!
@@ -1232,7 +1289,7 @@ final class ASRService: ObservableObject {
             self.isRunning = true
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             DebugLogger.shared.info("✅ Audio capture running", source: "ASRService")
-            onCaptureStarted?()
+            self.installCaptureStartedGate(onCaptureStarted)
 
             // Pause only after capture is live so media control cannot delay the
             // first PCM packet. A quick stop while this await is in flight is
@@ -1275,6 +1332,7 @@ final class ASRService: ObservableObject {
             self.isDictionaryTrainingCaptureActive = false
             self.audioCapturePipeline.setRecordingEnabled(false)
             self.isRunning = false
+            self.cancelCaptureStartedGate()
             self.stopActiveAudioCapture()
             self.retireAudioEngine(reason: "start_failed")
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
@@ -1383,6 +1441,7 @@ final class ASRService: ObservableObject {
         // Set isRunning to false before teardown so in-flight ASR chunks stop safely.
         DebugLogger.shared.debug("🚫 Setting isRunning = false...", source: "ASRService")
         self.isRunning = false
+        self.cancelCaptureStartedGate()
         DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
 
         // Stop monitoring device to prevent callbacks after stop
@@ -1698,6 +1757,7 @@ final class ASRService: ObservableObject {
 
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
         self.isRunning = false
+        self.cancelCaptureStartedGate()
         self.audioCapturePipeline.setRecordingEnabled(false)
 
         // Stop monitoring device
@@ -3615,10 +3675,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private var recordingSessionID: Int = 0
     private var recordingStartHostTime: UInt64 = 0
     private var recordingStopHostTime: UInt64?
-    private var resampleSourceRate: Double = 0
-    private var resampleSourceFrameCursor: Int64 = 0
-    private var resampleNextSourcePosition: Double = 0
-    private var resamplePreviousSample: Float?
+    private let resampler = StreamingResampler()
     private var lastInputSampleEnd: Int64?
 
     // Smoothing state (kept off ASRService/@MainActor)
@@ -3650,12 +3707,13 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         startHostTime: UInt64 = 0
     ) {
         self.lock.lock()
+        let wasRecording = self.recordingEnabled
         if enabled {
             self.firstAudioReported = false
             self.recordingSessionID = sessionID
             self.recordingStartHostTime = startHostTime == 0 ? mach_absolute_time() : startHostTime
             self.recordingStopHostTime = nil
-            self.resetResamplerLocked()
+            self.resampler.reset()
             self.lastInputSampleEnd = nil
             self.recordingEnabled = true
         }
@@ -3664,7 +3722,14 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.recordingSessionID = 0
             self.recordingStartHostTime = 0
             self.recordingStopHostTime = nil
-            self.resetResamplerLocked()
+            if wasRecording {
+                let tail = self.resampler.flush()
+                if tail.isEmpty == false {
+                    self.audioBuffer.append(tail)
+                }
+            } else {
+                self.resampler.reset()
+            }
             self.lastInputSampleEnd = nil
             self.levelHistory.removeAll(keepingCapacity: true)
             self.smoothedLevel = 0.0
@@ -3775,14 +3840,11 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             {
                 // Do not interpolate across a hardware discontinuity or a
                 // packet dropped under extreme consumer backpressure.
-                self.resetResamplerLocked()
+                self.resampler.reset()
             }
             self.lastInputSampleEnd = inputSampleTime + Int64(acceptedRange.upperBound)
         }
-        let mono16k = self.resampleTo16kLocked(
-            acceptedSamples,
-            sourceSampleRate: sampleRate
-        )
+        let mono16k = self.resampler.process(acceptedSamples, sourceRate: sampleRate)
         guard mono16k.isEmpty == false else {
             self.lock.unlock()
             return
@@ -3791,9 +3853,9 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         if shouldReportFirstAudio {
             self.firstAudioReported = true
         }
+        self.audioBuffer.append(mono16k)
         self.lock.unlock()
 
-        self.audioBuffer.append(mono16k)
         if shouldReportFirstAudio {
             let acceptedHostTime = Self.hostTime(
                 inputHostTime,
@@ -3871,70 +3933,6 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private static func elapsedMilliseconds(from start: UInt64, to end: UInt64) -> Int {
         guard start > 0, end >= start else { return 0 }
         return Int((Double(end - start) / self.hostTicksPerSecond * 1000).rounded())
-    }
-
-    private func resetResamplerLocked() {
-        self.resampleSourceRate = 0
-        self.resampleSourceFrameCursor = 0
-        self.resampleNextSourcePosition = 0
-        self.resamplePreviousSample = nil
-    }
-
-    /// Stateful linear resampling keeps fractional phase across small hardware
-    /// callbacks. Stateless per-packet conversion silently shortens 44.1 kHz
-    /// recordings and introduces a discontinuity at every device cycle.
-    private func resampleTo16kLocked(
-        _ samples: [Float],
-        sourceSampleRate: Double
-    ) -> [Float] {
-        guard samples.isEmpty == false else { return [] }
-        if sourceSampleRate == 16_000.0 {
-            return samples
-        }
-
-        if abs(self.resampleSourceRate - sourceSampleRate) > 0.5 {
-            self.resetResamplerLocked()
-            self.resampleSourceRate = sourceSampleRate
-        }
-
-        let chunkStart = Double(self.resampleSourceFrameCursor)
-        let chunkEnd = chunkStart + Double(samples.count)
-        let step = sourceSampleRate / 16_000.0
-        var output: [Float] = []
-        output.reserveCapacity(Int(ceil(Double(samples.count) / step)) + 1)
-
-        while self.resampleNextSourcePosition < chunkEnd {
-            let lowerFrame = Int64(floor(self.resampleNextSourcePosition))
-            let fraction = Float(self.resampleNextSourcePosition - Double(lowerFrame))
-            let localLower = lowerFrame - self.resampleSourceFrameCursor
-
-            let lowerSample: Float
-            let upperSample: Float
-            if localLower < 0 {
-                guard localLower == -1,
-                      let previousSample = self.resamplePreviousSample
-                else { break }
-                lowerSample = previousSample
-                upperSample = samples[0]
-            } else {
-                let index = Int(localLower)
-                guard index < samples.count else { break }
-                lowerSample = samples[index]
-                if fraction == 0 {
-                    upperSample = lowerSample
-                } else {
-                    guard index + 1 < samples.count else { break }
-                    upperSample = samples[index + 1]
-                }
-            }
-
-            output.append(lowerSample + (upperSample - lowerSample) * fraction)
-            self.resampleNextSourcePosition += step
-        }
-
-        self.resampleSourceFrameCursor += Int64(samples.count)
-        self.resamplePreviousSample = samples.last
-        return output
     }
 
     private func calculateAudioLevel(_ samples: [Float]) -> CGFloat {
