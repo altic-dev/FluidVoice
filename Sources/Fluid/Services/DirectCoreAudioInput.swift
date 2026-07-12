@@ -24,10 +24,18 @@ final class DirectCoreAudioInput {
     }
 
     let deviceID: AudioObjectID
-    let sampleRate: Double
-    let hardwareBufferFrameSize: UInt32
+    var sampleRate: Double {
+        guard let capture else { return 0 }
+        return fv_core_audio_capture_sample_rate(capture)
+    }
+
+    var hardwareBufferFrameSize: UInt32 {
+        guard let capture else { return 0 }
+        return fv_core_audio_capture_buffer_frame_size(capture)
+    }
 
     private var capture: FVCoreAudioCaptureRef?
+    private let onFormatChange: (@Sendable () -> Void)?
     private let packetHandler: PacketHandler
     private let workerQueue = DispatchQueue(
         label: "com.fluidvoice.audio.direct-input-consumer",
@@ -35,7 +43,11 @@ final class DirectCoreAudioInput {
     )
     private let workerGroup = DispatchGroup()
 
-    init(deviceID: AudioObjectID, packetHandler: @escaping PacketHandler) throws {
+    init(
+        deviceID: AudioObjectID,
+        onFormatChange: (@Sendable () -> Void)? = nil,
+        packetHandler: @escaping PacketHandler
+    ) throws {
         var capture: FVCoreAudioCaptureRef?
         let status = fv_core_audio_capture_create(deviceID, &capture)
         guard status == noErr, let capture else {
@@ -44,8 +56,7 @@ final class DirectCoreAudioInput {
 
         self.deviceID = deviceID
         self.capture = capture
-        self.sampleRate = fv_core_audio_capture_sample_rate(capture)
-        self.hardwareBufferFrameSize = fv_core_audio_capture_buffer_frame_size(capture)
+        self.onFormatChange = onFormatChange
         self.packetHandler = packetHandler
     }
 
@@ -63,6 +74,11 @@ final class DirectCoreAudioInput {
         return fv_core_audio_capture_dropped_packet_count(capture)
     }
 
+    var formatChanged: Bool {
+        guard let capture else { return false }
+        return fv_core_audio_capture_format_changed(capture)
+    }
+
     func start() throws {
         guard let capture else {
             throw Self.error(status: kAudioHardwareBadObjectError, operation: "start direct Core Audio input")
@@ -75,13 +91,18 @@ final class DirectCoreAudioInput {
             throw Self.error(status: status, operation: "start direct Core Audio input")
         }
 
+        let onFormatChange = self.onFormatChange
         let packetHandler = self.packetHandler
         let workerGroup = self.workerGroup
         let workerHandle = SendableCaptureHandle(rawValue: capture)
         workerGroup.enter()
         self.workerQueue.async {
             defer { workerGroup.leave() }
-            Self.consumePackets(capture: workerHandle.rawValue, packetHandler: packetHandler)
+            Self.consumePackets(
+                capture: workerHandle.rawValue,
+                onFormatChange: onFormatChange,
+                packetHandler: packetHandler
+            )
         }
     }
 
@@ -105,8 +126,11 @@ final class DirectCoreAudioInput {
 
     private nonisolated static func consumePackets(
         capture: FVCoreAudioCaptureRef,
+        onFormatChange: (@Sendable () -> Void)?,
         packetHandler: PacketHandler
     ) {
+        var didNotifyFormatChange = false
+
         while true {
             var packet = FVCoreAudioPacket()
             while fv_core_audio_capture_peek(capture, &packet) {
@@ -120,6 +144,11 @@ final class DirectCoreAudioInput {
                     )
                 }
                 fv_core_audio_capture_consume(capture)
+            }
+
+            if didNotifyFormatChange == false, fv_core_audio_capture_format_changed(capture) {
+                didNotifyFormatChange = true
+                onFormatChange?()
             }
 
             guard fv_core_audio_capture_is_running(capture) else {

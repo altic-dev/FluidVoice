@@ -43,6 +43,7 @@ void fv_core_audio_capture_clear(FVCoreAudioCaptureRef capture);
 void fv_core_audio_capture_wake(FVCoreAudioCaptureRef capture);
 
 bool fv_core_audio_capture_is_running(FVCoreAudioCaptureRef capture);
+bool fv_core_audio_capture_format_changed(FVCoreAudioCaptureRef capture);
 double fv_core_audio_capture_sample_rate(FVCoreAudioCaptureRef capture);
 uint32_t fv_core_audio_capture_buffer_frame_size(FVCoreAudioCaptureRef capture);
 uint64_t fv_core_audio_capture_dropped_packet_count(FVCoreAudioCaptureRef capture);
