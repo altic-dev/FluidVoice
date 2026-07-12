@@ -10,11 +10,11 @@ import Foundation
 /// from the default device, not just a single app's media.
 ///
 /// Volume is captured and restored as an `OutputVolumeSnapshot`, which preserves the
-/// **individual per-channel levels** (or the master element). Some output devices
-/// expose no settable master volume — only per-channel scalars — and a user may have
+/// **individual per-channel levels** (or the main element). Some output devices
+/// expose no settable main volume — only per-channel scalars — and a user may have
 /// a non-centered left/right balance that must survive a duck/restore cycle
 /// unchanged, so the snapshot records each element rather than a single scalar.
-/// When neither the master nor the per-channel scalars are settable, it falls back
+/// When neither the main volume nor the per-channel scalars are settable, it falls back
 /// to the HAL's virtual main volume (the control the macOS volume HUD drives).
 struct SystemAudioVolumeController {
     /// Captures the default output device's current volume so it can later be
@@ -25,15 +25,15 @@ struct SystemAudioVolumeController {
     func captureOutputVolume() -> OutputVolumeSnapshot? {
         guard let device = self.defaultOutputDevice() else { return nil }
 
-        // Prefer the single master element, but only when it is *settable* — otherwise we
-        // could capture a read-only master and then fail to restore it on a device whose
-        // per-channel volumes are the ones that are actually settable.
+        // Prefer the single main element, but only when it is *settable* — otherwise we
+        // could capture a read-only main volume and then fail to restore it on a device
+        // whose per-channel volumes are the ones that are actually settable.
         if self.isVolumeSettable(device: device, selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain),
-           let master = self.volume(device: device, selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain)
+           let mainLevel = self.volume(device: device, selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain)
         {
             return OutputVolumeSnapshot(
                 deviceID: device,
-                channels: [.init(selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain, volume: master)]
+                channels: [.init(selector: kAudioDevicePropertyVolumeScalar, element: kAudioObjectPropertyElementMain, volume: mainLevel)]
             )
         }
 
@@ -65,18 +65,42 @@ struct SystemAudioVolumeController {
         return nil
     }
 
+    /// Outcome of writing a snapshot's channels back to the device. Partial writes
+    /// are surfaced explicitly: treating "one of two channels written" as success
+    /// would let a failed restore leave one channel stuck at the ducked level.
+    enum ApplyOutcome {
+        /// Every captured channel was written.
+        case applied
+        /// Some channel writes failed — the device is in a mixed state.
+        case partial
+        /// No channel could be written.
+        case failed
+    }
+
     /// Writes every channel captured in `snapshot` back to its recorded level.
-    ///
-    /// - Returns: `true` if at least one channel was successfully written.
     @discardableResult
-    func apply(_ snapshot: OutputVolumeSnapshot) -> Bool {
-        var didSet = false
-        for channel in snapshot.channels {
-            if self.setVolume(channel.volume, device: snapshot.deviceID, selector: channel.selector, element: channel.element) {
-                didSet = true
-            }
+    func apply(_ snapshot: OutputVolumeSnapshot) -> ApplyOutcome {
+        let written = snapshot.channels.filter {
+            self.setVolume($0.volume, device: snapshot.deviceID, selector: $0.selector, element: $0.element)
+        }.count
+        switch written {
+        case snapshot.channels.count: return .applied
+        case 0: return .failed
+        default: return .partial
         }
-        return didSet
+    }
+
+    /// Sets the HAL virtual main volume on the snapshot's device to the snapshot's
+    /// average level — a restore fallback for when raw channel writes fail.
+    /// Approximate (the HAL preserves the device's *current* balance, not the
+    /// captured one), but far better than leaving one channel ducked.
+    func applyVirtualMainVolume(_ snapshot: OutputVolumeSnapshot) -> Bool {
+        self.setVolume(
+            snapshot.averageLevel,
+            device: snapshot.deviceID,
+            selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            element: kAudioObjectPropertyElementMain
+        )
     }
 
     /// Re-reads the current levels of the same device and elements captured in
@@ -184,18 +208,18 @@ struct SystemAudioVolumeController {
     }
 }
 
-/// An immutable capture of an output device's volume — either its master element or
+/// An immutable capture of an output device's volume — either its main element or
 /// its individual stereo channels — so a duck can be reverted without losing the
 /// device's original per-channel (left/right) balance.
 struct OutputVolumeSnapshot {
-    fileprivate struct Channel {
+    struct Channel {
         let selector: AudioObjectPropertySelector
         let element: AudioObjectPropertyElement
         let volume: Float
     }
 
-    fileprivate let deviceID: AudioDeviceID
-    fileprivate let channels: [Channel]
+    let deviceID: AudioDeviceID
+    let channels: [Channel]
 
     /// Average level across the captured channels, used for logging and for
     /// detecting whether the user changed the volume mid-dictation.

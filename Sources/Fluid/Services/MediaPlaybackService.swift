@@ -266,7 +266,8 @@ final class MediaPlaybackService {
         {
             let level = Float(SettingsStore.shared.duckMediaVolumeLevel)
             let target = original.scaled(by: level)
-            if self.volumeController.apply(target) {
+            switch self.volumeController.apply(target) {
+            case .applied:
                 // Re-read what the device actually snapped to (volume can be quantized to
                 // coarse steps) so the restore-time change check is accurate.
                 let applied = self.volumeController.reread(target) ?? target
@@ -276,12 +277,28 @@ final class MediaPlaybackService {
                     source: "MediaPlaybackService"
                 )
                 return
-            }
 
-            DebugLogger.shared.warning(
-                "MediaPlaybackService: Failed to lower output volume, falling back to pausing media",
-                source: "MediaPlaybackService"
-            )
+            case .partial:
+                // Only some channels ducked. Undo before falling back to pausing —
+                // otherwise the device would stay in a mixed left/right state for the
+                // whole session with nothing left to restore it.
+                if self.volumeController.apply(original) != .applied {
+                    DebugLogger.shared.warning(
+                        "MediaPlaybackService: Could not fully undo a partial duck, output channels may be unbalanced",
+                        source: "MediaPlaybackService"
+                    )
+                }
+                DebugLogger.shared.warning(
+                    "MediaPlaybackService: Volume duck only partially applied, falling back to pausing media",
+                    source: "MediaPlaybackService"
+                )
+
+            case .failed:
+                DebugLogger.shared.warning(
+                    "MediaPlaybackService: Failed to lower output volume, falling back to pausing media",
+                    source: "MediaPlaybackService"
+                )
+            }
         }
 
         DebugLogger.shared.info(
@@ -321,11 +338,20 @@ final class MediaPlaybackService {
                     "MediaPlaybackService: Restoring output volume to \(original.averageLevel) (we ducked it)",
                     source: "MediaPlaybackService"
                 )
-                if !self.volumeController.apply(original) {
-                    DebugLogger.shared.warning(
-                        "MediaPlaybackService: Failed to restore output volume — the ducked output device may no longer be available",
-                        source: "MediaPlaybackService"
-                    )
+                if self.volumeController.apply(original) != .applied {
+                    // Some or all raw channel writes failed. Fall back to the HAL virtual
+                    // main volume so a channel isn't left stuck at the ducked level.
+                    if self.volumeController.applyVirtualMainVolume(original) {
+                        DebugLogger.shared.warning(
+                            "MediaPlaybackService: Raw channel restore incomplete, restored via the virtual main volume instead",
+                            source: "MediaPlaybackService"
+                        )
+                    } else {
+                        DebugLogger.shared.warning(
+                            "MediaPlaybackService: Failed to restore output volume — the ducked output device may no longer be available",
+                            source: "MediaPlaybackService"
+                        )
+                    }
                 }
             }
 
