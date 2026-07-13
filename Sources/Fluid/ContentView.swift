@@ -3759,8 +3759,8 @@ extension ContentView {
                 TranscriptionSoundPlayer.shared.playStartSound()
             }
             self.captureRecordingContext()
-            self.prewarmPrivateAIDictationIfNeeded(for: slot)
             self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
+            self.prewarmPrivateAIDictationIfNeeded(for: slot)
             await self.asr.start(onCaptureStarted: {
                 self.appBench("overlay_mode_request mode=Dictation")
                 self.menuBarManager.setOverlayMode(.dictation)
