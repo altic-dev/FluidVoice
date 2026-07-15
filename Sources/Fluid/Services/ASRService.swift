@@ -619,6 +619,18 @@ final class ASRService: ObservableObject {
     }
 
     private func retireAudioEngine(reason: String) {
+        if let retired = self.detachAudioEngineForRetirement(reason: reason) {
+            self.scheduleRetiredEngineDrain(retired)
+        }
+    }
+
+    /// Tears the capture stack down and returns the holder carrying the
+    /// engine's final reference WITHOUT scheduling its release. The start-retry
+    /// loop keeps the holder alive until its synchronous rebuild is done —
+    /// postponing dealloc past bring-up satisfies the same "never overlap"
+    /// invariant as the drain fence where awaiting is impossible (#620). All
+    /// other callers go through retireAudioEngine, which drains immediately.
+    private func detachAudioEngineForRetirement(reason: String) -> RetiredAudioEngineReference? {
         self.audioEngineStandbyTask?.cancel()
         self.audioEngineStandbyTask = nil
 
@@ -646,18 +658,23 @@ final class ASRService: ObservableObject {
         // block finishes before this function returns, the local's release
         // becomes the final one and dealloc lands back on main. The holder keeps
         // the engine out of main-thread locals entirely.
+        var retired: RetiredAudioEngineReference?
         if self.engineStorage != nil {
-            let retired = RetiredAudioEngineReference(self.engineStorage)
+            retired = RetiredAudioEngineReference(self.engineStorage)
             self.engineStorage = nil
-            self.pendingEngineDrainCount += 1
-            retired.scheduleRelease(onDrained: { [weak self] in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.pendingEngineDrainCount = max(0, self.pendingEngineDrainCount - 1)
-                }
-            })
         }
         DebugLogger.shared.debug("Audio engine retired (\(reason))", source: "ASRService")
+        return retired
+    }
+
+    private func scheduleRetiredEngineDrain(_ retired: RetiredAudioEngineReference) {
+        self.pendingEngineDrainCount += 1
+        retired.scheduleRelease(onDrained: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.pendingEngineDrainCount = max(0, self.pendingEngineDrainCount - 1)
+            }
+        })
     }
 
     /// Resolves once every drain scheduled so far has finished, or returns
@@ -2280,6 +2297,16 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("🚀 startEngine() - ENTERED", source: "ASRService")
         var attempts = 0
         var lastError: Error?
+        // Engines retired by failed attempts are held here and drained only on
+        // exit, so a retry's configureSession()/prepare() can never run against
+        // an in-flight dealloc (#620). This loop is synchronous, so the async
+        // drain fence is not usable here; postponing the drain is equivalent.
+        var enginesRetiredDuringRetry: [RetiredAudioEngineReference] = []
+        defer {
+            for retired in enginesRetiredDuringRetry {
+                self.scheduleRetiredEngineDrain(retired)
+            }
+        }
 
         while attempts < 3 {
             do {
@@ -2335,7 +2362,9 @@ final class ASRService: ObservableObject {
                 // If this isn't the last attempt, recreate engine and reconfigure
                 if attempts < 3 {
                     DebugLogger.shared.debug("⚠️ Start failed, recreating engine for retry...", source: "ASRService")
-                    self.retireAudioEngine(reason: "start_retry")
+                    if let retired = self.detachAudioEngineForRetirement(reason: "start_retry") {
+                        enginesRetiredDuringRetry.append(retired)
+                    }
                     // Need to reconfigure the new engine
                     try? self.configureSession()
                     DebugLogger.shared.debug("✅ Engine recreated and reconfigured, will retry", source: "ASRService")
