@@ -153,6 +153,11 @@ extension VoiceEngineSettingsView {
 
                         // Filler Words Section
                         self.fillerWordsSection
+
+                        Divider().padding(.vertical, 4)
+
+                        // Model Memory Section
+                        self.modelMemorySection
                     }
                 }
             }
@@ -745,6 +750,59 @@ extension VoiceEngineSettingsView {
             if self.viewModel.removeFillerWordsEnabled {
                 FillerWordsEditor()
             }
+        }
+    }
+
+    // MARK: - Model Memory Section
+
+    private static let idleUnloadMinuteOptions = [0, 5, 15, 30, 60]
+
+    var modelMemorySection: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unload Model When Inactive")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.voiceEngineTitleText)
+                Text("Free memory by unloading the voice model after a period without dictation. It reloads automatically on the next dictation.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.voiceEngineSecondaryText)
+            }
+            Spacer()
+            Menu {
+                ForEach(Self.idleUnloadMinuteOptions, id: \.self) { minutes in
+                    Button(Self.idleUnloadOptionLabel(minutes)) {
+                        self.viewModel.speechModelIdleUnloadMinutes = minutes
+                    }
+                }
+            } label: {
+                Text(Self.idleUnloadOptionLabel(self.viewModel.speechModelIdleUnloadMinutes))
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.voiceEngineTitleText)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(self.theme.palette.cardBackground.opacity(0.8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9)
+                                    .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                            )
+                    )
+            }
+            .onChange(of: self.viewModel.speechModelIdleUnloadMinutes) { _, newValue in
+                self.settings.speechModelIdleUnloadMinutes = newValue
+            }
+        }
+    }
+
+    private static func idleUnloadOptionLabel(_ minutes: Int) -> String {
+        switch minutes {
+        case 0:
+            return "Never"
+        case 60:
+            return "After 1 hour"
+        default:
+            return "After \(minutes) minutes"
         }
     }
 

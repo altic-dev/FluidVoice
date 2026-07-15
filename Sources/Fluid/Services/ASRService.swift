@@ -85,6 +85,22 @@ final class ASRService: ObservableObject {
         failureCount >= 3
     }
 
+    nonisolated static func canUnloadIdleSpeechModel(
+        isAsrReady: Bool,
+        isRunning: Bool,
+        isStarting: Bool,
+        hasActiveModelPreparation: Bool,
+        hasActiveModelDownload: Bool,
+        activeSpeechModelUseCount: Int
+    ) -> Bool {
+        isAsrReady
+            && !isRunning
+            && !isStarting
+            && !hasActiveModelPreparation
+            && !hasActiveModelDownload
+            && activeSpeechModelUseCount == 0
+    }
+
     @Published var isRunning: Bool = false
     @Published var finalText: String = ""
     @Published var partialTranscription: String = ""
@@ -205,6 +221,8 @@ final class ASRService: ObservableObject {
         await self.providerResetDrain?.task.value
         await self.transcriptionExecutor.cancelAndAwaitPending()
 
+        self.modelIdleUnloadTask?.cancel()
+        self.modelIdleUnloadTask = nil
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
@@ -557,9 +575,12 @@ final class ASRService: ObservableObject {
         self.wordBoostStatusText = "Word boost: off"
 
         // Reset cached providers to force re-initialization with new settings
+        self.modelIdleUnloadTask?.cancel()
+        self.modelIdleUnloadTask = nil
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
+        self.nemotronProviders.removeAll()
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
@@ -577,6 +598,85 @@ final class ASRService: ObservableObject {
             }
             DebugLogger.shared.info("ASRService: Provider reset complete, will initialize '\(newModel.displayName)' on next use", source: "ASRService")
         }
+    }
+
+    // MARK: - Idle Speech Model Unload
+
+    /// Marks the loaded speech model as in use so an idle unload cannot fire
+    /// mid-operation. Every call must be balanced with `endSpeechModelUse()`.
+    func beginSpeechModelUse() {
+        self.activeSpeechModelUseCount += 1
+        self.modelIdleUnloadTask?.cancel()
+        self.modelIdleUnloadTask = nil
+    }
+
+    /// Balances `beginSpeechModelUse()` and re-arms the idle unload countdown
+    /// once the model is no longer in use.
+    func endSpeechModelUse() {
+        self.activeSpeechModelUseCount = max(0, self.activeSpeechModelUseCount - 1)
+        if self.activeSpeechModelUseCount == 0 {
+            self.scheduleModelIdleUnloadIfEnabled(reason: "model_use_ended")
+        }
+    }
+
+    private func scheduleModelIdleUnloadIfEnabled(reason: String) {
+        self.modelIdleUnloadTask?.cancel()
+        self.modelIdleUnloadTask = nil
+
+        let minutes = SettingsStore.shared.speechModelIdleUnloadMinutes
+        guard minutes > 0,
+              self.isAsrReady,
+              SettingsStore.shared.selectedSpeechModel.holdsModelInProcessMemory
+        else { return }
+
+        DebugLogger.shared.debug(
+            "Speech model idle unload armed for \(minutes)min (\(reason))",
+            source: "ASRService"
+        )
+        let delay = UInt64(minutes) * 60 * 1_000_000_000
+        self.modelIdleUnloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            self?.unloadIdleSpeechModel()
+        }
+    }
+
+    /// Releases every cached in-process speech model once the idle window has
+    /// elapsed with no dictation. Disk caches are untouched; the existing
+    /// `ensureAsrReady()` paths reload the model on next use, exactly like the
+    /// first dictation after app launch.
+    private func unloadIdleSpeechModel() {
+        self.modelIdleUnloadTask = nil
+        guard Self.canUnloadIdleSpeechModel(
+            isAsrReady: self.isAsrReady,
+            isRunning: self.isRunning,
+            isStarting: self.isStarting,
+            hasActiveModelPreparation: self.ensureReadyTask != nil,
+            hasActiveModelDownload: self.modelDownloadTask != nil,
+            activeSpeechModelUseCount: self.activeSpeechModelUseCount
+        ) else {
+            self.scheduleModelIdleUnloadIfEnabled(reason: "unload_deferred")
+            return
+        }
+
+        DebugLogger.shared.info(
+            "Unloading idle speech model to reclaim memory; it reloads on next dictation",
+            source: "ASRService"
+        )
+        self.fluidAudioProvider = nil
+        self.parakeetRealtimeProvider = nil
+        self.externalCoreMLProvider = nil
+        self.nemotronProviders.removeAll()
+        self.whisperProvider = nil
+        self.isAsrReady = false
+        self.hasCompletedFirstTranscription = false
+        self.isLoadingModel = false
+        self.modelPreparationPhase = nil
+        self.lastBoostHitTerm = nil
+        self.refreshWordBoostStatus()
     }
 
     // CRITICAL FIX (launch-time crash mitigation):
@@ -996,6 +1096,14 @@ final class ASRService: ObservableObject {
     private let audioRouteRecoveryDelayNanoseconds: UInt64 = 1_000_000_000
     private var audioEngineStandbyTask: Task<Void, Never>?
     private let audioEngineStandbyNanoseconds: UInt64 = 8_000_000_000
+
+    /// Countdown that releases the loaded speech model after the configured
+    /// idle window, so multi-GB model weights do not stay resident forever.
+    private var modelIdleUnloadTask: Task<Void, Never>?
+    /// Number of in-flight operations (final transcription, Local API calls,
+    /// file transcription) that must block an idle unload while they run.
+    private var activeSpeechModelUseCount = 0
+    private var idleUnloadPolicyObserver: NSObjectProtocol?
     private var isEngineTapInstalled = false
     private var isRecoveringAudioRoute = false
 
@@ -1079,6 +1187,15 @@ final class ASRService: ObservableObject {
                 self?.handleParakeetVocabularyDidChange()
             }
         }
+        self.idleUnloadPolicyObserver = NotificationCenter.default.addObserver(
+            forName: .speechModelIdleUnloadPolicyDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.scheduleModelIdleUnloadIfEnabled(reason: "policy_changed")
+            }
+        }
     }
 
     deinit {
@@ -1087,6 +1204,9 @@ final class ASRService: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = self.engineConfigurationChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = self.idleUnloadPolicyObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -1470,9 +1590,11 @@ final class ASRService: ObservableObject {
             return ""
         }
         let useDictionaryTrainingPath = forDictionaryTraining || self.isDictionaryTrainingCaptureActive
+        self.beginSpeechModelUse()
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
+            self.endSpeechModelUse()
         }
 
         self.audioRouteRecoveryTask?.cancel()
@@ -1727,6 +1849,8 @@ final class ASRService: ObservableObject {
     }
 
     func transcribeSamplesForAPI(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
+        self.beginSpeechModelUse()
+        defer { self.endSpeechModelUse() }
         var samples = inputSamples
         guard !samples.isEmpty else {
             return ASRTranscriptionResult(text: "", confidence: 0)
@@ -1764,6 +1888,8 @@ final class ASRService: ObservableObject {
     }
 
     func transcribeFileForAPI(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
+        self.beginSpeechModelUse()
+        defer { self.endSpeechModelUse() }
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
             throw NSError(
                 domain: "ASRService",
@@ -1809,9 +1935,11 @@ final class ASRService: ObservableObject {
 
     func stopWithoutTranscription() async {
         guard self.isRunning else { return }
+        self.beginSpeechModelUse()
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
+            self.endSpeechModelUse()
         }
 
         self.audioRouteRecoveryTask?.cancel()
@@ -3003,6 +3131,7 @@ final class ASRService: ObservableObject {
             self.isAsrReady = true
             self.isCancellingModelPreparation = false
             self.refreshWordBoostStatus()
+            self.scheduleModelIdleUnloadIfEnabled(reason: "model_ready")
         } catch is CancellationError {
             DebugLogger.shared.info("ASR initialization cancelled", source: "ASRService")
             if provider.shouldClearCacheAfterCancellation,
@@ -4194,4 +4323,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         vDSP_vsdiv(mono, 1, &div, &mono, 1, vDSP_Length(frameCount))
         return mono
     }
+}
+
+extension Notification.Name {
+    static let speechModelIdleUnloadPolicyDidChange = Notification.Name("SpeechModelIdleUnloadPolicyDidChange")
 }

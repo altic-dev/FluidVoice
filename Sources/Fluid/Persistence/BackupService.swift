@@ -75,6 +75,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let weekendsDontBreakStreak: Bool
     let fillerWords: [String]
     let removeFillerWordsEnabled: Bool
+    let speechModelIdleUnloadMinutes: Int?
     let autoConvertPunctuationEnabled: Bool?
     let literalDictationFormattingEnabled: Bool?
     let punctuationDictionaryPrefix: String?

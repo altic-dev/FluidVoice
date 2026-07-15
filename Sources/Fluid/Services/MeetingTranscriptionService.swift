@@ -163,10 +163,14 @@ final class MeetingTranscriptionService: ObservableObject {
         error = nil
         self.progress = 0.0
         let startTime = Date()
+        // Long file jobs reuse the ASR provider outside ASRService's own
+        // flows, so hold the model in memory until this run finishes.
+        self.asrService.beginSpeechModelUse()
 
         defer {
             isTranscribing = false
             progress = 0.0
+            self.asrService.endSpeechModelUse()
         }
 
         do {

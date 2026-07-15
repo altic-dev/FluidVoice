@@ -45,6 +45,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     @Published var removeFillerWordsEnabled: Bool
+    @Published var speechModelIdleUnloadMinutes: Int
 
     init(settings: SettingsStore, appServices: AppServices) {
         self.settings = settings
@@ -52,6 +53,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.previewSpeechModel = settings.selectedSpeechModel
         self.selectedSpeechProvider = settings.selectedSpeechModel.provider
         self.removeFillerWordsEnabled = settings.removeFillerWordsEnabled
+        self.speechModelIdleUnloadMinutes = settings.speechModelIdleUnloadMinutes
         appServices.objectWillChange
             .sink { [weak self] _ in
                 Task { @MainActor in
@@ -65,6 +67,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.previewSpeechModel = self.settings.selectedSpeechModel
         self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
         self.removeFillerWordsEnabled = self.settings.removeFillerWordsEnabled
+        self.speechModelIdleUnloadMinutes = self.settings.speechModelIdleUnloadMinutes
 
         Task {
             await self.asr.checkIfModelsExistAsync()

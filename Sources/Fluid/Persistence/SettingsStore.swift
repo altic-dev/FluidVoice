@@ -2995,6 +2995,7 @@ final class SettingsStore: ObservableObject {
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
+            speechModelIdleUnloadMinutes: self.speechModelIdleUnloadMinutes,
             autoConvertPunctuationEnabled: self.autoConvertPunctuationEnabled,
             literalDictationFormattingEnabled: self.literalDictationFormattingEnabled,
             punctuationDictionaryPrefix: self.punctuationDictionaryPrefix,
@@ -3114,6 +3115,9 @@ final class SettingsStore: ObservableObject {
         self.weekendsDontBreakStreak = payload.weekendsDontBreakStreak
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
+        if let speechModelIdleUnloadMinutes = payload.speechModelIdleUnloadMinutes {
+            self.speechModelIdleUnloadMinutes = speechModelIdleUnloadMinutes
+        }
         if let autoConvertPunctuationEnabled = payload.autoConvertPunctuationEnabled {
             self.autoConvertPunctuationEnabled = autoConvertPunctuationEnabled
         }
@@ -4377,6 +4381,20 @@ final class SettingsStore: ObservableObject {
             }
         }
 
+        /// Whether transcription runs on weights loaded into FluidVoice's own
+        /// process memory. Apple engines run in system services, so there is
+        /// no in-process model to unload when idle.
+        var holdsModelInProcessMemory: Bool {
+            switch self {
+            case .appleSpeech, .appleSpeechAnalyzer:
+                return false
+            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit,
+                 .nemotronOffline, .nemotronStreaming, .nemotronStreaming320,
+                 .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+                return true
+            }
+        }
+
         /// Warning text for models with high memory requirements, nil if no warning needed
         var memoryWarning: String? {
             switch self {
@@ -4927,6 +4945,7 @@ private extension SettingsStore {
 
         /// Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+        static let speechModelIdleUnloadMinutes = "SpeechModelIdleUnloadMinutes"
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
@@ -5184,6 +5203,24 @@ extension SettingsStore {
             self.defaults.set(model.rawValue, forKey: Keys.selectedSpeechModel)
         }
     }
+
+    /// Minutes of dictation inactivity after which the loaded speech model is
+    /// unloaded to reclaim memory. 0 keeps the model loaded until quit.
+    var speechModelIdleUnloadMinutes: Int {
+        get {
+            guard let value = self.defaults.object(forKey: Keys.speechModelIdleUnloadMinutes) as? Int else {
+                return Self.defaultSpeechModelIdleUnloadMinutes
+            }
+            return max(0, value)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(max(0, newValue), forKey: Keys.speechModelIdleUnloadMinutes)
+            NotificationCenter.default.post(name: .speechModelIdleUnloadPolicyDidChange, object: nil)
+        }
+    }
+
+    static let defaultSpeechModelIdleUnloadMinutes = 30
 
     var selectedCohereLanguage: CohereLanguage {
         get {
