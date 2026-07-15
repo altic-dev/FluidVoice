@@ -114,5 +114,19 @@ final class SpeechModelIdleUnloadTests: XCTestCase {
 
         SettingsStore.shared.speechModelIdleUnloadMinutes = -5
         XCTAssertEqual(SettingsStore.shared.speechModelIdleUnloadMinutes, 0)
+
+        // Oversized stored values (e.g. from a hand-edited or corrupt backup)
+        // must clamp instead of overflowing the timer's nanosecond math.
+        SettingsStore.shared.speechModelIdleUnloadMinutes = Int.max
+        XCTAssertEqual(
+            SettingsStore.shared.speechModelIdleUnloadMinutes,
+            SettingsStore.maxSpeechModelIdleUnloadMinutes
+        )
+
+        defaults.set(Int.max, forKey: self.idleUnloadMinutesKey)
+        XCTAssertEqual(
+            SettingsStore.shared.speechModelIdleUnloadMinutes,
+            SettingsStore.maxSpeechModelIdleUnloadMinutes
+        )
     }
 }

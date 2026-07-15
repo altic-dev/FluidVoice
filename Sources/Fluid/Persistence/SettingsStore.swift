@@ -5206,21 +5206,28 @@ extension SettingsStore {
 
     /// Minutes of dictation inactivity after which the loaded speech model is
     /// unloaded to reclaim memory. 0 keeps the model loaded until quit.
+    /// Clamped to at most 24 hours so stored or restored values can never
+    /// overflow the nanosecond arithmetic that arms the unload timer.
     var speechModelIdleUnloadMinutes: Int {
         get {
             guard let value = self.defaults.object(forKey: Keys.speechModelIdleUnloadMinutes) as? Int else {
                 return Self.defaultSpeechModelIdleUnloadMinutes
             }
-            return max(0, value)
+            return Self.clampedSpeechModelIdleUnloadMinutes(value)
         }
         set {
             objectWillChange.send()
-            self.defaults.set(max(0, newValue), forKey: Keys.speechModelIdleUnloadMinutes)
+            self.defaults.set(Self.clampedSpeechModelIdleUnloadMinutes(newValue), forKey: Keys.speechModelIdleUnloadMinutes)
             NotificationCenter.default.post(name: .speechModelIdleUnloadPolicyDidChange, object: nil)
         }
     }
 
     static let defaultSpeechModelIdleUnloadMinutes = 30
+    static let maxSpeechModelIdleUnloadMinutes = 24 * 60
+
+    static func clampedSpeechModelIdleUnloadMinutes(_ minutes: Int) -> Int {
+        min(max(0, minutes), Self.maxSpeechModelIdleUnloadMinutes)
+    }
 
     var selectedCohereLanguage: CohereLanguage {
         get {
