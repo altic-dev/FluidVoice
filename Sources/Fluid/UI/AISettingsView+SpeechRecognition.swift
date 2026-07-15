@@ -154,10 +154,14 @@ extension VoiceEngineSettingsView {
                         // Filler Words Section
                         self.fillerWordsSection
 
-                        Divider().padding(.vertical, 4)
+                        // Apple engines run in system services and hold no
+                        // in-process model, so there is nothing to unload.
+                        if self.settings.selectedSpeechModel.holdsModelInProcessMemory {
+                            Divider().padding(.vertical, 4)
 
-                        // Model Memory Section
-                        self.modelMemorySection
+                            // Model Memory Section
+                            self.modelMemorySection
+                        }
                     }
                 }
             }
@@ -799,6 +803,8 @@ extension VoiceEngineSettingsView {
         switch minutes {
         case 0:
             return "Never"
+        case 1:
+            return "After 1 minute"
         case 60:
             return "After 1 hour"
         default:

@@ -1490,9 +1490,13 @@ final class ASRService: ObservableObject {
             // Only start streaming for models that support it (large Whisper models are too slow)
             let model = SettingsStore.shared.selectedSpeechModel
             if model.supportsStreaming, !forDictionaryTraining {
-                DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
-                self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples)")
-                self.startStreamingTranscription()
+                if self.isAsrReady {
+                    DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
+                    self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples)")
+                    self.startStreamingTranscription()
+                } else {
+                    self.attachStreamingTranscriptionWhenModelLoads()
+                }
             } else if forDictionaryTraining {
                 DebugLogger.shared.debug("⏸️ Skipping streaming for dictionary training sample", source: "ASRService")
             } else {
@@ -3357,6 +3361,33 @@ final class ASRService: ObservableObject {
     }
 
     // MARK: - Timer-based Streaming Transcription (No VAD)
+
+    /// The model can be absent when capture starts (idle unload, or app launch
+    /// before the startup auto-load finishes). Reload it during capture and
+    /// attach the live streaming preview to the same session once it is ready,
+    /// instead of losing streaming for the whole dictation.
+    private func attachStreamingTranscriptionWhenModelLoads() {
+        let sessionID = self.benchmarkSessionID
+        DebugLogger.shared.debug("📡 Streaming deferred - loading model during capture...", source: "ASRService")
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.ensureAsrReady()
+            } catch {
+                DebugLogger.shared.debug(
+                    "Streaming attach abandoned - model load failed: \(error.localizedDescription)",
+                    source: "ASRService"
+                )
+                return
+            }
+            guard self.isRunning,
+                  self.benchmarkSessionID == sessionID,
+                  SettingsStore.shared.selectedSpeechModel.supportsStreaming
+            else { return }
+            self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples) deferred=true")
+            self.startStreamingTranscription()
+        }
+    }
 
     private func startStreamingTranscription() {
         self.streamingTask?.cancel()
