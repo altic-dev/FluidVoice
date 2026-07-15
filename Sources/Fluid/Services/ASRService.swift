@@ -618,7 +618,7 @@ final class ASRService: ObservableObject {
         self.directAudioInput != nil || self.hasWarmAudioEngine
     }
 
-    private func retireAudioEngine(reason: String, onDrained: (@Sendable () -> Void)? = nil) {
+    private func retireAudioEngine(reason: String) {
         self.audioEngineStandbyTask?.cancel()
         self.audioEngineStandbyTask = nil
 
@@ -649,38 +649,54 @@ final class ASRService: ObservableObject {
         if self.engineStorage != nil {
             let retired = RetiredAudioEngineReference(self.engineStorage)
             self.engineStorage = nil
-            retired.scheduleRelease(onDrained: onDrained)
-        } else {
-            // Nothing retained; follow-up work can run right away.
-            onDrained?()
+            self.pendingEngineDrainCount += 1
+            retired.scheduleRelease(onDrained: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.pendingEngineDrainCount = max(0, self.pendingEngineDrainCount - 1)
+                }
+            })
         }
         DebugLogger.shared.debug("Audio engine retired (\(reason))", source: "ASRService")
     }
 
-    /// Retires the engine and suspends (cooperatively — the main thread stays
-    /// responsive) until its final release has completed on the drain queue.
-    /// Returns false if the teardown did not finish within the timeout.
-    private func retireAudioEngineAndAwaitDrain(reason: String) async -> Bool {
-        let (drainStream, drainContinuation) = AsyncStream.makeStream(of: Void.self)
-        self.retireAudioEngine(reason: reason, onDrained: {
-            drainContinuation.yield()
-            drainContinuation.finish()
-        })
-
-        let timeoutNanoseconds = self.audioEngineDrainTimeoutNanoseconds
+    /// Resolves once every drain scheduled so far has finished, or returns
+    /// false at the timeout. Cooperative — the main thread stays responsive.
+    private func awaitEngineDrainFence(timeoutNanoseconds: UInt64) async -> Bool {
+        let (fenceStream, fenceContinuation) = AsyncStream.makeStream(of: Void.self)
+        RetiredAudioEngineReference.notifyAfterPendingDrains {
+            fenceContinuation.yield()
+            fenceContinuation.finish()
+        }
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
-                for await _ in drainStream { return true }
+                for await _ in fenceStream { return true }
                 return true
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 return false
             }
-            let drainWonTheRace = await group.next() ?? false
+            let fenceWonTheRace = await group.next() ?? false
             group.cancelAll()
-            return drainWonTheRace
+            return fenceWonTheRace
         }
+    }
+
+    /// Suspends until no retired engine is still deallocating, so bring-up can
+    /// never enter the HAL against an in-flight teardown (#620). Returns false
+    /// if teardown does not settle within `audioEngineDrainTimeoutNanoseconds`.
+    private func awaitPendingEngineDrains() async -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + self.audioEngineDrainTimeoutNanoseconds
+        while self.pendingEngineDrainCount > 0 {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { return false }
+            guard await self.awaitEngineDrainFence(timeoutNanoseconds: deadline - now) else { return false }
+            // The count decrements via a MainActor hop; yield so it can land
+            // before the next check.
+            await Task.yield()
+        }
+        return true
     }
 
     private func scheduleAudioEngineStandbyRetirement() {
@@ -736,6 +752,19 @@ final class ASRService: ObservableObject {
         }
         guard self.hasPreparedAudioCapture == false else {
             DebugLogger.shared.debug("Audio capture prewarm skipped - backend already prepared", source: "ASRService")
+            return
+        }
+        guard self.pendingEngineDrainCount == 0 else {
+            // A retired engine is still deallocating; bring-up must not enter
+            // the HAL until it finishes (#620). Re-attempt once the drains
+            // settle — repeat deferrals self-coalesce through the prepared
+            // guard above.
+            DebugLogger.shared.debug("Audio engine prewarm deferred - engine drain pending (\(reason))", source: "ASRService")
+            RetiredAudioEngineReference.notifyAfterPendingDrains { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.prewarmAudioEngineIfPossible(reason: reason)
+                }
+            }
             return
         }
 
@@ -1023,9 +1052,9 @@ final class ASRService: ObservableObject {
     private var engineConfigurationChangeObserver: NSObjectProtocol?
     private var audioRouteRecoveryTask: Task<Void, Never>?
     private let audioRouteRecoveryDelayNanoseconds: UInt64 = 1_000_000_000
-    /// Bumped on every idle route change so a burst of them collapses into a
-    /// single engine rebuild once the newest teardown has drained.
-    private var idleEngineRebuildGeneration = 0
+    /// Retired engines whose dealloc is still running on the drain queue.
+    /// Every engine bring-up path must wait for this to reach zero (#620).
+    private var pendingEngineDrainCount = 0
     private let audioEngineDrainTimeoutNanoseconds: UInt64 = 5_000_000_000
     private var audioEngineStandbyTask: Task<Void, Never>?
     private let audioEngineStandbyNanoseconds: UInt64 = 8_000_000_000
@@ -1369,6 +1398,19 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
+            // A route change just before this start may still be draining the
+            // retired engine; entering the HAL against that teardown is the
+            // #620 freeze. The common path pays nothing — the count is only
+            // non-zero for the few milliseconds a dealloc is in flight.
+            if self.pendingEngineDrainCount > 0 {
+                guard await self.awaitPendingEngineDrains() else {
+                    throw NSError(
+                        domain: "ASRService",
+                        code: -1101,
+                        userInfo: [NSLocalizedDescriptionKey: "The previous audio engine is still shutting down."]
+                    )
+                }
+            }
             try self.startPreferredAudioCapture()
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             self.isRunning = true
@@ -2398,20 +2440,11 @@ final class ASRService: ObservableObject {
         guard self.isRunning else {
             self.audioLevelSubject.send(0.0)
             if self.hasPreparedAudioCapture {
-                // Rebuild only after the retired engine has fully deallocated:
-                // -[AVAudioEngine dealloc] on the drain queue and inputNode/
-                // prepare() on a fresh engine serialize inside the HAL, and
-                // overlapping them can park the main thread behind the teardown
-                // for good (#620). The generation check collapses route-change
-                // bursts into one rebuild of the newest configuration.
-                self.idleEngineRebuildGeneration &+= 1
-                let generation = self.idleEngineRebuildGeneration
-                self.retireAudioEngine(reason: "idle_route_change:\(reason)", onDrained: { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.idleEngineRebuildGeneration == generation else { return }
-                        self.prewarmAudioEngineIfPossible(reason: "idle_route_change")
-                    }
-                })
+                // prewarmAudioEngineIfPossible defers itself behind the drain
+                // this retire just scheduled, so the rebuild can never enter
+                // the HAL while the old engine is still deallocating (#620).
+                self.retireAudioEngine(reason: "idle_route_change:\(reason)")
+                self.prewarmAudioEngineIfPossible(reason: "idle_route_change")
             }
             return
         }
@@ -2456,7 +2489,8 @@ final class ASRService: ObservableObject {
         // Same HAL serialization hazard as the idle path (#620): never build the
         // replacement capture stack while the retired engine is still tearing
         // down. If the drain wedges, fail the recovery cleanly instead of racing.
-        let drained = await self.retireAudioEngineAndAwaitDrain(reason: "audio_route_recovery")
+        self.retireAudioEngine(reason: "audio_route_recovery")
+        let drained = await self.awaitPendingEngineDrains()
         guard drained else {
             self.audioCapturePipeline.setRecordingEnabled(false)
             DebugLogger.shared.error(
@@ -3808,15 +3842,22 @@ private extension ASRService {
 /// `@unchecked Sendable`: created on the main thread, then handed off and touched
 /// exactly once by the draining block; the dispatch provides the ordering.
 private final nonisolated class RetiredAudioEngineReference: @unchecked Sendable {
-    /// One serial queue for every retired engine: drains can never overlap each
-    /// other, and callers can order bring-up work behind a drain via
-    /// `onDrained` (#620).
+    /// One shared serial queue across all retired engines: drains can never
+    /// overlap each other, and `notifyAfterPendingDrains` can fence bring-up
+    /// work behind every teardown scheduled so far (#620).
     private static let drainQueue = DispatchQueue(label: "com.fluidapp.audio-engine-drain", qos: .utility)
 
     private var engine: AnyObject?
 
     init(_ engine: AnyObject?) {
         self.engine = engine
+    }
+
+    /// Runs `completion` on the drain queue after every drain scheduled so far
+    /// has finished — a fence over pending teardowns, regardless of which
+    /// retirement scheduled them.
+    static func notifyAfterPendingDrains(_ completion: @escaping @Sendable () -> Void) {
+        self.drainQueue.async { completion() }
     }
 
     /// Schedules the retained engine's release off the main thread. Keeping the
