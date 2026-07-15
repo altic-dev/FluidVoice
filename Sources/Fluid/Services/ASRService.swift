@@ -902,7 +902,16 @@ final class ASRService: ObservableObject {
     private func startCompatibilityAudioCapture(reason: String) throws {
         self.benchmarkLog("audio_backend kind=av_audio_engine_fallback reason=\(reason)")
         try self.configureSession()
-        try self.startEngine()
+        // Engines retired by failed start attempts stay referenced until the
+        // whole bring-up — including tap installation — has finished, so their
+        // dealloc can never overlap any of it (#620).
+        var enginesRetiredDuringRetry: [RetiredAudioEngineReference] = []
+        defer {
+            for retired in enginesRetiredDuringRetry {
+                self.scheduleRetiredEngineDrain(retired)
+            }
+        }
+        try self.startEngine(holdingRetiredEnginesIn: &enginesRetiredDuringRetry)
         try self.setupEngineTap()
         self.activeAudioCaptureBackend = .audioEngine
     }
@@ -2293,20 +2302,15 @@ final class ASRService: ObservableObject {
         }
     }
 
-    private func startEngine() throws {
+    /// Retry attempts detach the failed engine into `retiredEngines` instead
+    /// of draining it: this loop and the tap setup that follows are
+    /// synchronous, so the async drain fence cannot be awaited here. The
+    /// caller schedules the drains once the entire bring-up has completed,
+    /// which preserves the same never-overlap invariant (#620).
+    private func startEngine(holdingRetiredEnginesIn retiredEngines: inout [RetiredAudioEngineReference]) throws {
         DebugLogger.shared.debug("🚀 startEngine() - ENTERED", source: "ASRService")
         var attempts = 0
         var lastError: Error?
-        // Engines retired by failed attempts are held here and drained only on
-        // exit, so a retry's configureSession()/prepare() can never run against
-        // an in-flight dealloc (#620). This loop is synchronous, so the async
-        // drain fence is not usable here; postponing the drain is equivalent.
-        var enginesRetiredDuringRetry: [RetiredAudioEngineReference] = []
-        defer {
-            for retired in enginesRetiredDuringRetry {
-                self.scheduleRetiredEngineDrain(retired)
-            }
-        }
 
         while attempts < 3 {
             do {
@@ -2363,7 +2367,7 @@ final class ASRService: ObservableObject {
                 if attempts < 3 {
                     DebugLogger.shared.debug("⚠️ Start failed, recreating engine for retry...", source: "ASRService")
                     if let retired = self.detachAudioEngineForRetirement(reason: "start_retry") {
-                        enginesRetiredDuringRetry.append(retired)
+                        retiredEngines.append(retired)
                     }
                     // Need to reconfigure the new engine
                     try? self.configureSession()
