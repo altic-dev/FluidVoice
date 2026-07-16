@@ -642,6 +642,8 @@ struct OnboardingFlowView: View {
     let openAccessibilitySettings: () -> Void
     let restartApp: () -> Void
     let menuBarManager: MenuBarManager
+    let stopAndProcessTranscription: () async -> Void
+    let startRecording: () -> Void
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
     let theme: AppTheme
@@ -723,11 +725,11 @@ struct OnboardingFlowView: View {
             case .voiceModel:
                 return "Choose the best local engine for your language."
             case .permissions:
-                return "Allow FluidVoice to listen and type into other apps."
+                return "Allow FluidVoice to listen. Accessibility unlocks hotkeys and auto-paste."
             case .aiEnhancement:
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
-                return "Use your dictation shortcut once before finishing setup."
+                return "Try dictation once before finishing setup."
             }
         }
     }
@@ -861,6 +863,14 @@ struct OnboardingFlowView: View {
 
     private var isPermissionsReady: Bool {
         self.isMicrophoneReady && self.isAccessibilityReady
+    }
+
+    private var canSkipAccessibility: Bool {
+        self.isMicrophoneReady && !self.isAccessibilityReady
+    }
+
+    private var shouldUseInAppPlaygroundRecording: Bool {
+        !self.isAccessibilityReady || self.settings.onboardingAccessibilitySkipped
     }
 
     private var isAIReady: Bool {
@@ -1389,7 +1399,8 @@ struct OnboardingFlowView: View {
         continueAction: @escaping () -> Void,
         skipTitle: String? = nil,
         canSkip: Bool = false,
-        skipAction: (() -> Void)? = nil
+        skipAction: (() -> Void)? = nil,
+        skipButtonWidth: CGFloat = 132
     ) -> some View {
         let canNavigateBack = !self.isModelPreparationInProgress && !self.asr.isRunning && !self.isRecordingAnyShortcut
 
@@ -1409,7 +1420,8 @@ struct OnboardingFlowView: View {
                 self.cinematicFooterButton(
                     title: skipTitle,
                     kind: .skip,
-                    isEnabled: canSkip
+                    isEnabled: canSkip,
+                    width: skipButtonWidth
                 ) {
                     skipAction()
                 }
@@ -1432,6 +1444,7 @@ struct OnboardingFlowView: View {
         title: String,
         kind: OnboardingFooterButton,
         isEnabled: Bool,
+        width: CGFloat = 132,
         action: @escaping () -> Void
     ) -> some View {
         let isPrimary = kind == .next
@@ -1442,7 +1455,7 @@ struct OnboardingFlowView: View {
                 title: title,
                 systemImage: nil,
                 tone: isPrimary ? .primary : .secondary,
-                width: 132,
+                width: width,
                 height: 48,
                 fontSize: 16,
                 iconSize: 14,
@@ -1688,9 +1701,10 @@ struct OnboardingFlowView: View {
                                 .lineSpacing(4)
                                 .padding(.bottom, 16)
 
-                            Text("Two quick permissions make dictation work anywhere.")
+                            Text("Microphone is required. Accessibility is recommended for hotkeys and auto-paste.")
                                 .font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(Color.white.opacity(0.62))
+                                .multilineTextAlignment(.center)
                                 .padding(.bottom, 28)
 
                             VStack(spacing: 14) {
@@ -1720,10 +1734,18 @@ struct OnboardingFlowView: View {
                                 }
 
                                 if !self.isAccessibilityReady {
-                                    Text("Already enabled it? FluidVoice will update when macOS confirms access.")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(Color.white.opacity(0.42))
-                                        .padding(.top, 2)
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Already enabled it? FluidVoice will update when macOS confirms access.")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(Color.white.opacity(0.42))
+
+                                        Text("Without Accessibility you won't get global hotkeys, auto-paste into other apps, or Edit Mode selection. You can still dictate from the app or menu bar — transcripts copy to the clipboard for ⌘V.")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(Color.white.opacity(0.52))
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.top, 2)
                                 }
                             }
                             .frame(width: 560)
@@ -1735,10 +1757,18 @@ struct OnboardingFlowView: View {
 
                     self.cinematicFooter(
                         continueTitle: "Continue",
-                        canContinue: self.canContinue
-                    ) {
-                        self.handlePrimaryAction()
-                    }
+                        canContinue: self.canContinue,
+                        continueAction: {
+                            self.settings.onboardingAccessibilitySkipped = false
+                            self.handlePrimaryAction()
+                        },
+                        skipTitle: self.canSkipAccessibility ? "Continue without Accessibility" : nil,
+                        canSkip: self.canSkipAccessibility,
+                        skipAction: self.canSkipAccessibility ? {
+                            self.skipAccessibilityPermission()
+                        } : nil,
+                        skipButtonWidth: 248
+                    )
                 }
 
                 FluidOnboardingLandingHoverTracker(
@@ -1820,7 +1850,11 @@ struct OnboardingFlowView: View {
                                 isRunning: self.asr.isRunning,
                                 isRecordingShortcut: self.isRecordingPrimaryShortcut,
                                 shortcutRecordingMessage: self.isRecordingPrimaryShortcut ? self.shortcutRecordingMessage : nil,
-                                onToggleShortcut: self.togglePrimaryShortcutRecording
+                                showsInAppRecordControl: self.shouldUseInAppPlaygroundRecording,
+                                onToggleShortcut: self.togglePrimaryShortcutRecording,
+                                onToggleRecording: self.shouldUseInAppPlaygroundRecording ? {
+                                    self.toggleInAppPlaygroundRecording()
+                                } : nil
                             )
                         }
                         .frame(maxWidth: .infinity)
@@ -1883,7 +1917,7 @@ struct OnboardingFlowView: View {
         if self.accessibilitySetupInProgress {
             return "Use the floating guide to drag \(self.appDisplayName) into the Accessibility apps list."
         }
-        return "Open Settings, then use the floating guide to add \(self.appDisplayName)."
+        return "Recommended for global hotkeys and auto-paste. Open Settings, then use the floating guide to add \(self.appDisplayName)."
     }
 
     private var appDisplayName: String {
@@ -2673,6 +2707,22 @@ struct OnboardingFlowView: View {
             self.shortcutRecordingMessage = nil
             self.activeShortcutRecordingTarget = .primaryDictation(.replace(0))
         }
+    }
+
+    private func toggleInAppPlaygroundRecording() {
+        if self.asr.isRunning {
+            Task {
+                await self.stopAndProcessTranscription()
+            }
+        } else {
+            self.startRecording()
+        }
+    }
+
+    private func skipAccessibilityPermission() {
+        self.settings.onboardingAccessibilitySkipped = true
+        self.settings.copyTranscriptionToClipboard = true
+        self.goNext()
     }
 
     private func resetTryoutValidationForSetupChange() {

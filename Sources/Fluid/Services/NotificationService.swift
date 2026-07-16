@@ -10,6 +10,7 @@ enum NotificationService {
         static let aiProcessingFallback = "aiProcessingFallback"
         static let audioCaptureFallback = "audioCaptureFallback"
         static let commandModeFailure = "commandModeFailure"
+        static let clipboardOnlyOutput = "clipboardOnlyOutput"
     }
 
     static func showAudioCaptureFallback(
@@ -111,6 +112,34 @@ enum NotificationService {
         }
     }
 
+    static func showClipboardOnlyOutput() {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.deliverClipboardOnlyOutput(using: center)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert]) { granted, requestError in
+                    if let requestError {
+                        DebugLogger.shared.warning(
+                            "Notification permission request failed: \(requestError.localizedDescription)",
+                            source: "NotificationService"
+                        )
+                    }
+                    guard granted else { return }
+                    self.deliverClipboardOnlyOutput(using: center)
+                }
+            case .denied:
+                DebugLogger.shared.debug(
+                    "Skipping clipboard-only notification because notification permission is denied",
+                    source: "NotificationService"
+                )
+            @unknown default:
+                break
+            }
+        }
+    }
+
     private static func deliverAIProcessingFallback(error: String, using center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = "AI Enhancement failed"
@@ -184,6 +213,29 @@ enum NotificationService {
             if let addError {
                 DebugLogger.shared.warning(
                     "Failed to show Command Mode notification: \(addError.localizedDescription)",
+                    source: "NotificationService"
+                )
+            }
+        }
+    }
+
+    private static func deliverClipboardOnlyOutput(using center: UNUserNotificationCenter) {
+        let content = UNMutableNotificationContent()
+        content.title = "Copied to clipboard"
+        content.body = "Enable Accessibility for auto-paste and global hotkeys."
+        content.sound = nil
+        content.userInfo = [UserInfoKey.kind: Kind.clipboardOnlyOutput]
+
+        let request = UNNotificationRequest(
+            identifier: "clipboard-only-output-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        center.add(request) { addError in
+            if let addError {
+                DebugLogger.shared.warning(
+                    "Failed to show clipboard-only notification: \(addError.localizedDescription)",
                     source: "NotificationService"
                 )
             }

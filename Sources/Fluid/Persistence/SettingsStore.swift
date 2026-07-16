@@ -2336,6 +2336,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var onboardingAccessibilitySkipped: Bool {
+        get { self.defaults.bool(forKey: Keys.onboardingAccessibilitySkipped) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.onboardingAccessibilitySkipped)
+        }
+    }
+
     var onboardingSelectedLanguageID: String {
         get {
             let stored = self.defaults.string(forKey: Keys.onboardingSelectedLanguageID)?
@@ -2396,6 +2404,7 @@ final class SettingsStore: ObservableObject {
             self.defaults.set(false, forKey: Keys.onboardingAISkipped)
             self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
             self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+            self.defaults.set(false, forKey: Keys.onboardingAccessibilitySkipped)
             self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
         } else {
             self.defaults.set(true, forKey: Keys.onboardingCompleted)
@@ -2403,6 +2412,7 @@ final class SettingsStore: ObservableObject {
             self.defaults.set(false, forKey: Keys.onboardingAISkipped)
             self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
             self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+            self.defaults.set(false, forKey: Keys.onboardingAccessibilitySkipped)
             self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
         }
     }
@@ -2416,6 +2426,7 @@ final class SettingsStore: ObservableObject {
         self.defaults.set(false, forKey: Keys.onboardingAISkipped)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        self.defaults.set(false, forKey: Keys.onboardingAccessibilitySkipped)
         self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
         self.defaults.set(false, forKey: Keys.playgroundUsed)
     }
@@ -2443,6 +2454,7 @@ final class SettingsStore: ObservableObject {
         self.defaults.set(false, forKey: Keys.onboardingAISkipped)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        self.defaults.set(false, forKey: Keys.onboardingAccessibilitySkipped)
     }
 
     private func hasLegacyUsageSignals() -> Bool {
@@ -4857,6 +4869,7 @@ private extension SettingsStore {
         static let onboardingAISkipped = "OnboardingAISkipped"
         static let onboardingPlaygroundValidated = "OnboardingPlaygroundValidated"
         static let onboardingPlaygroundSkipped = "OnboardingPlaygroundSkipped"
+        static let onboardingAccessibilitySkipped = "OnboardingAccessibilitySkipped"
         static let onboardingSelectedLanguageID = "OnboardingSelectedLanguageID"
 
         // Command Mode Keys

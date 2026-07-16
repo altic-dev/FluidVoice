@@ -1011,13 +1011,14 @@ struct SettingsView: View {
                                         HStack(spacing: 6) {
                                             Image(systemName: "exclamationmark.triangle.fill")
                                                 .foregroundStyle(self.theme.palette.warning)
-                                            Text("Accessibility permissions required")
+                                            Text("Clipboard-only mode")
                                                 .font(self.theme.typography.bodyStrong)
                                                 .foregroundStyle(self.theme.palette.warning)
                                         }
-                                        Text("Required for global hotkey functionality")
+                                        Text("Accessibility is required for global hotkeys and auto-paste. Until then, use menu bar Start/Stop Dictation or in-app Record — transcripts copy to the clipboard.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     Spacer()
 
@@ -1052,6 +1053,17 @@ struct SettingsView: View {
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
+                                }
+
+                                Divider().opacity(0.2)
+
+                                self.optionToggleRow(
+                                    title: "Copy to Clipboard",
+                                    description: "Keeps transcripts available for ⌘V. Recommended while Accessibility is off.",
+                                    isOn: self.$copyToClipboard
+                                )
+                                .onChange(of: self.copyToClipboard) { _, newValue in
+                                    SettingsStore.shared.copyTranscriptionToClipboard = newValue
                                 }
                             }
                         }

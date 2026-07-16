@@ -17,6 +17,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     // Cached menu items to avoid rebuilding entire menu
     private var statusMenuItem: NSMenuItem?
+    private var startStopDictationMenuItem: NSMenuItem?
     private var copyLastTranscriptMenuItem: NSMenuItem?
     private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
@@ -25,6 +26,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     // References to app state
     private weak var asrService: ASRService?
     private var cancellables = Set<AnyCancellable>()
+    private var startDictationCallback: (() -> Void)?
+    private var stopDictationCallback: (() async -> Void)?
 
     /// Overlay management (persistent, independent of window lifecycle)
     private var overlayVisible: Bool = false
@@ -95,6 +98,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 }
             }
             .store(in: &self.cancellables)
+    }
+
+    func configureDictationControls(
+        start: @escaping () -> Void,
+        stop: @escaping () async -> Void
+    ) {
+        self.startDictationCallback = start
+        self.stopDictationCallback = stop
+        self.updateMenuItemsText()
     }
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
@@ -466,6 +478,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             menu.addItem(statusItem)
         }
 
+        let startStopItem = NSMenuItem(
+            title: "Start Dictation",
+            action: #selector(toggleDictationFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        startStopItem.target = self
+        menu.addItem(startStopItem)
+        self.startStopDictationMenuItem = startStopItem
+
         let copyLastTranscriptItem = NSMenuItem(
             title: "Copy Last Transcript",
             action: #selector(copyLastTranscript(_:)),
@@ -555,6 +576,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         let hotkeyInfo = hotkeyDisplay.isEmpty ? "" : " (\(hotkeyDisplay))"
         let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
         self.statusMenuItem?.title = statusTitle
+        self.startStopDictationMenuItem?.title = self.isRecording ? "Stop Dictation" : "Start Dictation"
+        self.startStopDictationMenuItem?.isEnabled = self.startDictationCallback != nil && self.stopDictationCallback != nil
         self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
         self.microphoneMenuItem?.isEnabled = true
 
@@ -642,6 +665,26 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         _ = ClipboardService.copyToClipboard(text)
         DebugLogger.shared.info("Menu action: Copied latest transcription to clipboard", source: "MenuBarManager")
+    }
+
+    @objc private func toggleDictationFromMenu(_ sender: Any?) {
+        if self.isRecording {
+            guard let stopDictationCallback else {
+                DebugLogger.shared.warning("Menu action: Stop Dictation requested but callback is missing", source: "MenuBarManager")
+                return
+            }
+            DebugLogger.shared.info("Menu action: Stop Dictation", source: "MenuBarManager")
+            Task { @MainActor in
+                await stopDictationCallback()
+            }
+        } else {
+            guard let startDictationCallback else {
+                DebugLogger.shared.warning("Menu action: Start Dictation requested but callback is missing", source: "MenuBarManager")
+                return
+            }
+            DebugLogger.shared.info("Menu action: Start Dictation", source: "MenuBarManager")
+            startDictationCallback()
+        }
     }
 
     @objc private func selectMicrophone(_ sender: NSMenuItem) {

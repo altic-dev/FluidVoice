@@ -619,6 +619,14 @@ struct ContentView: View {
             self.audioObserver.startObserving()
             self.asr.initialize()
             self.menuBarManager.configure(asrService: self.appServices.asr)
+            self.menuBarManager.configureDictationControls(
+                start: { [self] in
+                    self.startRecording()
+                },
+                stop: { [self] in
+                    await self.stopAndProcessTranscription()
+                }
+            )
             self.refreshDevices()
 
             if self.selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid {
@@ -1330,6 +1338,10 @@ struct ContentView: View {
             openAccessibilitySettings: self.openAccessibilitySettings,
             restartApp: self.restartApp,
             menuBarManager: self.menuBarManager,
+            stopAndProcessTranscription: {
+                await self.stopAndProcessTranscription(route: .onboardingSandbox)
+            },
+            startRecording: self.startRecording,
             activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
             shortcutRecordingMessage: self.$shortcutRecordingMessage,
             theme: self.theme
@@ -2365,26 +2377,35 @@ struct ContentView: View {
         }
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
+        let accessibilityTrusted = AXIsProcessTrusted()
+        let shouldForceClipboardFallback = shouldPersistOutputs && !isFluidFrontmost && !accessibilityTrusted
         let shouldCopyToClipboard = shouldPersistOutputs &&
-            SettingsStore.shared.copyTranscriptionToClipboard &&
-            !isFluidFrontmost
+            !isFluidFrontmost &&
+            (SettingsStore.shared.copyTranscriptionToClipboard || shouldForceClipboardFallback)
 
+        var didCopyToClipboard = false
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
+            didCopyToClipboard = true
             AnalyticsService.shared.capture(
                 .outputDelivered,
                 properties: [
                     "mode": AnalyticsMode.dictation.rawValue,
                     "method": AnalyticsOutputMethod.clipboard.rawValue,
+                    "clipboard_only_output": shouldForceClipboardFallback,
                 ]
             )
         }
 
+        if shouldForceClipboardFallback {
+            NotificationService.showClipboardOnlyOutput()
+        }
+
         var didTypeExternally = false
-        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost
+        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost && accessibilityTrusted
 
         DebugLogger.shared.debug(
-            "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), willTypeExternally: \(shouldTypeExternally)",
+            "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), accessibilityTrusted: \(accessibilityTrusted), willTypeExternally: \(shouldTypeExternally)",
             source: "ContentView"
         )
 
@@ -2434,7 +2455,7 @@ struct ContentView: View {
                 aiProvider: modelInfo.provider
             )
         } else if shouldPersistOutputs,
-                  SettingsStore.shared.copyTranscriptionToClipboard == false,
+                  !didCopyToClipboard,
                   SettingsStore.shared.saveTranscriptionHistory
         {
             AnalyticsService.shared.capture(
@@ -2735,16 +2756,24 @@ struct ContentView: View {
 
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let isFluidFrontmost = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
+        let accessibilityTrusted = AXIsProcessTrusted()
+        let shouldForceClipboardFallback = !isFluidFrontmost && !accessibilityTrusted
+        let shouldCopyToClipboard = !isFluidFrontmost &&
+            (SettingsStore.shared.copyTranscriptionToClipboard || shouldForceClipboardFallback)
 
-        if SettingsStore.shared.copyTranscriptionToClipboard, !isFluidFrontmost {
+        if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
+        }
+
+        if shouldForceClipboardFallback {
+            NotificationService.showClipboardOnlyOutput()
         }
 
         let focusedPID = TypingService.captureSystemFocusedPID()
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
 
-        let shouldTypeExternally = !isFluidFrontmost
+        let shouldTypeExternally = !isFluidFrontmost && accessibilityTrusted
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
@@ -2860,7 +2889,13 @@ struct ContentView: View {
 
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let isFluidFrontmost = frontmostApp?.bundleIdentifier?.contains("fluid") == true
-        let shouldTypeExternally = !isFluidFrontmost || self.isTranscriptionFocused == false
+        let accessibilityTrusted = AXIsProcessTrusted()
+        let shouldForceClipboardFallback = !isFluidFrontmost && !accessibilityTrusted
+        if shouldForceClipboardFallback {
+            ClipboardService.copyToClipboard(finalText)
+            NotificationService.showClipboardOnlyOutput()
+        }
+        let shouldTypeExternally = (!isFluidFrontmost || self.isTranscriptionFocused == false) && accessibilityTrusted
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
@@ -2901,34 +2936,40 @@ struct ContentView: View {
         if !self.rewriteModeService.rewrittenText.isEmpty {
             DebugLogger.shared.info("Rewrite successful, typing result (chars: \(self.rewriteModeService.rewrittenText.count))", source: "ContentView")
 
-            // Copy to clipboard as backup
-            if SettingsStore.shared.copyTranscriptionToClipboard {
+            // Copy to clipboard as backup (or as primary delivery without Accessibility)
+            let accessibilityTrusted = AXIsProcessTrusted()
+            if SettingsStore.shared.copyTranscriptionToClipboard || !accessibilityTrusted {
                 ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
                 AnalyticsService.shared.capture(
                     .outputDelivered,
                     properties: [
                         "mode": AnalyticsMode.rewrite.rawValue,
                         "method": AnalyticsOutputMethod.clipboard.rawValue,
+                        "clipboard_only_output": !accessibilityTrusted,
                     ]
                 )
             }
 
-            // Type the rewritten text
-            let typingTarget = self.resolveTypingTargetPID()
-            if typingTarget.shouldRestoreOriginalFocus {
-                await self.restoreFocusToRecordingTarget()
+            // Type the rewritten text when Accessibility is available
+            if accessibilityTrusted {
+                let typingTarget = self.resolveTypingTargetPID()
+                if typingTarget.shouldRestoreOriginalFocus {
+                    await self.restoreFocusToRecordingTarget()
+                }
+                self.asr.typeTextToActiveField(
+                    self.rewriteModeService.rewrittenText,
+                    preferredTargetPID: typingTarget.pid
+                )
+                AnalyticsService.shared.capture(
+                    .outputDelivered,
+                    properties: [
+                        "mode": AnalyticsMode.rewrite.rawValue,
+                        "method": AnalyticsOutputMethod.typed.rawValue,
+                    ]
+                )
+            } else {
+                NotificationService.showClipboardOnlyOutput()
             }
-            self.asr.typeTextToActiveField(
-                self.rewriteModeService.rewrittenText,
-                preferredTargetPID: typingTarget.pid
-            )
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.rewrite.rawValue,
-                    "method": AnalyticsOutputMethod.typed.rawValue,
-                ]
-            )
 
             // Clear the rewrite service state for next use
             self.rewriteModeService.clearState()
@@ -3760,10 +3801,6 @@ extension ContentView {
         self.asr.micStatus == .authorized
     }
 
-    private var onboardingAccessibilityReady: Bool {
-        self.accessibilityEnabled
-    }
-
     private var onboardingAIReady: Bool {
         self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isProviderConfigured()
     }
@@ -3821,9 +3858,6 @@ extension ContentView {
         }
         if !self.onboardingMicrophoneReady {
             missing.append("microphone access")
-        }
-        if !self.onboardingAccessibilityReady {
-            missing.append("Accessibility access")
         }
         if !allowsAIConfiguration, !self.onboardingAIReady {
             missing.append("AI choice")

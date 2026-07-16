@@ -296,9 +296,10 @@ final class TypingService {
 
         // Check accessibility permissions first
         guard AXIsProcessTrusted() else {
-            self.bench("request_return reason=accessibility_not_trusted")
-            self.log("[TypingService] ERROR: Accessibility permissions required for text injection")
-            self.log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
+            self.bench("request_return reason=accessibility_not_trusted clipboard_fallback=true")
+            self.log("[TypingService] Accessibility unavailable — copying transcript to clipboard instead of injecting")
+            let copied = ClipboardService.copyToClipboard(text)
+            self.log("[TypingService] Clipboard fallback \(copied ? "succeeded" : "failed") for \(text.count) characters")
             return
         }
 

@@ -10,7 +10,9 @@ struct OnboardingTryoutStepView: View {
     let isRecordingShortcut: Bool
     let shortcutRecordingMessage: String?
     let footerHint: String?
+    let showsInAppRecordControl: Bool
     let onToggleShortcut: () -> Void
+    let onToggleRecording: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.theme) private var theme
@@ -19,6 +21,7 @@ struct OnboardingTryoutStepView: View {
     @State private var isShortcutKeyPressed = false
     @State private var isShortcutGlowActive = false
     @State private var shortcutAnimationRevision = 0
+    @State private var isRecordHovered = false
 
     init(
         finalText: Binding<String>,
@@ -29,7 +32,9 @@ struct OnboardingTryoutStepView: View {
         isRecordingShortcut: Bool,
         shortcutRecordingMessage: String?,
         footerHint: String? = nil,
-        onToggleShortcut: @escaping () -> Void
+        showsInAppRecordControl: Bool = false,
+        onToggleShortcut: @escaping () -> Void,
+        onToggleRecording: (() -> Void)? = nil
     ) {
         self._finalText = finalText
         self.language = language
@@ -39,7 +44,9 @@ struct OnboardingTryoutStepView: View {
         self.isRecordingShortcut = isRecordingShortcut
         self.shortcutRecordingMessage = shortcutRecordingMessage
         self.footerHint = footerHint
+        self.showsInAppRecordControl = showsInAppRecordControl
         self.onToggleShortcut = onToggleShortcut
+        self.onToggleRecording = onToggleRecording
     }
 
     private static let languageExamples: [String: [String]] = [
@@ -162,27 +169,41 @@ struct OnboardingTryoutStepView: View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
 
         return VStack(spacing: 14) {
-            HStack {
-                Spacer()
-                self.changeShortcutButton
-            }
-            .frame(height: 0)
-            .offset(y: 8)
+            if self.showsInAppRecordControl {
+                self.inAppRecordControl
+                    .padding(.top, 10)
 
-            self.shortcutVisual
-                .padding(.top, 10)
-
-            self.actionHintRow
-
-            if let shortcutRecordingMessage,
-               self.isRecordingShortcut,
-               !shortcutRecordingMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                Label(shortcutRecordingMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(Color.orange.opacity(0.92))
-                    .lineLimit(1)
+                Text(self.isRunning ? "Listening… Speak now, then stop when you're done." : "Use Record to try dictation without Accessibility.")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(Color.white.opacity(0.62))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.82)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 2)
+            } else {
+                HStack {
+                    Spacer()
+                    self.changeShortcutButton
+                }
+                .frame(height: 0)
+                .offset(y: 8)
+
+                self.shortcutVisual
+                    .padding(.top, 10)
+
+                self.actionHintRow
+
+                if let shortcutRecordingMessage,
+                   self.isRecordingShortcut,
+                   !shortcutRecordingMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    Label(shortcutRecordingMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(self.theme.typography.captionSmall)
+                        .foregroundStyle(Color.orange.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                }
             }
 
             self.editorPanel
@@ -202,7 +223,58 @@ struct OnboardingTryoutStepView: View {
                 )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Dictation shortcut \(self.shortcutDisplay). Press once to start. Press again to stop.")
+        .accessibilityLabel(
+            self.showsInAppRecordControl
+                ? "In-app dictation tryout. Record to start. Stop to finish."
+                : "Dictation shortcut \(self.shortcutDisplay). Press once to start. Press again to stop."
+        )
+    }
+
+    private var inAppRecordControl: some View {
+        let shape = Capsule()
+        let title = self.isRunning ? "Stop Recording" : "Start Recording"
+        let fillOpacity = self.isRecordHovered ? 0.16 : 0.10
+        let ringOpacity = self.isRecordHovered ? 0.50 : 0.18
+
+        return Button {
+            self.onToggleRecording?()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: self.isRunning ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 14, weight: .bold))
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white.opacity(0.94))
+            .padding(.horizontal, 22)
+            .frame(height: 46)
+            .background(
+                shape
+                    .fill(self.isRunning ? Color.red.opacity(0.78) : FluidOnboardingLandingColors.blue.opacity(0.92))
+                    .overlay(shape.fill(Color.white.opacity(fillOpacity)))
+                    .overlay(
+                        shape.stroke(
+                            FluidOnboardingLandingColors.blue.opacity(ringOpacity),
+                            lineWidth: self.isRecordHovered ? 1.4 : 1
+                        )
+                    )
+                    .shadow(
+                        color: (self.isRunning ? Color.red : FluidOnboardingLandingColors.blue)
+                            .opacity(self.isRecordHovered ? 0.36 : 0.18),
+                        radius: self.isRecordHovered ? 18 : 12,
+                        x: 0,
+                        y: 6
+                    )
+            )
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovered in
+            self.isRecordHovered = isHovered
+        }
+        .accessibilityLabel(title)
     }
 
     private var changeShortcutButton: some View {
