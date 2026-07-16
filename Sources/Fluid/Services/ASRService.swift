@@ -104,6 +104,9 @@ final class ASRService: ObservableObject {
     private(set) var dictionaryTrainingAudioGeneration = 0
 
     private var isStarting: Bool = false // Guard against re-entrant start() calls
+    // Set by abortStartIfPending() while start() is suspended at the engine-
+    // drain fence; the stop paths gate on isRunning, which is still false there.
+    private var startAbortRequested = false
     private var hasCompletedFirstTranscription: Bool = false // Track if model has warmed up with first transcription
     private var lastBoostHitTerm: String?
     private var hasPendingParakeetVocabularyReload: Bool = false
@@ -1349,6 +1352,18 @@ final class ASRService: ObservableObject {
         }
     }
 
+    /// Cancels an in-flight `start()` that is suspended at the engine-drain
+    /// fence. During that suspension `isRunning` is still false, so the stop
+    /// paths would silently drop the request and capture would come up after
+    /// the user already released the hotkey (#620). Returns `true` when a
+    /// pending start will abort; no-op otherwise.
+    @discardableResult
+    func abortStartIfPending() -> Bool {
+        guard self.isStarting, self.isRunning == false else { return false }
+        self.startAbortRequested = true
+        return true
+    }
+
     /// Starts the speech recognition session.
     ///
     /// This method initiates audio capture and real-time processing. The service will:
@@ -1420,7 +1435,10 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("✅ Buffers cleared", source: "ASRService")
 
         self.isStarting = true
-        defer { self.isStarting = false }
+        defer {
+            self.isStarting = false
+            self.startAbortRequested = false
+        }
         self.isDictionaryTrainingCaptureActive = false
 
         do {
@@ -1436,6 +1454,15 @@ final class ASRService: ObservableObject {
                         userInfo: [NSLocalizedDescriptionKey: "The previous audio engine is still shutting down."]
                     )
                 }
+            }
+            // The fence above is the only suspension before isRunning is set;
+            // a stop that landed during it must cancel the session here or
+            // recording would begin after the user already let go.
+            if self.startAbortRequested {
+                self.audioCapturePipeline.setRecordingEnabled(false)
+                self.benchmarkLog("recording_start_aborted reason=stop_during_engine_drain")
+                DebugLogger.shared.info("🛑 START() aborted - stop requested while awaiting engine teardown", source: "ASRService")
+                return
             }
             try self.startPreferredAudioCapture()
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining

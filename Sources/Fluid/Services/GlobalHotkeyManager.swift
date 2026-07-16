@@ -1812,6 +1812,10 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             guard self.asrService.isRunning else {
+                // start() may still be suspended at its engine-drain fence
+                // with isRunning false; mark the session aborted so capture
+                // does not come up after the key was already released.
+                self.asrService.abortStartIfPending()
                 return
             }
 
