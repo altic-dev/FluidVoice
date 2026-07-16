@@ -300,6 +300,11 @@ final class TypingService {
             self.log("[TypingService] Accessibility unavailable — copying transcript to clipboard instead of injecting")
             let copied = ClipboardService.copyToClipboard(text)
             self.log("[TypingService] Clipboard fallback \(copied ? "succeeded" : "failed") for \(text.count) characters")
+            if copied {
+                Task { @MainActor in
+                    NotificationService.showClipboardOnlyOutput()
+                }
+            }
             return
         }
 

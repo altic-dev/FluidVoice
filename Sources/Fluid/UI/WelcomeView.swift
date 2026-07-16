@@ -870,7 +870,9 @@ struct OnboardingFlowView: View {
     }
 
     private var shouldUseInAppPlaygroundRecording: Bool {
-        !self.isAccessibilityReady || self.settings.onboardingAccessibilitySkipped
+        // Prefer hotkey tryout whenever Accessibility is available now, even if
+        // the user previously skipped it earlier in this onboarding session.
+        !self.isAccessibilityReady
     }
 
     private var isAIReady: Bool {
