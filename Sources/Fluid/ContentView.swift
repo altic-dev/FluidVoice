@@ -2394,19 +2394,20 @@ struct ContentView: View {
 
         var didCopyToClipboard = false
         if shouldCopyToClipboard {
-            ClipboardService.copyToClipboard(finalText)
-            didCopyToClipboard = true
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.dictation.rawValue,
-                    "method": AnalyticsOutputMethod.clipboard.rawValue,
-                    "clipboard_only_output": shouldForceClipboardFallback,
-                ]
-            )
+            didCopyToClipboard = ClipboardService.copyToClipboard(finalText)
+            if didCopyToClipboard {
+                AnalyticsService.shared.capture(
+                    .outputDelivered,
+                    properties: [
+                        "mode": AnalyticsMode.dictation.rawValue,
+                        "method": AnalyticsOutputMethod.clipboard.rawValue,
+                        "clipboard_only_output": shouldForceClipboardFallback,
+                    ]
+                )
+            }
         }
 
-        if shouldForceClipboardFallback {
+        if shouldForceClipboardFallback, didCopyToClipboard {
             NotificationService.showClipboardOnlyOutput()
         }
 
@@ -2770,11 +2771,12 @@ struct ContentView: View {
         let shouldCopyToClipboard = shouldForceClipboardFallback ||
             (!isFluidFrontmost && SettingsStore.shared.copyTranscriptionToClipboard)
 
+        var didCopyToClipboard = false
         if shouldCopyToClipboard {
-            ClipboardService.copyToClipboard(finalText)
+            didCopyToClipboard = ClipboardService.copyToClipboard(finalText)
         }
 
-        if shouldForceClipboardFallback {
+        if shouldForceClipboardFallback, didCopyToClipboard {
             NotificationService.showClipboardOnlyOutput()
         }
 
@@ -2888,8 +2890,9 @@ struct ContentView: View {
             self.pendingAIReprocessText = nil
         }
 
+        var didCopyToClipboard = false
         if SettingsStore.shared.copyTranscriptionToClipboard {
-            ClipboardService.copyToClipboard(finalText)
+            didCopyToClipboard = ClipboardService.copyToClipboard(finalText)
         }
 
         let focusedPID = TypingService.captureSystemFocusedPID()
@@ -2901,8 +2904,12 @@ struct ContentView: View {
         let accessibilityTrusted = AXIsProcessTrusted()
         let shouldForceClipboardFallback = !accessibilityTrusted
         if shouldForceClipboardFallback {
-            ClipboardService.copyToClipboard(finalText)
-            NotificationService.showClipboardOnlyOutput()
+            if !didCopyToClipboard {
+                didCopyToClipboard = ClipboardService.copyToClipboard(finalText)
+            }
+            if didCopyToClipboard {
+                NotificationService.showClipboardOnlyOutput()
+            }
         }
         let shouldTypeExternally = (!isFluidFrontmost || self.isTranscriptionFocused == false) && accessibilityTrusted
         if shouldTypeExternally {
@@ -2947,16 +2954,19 @@ struct ContentView: View {
 
             // Copy to clipboard as backup (or as primary delivery without Accessibility)
             let accessibilityTrusted = AXIsProcessTrusted()
+            var didCopyToClipboard = false
             if SettingsStore.shared.copyTranscriptionToClipboard || !accessibilityTrusted {
-                ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
-                AnalyticsService.shared.capture(
-                    .outputDelivered,
-                    properties: [
-                        "mode": AnalyticsMode.rewrite.rawValue,
-                        "method": AnalyticsOutputMethod.clipboard.rawValue,
-                        "clipboard_only_output": !accessibilityTrusted,
-                    ]
-                )
+                didCopyToClipboard = ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
+                if didCopyToClipboard {
+                    AnalyticsService.shared.capture(
+                        .outputDelivered,
+                        properties: [
+                            "mode": AnalyticsMode.rewrite.rawValue,
+                            "method": AnalyticsOutputMethod.clipboard.rawValue,
+                            "clipboard_only_output": !accessibilityTrusted,
+                        ]
+                    )
+                }
             }
 
             // Type the rewritten text when Accessibility is available
@@ -2976,7 +2986,7 @@ struct ContentView: View {
                         "method": AnalyticsOutputMethod.typed.rawValue,
                     ]
                 )
-            } else {
+            } else if didCopyToClipboard {
                 NotificationService.showClipboardOnlyOutput()
             }
 

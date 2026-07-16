@@ -37,6 +37,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// overlay. During post-processing we want the overlay to stay visible until processing ends.
     private var isProcessingActive: Bool = false
 
+    /// Menu-bar Stop can return before transcription/AI cleanup finishes, and `isRunning`
+    /// flips false first — without this gate the item becomes Start and can start a new
+    /// recording mid-stop (hotkeys use the same pattern via `isProcessingStop`).
+    private var isProcessingMenuDictationStop = false
+
     @Published var isRecording: Bool = false
 
     /// One-shot navigation requests from the menu bar into the main window UI.
@@ -586,6 +591,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         if self.asrService?.isDictionaryTrainingCaptureActive == true {
             return false
         }
+        if self.isProcessingMenuDictationStop {
+            return false
+        }
         return true
     }
 
@@ -689,7 +697,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     @objc private func toggleDictationFromMenu(_ sender: Any?) {
         guard self.canToggleDictationFromMenu else {
             DebugLogger.shared.info(
-                "Menu action: Start/Stop Dictation ignored (callbacks missing or dictionary training active)",
+                "Menu action: Start/Stop Dictation ignored (callbacks missing, training active, or stop in flight)",
                 source: "MenuBarManager"
             )
             return
@@ -698,7 +706,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         if self.isRecording {
             guard let stopDictationCallback else { return }
             DebugLogger.shared.info("Menu action: Stop Dictation", source: "MenuBarManager")
+            self.isProcessingMenuDictationStop = true
+            self.updateMenuItemsText()
             Task { @MainActor in
+                defer {
+                    self.isProcessingMenuDictationStop = false
+                    self.updateMenuItemsText()
+                }
                 await stopDictationCallback()
             }
         } else {
