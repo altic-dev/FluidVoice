@@ -350,6 +350,11 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
                 self.reloadSettingsStateAfterBackupRestore()
             }
+            .onChange(of: self.settings.copyTranscriptionToClipboard) { _, newValue in
+                // Keep Settings toggle in sync when onboarding skip (or other writers)
+                // update SettingsStore directly.
+                self.copyToClipboard = newValue
+            }
             .toolbar {
                 if !self.settings.shouldShowOnboarding {
                     ToolbarItemGroup(placement: .primaryAction) {
@@ -624,7 +629,8 @@ struct ContentView: View {
                     self.startRecording()
                 },
                 stop: { [self] in
-                    await self.stopAndProcessTranscription()
+                    let route = self.currentDictationOutputRouteForHotkeyStop()
+                    await self.stopAndProcessTranscription(route: route)
                 }
             )
             self.refreshDevices()

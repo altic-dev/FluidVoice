@@ -1772,7 +1772,10 @@ final class SettingsStore: ObservableObject {
 
     var copyTranscriptionToClipboard: Bool {
         get { self.defaults.bool(forKey: Keys.copyTranscriptionToClipboard) }
-        set { self.defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard)
+        }
     }
 
     var preferredInputDeviceUID: String? {
