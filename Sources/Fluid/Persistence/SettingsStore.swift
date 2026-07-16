@@ -1785,17 +1785,25 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
-    /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
-    /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
+    /// When enabled (the default), changing audio devices in FluidVoice also updates the macOS
+    /// system default input/output. When disabled, FluidVoice captures its preferred *input*
+    /// device independently via the direct Core Audio IOProc path (see `DirectCoreAudioInput` /
+    /// `CoreAudioCaptureSupport.c`, which uses `AudioDeviceCreateIOProcID`). That path binds a
+    /// specific device per-app without changing the system default and without the AVAudioEngine
+    /// limitation (`kAudioUnitErr_InvalidPropertyValue` / -10851) that originally forced this mode
+    /// off for aggregate/Bluetooth devices.
+    ///
+    /// Independent mode therefore requires Direct Audio Capture: if that is disabled we return
+    /// `true` so the AVAudioEngine compatibility path keeps following the system default.
     var syncAudioDevicesWithSystem: Bool {
         get {
-            // Always return true - independent mode doesn't work for Bluetooth/aggregate devices
-            return true
+            // Per-app input selection is only safe on the direct-capture path.
+            guard self.experimentalDirectAudioCaptureEnabled else { return true }
+            return (self.defaults.object(forKey: Keys.syncAudioDevicesWithSystem) as? Bool) ?? true
         }
         set {
-            // No-op: sync mode is always enabled
-            // Kept for backward compatibility but value is ignored
-            _ = newValue
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.syncAudioDevicesWithSystem)
         }
     }
 

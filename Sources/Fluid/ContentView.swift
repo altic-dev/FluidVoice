@@ -399,9 +399,10 @@ struct ContentView: View {
                     {
                         self.selectedInputUID = prefIn
                     } else if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
-                        // Fallback to system default if preferred device disconnected
+                        // Preferred device disconnected: show the system default in the picker
+                        // (capture falls back to it too), but KEEP preferredInputDeviceUID so it
+                        // auto-restores when the device reconnects.
                         self.selectedInputUID = sysIn
-                        SettingsStore.shared.preferredInputDeviceUID = sysIn
                     }
 
                     if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
@@ -628,8 +629,16 @@ struct ContentView: View {
                 self.selectedOutputUID = defOut
             }
 
-            if let systemInputUID = AudioDevice.getDefaultInputDevice()?.uid,
-               self.inputDevices.contains(where: { $0.uid == systemInputUID })
+            // Independent mode: reflect the saved preferred input device in the picker
+            // (mirrors the preferred-output handling below). In sync mode, follow the
+            // system default.
+            if SettingsStore.shared.syncAudioDevicesWithSystem == false,
+               let prefIn = SettingsStore.shared.preferredInputDeviceUID, prefIn.isEmpty == false,
+               self.inputDevices.contains(where: { $0.uid == prefIn })
+            {
+                self.selectedInputUID = prefIn
+            } else if let systemInputUID = AudioDevice.getDefaultInputDevice()?.uid,
+                      self.inputDevices.contains(where: { $0.uid == systemInputUID })
             {
                 self.selectedInputUID = systemInputUID
             }
@@ -4327,7 +4336,9 @@ private extension ContentView {
         self.isRewriteModeShortcutEnabled = SettingsStore.shared.rewriteModeShortcutEnabled
         self.playgroundUsed = SettingsStore.shared.playgroundUsed
         self.visualizerNoiseThreshold = SettingsStore.shared.visualizerNoiseThreshold
-        self.selectedInputUID = AudioDevice.getDefaultInputDevice()?.uid ?? ""
+        self.selectedInputUID = SettingsStore.shared.syncAudioDevicesWithSystem
+            ? (AudioDevice.getDefaultInputDevice()?.uid ?? "")
+            : (SettingsStore.shared.preferredInputDeviceUID ?? AudioDevice.getDefaultInputDevice()?.uid ?? "")
         self.selectedOutputUID = SettingsStore.shared.preferredOutputDeviceUID ?? ""
         self.enableDebugLogs = SettingsStore.shared.enableDebugLogs
         self.hotkeyMode = SettingsStore.shared.hotkeyMode

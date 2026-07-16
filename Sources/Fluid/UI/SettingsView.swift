@@ -1086,12 +1086,35 @@ struct SettingsView: View {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(self.settingsSecondaryText)
                                 .font(self.theme.typography.bodyStrong)
-                            Text("Audio devices are synced with macOS System Settings.")
+                            Text(self.settings.syncAudioDevicesWithSystem
+                                ? (self.settings.experimentalDirectAudioCaptureEnabled
+                                    ? "Audio devices are synced with macOS System Settings. Turn off syncing to use a dedicated input device for FluidVoice only."
+                                    : "Audio devices are synced with macOS System Settings.")
+                                : "FluidVoice captures its selected input device directly, without changing your macOS system input.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 4)
+
+                        // Independent input device: capture the selected input per-app via the
+                        // direct Core Audio path, leaving the macOS system default untouched.
+                        // Only offered when Direct Audio Capture is enabled (that path is what
+                        // makes per-app, non-default capture possible without the -10851 limit).
+                        if self.settings.experimentalDirectAudioCaptureEnabled {
+                            HStack {
+                                Text("Sync devices with macOS")
+                                    .font(self.theme.typography.bodyStrong)
+                                    .foregroundStyle(self.settingsTitleText)
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { SettingsStore.shared.syncAudioDevicesWithSystem },
+                                    set: { SettingsStore.shared.syncAudioDevicesWithSystem = $0 }
+                                ))
+                                .labelsHidden()
+                                .disabled(self.asr.isRunning)
+                            }
+                        }
 
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
@@ -1099,7 +1122,43 @@ struct SettingsView: View {
                                     .font(self.theme.typography.bodyStrong)
                                     .foregroundStyle(self.settingsTitleText)
                                 Spacer()
-                                Picker("", selection: self.$selectedInputUID) {
+                                Picker("", selection: Binding(
+                                    get: {
+                                        // Display the device that will actually be captured: the
+                                        // preferred device when present in independent mode, else
+                                        // the current system default. Derived on every render so it
+                                        // can't go stale (mode toggle, connect/disconnect, startup);
+                                        // capture resolves the same preference.
+                                        if SettingsStore.shared.syncAudioDevicesWithSystem == false,
+                                           let pref = SettingsStore.shared.preferredInputDeviceUID,
+                                           pref.isEmpty == false,
+                                           self.inputDevices.contains(where: { $0.uid == pref }) {
+                                            return pref
+                                        }
+                                        // Fall back to the system default, matched by UID (device
+                                        // names are not unique) so it can't check-mark the wrong
+                                        // one of two identically-named devices.
+                                        if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
+                                           self.inputDevices.contains(where: { $0.uid == defaultUID }) {
+                                            return defaultUID
+                                        }
+                                        return self.selectedInputUID
+                                    },
+                                    set: { newUID in
+                                        // Called only on an explicit user selection. Programmatic
+                                        // display updates (mode toggle, device connect/disconnect,
+                                        // startup) flow through `get` and never persist a preference
+                                        // — this keeps preferredInputDeviceUID intact across a
+                                        // temporary disconnect so it auto-restores on reconnect.
+                                        guard !newUID.isEmpty, !self.asr.isRunning else { return }
+                                        self.selectedInputUID = newUID
+                                        SettingsStore.shared.preferredInputDeviceUID = newUID
+                                        // Only change the macOS system default when syncing is on.
+                                        if SettingsStore.shared.syncAudioDevicesWithSystem {
+                                            _ = AudioDevice.setDefaultInputDevice(uid: newUID)
+                                        }
+                                    }
+                                )) {
                                     // Handle empty state gracefully
                                     if self.inputDevices.isEmpty {
                                         Text("Loading...").tag("")
@@ -1114,41 +1173,14 @@ struct SettingsView: View {
                                 .pickerStyle(.menu)
                                 .frame(width: 240)
                                 .disabled(self.asr.isRunning) // Disable device changes during recording
-                                .onChange(of: self.selectedInputUID) { oldUID, newUID in
-                                    guard !newUID.isEmpty else { return }
-
-                                    // Prevent device changes during active recording
-                                    if self.asr.isRunning {
-                                        DebugLogger.shared.warning("Cannot change input device during recording", source: "SettingsView")
-                                        // Revert to previous value
-                                        self.selectedInputUID = oldUID
-                                        return
-                                    }
-
-                                    SettingsStore.shared.preferredInputDeviceUID = newUID
-                                    // Only change system default if sync is enabled
-                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
-                                        _ = AudioDevice.setDefaultInputDevice(uid: newUID)
-                                    }
-                                }
                                 // Sync selection when devices load or change
-                                .onChange(of: self.inputDevices) { _, newDevices in
-                                    // Update cached default device name when device list changes
+                                .onChange(of: self.inputDevices) { _, _ in
+                                    // Keep the cached default-device name fresh (used for the
+                                    // "(System Default)" label). The picker's displayed value is
+                                    // derived in its binding `get`, so no manual re-selection —
+                                    // which could clobber the saved preference on a temporary
+                                    // disconnect — is needed here.
                                     self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
-
-                                    // If selection is empty or not found in new list, select first available
-                                    if !newDevices.isEmpty {
-                                        let currentValid = newDevices.contains { $0.uid == self.selectedInputUID }
-                                        if !currentValid {
-                                            if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                                               newDevices.contains(where: { $0.uid == defaultUID })
-                                            {
-                                                self.selectedInputUID = defaultUID
-                                            } else {
-                                                self.selectedInputUID = newDevices.first?.uid ?? ""
-                                            }
-                                        }
-                                    }
                                 }
                             }
 
@@ -1184,10 +1216,10 @@ struct SettingsView: View {
                                     }
 
                                     SettingsStore.shared.preferredOutputDeviceUID = newUID
-                                    // Only change system default if sync is enabled
-                                    if SettingsStore.shared.syncAudioDevicesWithSystem {
-                                        _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
-                                    }
+                                    // Independent mode is input-only (direct capture has no output
+                                    // path), so selecting an output always updates the macOS system
+                                    // default — otherwise the picker would have no effect.
+                                    _ = AudioDevice.setDefaultOutputDevice(uid: newUID)
                                 }
                                 // Sync selection when devices load or change
                                 .onChange(of: self.outputDevices) { _, newDevices in

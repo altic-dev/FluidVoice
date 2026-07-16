@@ -1900,8 +1900,14 @@ final class ASRService: ObservableObject {
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
 
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
-            DebugLogger.shared.info("Sync mode enabled - using system default input device", source: "ASRService")
+        // Per-app device selection rides the direct Core Audio IOProc path when Direct Audio
+        // Capture is enabled. The AVAudioEngine path must never bind a non-default device
+        // (kAudioUnitErr_InvalidPropertyValue / -10851), so it only attempts a preferred-device
+        // bind in the legacy configuration where direct capture is off. Otherwise it follows the
+        // macOS system default (identical to sync mode).
+        guard SettingsStore.shared.syncAudioDevicesWithSystem == false,
+              SettingsStore.shared.experimentalDirectAudioCaptureEnabled == false else {
+            DebugLogger.shared.info("Using system default input device (AVAudioEngine path)", source: "ASRService")
             return true
         }
 
@@ -1944,8 +1950,12 @@ final class ASRService: ObservableObject {
     private func bindPreferredOutputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredOutputDeviceIfNeeded() - Starting output device binding", source: "ASRService")
 
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false else {
-            DebugLogger.shared.info("Sync mode enabled - using system default output device", source: "ASRService")
+        // Output has no direct-capture equivalent (direct capture is input-only), so the
+        // AVAudioEngine output path always follows the macOS system default when Direct Audio
+        // Capture is enabled — avoiding the -10851 non-default-device binding limitation.
+        guard SettingsStore.shared.syncAudioDevicesWithSystem == false,
+              SettingsStore.shared.experimentalDirectAudioCaptureEnabled == false else {
+            DebugLogger.shared.info("Using system default output device (AVAudioEngine path)", source: "ASRService")
             return true
         }
 

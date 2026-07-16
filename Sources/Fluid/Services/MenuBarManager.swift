@@ -625,6 +625,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func currentPreferredInputUID(defaultInputUID: String?) -> String? {
+        // In independent mode the menu bar should check-mark the device FluidVoice will
+        // actually capture (the preferred device), not the macOS system default.
+        if SettingsStore.shared.syncAudioDevicesWithSystem == false,
+           let preferred = SettingsStore.shared.preferredInputDeviceUID, preferred.isEmpty == false {
+            return preferred
+        }
         return defaultInputUID
     }
 

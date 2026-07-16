@@ -17,6 +17,7 @@
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
 		272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */; };
 		A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000001 /* AudioBufferConverterTests.swift */; };
+		A62300000000000000000004 /* AudioDeviceSyncSettingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000003 /* AudioDeviceSyncSettingTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
@@ -40,6 +41,7 @@
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A62300000000000000000001 /* AudioBufferConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferConverterTests.swift; sourceTree = "<group>"; };
+		A62300000000000000000003 /* AudioDeviceSyncSettingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceSyncSettingTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
@@ -113,6 +115,7 @@
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
 				980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */,
 				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
+				A62300000000000000000003 /* AudioDeviceSyncSettingTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -270,6 +273,7 @@
 				86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */,
 				272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */,
 				A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */,
+				A62300000000000000000004 /* AudioDeviceSyncSettingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
