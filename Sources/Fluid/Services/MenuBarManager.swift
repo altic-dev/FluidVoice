@@ -37,10 +37,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// overlay. During post-processing we want the overlay to stay visible until processing ends.
     private var isProcessingActive: Bool = false
 
-    /// Menu-bar Stop can return before transcription/AI cleanup finishes, and `isRunning`
-    /// flips false first — without this gate the item becomes Start and can start a new
-    /// recording mid-stop (hotkeys use the same pattern via `isProcessingStop`).
-    private var isProcessingMenuDictationStop = false
+    /// Depth of in-flight stop→transcribe work (menu, hotkey, or in-app).
+    /// `isRunning` flips false before that work finishes; without this the menu becomes Start
+    /// and can begin a new recording mid-stop (mirrors GlobalHotkeyManager.`isProcessingStop`).
+    private var dictationStopProcessingCount = 0
+
+    private var isProcessingDictationStop: Bool {
+        self.dictationStopProcessingCount > 0
+    }
 
     @Published var isRecording: Bool = false
 
@@ -390,6 +394,24 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
+    /// Keeps Start/Stop Dictation disabled for the full stop→transcribe window,
+    /// including stops initiated from hotkeys or in-app Record (not only the menu item).
+    /// Nested begin/end is supported so menu + ContentView can both track the same stop.
+    func beginDictationStopProcessing() {
+        self.dictationStopProcessingCount += 1
+        if self.dictationStopProcessingCount == 1 {
+            self.updateMenuItemsText()
+        }
+    }
+
+    func endDictationStopProcessing() {
+        guard self.dictationStopProcessingCount > 0 else { return }
+        self.dictationStopProcessingCount -= 1
+        if self.dictationStopProcessingCount == 0 {
+            self.updateMenuItemsText()
+        }
+    }
+
     /// Ends processing and waits for the recording overlay's exit transition.
     /// Output paths normally call this asynchronously after insertion dispatch
     /// so the exit animation cannot delay text delivery.
@@ -591,7 +613,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         if self.asrService?.isDictionaryTrainingCaptureActive == true {
             return false
         }
-        if self.isProcessingMenuDictationStop {
+        if self.isProcessingDictationStop {
             return false
         }
         return true
@@ -706,13 +728,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         if self.isRecording {
             guard let stopDictationCallback else { return }
             DebugLogger.shared.info("Menu action: Stop Dictation", source: "MenuBarManager")
-            self.isProcessingMenuDictationStop = true
-            self.updateMenuItemsText()
+            // Begin immediately so Start stays disabled before the Task runs;
+            // ContentView also begins/ends around stopAndProcessTranscription.
+            self.beginDictationStopProcessing()
             Task { @MainActor in
-                defer {
-                    self.isProcessingMenuDictationStop = false
-                    self.updateMenuItemsText()
-                }
+                defer { self.endDictationStopProcessing() }
                 await stopDictationCallback()
             }
         } else {

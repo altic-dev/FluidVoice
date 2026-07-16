@@ -2046,6 +2046,11 @@ struct ContentView: View {
         DebugLogger.shared.info("Output route selected: \(route.rawValue)", source: "ContentView")
         self.appBench("stop_path_enter route=\(route.rawValue)")
 
+        // Disable menu Start/Stop for the full stop window — including hotkey and
+        // in-app stops, where isRunning flips false before transcription finishes.
+        self.menuBarManager.beginDictationStopProcessing()
+        defer { self.menuBarManager.endDictationStopProcessing() }
+
         // Check if we're in rewrite or command mode
         let modeAtStop = self.activeRecordingMode
         let wasRewriteMode = modeAtStop == .edit || self.isRecordingForRewrite
