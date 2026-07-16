@@ -11,7 +11,22 @@ struct TranscriptionHistoryView: View {
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
     @State private var selectedEntryID: UUID?
+    @State private var copiedMark: CopiedMark?
+    @State private var copiedResetTask: Task<Void, Never>?
     @FocusState private var listFocused: Bool
+
+    /// A detail-pane copy button that just copied. Scoped to its entry so the
+    /// inline confirmation can never leak onto a different entry.
+    private enum CopiedButton: Equatable {
+        case primary
+        case raw
+        case both
+    }
+
+    private struct CopiedMark: Equatable {
+        let entryID: UUID
+        let button: CopiedButton
+    }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
         self.historyStore.search(query: self.searchQuery)
@@ -361,10 +376,14 @@ struct TranscriptionHistoryView: View {
 
                         Button {
                             self.copyToClipboard(entry.clipboardText ?? entry.processedText)
-                            self.flashCopied()
+                            self.markButtonCopied(.primary, for: entry)
                         } label: {
-                            Label(entry.wasAIProcessed ? "Copy AI" : "Copy", systemImage: "doc.on.doc")
-                                .font(.system(size: 12, weight: .medium))
+                            self.copyButtonLabel(
+                                .primary,
+                                for: entry,
+                                title: entry.wasAIProcessed ? "Copy AI" : "Copy",
+                                systemImage: "doc.on.doc"
+                            )
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -402,20 +421,18 @@ struct TranscriptionHistoryView: View {
                         if entry.wasAIProcessed {
                             Button {
                                 self.copyToClipboard(entry.rawText)
-                                self.flashCopied()
+                                self.markButtonCopied(.raw, for: entry)
                             } label: {
-                                Label("Raw", systemImage: "doc.on.doc.fill")
-                                    .font(.system(size: 12, weight: .medium))
+                                self.copyButtonLabel(.raw, for: entry, title: "Raw", systemImage: "doc.on.doc.fill")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
 
                             Button {
                                 self.copyToClipboard(self.combinedText(for: entry))
-                                self.flashCopied()
+                                self.markButtonCopied(.both, for: entry)
                             } label: {
-                                Label("Both", systemImage: "doc.on.doc")
-                                    .font(.system(size: 12, weight: .medium))
+                                self.copyButtonLabel(.both, for: entry, title: "Both", systemImage: "doc.on.doc")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -594,8 +611,39 @@ struct TranscriptionHistoryView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    /// Cursor toast — for the copy paths with no button to morph: double-click,
+    /// ⌘C, and the right-click menu (which dismisses the moment it's clicked).
     private func flashCopied() {
         CursorCopyToast.shared.show()
+    }
+
+    /// Inline confirmation for the detail-pane copy buttons: the button itself
+    /// briefly becomes "Copied", so the feedback lands on the control the user
+    /// actually pressed.
+    private func markButtonCopied(_ button: CopiedButton, for entry: TranscriptionHistoryEntry) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            self.copiedMark = CopiedMark(entryID: entry.id, button: button)
+        }
+        self.copiedResetTask?.cancel()
+        self.copiedResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.15)) {
+                self.copiedMark = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func copyButtonLabel(
+        _ button: CopiedButton,
+        for entry: TranscriptionHistoryEntry,
+        title: String,
+        systemImage: String
+    ) -> some View {
+        let copied = self.copiedMark == CopiedMark(entryID: entry.id, button: button)
+        Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : systemImage)
+            .font(.system(size: 12, weight: .medium))
     }
 
     private func moveSelection(_ direction: MoveCommandDirection, scrollProxy: ScrollViewProxy) {
