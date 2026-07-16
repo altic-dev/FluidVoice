@@ -88,6 +88,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             }
             .store(in: &self.cancellables)
 
+        asrService.$isDictionaryTrainingCaptureActive
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateMenu()
+            }
+            .store(in: &self.cancellables)
+
         // Subscribe to partial transcription updates for streaming preview
         asrService.$partialTranscription
             .receive(on: DispatchQueue.main)
@@ -570,6 +577,18 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
+    private var canToggleDictationFromMenu: Bool {
+        guard self.startDictationCallback != nil, self.stopDictationCallback != nil else {
+            return false
+        }
+        // Dictionary training owns recording; diverting stop into the dictation
+        // pipeline would desync training UI and emit the sample as a transcript.
+        if self.asrService?.isDictionaryTrainingCaptureActive == true {
+            return false
+        }
+        return true
+    }
+
     private func updateMenuItemsText() {
         // Update status text with hotkey info
         let hotkeyDisplay = SettingsStore.shared.primaryDictationShortcutDisplayString
@@ -577,7 +596,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
         self.statusMenuItem?.title = statusTitle
         self.startStopDictationMenuItem?.title = self.isRecording ? "Stop Dictation" : "Start Dictation"
-        self.startStopDictationMenuItem?.isEnabled = self.startDictationCallback != nil && self.stopDictationCallback != nil
+        self.startStopDictationMenuItem?.isEnabled = self.canToggleDictationFromMenu
         self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
         self.microphoneMenuItem?.isEnabled = true
 
@@ -668,20 +687,22 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     @objc private func toggleDictationFromMenu(_ sender: Any?) {
+        guard self.canToggleDictationFromMenu else {
+            DebugLogger.shared.info(
+                "Menu action: Start/Stop Dictation ignored (callbacks missing or dictionary training active)",
+                source: "MenuBarManager"
+            )
+            return
+        }
+
         if self.isRecording {
-            guard let stopDictationCallback else {
-                DebugLogger.shared.warning("Menu action: Stop Dictation requested but callback is missing", source: "MenuBarManager")
-                return
-            }
+            guard let stopDictationCallback else { return }
             DebugLogger.shared.info("Menu action: Stop Dictation", source: "MenuBarManager")
             Task { @MainActor in
                 await stopDictationCallback()
             }
         } else {
-            guard let startDictationCallback else {
-                DebugLogger.shared.warning("Menu action: Start Dictation requested but callback is missing", source: "MenuBarManager")
-                return
-            }
+            guard let startDictationCallback else { return }
             DebugLogger.shared.info("Menu action: Start Dictation", source: "MenuBarManager")
             startDictationCallback()
         }

@@ -226,8 +226,10 @@ enum NotificationService {
         content.sound = nil
         content.userInfo = [UserInfoKey.kind: Kind.clipboardOnlyOutput]
 
+        // Stable ID so repeated clipboard-only dictations replace the previous
+        // banner instead of stacking identical Notification Center entries.
         let request = UNNotificationRequest(
-            identifier: "clipboard-only-output-\(UUID().uuidString)",
+            identifier: "clipboard-only-output",
             content: content,
             trigger: nil
         )

@@ -2375,13 +2375,16 @@ struct ContentView: View {
                 model: transcriptionModelInfo.model
             )
         }
-        // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
-        // Avoid re-inserting or overwriting the clipboard in that self-target case.
+        // When FluidVoice itself is frontmost and Accessibility works, the bound
+        // editor already receives `finalText` — skip clipboard overwrite there.
+        // In clipboard-only mode (!Accessibility), still copy even when Fluid is
+        // frontmost so in-app / menu-bar recordings are not dropped.
         let accessibilityTrusted = AXIsProcessTrusted()
-        let shouldForceClipboardFallback = shouldPersistOutputs && !isFluidFrontmost && !accessibilityTrusted
-        let shouldCopyToClipboard = shouldPersistOutputs &&
-            !isFluidFrontmost &&
-            (SettingsStore.shared.copyTranscriptionToClipboard || shouldForceClipboardFallback)
+        let shouldForceClipboardFallback = shouldPersistOutputs && !accessibilityTrusted
+        let shouldCopyToClipboard = shouldPersistOutputs && (
+            shouldForceClipboardFallback ||
+                (!isFluidFrontmost && SettingsStore.shared.copyTranscriptionToClipboard)
+        )
 
         var didCopyToClipboard = false
         if shouldCopyToClipboard {
@@ -2757,9 +2760,9 @@ struct ContentView: View {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let isFluidFrontmost = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
         let accessibilityTrusted = AXIsProcessTrusted()
-        let shouldForceClipboardFallback = !isFluidFrontmost && !accessibilityTrusted
-        let shouldCopyToClipboard = !isFluidFrontmost &&
-            (SettingsStore.shared.copyTranscriptionToClipboard || shouldForceClipboardFallback)
+        let shouldForceClipboardFallback = !accessibilityTrusted
+        let shouldCopyToClipboard = shouldForceClipboardFallback ||
+            (!isFluidFrontmost && SettingsStore.shared.copyTranscriptionToClipboard)
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
@@ -2890,7 +2893,7 @@ struct ContentView: View {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let isFluidFrontmost = frontmostApp?.bundleIdentifier?.contains("fluid") == true
         let accessibilityTrusted = AXIsProcessTrusted()
-        let shouldForceClipboardFallback = !isFluidFrontmost && !accessibilityTrusted
+        let shouldForceClipboardFallback = !accessibilityTrusted
         if shouldForceClipboardFallback {
             ClipboardService.copyToClipboard(finalText)
             NotificationService.showClipboardOnlyOutput()
