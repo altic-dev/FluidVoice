@@ -24,6 +24,14 @@ private struct PromptCardModelPicker {
     let onOpenProviders: () -> Void
 }
 
+private struct PromptEditorScrollContainer: ViewModifier {
+    func body(content: Content) -> some View {
+        ScrollView {
+            content
+        }
+    }
+}
+
 extension AIEnhancementSettingsView {
     // MARK: - Advanced Settings Card
 
@@ -1879,7 +1887,8 @@ extension AIEnhancementSettingsView {
             }
         }
         .padding()
-        .frame(minWidth: 780, idealWidth: 820, minHeight: 420)
+        .modifier(PromptEditorScrollContainer())
+        .frame(minWidth: 780, idealWidth: 820, minHeight: 420, idealHeight: 700, maxHeight: 720)
         .onAppear {
             self.preparePromptEditorConfigurationDraft(mode: mode)
         }
