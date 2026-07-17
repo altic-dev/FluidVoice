@@ -24,14 +24,6 @@ private struct PromptCardModelPicker {
     let onOpenProviders: () -> Void
 }
 
-private struct PromptEditorScrollContainer: ViewModifier {
-    func body(content: Content) -> some View {
-        ScrollView {
-            content
-        }
-    }
-}
-
 extension AIEnhancementSettingsView {
     // MARK: - Advanced Settings Card
 
@@ -1637,222 +1629,229 @@ extension AIEnhancementSettingsView {
     }
 
     func promptEditorSheet(mode: PromptEditorMode) -> some View {
-        VStack(spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text({
-                        switch mode {
-                        case let .defaultPrompt(promptMode): return "Default \(self.friendlyModeName(promptMode)) Prompt"
-                        case let .newPrompt(prefillMode): return "New \(self.friendlyModeName(prefillMode)) Prompt"
-                        case .edit: return "Edit Prompt"
-                        case .privateAI: return PrivateAIProviderFeature.displayName
-                        }
-                    }())
-                        .font(.headline)
-                    if mode.isPrivateAI {
-                        Text("Built-in system prompt. Only the shortcut can be customized.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if mode.isDefault {
-                        Text("This is the built-in prompt. Create a custom prompt to override it.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-            }
-
-            if self.shouldShowPromptEditorConfigurationPanel(for: mode) {
-                self.promptEditorConfigurationPanel(mode: mode)
-            }
-
-            if !mode.isPrivateAI {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Name")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    let isDefaultNameLocked = mode.isDefault
-                    TextField("Prompt name", text: self.$viewModel.draftPromptName)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(isDefaultNameLocked)
-                }
-            }
-
-            if !mode.isPrivateAI {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Prompt")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    PromptTextView(
-                        text: self.$viewModel.draftPromptText,
-                        isEditable: true,
-                        font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-                    )
-                    .id(self.viewModel.promptEditorSessionID)
-                    .frame(minHeight: 180)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(self.theme.palette.contentBackground)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                            )
-                    )
-                    .onChange(of: self.viewModel.draftPromptText) { _, newValue in
-                        guard self.viewModel.draftPromptMode == .dictate else { return }
-                        let combined = self.viewModel.combinedDraftPrompt(newValue, mode: self.viewModel.draftPromptMode)
-                        self.promptTest.updateDraftPromptText(combined)
-                    }
-                }
-
-                if self.viewModel.draftPromptMode == .dictate {
-                    self.baseDictationPromptReference
-                }
-            }
-
-            if self.viewModel.draftPromptMode != .dictate {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Selected text is added automatically when text is selected.")
-                        .font(.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-
-                    Text("Context block added automatically:")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    Text(SettingsStore.contextTemplateText())
-                        .font(.system(.caption2, design: .monospaced))
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(self.theme.palette.contentBackground)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                                )
-                        )
-                }
-            }
-
-            // MARK: - Test Mode
-
-            if self.viewModel.draftPromptMode == .dictate && !mode.isPrivateAI {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "waveform")
-                            .foregroundStyle(self.theme.palette.accent)
-                        Text("Test")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Spacer()
-                    }
-
-                    let hotkeyDisplay = self.settings.primaryDictationShortcutDisplayString
-                    let canTest = self.viewModel.isAIPostProcessingConfiguredForDictation()
-
-                    Toggle(isOn: Binding(
-                        get: { self.promptTest.isActive },
-                        set: { enabled in
-                            if enabled {
-                                let combined = self.viewModel.combinedDraftPrompt(self.viewModel.draftPromptText, mode: self.viewModel.draftPromptMode)
-                                self.promptTest.activate(draftPromptText: combined)
-                            } else {
-                                self.promptTest.deactivate()
-                            }
-                        }
-                    )) {
-                        Text("Enable Test Mode (Hotkey: \(hotkeyDisplay))")
-                            .font(.caption)
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(!canTest)
-
-                    if !canTest {
-                        Text("Testing is disabled because AI post-processing is not configured.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else if self.promptTest.isActive {
-                        Text("Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps).")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if self.promptTest.isActive {
-                        if self.promptTest.isProcessing {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small).fixedSize()
-                                Text("Processing…")
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 14) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text({
+                                switch mode {
+                                case let .defaultPrompt(promptMode): return "Default \(self.friendlyModeName(promptMode)) Prompt"
+                                case let .newPrompt(prefillMode): return "New \(self.friendlyModeName(prefillMode)) Prompt"
+                                case .edit: return "Edit Prompt"
+                                case .privateAI: return PrivateAIProviderFeature.displayName
+                                }
+                            }())
+                                .font(.headline)
+                            if mode.isPrivateAI {
+                                Text("Built-in system prompt. Only the shortcut can be customized.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if mode.isDefault {
+                                Text("This is the built-in prompt. Create a custom prompt to override it.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        Spacer()
+                    }
 
-                        if !self.promptTest.lastError.isEmpty {
-                            Text(self.promptTest.lastError)
-                                .font(.caption2)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                        }
+                    if self.shouldShowPromptEditorConfigurationPanel(for: mode) {
+                        self.promptEditorConfigurationPanel(mode: mode)
+                    }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Raw transcription")
-                                .font(.caption2)
+                    if !mode.isPrivateAI {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Name")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                            TextEditor(text: Binding(
-                                get: { self.promptTest.lastTranscriptionText },
-                                set: { _ in }
-                            ))
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(minHeight: 70)
-                            .scrollContentBackground(.hidden)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(self.theme.palette.contentBackground)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                                    )
-                            )
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Post-processed output")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            TextEditor(text: Binding(
-                                get: { self.promptTest.lastOutputText },
-                                set: { _ in }
-                            ))
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(minHeight: 110)
-                            .scrollContentBackground(.hidden)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(self.theme.palette.contentBackground)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                                    )
-                            )
+                            let isDefaultNameLocked = mode.isDefault
+                            TextField("Prompt name", text: self.$viewModel.draftPromptName)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(isDefaultNameLocked)
                         }
                     }
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(self.theme.palette.accent.opacity(0.08))
-                        .overlay(
+
+                    if !mode.isPrivateAI {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Prompt")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            PromptTextView(
+                                text: self.$viewModel.draftPromptText,
+                                isEditable: true,
+                                font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                            )
+                            .id(self.viewModel.promptEditorSessionID)
+                            .frame(minHeight: 180)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(self.theme.palette.contentBackground)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                    )
+                            )
+                            .onChange(of: self.viewModel.draftPromptText) { _, newValue in
+                                guard self.viewModel.draftPromptMode == .dictate else { return }
+                                let combined = self.viewModel.combinedDraftPrompt(newValue, mode: self.viewModel.draftPromptMode)
+                                self.promptTest.updateDraftPromptText(combined)
+                            }
+                        }
+
+                        if self.viewModel.draftPromptMode == .dictate {
+                            self.baseDictationPromptReference
+                        }
+                    }
+
+                    if self.viewModel.draftPromptMode != .dictate {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Selected text is added automatically when text is selected.")
+                                .font(.caption)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+
+                            Text("Context block added automatically:")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+
+                            Text(SettingsStore.contextTemplateText())
+                                .font(.system(.caption2, design: .monospaced))
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(self.theme.palette.contentBackground)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                        )
+                                )
+                        }
+                    }
+
+                    // MARK: - Test Mode
+
+                    if self.viewModel.draftPromptMode == .dictate && !mode.isPrivateAI {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "waveform")
+                                    .foregroundStyle(self.theme.palette.accent)
+                                Text("Test")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+
+                            let hotkeyDisplay = self.settings.primaryDictationShortcutDisplayString
+                            let canTest = self.viewModel.isAIPostProcessingConfiguredForDictation()
+
+                            Toggle(isOn: Binding(
+                                get: { self.promptTest.isActive },
+                                set: { enabled in
+                                    if enabled {
+                                        let combined = self.viewModel.combinedDraftPrompt(self.viewModel.draftPromptText, mode: self.viewModel.draftPromptMode)
+                                        self.promptTest.activate(draftPromptText: combined)
+                                    } else {
+                                        self.promptTest.deactivate()
+                                    }
+                                }
+                            )) {
+                                Text("Enable Test Mode (Hotkey: \(hotkeyDisplay))")
+                                    .font(.caption)
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(!canTest)
+
+                            if !canTest {
+                                Text("Testing is disabled because AI post-processing is not configured.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            } else if self.promptTest.isActive {
+                                Text("Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps).")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if self.promptTest.isActive {
+                                if self.promptTest.isProcessing {
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.small).fixedSize()
+                                        Text("Processing…")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                if !self.promptTest.lastError.isEmpty {
+                                    Text(self.promptTest.lastError)
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                        .textSelection(.enabled)
+                                }
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Raw transcription")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    TextEditor(text: Binding(
+                                        get: { self.promptTest.lastTranscriptionText },
+                                        set: { _ in }
+                                    ))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(minHeight: 70)
+                                    .scrollContentBackground(.hidden)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(self.theme.palette.contentBackground)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                            )
+                                    )
+                                }
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Post-processed output")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    TextEditor(text: Binding(
+                                        get: { self.promptTest.lastOutputText },
+                                        set: { _ in }
+                                    ))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(minHeight: 110)
+                                    .scrollContentBackground(.hidden)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(self.theme.palette.contentBackground)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                            )
+                                    )
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                .fill(self.theme.palette.accent.opacity(0.08))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                                )
                         )
-                )
-            } else if self.promptTest.isActive {
-                Text("Prompt test mode is available only for Dictate prompts.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .onAppear { self.promptTest.deactivate() }
+                    } else if self.promptTest.isActive {
+                        Text("Prompt test mode is available only for Dictate prompts.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .onAppear { self.promptTest.deactivate() }
+                    }
+                }
+                .padding()
             }
+
+            Divider()
 
             HStack(spacing: 10) {
                 if mode.isDefault,
@@ -1885,9 +1884,8 @@ extension AIEnhancementSettingsView {
                 .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
                 .disabled(!mode.isDefault && self.viewModel.draftPromptName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .padding()
         }
-        .padding()
-        .modifier(PromptEditorScrollContainer())
         .frame(minWidth: 780, idealWidth: 820, minHeight: 420, idealHeight: 700, maxHeight: 720)
         .onAppear {
             self.preparePromptEditorConfigurationDraft(mode: mode)
