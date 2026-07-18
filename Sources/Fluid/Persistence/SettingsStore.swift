@@ -1427,6 +1427,11 @@ final class SettingsStore: ObservableObject {
         self.defaults.object(forKey: Self.customModelsByProviderDefaultsKey) != nil
     }
 
+    func clearStoredCustomModelsByProvider() {
+        objectWillChange.send()
+        self.defaults.removeObject(forKey: Self.customModelsByProviderDefaultsKey)
+    }
+
     var enableDebugLogs: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableDebugLogs)
@@ -3111,7 +3116,11 @@ final class SettingsStore: ObservableObject {
         self.savedProviders = payload.savedProviders
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
-        self.customModelsByProvider = payload.customModelsByProvider ?? [:]
+        if let customModelsByProvider = payload.customModelsByProvider {
+            self.customModelsByProvider = customModelsByProvider
+        } else {
+            self.clearStoredCustomModelsByProvider()
+        }
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {
             self.privateAIPrefixKVCacheEnabled = privateAIPrefixKVCacheEnabled

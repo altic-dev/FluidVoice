@@ -53,20 +53,20 @@ final class AIModelRefreshTests: XCTestCase {
         )
     }
 
-    func testLegacyCachedAndSavedModelsMigrateBeforeFirstRefresh() {
+    func testLegacyAppendedModelsMigrateWithoutPromotingSortedCatalogs() {
         XCTAssertEqual(
             AIEnhancementSettingsViewModel.migratedLegacyCustomModels(
                 cachedModelsByProvider: [
-                    "OpenAI": [" gpt-cached ", "gpt-shared"],
-                    "legacy-provider": ["cached-model"],
+                    "OpenAI": ["gpt-a", "gpt-z", " custom-mid "],
+                    "sorted-provider": ["model-a", "model-b", "model-c"],
                 ],
                 savedModelsByProvider: [
-                    "legacy-provider": ["saved-model", "cached-model"],
+                    "legacy-provider": ["model-a", "model-z", "manual-a", "manual-b"],
                 ]
             ),
             [
-                "openai": ["gpt-cached", "gpt-shared"],
-                "custom:legacy-provider": ["cached-model", "saved-model"],
+                "openai": ["custom-mid"],
+                "custom:legacy-provider": ["manual-a", "manual-b"],
             ]
         )
     }

@@ -178,6 +178,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.isDictationPromptOff = self.settings.isDictationPromptOff
         self.isEditPromptOff = self.settings.isEditPromptOff
 
+        let legacyCachedModels = self.availableModelsByProvider
+        let legacySavedModels = Dictionary(
+            self.savedProviders.map { ($0.id, $0.models) },
+            uniquingKeysWith: { _, newer in newer }
+        )
+
         if !self.selectedProviderID.isEmpty,
            !ModelRepository.shared.isBuiltIn(self.selectedProviderID),
            self.savedProviders.contains(where: { $0.id == self.selectedProviderID }) == false
@@ -209,11 +215,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         if !hasStoredCustomModels {
             normalizedCustom = Self.migratedLegacyCustomModels(
-                cachedModelsByProvider: normalized,
-                savedModelsByProvider: Dictionary(
-                    self.savedProviders.map { ($0.id, $0.models) },
-                    uniquingKeysWith: { _, newer in newer }
-                )
+                cachedModelsByProvider: legacyCachedModels,
+                savedModelsByProvider: legacySavedModels
             )
         }
         for (key, customModels) in normalizedCustom {
@@ -625,20 +628,30 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return trimmed.hasPrefix("custom:") ? trimmed : "custom:\(trimmed)"
         }
 
-        for (providerID, models) in cachedModelsByProvider.merging(
-            savedModelsByProvider,
-            uniquingKeysWith: { cached, saved in AIModelCatalog.merged(
-                discoveredModels: cached,
-                customModels: saved
-            ) }
-        ) {
-            let key = providerKey(providerID)
-            let normalized = AIModelCatalog.normalized(models)
-            if !key.isEmpty, !normalized.isEmpty {
-                migrated[key] = AIModelCatalog.merged(
-                    discoveredModels: migrated[key] ?? [],
-                    customModels: normalized
-                )
+        func appendedManualModels(_ models: [String]) -> [String] {
+            let normalizedInOrder = models
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            guard normalizedInOrder.count > 1,
+                  let firstAppendedIndex = (1 ..< normalizedInOrder.count).first(where: {
+                      normalizedInOrder[$0] < normalizedInOrder[$0 - 1]
+                  })
+            else {
+                return []
+            }
+            return AIModelCatalog.normalized(Array(normalizedInOrder[firstAppendedIndex...]))
+        }
+
+        for source in [cachedModelsByProvider, savedModelsByProvider] {
+            for (providerID, models) in source {
+                let key = providerKey(providerID)
+                let appendedModels = appendedManualModels(models)
+                if !key.isEmpty, !appendedModels.isEmpty {
+                    migrated[key] = AIModelCatalog.merged(
+                        discoveredModels: migrated[key] ?? [],
+                        customModels: appendedModels
+                    )
+                }
             }
         }
 
