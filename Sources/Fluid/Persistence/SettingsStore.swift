@@ -23,7 +23,7 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationRoundTripTokenCost = 2.75
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
     static let customModelsByProviderDefaultsKey = "CustomModelsByProvider"
-    static let legacyModelCandidatesByProviderDefaultsKey = "LegacyModelCandidatesByProvider"
+    static let legacyModelCandidatesDefaultsKey = "LegacyModelCandidatesByProvider"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
@@ -1436,18 +1436,18 @@ final class SettingsStore: ObservableObject {
     var legacyModelCandidatesByProvider: [String: [String]] {
         get {
             (self.defaults.dictionary(
-                forKey: Self.legacyModelCandidatesByProviderDefaultsKey
+                forKey: Self.legacyModelCandidatesDefaultsKey
             ) as? [String: [String]]) ?? [:]
         }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Self.legacyModelCandidatesByProviderDefaultsKey)
+            self.defaults.set(newValue, forKey: Self.legacyModelCandidatesDefaultsKey)
         }
     }
 
     func clearStoredLegacyModelCandidatesByProvider() {
         objectWillChange.send()
-        self.defaults.removeObject(forKey: Self.legacyModelCandidatesByProviderDefaultsKey)
+        self.defaults.removeObject(forKey: Self.legacyModelCandidatesDefaultsKey)
     }
 
     var enableDebugLogs: Bool {
