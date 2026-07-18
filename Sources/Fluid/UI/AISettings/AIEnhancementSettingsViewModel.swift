@@ -102,6 +102,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
     }
 
+    struct ManualModelAddition: Equatable {
+        let modelID: String
+        let visibleModels: [String]
+        let customModels: [String]
+    }
+
     @Published var cachedProviderItems: [ProviderItemData] = []
     @Published var cachedVerifiedProviderItems: [ProviderItemData] = []
     @Published var cachedUnverifiedProviderItems: [ProviderItemData] = []
@@ -573,16 +579,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return self.settings.isReasoningModel(self.selectedModel)
     }
 
+    static func manualModelAddition(
+        _ enteredModel: String,
+        visibleModels: [String],
+        customModels: [String]
+    ) -> ManualModelAddition? {
+        guard let visibleAddition = AIModelCatalog.adding(enteredModel, to: visibleModels) else { return nil }
+        let wasAlreadyVisible = AIModelCatalog.normalized(visibleModels).contains(visibleAddition.modelID)
+        let updatedCustomModels: [String]
+        if wasAlreadyVisible {
+            updatedCustomModels = AIModelCatalog.normalized(customModels)
+        } else {
+            updatedCustomModels = AIModelCatalog.normalized(customModels + [visibleAddition.modelID])
+        }
+        return ManualModelAddition(
+            modelID: visibleAddition.modelID,
+            visibleModels: visibleAddition.models,
+            customModels: updatedCustomModels
+        )
+    }
+
     func addNewModel() {
         let key = self.providerKey(for: self.selectedProviderID)
         let visibleModels = self.availableModelsByProvider[key] ?? self.availableModels
-        guard let visibleAddition = AIModelCatalog.adding(self.newModelName, to: visibleModels) else { return }
-        let modelName = visibleAddition.modelID
-        let list = visibleAddition.models
-
         let customModels = self.customModelsByProvider[key] ?? []
-        if let customAddition = AIModelCatalog.adding(modelName, to: customModels) {
-            self.customModelsByProvider[key] = customAddition.models
+        guard let addition = Self.manualModelAddition(
+            self.newModelName,
+            visibleModels: visibleModels,
+            customModels: customModels
+        ) else { return }
+        let modelName = addition.modelID
+        let list = addition.visibleModels
+
+        if addition.customModels.isEmpty {
+            self.customModelsByProvider.removeValue(forKey: key)
+        } else {
+            self.customModelsByProvider[key] = addition.customModels
         }
         self.settings.customModelsByProvider = self.customModelsByProvider
 

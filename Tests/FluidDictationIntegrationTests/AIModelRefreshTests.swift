@@ -3,16 +3,14 @@ import XCTest
 
 @MainActor
 final class AIModelRefreshTests: XCTestCase {
-    private let customModelsByProviderKey = "CustomModelsByProvider"
-
     func testCustomModelsPersistByProvider() {
         let defaults = UserDefaults.standard
-        let previousValue = defaults.object(forKey: self.customModelsByProviderKey)
+        let previousValue = defaults.object(forKey: SettingsStore.customModelsByProviderDefaultsKey)
         defer {
             if let previousValue {
-                defaults.set(previousValue, forKey: self.customModelsByProviderKey)
+                defaults.set(previousValue, forKey: SettingsStore.customModelsByProviderDefaultsKey)
             } else {
-                defaults.removeObject(forKey: self.customModelsByProviderKey)
+                defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
             }
         }
 
@@ -22,6 +20,36 @@ final class AIModelRefreshTests: XCTestCase {
         XCTAssertEqual(
             SettingsStore.shared.customModelsByProvider[providerKey],
             ["model/custom:nitro"]
+        )
+    }
+
+    func testEnteringDiscoveredModelSelectsWithoutPersistingAsCustom() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.manualModelAddition(
+                " model/discovered ",
+                visibleModels: ["model/discovered", "model/other"],
+                customModels: []
+            ),
+            AIEnhancementSettingsViewModel.ManualModelAddition(
+                modelID: "model/discovered",
+                visibleModels: ["model/discovered", "model/other"],
+                customModels: []
+            )
+        )
+    }
+
+    func testEnteringNewManualModelPersistsAsCustom() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.manualModelAddition(
+                " model/custom:nitro ",
+                visibleModels: ["model/discovered"],
+                customModels: []
+            ),
+            AIEnhancementSettingsViewModel.ManualModelAddition(
+                modelID: "model/custom:nitro",
+                visibleModels: ["model/discovered", "model/custom:nitro"],
+                customModels: ["model/custom:nitro"]
+            )
         )
     }
 

@@ -22,6 +22,7 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationMinimumOutputTokens = 256
     static let privateAIDictationRoundTripTokenCost = 2.75
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
+    static let customModelsByProviderDefaultsKey = "CustomModelsByProvider"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
@@ -1413,10 +1414,12 @@ final class SettingsStore: ObservableObject {
     }
 
     var customModelsByProvider: [String: [String]] {
-        get { (self.defaults.dictionary(forKey: Keys.customModelsByProvider) as? [String: [String]]) ?? [:] }
+        get {
+            (self.defaults.dictionary(forKey: Self.customModelsByProviderDefaultsKey) as? [String: [String]]) ?? [:]
+        }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.customModelsByProvider)
+            self.defaults.set(newValue, forKey: Self.customModelsByProviderDefaultsKey)
         }
     }
 
@@ -4880,7 +4883,6 @@ private extension SettingsStore {
         static let enableDebugLogs = "EnableDebugLogs"
         static let availableAIModels = "AvailableAIModels"
         static let availableModelsByProvider = "AvailableModelsByProvider"
-        static let customModelsByProvider = "CustomModelsByProvider"
         static let selectedAIModel = "SelectedAIModel"
         static let selectedModelByProvider = "SelectedModelByProvider"
         static let selectedProviderID = "SelectedProviderID"
