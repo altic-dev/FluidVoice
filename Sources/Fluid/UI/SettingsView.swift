@@ -899,6 +899,9 @@ struct SettingsView: View {
                                         Divider().opacity(0.2)
                                     }
 
+                                    self.historyAutoClearRow
+                                    Divider().opacity(0.2)
+
                                     self.optionToggleRow(
                                         title: "Notify AI Enhancement Failures",
                                         description: "Show a macOS notification when AI Enhancement fails and raw transcription is typed.",
@@ -2296,6 +2299,56 @@ struct SettingsView: View {
             }
         }
         .opacity(enabledValue ? 1 : 0.7)
+    }
+}
+
+private extension SettingsView {
+    var historyAutoClearRow: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Automatically Clear History")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.settingsTitleText)
+                Text(SettingsStore.shared.historyAutoClearInterval.description)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.settingsSecondaryText)
+            }
+
+            Spacer()
+
+            Picker("", selection: Binding(
+                get: { SettingsStore.shared.historyAutoClearInterval },
+                set: { self.applyHistoryAutoClearInterval($0) }
+            )) {
+                ForEach(SettingsStore.HistoryAutoClearInterval.allCases) { interval in
+                    Text(interval.displayName).tag(interval)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 170, alignment: .trailing)
+        }
+        .disabled(!SettingsStore.shared.saveTranscriptionHistory)
+    }
+
+    func applyHistoryAutoClearInterval(_ interval: SettingsStore.HistoryAutoClearInterval) {
+        if let cutoff = interval.cutoffDate() {
+            let expiredCount = TranscriptionHistoryStore.shared.entries.filter { $0.timestamp < cutoff }.count
+            if expiredCount > 0 {
+                let confirm = NSAlert()
+                confirm.messageText = "Clear older history now?"
+                confirm.informativeText = """
+                This deletes \(expiredCount) history \(expiredCount == 1 ? "entry" : "entries") older than the selected period, including any saved audio. Stats and streaks based on those entries are affected.
+                """
+                confirm.alertStyle = .warning
+                confirm.addButton(withTitle: "Apply and Clear")
+                confirm.addButton(withTitle: "Cancel")
+                guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            }
+        }
+
+        SettingsStore.shared.historyAutoClearInterval = interval
+        TranscriptionHistoryStore.shared.pruneExpiredEntries()
+        self.refreshAudioHistoryUsage()
     }
 }
 

@@ -71,6 +71,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let saveTranscriptionHistory: Bool
     let saveAudioWithTranscriptionHistory: Bool?
     let audioHistoryBudgetGB: Double?
+    let historyAutoClearInterval: SettingsStore.HistoryAutoClearInterval?
     let notifyAIProcessingFailures: Bool?
     let weekendsDontBreakStreak: Bool
     let fillerWords: [String]

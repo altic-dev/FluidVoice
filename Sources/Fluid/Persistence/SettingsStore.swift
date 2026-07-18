@@ -2917,6 +2917,83 @@ final class SettingsStore: ObservableObject {
         DictationAudioHistoryStore.bytes(forGigabytes: self.audioHistoryBudgetGB)
     }
 
+    enum HistoryAutoClearInterval: String, CaseIterable, Identifiable, Codable {
+        case never
+        case endOfDay
+        case afterWeek
+        case afterMonth
+        case afterQuarter
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .never:
+                return "Never"
+            case .endOfDay:
+                return "End of Day"
+            case .afterWeek:
+                return "After 7 Days"
+            case .afterMonth:
+                return "After 30 Days"
+            case .afterQuarter:
+                return "After 90 Days"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .never:
+                return "Keep transcription history until you delete it manually."
+            case .endOfDay:
+                return "Clears previous days' entries at midnight, keeping only today's history."
+            case .afterWeek:
+                return "Deletes history entries older than 7 days."
+            case .afterMonth:
+                return "Deletes history entries older than 30 days."
+            case .afterQuarter:
+                return "Deletes history entries older than 90 days."
+            }
+        }
+
+        /// Entries with a timestamp before this date are expired. Nil means keep forever.
+        /// Anchored to start-of-day so a full retained day never partially expires.
+        func cutoffDate(relativeTo now: Date = Date(), calendar: Calendar = .current) -> Date? {
+            let retainedDays: Int
+            switch self {
+            case .never:
+                return nil
+            case .endOfDay:
+                retainedDays = 0
+            case .afterWeek:
+                retainedDays = 7
+            case .afterMonth:
+                retainedDays = 30
+            case .afterQuarter:
+                retainedDays = 90
+            }
+            return calendar.date(byAdding: .day, value: -retainedDays, to: calendar.startOfDay(for: now))
+        }
+    }
+
+    /// How long transcription history is retained before it is automatically cleared
+    var historyAutoClearInterval: HistoryAutoClearInterval {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.historyAutoClearInterval),
+                  let interval = HistoryAutoClearInterval(rawValue: raw)
+            else {
+                return .never
+            }
+            return interval
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.historyAutoClearInterval)
+        }
+    }
+
     /// Whether to show a native notification when AI post-processing fails and raw text is used
     var notifyAIProcessingFailures: Bool {
         get {
@@ -2991,6 +3068,7 @@ final class SettingsStore: ObservableObject {
             saveTranscriptionHistory: self.saveTranscriptionHistory,
             saveAudioWithTranscriptionHistory: self.saveAudioWithTranscriptionHistory,
             audioHistoryBudgetGB: self.audioHistoryBudgetGB,
+            historyAutoClearInterval: self.historyAutoClearInterval,
             notifyAIProcessingFailures: self.notifyAIProcessingFailures,
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
@@ -3107,6 +3185,9 @@ final class SettingsStore: ObservableObject {
         }
         if let audioHistoryBudgetGB = payload.audioHistoryBudgetGB {
             self.audioHistoryBudgetGB = audioHistoryBudgetGB
+        }
+        if let historyAutoClearInterval = payload.historyAutoClearInterval {
+            self.historyAutoClearInterval = historyAutoClearInterval
         }
         if let notifyAIProcessingFailures = payload.notifyAIProcessingFailures {
             self.notifyAIProcessingFailures = notifyAIProcessingFailures
@@ -4895,6 +4976,7 @@ private extension SettingsStore {
         static let saveTranscriptionHistory = "SaveTranscriptionHistory"
         static let saveAudioWithTranscriptionHistory = "SaveAudioWithTranscriptionHistory"
         static let audioHistoryBudgetGB = "AudioHistoryBudgetGB"
+        static let historyAutoClearInterval = "HistoryAutoClearInterval"
         static let notifyAIProcessingFailures = "NotifyAIProcessingFailures"
 
         // Filler Words
