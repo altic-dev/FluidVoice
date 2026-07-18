@@ -1436,6 +1436,16 @@ extension AIEnhancementSettingsView {
                         self.activateProvider(item.id)
                         Task { await self.viewModel.fetchModelsForCurrentProvider() }
                     }
+
+                    self.companionIconButton(systemName: "plus", help: "Add custom model") {
+                        self.activateProvider(item.id)
+                        self.viewModel.newModelName = ""
+                        self.viewModel.showingAddModel = true
+                    }
+                }
+
+                if self.viewModel.showingAddModel && self.viewModel.selectedProviderID == item.id {
+                    self.addModelSection
                 }
 
                 HStack(spacing: 8) {
@@ -1715,6 +1725,13 @@ extension AIEnhancementSettingsView {
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
+                        self.companionIconButton(systemName: "plus", help: "Add custom model") {
+                            self.activateProvider(item.id)
+                            self.viewModel.newModelName = ""
+                            self.viewModel.showingAddModel = true
+                        }
+                        .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+
                         self.reasoningButton(for: item.id)
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
@@ -1748,6 +1765,14 @@ extension AIEnhancementSettingsView {
                     showsLoadingIndicator: isFluidLoading || isFluidTesting
                 )
                 .padding(.top, 8)
+            }
+
+            if !isPrivateAIProvider,
+               self.viewModel.showingAddModel,
+               self.viewModel.selectedProviderID == item.id
+            {
+                self.addModelSection
+                    .padding(.top, 8)
             }
 
             if isPrivateAIProvider, isEditing {

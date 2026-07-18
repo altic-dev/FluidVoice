@@ -1412,6 +1412,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var customModelsByProvider: [String: [String]] {
+        get { (self.defaults.dictionary(forKey: Keys.customModelsByProvider) as? [String: [String]]) ?? [:] }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.customModelsByProvider)
+        }
+    }
+
     var enableDebugLogs: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableDebugLogs)
@@ -4872,6 +4880,7 @@ private extension SettingsStore {
         static let enableDebugLogs = "EnableDebugLogs"
         static let availableAIModels = "AvailableAIModels"
         static let availableModelsByProvider = "AvailableModelsByProvider"
+        static let customModelsByProvider = "CustomModelsByProvider"
         static let selectedAIModel = "SelectedAIModel"
         static let selectedModelByProvider = "SelectedModelByProvider"
         static let selectedProviderID = "SelectedProviderID"

@@ -18,6 +18,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     // Model Management
     @Published var availableModelsByProvider: [String: [String]] = [:]
+    @Published var customModelsByProvider: [String: [String]] = [:]
     @Published var selectedModelByProvider: [String: String] = [:]
     @Published var availableModels: [String] = []
     @Published var selectedModel: String = "" {
@@ -158,6 +159,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedProviderID = self.settings.selectedProviderID
 
         self.availableModelsByProvider = self.settings.availableModelsByProvider
+        self.customModelsByProvider = self.settings.customModelsByProvider
         self.selectedModelByProvider = self.settings.selectedModelByProvider
         self.providerAPIKeys = self.settings.providerAPIKeys
         self.savedProviders = self.settings.savedProviders
@@ -190,8 +192,24 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             let clean = Array(Set(models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
             if !clean.isEmpty { normalized[newKey] = clean }
         }
+        var normalizedCustom: [String: [String]] = [:]
+        for (key, models) in self.customModelsByProvider {
+            let providerKey = self.providerKey(for: key)
+            let clean = AIModelCatalog.normalized(models)
+            if !providerKey.isEmpty, !clean.isEmpty {
+                normalizedCustom[providerKey] = clean
+            }
+        }
+        for (key, customModels) in normalizedCustom {
+            normalized[key] = AIModelCatalog.merged(
+                discoveredModels: normalized[key] ?? [],
+                customModels: customModels
+            )
+        }
         self.availableModelsByProvider = normalized
         self.settings.availableModelsByProvider = normalized
+        self.customModelsByProvider = normalizedCustom
+        self.settings.customModelsByProvider = normalizedCustom
 
         // Normalize selected model by provider
         var normalizedSel: [String: String] = [:]
@@ -535,6 +553,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func saveSavedProviders() {
         self.settings.savedProviders = self.savedProviders
         self.settings.availableModelsByProvider = self.availableModelsByProvider
+        self.settings.customModelsByProvider = self.customModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
         self.settings.selectedProviderID = self.selectedProviderID
         self.refreshProviderItems()
@@ -555,32 +574,36 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func addNewModel() {
-        guard !self.newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let modelName = self.newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = self.providerKey(for: self.selectedProviderID)
+        let visibleModels = self.availableModelsByProvider[key] ?? self.availableModels
+        guard let visibleAddition = AIModelCatalog.adding(self.newModelName, to: visibleModels) else { return }
+        let modelName = visibleAddition.modelID
+        let list = visibleAddition.models
 
-        var list = self.availableModelsByProvider[key] ?? self.availableModels
-        if !list.contains(modelName) {
-            list.append(modelName)
-            self.availableModelsByProvider[key] = list
-            self.settings.availableModelsByProvider = self.availableModelsByProvider
-
-            if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
-                let updatedProvider = SettingsStore.SavedProvider(
-                    id: self.savedProviders[providerIndex].id,
-                    name: self.savedProviders[providerIndex].name,
-                    baseURL: self.savedProviders[providerIndex].baseURL,
-                    models: list
-                )
-                self.savedProviders[providerIndex] = updatedProvider
-                self.saveSavedProviders()
-            }
-
-            self.availableModels = list
-            self.selectedModel = modelName
-            self.selectedModelByProvider[key] = modelName
-            self.settings.selectedModelByProvider = self.selectedModelByProvider
+        let customModels = self.customModelsByProvider[key] ?? []
+        if let customAddition = AIModelCatalog.adding(modelName, to: customModels) {
+            self.customModelsByProvider[key] = customAddition.models
         }
+        self.settings.customModelsByProvider = self.customModelsByProvider
+
+        self.availableModelsByProvider[key] = list
+        self.settings.availableModelsByProvider = self.availableModelsByProvider
+
+        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+            let updatedProvider = SettingsStore.SavedProvider(
+                id: self.savedProviders[providerIndex].id,
+                name: self.savedProviders[providerIndex].name,
+                baseURL: self.savedProviders[providerIndex].baseURL,
+                models: list
+            )
+            self.savedProviders[providerIndex] = updatedProvider
+            self.saveSavedProviders()
+        }
+
+        self.availableModels = list
+        self.selectedModel = modelName
+        self.selectedModelByProvider[key] = modelName
+        self.settings.selectedModelByProvider = self.selectedModelByProvider
 
         self.showingAddModel = false
         self.newModelName = ""
@@ -1083,11 +1106,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.saveSavedProviders()
         let key = self.providerKey(for: self.selectedProviderID)
         self.availableModelsByProvider.removeValue(forKey: key)
+        self.customModelsByProvider.removeValue(forKey: key)
         self.selectedModelByProvider.removeValue(forKey: key)
         self.providerAPIKeys.removeValue(forKey: key)
         self.saveProviderAPIKeys()
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
         self.settings.availableModelsByProvider = self.availableModelsByProvider
+        self.settings.customModelsByProvider = self.customModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
         self.selectedProviderID = ""
         self.openAIBaseURL = ""
@@ -1096,6 +1121,16 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedModel = ""
         self.refreshVerifiedProviders()
         self.selectSoleVerifiedProviderIfNeeded()
+    }
+
+    private func modelsAfterRefresh(
+        discoveredModels: [String],
+        providerKey: String
+    ) -> [String] {
+        return AIModelCatalog.merged(
+            discoveredModels: discoveredModels,
+            customModels: self.customModelsByProvider[providerKey] ?? []
+        )
     }
 
     func saveEditedProvider() {
@@ -1127,6 +1162,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func deleteSelectedModel() {
         let key = self.providerKey(for: self.selectedProviderID)
+        self.customModelsByProvider[key]?.removeAll { $0 == self.selectedModel }
+        if self.customModelsByProvider[key]?.isEmpty == true {
+            self.customModelsByProvider.removeValue(forKey: key)
+        }
+        self.settings.customModelsByProvider = self.customModelsByProvider
+
         var list = self.availableModelsByProvider[key] ?? self.availableModels
         list.removeAll { $0 == self.selectedModel }
         if list.isEmpty { list = ModelRepository.shared.defaultModels(for: key) }
@@ -1181,8 +1222,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     // Keep existing models if fetch returned empty
                     self.fetchModelsError = "No models returned from API"
                 } else {
-                    self.availableModels = models
-                    self.availableModelsByProvider[key] = models
+                    let mergedModels = self.modelsAfterRefresh(
+                        discoveredModels: models,
+                        providerKey: key
+                    )
+                    self.availableModels = mergedModels
+                    self.availableModelsByProvider[key] = mergedModels
                     self.settings.availableModelsByProvider = self.availableModelsByProvider
                     self.fetchedModelsProviders.insert(key)
 
@@ -1191,15 +1236,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                             id: self.savedProviders[providerIndex].id,
                             name: self.savedProviders[providerIndex].name,
                             baseURL: self.savedProviders[providerIndex].baseURL,
-                            models: models
+                            models: mergedModels
                         )
                         self.savedProviders[providerIndex] = updatedProvider
                         self.saveSavedProviders()
                     }
 
                     // Select first model if current selection not in list
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
+                    if !mergedModels.contains(self.selectedModel) {
+                        self.selectedModel = mergedModels.first ?? ""
                         self.selectedModelByProvider[key] = self.selectedModel
                         self.settings.selectedModelByProvider = self.selectedModelByProvider
                     }
@@ -1285,19 +1330,23 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     return
                 }
 
-                self.availableModelsByProvider[key] = models
+                let selectedForProvider = self.selectedModelByProvider[key] ?? ""
+                let mergedModels = self.modelsAfterRefresh(
+                    discoveredModels: models,
+                    providerKey: key
+                )
+                self.availableModelsByProvider[key] = mergedModels
                 self.settings.availableModelsByProvider = self.availableModelsByProvider
                 self.fetchedModelsProviders.insert(key)
 
                 if providerID == self.selectedProviderID {
-                    self.availableModels = models
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
+                    self.availableModels = mergedModels
+                    if !mergedModels.contains(self.selectedModel) {
+                        self.selectedModel = mergedModels.first ?? ""
                     }
                 }
 
-                let selectedForProvider = self.selectedModelByProvider[key] ?? ""
-                if !models.contains(selectedForProvider), let first = models.first {
+                if !mergedModels.contains(selectedForProvider), let first = mergedModels.first {
                     self.selectedModelByProvider[key] = first
                     self.settings.selectedModelByProvider = self.selectedModelByProvider
                 }
@@ -1307,7 +1356,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         id: self.savedProviders[providerIndex].id,
                         name: self.savedProviders[providerIndex].name,
                         baseURL: self.savedProviders[providerIndex].baseURL,
-                        models: models
+                        models: mergedModels
                     )
                     self.savedProviders[providerIndex] = updatedProvider
                     self.saveSavedProviders()
