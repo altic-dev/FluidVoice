@@ -282,6 +282,17 @@ extension HotkeyShortcut {
         return keyCode == self.keyCode && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags
     }
 
+    /// Matches this shortcut's key while tolerating *extra* modifiers that are held down
+    /// but are not part of the shortcut. The shortcut's own modifiers (if any) must still
+    /// all be present. This lets a modifier-less cancel key (e.g. Escape) fire while a
+    /// push-to-talk activation modifier (e.g. Right ⌘) is still being held — the exact
+    /// `matches(_:_:)` check fails there because the held modifier is reported on the event.
+    func matchesAllowingHeldModifiers(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard !self.isMouseShortcut else { return false }
+        let activeModifiers = modifiers.intersection(Self.relevantModifierMask)
+        return keyCode == self.keyCode && activeModifiers.isSuperset(of: self.relevantModifierFlags)
+    }
+
     func matchesMouse(button: Int, modifiers: NSEvent.ModifierFlags) -> Bool {
         guard self.isMouseShortcut, let mouseButton else { return false }
         guard !self.isUnmodifiedLeftOrRightClick else { return false }

@@ -617,7 +617,17 @@ final class GlobalHotkeyManager: NSObject {
             }
 
             // Check the configured cancel shortcut first.
-            if SettingsStore.shared.cancelRecordingHotkeyShortcut.matches(keyCode: keyCode, modifiers: eventModifiers) {
+            //
+            // While recording via push-to-talk, the activation modifier (e.g. Right ⌘) is
+            // still held when the cancel key is pressed, so its flag rides along on the event
+            // and the exact-modifier match fails — Escape then gets silently ignored. Fall back
+            // to a modifier-tolerant match *only while recording* so the cancel key still fires
+            // mid-hold, without over-consuming cancel-key chords the rest of the time.
+            let cancelShortcut = SettingsStore.shared.cancelRecordingHotkeyShortcut
+            let cancelShortcutPressed = cancelShortcut.matches(keyCode: keyCode, modifiers: eventModifiers)
+                || (self.asrService.isRunning
+                    && cancelShortcut.matchesAllowingHeldModifiers(keyCode: keyCode, modifiers: eventModifiers))
+            if cancelShortcutPressed {
                 var handled = false
 
                 if self.asrService.isRunning {

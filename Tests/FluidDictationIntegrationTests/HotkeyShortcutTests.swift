@@ -64,6 +64,30 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertTrue(shortcut.matches(keyCode: 61, modifiers: NSEvent.ModifierFlags()))
     }
 
+    func testCancelShortcutMatchesWhilePushToTalkModifierIsHeld() {
+        // Repro: dictation activated by holding Right ⌘ (push-to-talk) in automatic mode,
+        // cancel shortcut is bare Escape. Pressing Escape mid-hold reports ⌘ on the event.
+        let cancelEscape = HotkeyShortcut(keyCode: 53, modifierFlags: [])
+
+        // Exact match fails because the held ⌘ is not part of the cancel shortcut — this is
+        // the bug: Escape gets ignored during push-to-talk.
+        XCTAssertFalse(cancelEscape.matches(keyCode: 53, modifiers: [.command]))
+
+        // Modifier-tolerant match recognises Escape even with the activation modifier held.
+        XCTAssertTrue(cancelEscape.matchesAllowingHeldModifiers(keyCode: 53, modifiers: [.command]))
+        XCTAssertTrue(cancelEscape.matchesAllowingHeldModifiers(keyCode: 53, modifiers: []))
+
+        // A different key still never matches, even with modifiers held.
+        XCTAssertFalse(cancelEscape.matchesAllowingHeldModifiers(keyCode: 61, modifiers: [.command]))
+
+        // The shortcut's own modifiers remain required: ⌘+Escape does not fire on bare Escape,
+        // but tolerates an extra held modifier (e.g. ⌘ + ⌥) on top of its own.
+        let cancelCommandEscape = HotkeyShortcut(keyCode: 53, modifierFlags: [.command])
+        XCTAssertFalse(cancelCommandEscape.matchesAllowingHeldModifiers(keyCode: 53, modifiers: []))
+        XCTAssertTrue(cancelCommandEscape.matchesAllowingHeldModifiers(keyCode: 53, modifiers: [.command]))
+        XCTAssertTrue(cancelCommandEscape.matchesAllowingHeldModifiers(keyCode: 53, modifiers: [.command, .option]))
+    }
+
     func testKeyboardPayloadIgnoresStrayMouseButtonField() throws {
         let json = #"{"kind":"keyboard","keyCode":0,"modifierFlagsRawValue":0,"mouseButton":3}"#
         let data = try XCTUnwrap(json.data(using: .utf8))
