@@ -164,6 +164,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.reconcilePromptStateAfterProfileChanges()
         self.selectedProviderID = self.settings.selectedProviderID
 
+        let hasStoredCustomModels = self.settings.hasStoredCustomModelsByProvider
         self.availableModelsByProvider = self.settings.availableModelsByProvider
         self.customModelsByProvider = self.settings.customModelsByProvider
         self.selectedModelByProvider = self.settings.selectedModelByProvider
@@ -205,6 +206,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             if !providerKey.isEmpty, !clean.isEmpty {
                 normalizedCustom[providerKey] = clean
             }
+        }
+        if !hasStoredCustomModels {
+            normalizedCustom = Self.migratedLegacyCustomModels(
+                cachedModelsByProvider: normalized,
+                savedModelsByProvider: Dictionary(
+                    self.savedProviders.map { ($0.id, $0.models) },
+                    uniquingKeysWith: { _, newer in newer }
+                )
+            )
         }
         for (key, customModels) in normalizedCustom {
             normalized[key] = AIModelCatalog.merged(
@@ -597,6 +607,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             visibleModels: visibleAddition.models,
             customModels: updatedCustomModels
         )
+    }
+
+    static func migratedLegacyCustomModels(
+        cachedModelsByProvider: [String: [String]],
+        savedModelsByProvider: [String: [String]]
+    ) -> [String: [String]] {
+        var migrated: [String: [String]] = [:]
+
+        func providerKey(_ providerID: String) -> String {
+            let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "" }
+            let lower = trimmed.lowercased()
+            if ModelRepository.shared.isBuiltIn(lower) {
+                return lower
+            }
+            return trimmed.hasPrefix("custom:") ? trimmed : "custom:\(trimmed)"
+        }
+
+        for (providerID, models) in cachedModelsByProvider.merging(
+            savedModelsByProvider,
+            uniquingKeysWith: { cached, saved in AIModelCatalog.merged(
+                discoveredModels: cached,
+                customModels: saved
+            ) }
+        ) {
+            let key = providerKey(providerID)
+            let normalized = AIModelCatalog.normalized(models)
+            if !key.isEmpty, !normalized.isEmpty {
+                migrated[key] = AIModelCatalog.merged(
+                    discoveredModels: migrated[key] ?? [],
+                    customModels: normalized
+                )
+            }
+        }
+
+        return migrated
     }
 
     func addNewModel() {
@@ -1221,6 +1267,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedModel = list.first ?? ""
         self.selectedModelByProvider[key] = self.selectedModel
         self.settings.selectedModelByProvider = self.selectedModelByProvider
+    }
+
+    func canDeleteSelectedModel() -> Bool {
+        let key = self.providerKey(for: self.selectedProviderID)
+        return !ModelRepository.shared.isBuiltIn(self.selectedProviderID) ||
+            (self.customModelsByProvider[key]?.contains(self.selectedModel) == true)
     }
 
     func fetchModelsForCurrentProvider() async {

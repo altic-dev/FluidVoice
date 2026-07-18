@@ -53,6 +53,24 @@ final class AIModelRefreshTests: XCTestCase {
         )
     }
 
+    func testLegacyCachedAndSavedModelsMigrateBeforeFirstRefresh() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.migratedLegacyCustomModels(
+                cachedModelsByProvider: [
+                    "OpenAI": [" gpt-cached ", "gpt-shared"],
+                    "legacy-provider": ["cached-model"],
+                ],
+                savedModelsByProvider: [
+                    "legacy-provider": ["saved-model", "cached-model"],
+                ]
+            ),
+            [
+                "openai": ["gpt-cached", "gpt-shared"],
+                "custom:legacy-provider": ["cached-model", "saved-model"],
+            ]
+        )
+    }
+
     func testRefreshDropsSelectedNonCustomModelMissingFromCatalog() {
         let selectedModel = "model/retired"
         let merged = AIModelCatalog.merged(

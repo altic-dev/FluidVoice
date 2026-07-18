@@ -2420,7 +2420,7 @@ extension AIEnhancementSettingsView {
                 controlHeight: AISettingsLayout.controlHeight
             )
 
-            if !ModelRepository.shared.isBuiltIn(self.viewModel.selectedProviderID) {
+            if self.viewModel.canDeleteSelectedModel() {
                 Button(action: { self.viewModel.deleteSelectedModel() }) {
                     HStack(spacing: 4) { Image(systemName: "trash"); Text("Delete") }.font(.caption)
                 }

@@ -1423,6 +1423,10 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var hasStoredCustomModelsByProvider: Bool {
+        self.defaults.object(forKey: Self.customModelsByProviderDefaultsKey) != nil
+    }
+
     var enableDebugLogs: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableDebugLogs)
@@ -3005,6 +3009,7 @@ final class SettingsStore: ObservableObject {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
             selectedModelByProvider: self.selectedModelByProvider,
+            customModelsByProvider: self.customModelsByProvider,
             savedProviders: self.savedProviders,
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
@@ -3106,6 +3111,7 @@ final class SettingsStore: ObservableObject {
         self.savedProviders = payload.savedProviders
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
+        self.customModelsByProvider = payload.customModelsByProvider ?? [:]
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {
             self.privateAIPrefixKVCacheEnabled = privateAIPrefixKVCacheEnabled
