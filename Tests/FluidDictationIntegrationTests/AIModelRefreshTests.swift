@@ -71,6 +71,23 @@ final class AIModelRefreshTests: XCTestCase {
         )
     }
 
+    func testLegacyModelsReconcileAgainstFirstFreshCatalog() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.reconciledLegacyCustomModels(
+                legacyModels: ["gpt-4.1", "gpt-5-custom"],
+                discoveredModels: ["gpt-4.1"]
+            ),
+            ["gpt-5-custom"]
+        )
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.reconciledLegacyCustomModels(
+                legacyModels: ["model-a", "model-b", "model-c"],
+                discoveredModels: ["model-a", "model-b", "model-c"]
+            ),
+            []
+        )
+    }
+
     func testRefreshDropsSelectedNonCustomModelMissingFromCatalog() {
         let selectedModel = "model/retired"
         let merged = AIModelCatalog.merged(
