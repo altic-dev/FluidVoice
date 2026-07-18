@@ -55,6 +55,10 @@ final class TypingService {
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
 
+    /// Community pasteboard convention (nspasteboard.org): items carrying this type are
+    /// temporary programmatic writes that clipboard managers should not record.
+    private static let transientPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
     private var textInsertionMode: SettingsStore.TextInsertionMode {
         SettingsStore.shared.textInsertionMode
     }
@@ -574,6 +578,9 @@ final class TypingService {
             for (type, data) in snap.dataByType {
                 item.setData(data, forType: type)
             }
+            // The restored payload was already on the pasteboard before we borrowed it, so
+            // clipboard managers recorded it then; the marker stops them re-recording a duplicate.
+            item.setData(Data(), forType: Self.transientPasteboardType)
             return item
         }
         _ = pasteboard.writeObjects(restoredItems)
@@ -596,7 +603,10 @@ final class TypingService {
         let snapshot = self.capturePasteboardSnapshot(pasteboard)
 
         pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
+        let temporaryItem = NSPasteboardItem()
+        temporaryItem.setString(text, forType: .string)
+        temporaryItem.setData(Data(), forType: Self.transientPasteboardType)
+        guard pasteboard.writeObjects([temporaryItem]) else {
             self.log("[TypingService] ERROR: Failed to set temporary clipboard string")
             self.restorePasteboardSnapshot(snapshot, to: pasteboard)
             return false
