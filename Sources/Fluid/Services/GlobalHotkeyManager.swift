@@ -9,9 +9,121 @@ private nonisolated enum HotkeyHoldModeType: Hashable {
     case promptAssignment
 }
 
-private nonisolated enum ActivePrimaryShortcutPress: Equatable {
-    case keyboard(UInt16)
-    case mouse(Int)
+private nonisolated struct PrimaryShortcutIdentity: Equatable {
+    private static let relevantModifierMask: NSEvent.ModifierFlags = [.function, .command, .option, .control, .shift]
+
+    enum Kind {
+        case keyboard
+        case mouse
+    }
+
+    let kind: Kind
+    let keyCode: UInt16
+    let mouseButton: Int?
+    let modifierFlagsRawValue: UInt
+
+    init(shortcut: HotkeyShortcut) {
+        if shortcut.mouseButton != nil {
+            self.kind = .mouse
+        } else {
+            self.kind = .keyboard
+        }
+        self.keyCode = shortcut.keyCode
+        self.mouseButton = shortcut.mouseButton
+        self.modifierFlagsRawValue = shortcut.modifierFlags.intersection(Self.relevantModifierMask).rawValue
+    }
+
+    static func normalizedModifierOnlyKeyCodes(for shortcut: HotkeyShortcut) -> [UInt16] {
+        guard shortcut.mouseButton == nil else { return [] }
+
+        let normalized = self.normalizedModifierKeyCodes(from: shortcut.modifierKeyCodes)
+        if !normalized.isEmpty {
+            return normalized
+        }
+
+        if self.modifierFlag(forKeyCode: shortcut.keyCode) != nil,
+           shortcut.modifierFlags.isDisjoint(with: self.relevantModifierMask)
+        {
+            return [shortcut.keyCode]
+        }
+
+        return []
+    }
+
+    static func normalizedModifierKeyCodes(from modifierKeyCodes: [UInt16]) -> [UInt16] {
+        Array(Set(modifierKeyCodes)).compactMap { keyCode -> (UInt16, Int)? in
+            guard let priority = self.modifierSortPriority(forKeyCode: keyCode) else { return nil }
+            return (keyCode, priority)
+        }
+        .sorted { lhs, rhs in
+            lhs.1 < rhs.1
+        }
+        .map(\.0)
+    }
+
+    private static func modifierFlag(forKeyCode keyCode: UInt16) -> NSEvent.ModifierFlags? {
+        switch keyCode {
+        case 63:
+            return .function
+        case 54, 55:
+            return .command
+        case 58, 61:
+            return .option
+        case 59, 62:
+            return .control
+        case 56, 60:
+            return .shift
+        default:
+            return nil
+        }
+    }
+
+    private static func modifierSortPriority(forKeyCode keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 63: return 0
+        case 55: return 1
+        case 54: return 2
+        case 58: return 3
+        case 61: return 4
+        case 59: return 5
+        case 62: return 6
+        case 56: return 7
+        case 60: return 8
+        default: return nil
+        }
+    }
+}
+
+private nonisolated enum ActivePrimaryShortcutPress {
+    case keyboard(PrimaryShortcutIdentity)
+    case mouse(PrimaryShortcutIdentity)
+
+    init(shortcut: HotkeyShortcut) {
+        let identity = PrimaryShortcutIdentity(shortcut: shortcut)
+        switch identity.kind {
+        case .keyboard:
+            self = .keyboard(identity)
+        case .mouse:
+            self = .mouse(identity)
+        }
+    }
+
+    var identity: PrimaryShortcutIdentity {
+        switch self {
+        case let .keyboard(identity), let .mouse(identity):
+            return identity
+        }
+    }
+
+    func matchesKeyboardRelease(keyCode: UInt16) -> Bool {
+        guard case let .keyboard(identity) = self else { return false }
+        return identity.keyCode == keyCode
+    }
+
+    func matchesMouseRelease(button: Int) -> Bool {
+        guard case let .mouse(identity) = self else { return false }
+        return identity.mouseButton == button
+    }
 }
 
 private final nonisolated class HotkeyState: @unchecked Sendable {
@@ -338,7 +450,9 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updatePrimaryShortcuts(_ newShortcuts: [HotkeyShortcut]) {
+        let removedShortcuts = self.primaryShortcuts.filter { !newShortcuts.contains($0) }
         self.primaryShortcuts = newShortcuts
+        self.clearPrimaryShortcutPressState(removedShortcuts: removedShortcuts)
         DebugLogger.shared.info("Updated transcription hotkeys", source: "GlobalHotkeyManager")
     }
 
@@ -509,18 +623,65 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private nonisolated func clearPrimaryShortcutPressState() {
-        let task = self.state.withLock { () -> Task<Void, Never>? in
-            guard self.state.activePrimaryShortcutPress != nil || self.state.isKeyPressed else { return nil }
-            self.state.activePrimaryShortcutPress = nil
+        self.clearPrimaryShortcutPressState(removedShortcuts: [], forceClear: true)
+    }
+
+    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut]) {
+        self.clearPrimaryShortcutPressState(removedShortcuts: removedShortcuts, forceClear: false)
+    }
+
+    private nonisolated func clearPrimaryShortcutPressState(removedShortcuts: [HotkeyShortcut], forceClear: Bool) {
+        let tasks = self.state.withLock { () -> [Task<Void, Never>] in
+            var tasks: [Task<Void, Never>] = []
+            let removedActiveShortcut = self.state.activePrimaryShortcutPress.map { press in
+                removedShortcuts.contains {
+                    PrimaryShortcutIdentity(shortcut: $0) == press.identity
+                }
+            } ?? false
+            let pressedModifierKeyCodes = PrimaryShortcutIdentity.normalizedModifierKeyCodes(from: Array(self.state.pressedModifierKeyCodes))
+            let removedPendingModShortcut = pressedModifierKeyCodes.isEmpty
+                && self.state.pendingHoldModeType == .transcription
+                && removedShortcuts.contains { !PrimaryShortcutIdentity.normalizedModifierOnlyKeyCodes(for: $0).isEmpty }
+            let removedModifierOnlyShortcut = removedPendingModShortcut || !pressedModifierKeyCodes.isEmpty && removedShortcuts.contains { shortcut in
+                PrimaryShortcutIdentity.normalizedModifierOnlyKeyCodes(for: shortcut) == pressedModifierKeyCodes
+            }
+            let shouldClearPrimaryPress = forceClear || removedActiveShortcut || removedModifierOnlyShortcut
+
+            guard shouldClearPrimaryPress else { return tasks }
+
+            if forceClear || removedModifierOnlyShortcut {
+                self.state.pressedModifierKeyCodes.removeAll()
+                self.state.modifierOnlyKeyDown = false
+                self.state.otherKeyPressedDuringModifier = false
+                self.state.modifierPressStartTime = nil
+            }
+
+            if self.state.pendingHoldModeType == .transcription, forceClear || removedModifierOnlyShortcut {
+                if let task = self.state.pendingHoldModeStart {
+                    tasks.append(task)
+                }
+                self.state.pendingHoldModeStart = nil
+                self.state.pendingHoldModeType = nil
+            }
+
+            if forceClear || removedActiveShortcut {
+                self.state.activePrimaryShortcutPress = nil
+            }
             self.state.isKeyPressed = false
             self.state.holdModeStartTriggeredTypes.remove(.transcription)
             self.state.automaticPressStartTimes.removeValue(forKey: .transcription)
             self.state.automaticPressWasTargetActive.removeValue(forKey: .transcription)
             self.state.automaticPressStartedTypes.remove(.transcription)
             _ = self.state.pendingReleaseStopTokens.removeValue(forKey: .transcription)
-            return self.state.pendingReleaseStopTasks.removeValue(forKey: .transcription)
+            if let task = self.state.pendingReleaseStopTasks.removeValue(forKey: .transcription) {
+                tasks.append(task)
+            }
+
+            return tasks
         }
-        task?.cancel()
+        for task in tasks {
+            task.cancel()
+        }
     }
 
     private func markOtherInputDuringModifierOnly() {
@@ -542,9 +703,19 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
-    private func finishPrimaryShortcutPress(_ press: ActivePrimaryShortcutPress) -> Bool {
+    private func finishPrimaryShortcutPress(keyCode: UInt16) -> Bool {
         self.state.withLock {
-            guard self.state.activePrimaryShortcutPress == press else {
+            guard self.state.activePrimaryShortcutPress?.matchesKeyboardRelease(keyCode: keyCode) == true else {
+                return false
+            }
+            self.state.activePrimaryShortcutPress = nil
+            return true
+        }
+    }
+
+    private func finishPrimaryShortcutPress(mouseButton: Int) -> Bool {
+        self.state.withLock {
+            guard self.state.activePrimaryShortcutPress?.matchesMouseRelease(button: mouseButton) == true else {
                 return false
             }
             self.state.activePrimaryShortcutPress = nil
@@ -808,7 +979,7 @@ final class GlobalHotkeyManager: NSObject {
 
             // Then check transcription hotkeys
             if let shortcut = self.primaryShortcuts.first(where: { $0.matches(keyCode: keyCode, modifiers: eventModifiers) }) {
-                guard self.beginPrimaryShortcutPress(.keyboard(shortcut.keyCode)) else { return nil }
+                guard self.beginPrimaryShortcutPress(ActivePrimaryShortcutPress(shortcut: shortcut)) else { return nil }
                 self.handlePrimaryDictationTriggerDown()
                 return nil
             }
@@ -880,7 +1051,7 @@ final class GlobalHotkeyManager: NSObject {
 
             // Transcription key up
             // Note: Only check keyCode, not modifiers - user may release modifier before/with main key
-            if self.finishPrimaryShortcutPress(.keyboard(keyCode)) {
+            if self.finishPrimaryShortcutPress(keyCode: keyCode) {
                 self.handlePrimaryDictationTriggerUp()
                 return nil
             }
@@ -1649,8 +1820,8 @@ final class GlobalHotkeyManager: NSObject {
             return true
         }
 
-        if self.primaryShortcuts.contains(where: { $0.matchesMouse(button: mouseButton, modifiers: eventModifiers) }) {
-            guard self.beginPrimaryShortcutPress(.mouse(mouseButton)) else { return true }
+        if let shortcut = self.primaryShortcuts.first(where: { $0.matchesMouse(button: mouseButton, modifiers: eventModifiers) }) {
+            guard self.beginPrimaryShortcutPress(ActivePrimaryShortcutPress(shortcut: shortcut)) else { return true }
             self.handlePrimaryDictationTriggerDown()
             return true
         }
@@ -1671,7 +1842,7 @@ final class GlobalHotkeyManager: NSObject {
             return true
         }
 
-        guard self.finishPrimaryShortcutPress(.mouse(mouseButton)) else { return false }
+        guard self.finishPrimaryShortcutPress(mouseButton: mouseButton) else { return false }
         self.handlePrimaryDictationTriggerUp()
         return true
     }
@@ -1897,3 +2068,63 @@ final class GlobalHotkeyManager: NSObject {
         cleanupEventTap()
     }
 }
+
+#if DEBUG
+extension GlobalHotkeyManager {
+    func debugHandlePrimaryModifierOnlyFlagsChanged(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        if HotkeyShortcut.modifierFlag(forKeyCode: keyCode) != nil {
+            self.pressedModifierKeyCodes = self.synchronizedPressedModifierKeyCodes(
+                changedKeyCode: keyCode,
+                modifiers: modifiers
+            )
+        }
+
+        for shortcut in self.primaryShortcuts where shortcut.isModifierOnlyShortcut {
+            if self.handleModifierOnlyShortcutFlagsChanged(
+                behavior: self.primaryModifierOnlyBehavior(for: shortcut),
+                keyCode: keyCode,
+                modifiers: modifiers
+            ) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    func debugHandlePrimaryShortcutKeyDown(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard let shortcut = self.primaryShortcuts.first(where: { $0.matches(keyCode: keyCode, modifiers: modifiers) }) else {
+            return false
+        }
+        return self.beginPrimaryShortcutPress(ActivePrimaryShortcutPress(shortcut: shortcut))
+    }
+
+    func debugHandlePrimaryShortcutKeyUp(keyCode: UInt16) -> Bool {
+        self.finishPrimaryShortcutPress(keyCode: keyCode)
+    }
+
+    var debugHasActivePrimaryShortcutPress: Bool {
+        self.state.withLock {
+            self.state.activePrimaryShortcutPress != nil
+        }
+    }
+
+    var debugPrimaryShortcutPressStateIsClear: Bool {
+        self.state.withLock {
+            self.state.activePrimaryShortcutPress == nil
+                && !self.state.isKeyPressed
+                && !self.state.modifierOnlyKeyDown
+                && !self.state.otherKeyPressedDuringModifier
+                && self.state.modifierPressStartTime == nil
+                && self.state.pendingHoldModeStart == nil
+                && self.state.pendingHoldModeType != .transcription
+                && !self.state.holdModeStartTriggeredTypes.contains(.transcription)
+                && self.state.automaticPressStartTimes[.transcription] == nil
+                && self.state.automaticPressWasTargetActive[.transcription] == nil
+                && !self.state.automaticPressStartedTypes.contains(.transcription)
+                && self.state.pendingReleaseStopTasks[.transcription] == nil
+                && self.state.pendingReleaseStopTokens[.transcription] == nil
+        }
+    }
+}
+#endif

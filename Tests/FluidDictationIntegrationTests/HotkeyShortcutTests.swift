@@ -220,3 +220,70 @@ final class HotkeyShortcutTests: XCTestCase {
         try run()
     }
 }
+
+@MainActor
+final class GlobalHotkeyManagerShortcutTests: XCTestCase {
+    func testUpdatingPrimaryShortcutsCancelsDeletedModifierOnlyShortcutPress() async throws {
+        let leftOption = HotkeyShortcut(keyCode: 58, modifierFlags: [])
+        let leftCommand = HotkeyShortcut(keyCode: 55, modifierFlags: [])
+        let startProbe = HotkeyStartProbe()
+        let manager = GlobalHotkeyManager(
+            asrService: ASRService(),
+            primaryShortcuts: [leftOption, leftCommand],
+            promptModeShortcut: HotkeyShortcut(keyCode: 12, modifierFlags: [.option]),
+            commandModeShortcut: nil,
+            rewriteModeShortcut: HotkeyShortcut(keyCode: 14, modifierFlags: [.option]),
+            promptModeShortcutEnabled: false,
+            commandModeShortcutEnabled: false,
+            rewriteModeShortcutEnabled: false,
+            startRecordingCallback: { await startProbe.recordStart() },
+            isDictateRecordingProvider: { true },
+            isShortcutCaptureActiveProvider: { false }
+        )
+        manager.setHotkeyMode(.hold)
+
+        XCTAssertTrue(
+            manager.debugHandlePrimaryModifierOnlyFlagsChanged(keyCode: 55, modifiers: [.command])
+        )
+
+        manager.updatePrimaryShortcuts([leftOption])
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertEqual(startProbe.count, 0)
+        XCTAssertTrue(manager.debugPrimaryShortcutPressStateIsClear)
+    }
+
+    func testDeletingInactivePrimaryShortcutWithSameKeyDoesNotClearActivePress() {
+        let commandK = HotkeyShortcut(keyCode: 40, modifierFlags: [.command])
+        let optionK = HotkeyShortcut(keyCode: 40, modifierFlags: [.option])
+        let manager = GlobalHotkeyManager(
+            asrService: ASRService(),
+            primaryShortcuts: [commandK, optionK],
+            promptModeShortcut: HotkeyShortcut(keyCode: 12, modifierFlags: [.option]),
+            commandModeShortcut: nil,
+            rewriteModeShortcut: HotkeyShortcut(keyCode: 14, modifierFlags: [.option]),
+            promptModeShortcutEnabled: false,
+            commandModeShortcutEnabled: false,
+            rewriteModeShortcutEnabled: false,
+            isDictateRecordingProvider: { true },
+            isShortcutCaptureActiveProvider: { false }
+        )
+
+        XCTAssertTrue(manager.debugHandlePrimaryShortcutKeyDown(keyCode: 40, modifiers: [.command]))
+
+        manager.updatePrimaryShortcuts([commandK])
+
+        XCTAssertTrue(manager.debugHasActivePrimaryShortcutPress)
+        XCTAssertTrue(manager.debugHandlePrimaryShortcutKeyUp(keyCode: 40))
+        XCTAssertTrue(manager.debugPrimaryShortcutPressStateIsClear)
+    }
+}
+
+@MainActor
+private final class HotkeyStartProbe {
+    private(set) var count = 0
+
+    func recordStart() async {
+        self.count += 1
+    }
+}
