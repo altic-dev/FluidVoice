@@ -1893,168 +1893,34 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("✅ configureSession() - COMPLETED", source: "ASRService")
     }
 
-    /// In independent mode, attempt to bind AVAudioEngine's input to the user's preferred input device.
-    /// In sync-with-system mode, we intentionally do nothing so the engine follows macOS defaults.
-    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
+    /// The AVAudioEngine capture path always follows the macOS system default input.
+    ///
+    /// Per-app input selection instead rides the direct Core Audio IOProc path (see
+    /// `resolvedInputDeviceForCapture()` / `DirectCoreAudioInput`), which binds an arbitrary device
+    /// without touching the system default. Binding a non-default device through AVAudioEngine's
+    /// input node fails with `kAudioUnitErr_InvalidPropertyValue` (-10851) for aggregate/Bluetooth
+    /// devices, so it is never attempted on this path. `syncAudioDevicesWithSystem` is forced `true`
+    /// whenever Direct Audio Capture is off, so there is never a preferred device to bind here. Kept
+    /// as an explicit, always-succeeding seam so `startEngine()` reads clearly and the pre-`prepare()`
+    /// binding call order is preserved.
     @discardableResult
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
-        DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
-
-        // Per-app device selection rides the direct Core Audio IOProc path when Direct Audio
-        // Capture is enabled. The AVAudioEngine path must never bind a non-default device
-        // (kAudioUnitErr_InvalidPropertyValue / -10851), so it only attempts a preferred-device
-        // bind in the legacy configuration where direct capture is off. Otherwise it follows the
-        // macOS system default (identical to sync mode).
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false,
-              SettingsStore.shared.experimentalDirectAudioCaptureEnabled == false else {
-            DebugLogger.shared.info("Using system default input device (AVAudioEngine path)", source: "ASRService")
-            return true
-        }
-
-        guard let preferredUID = SettingsStore.shared.preferredInputDeviceUID, preferredUID.isEmpty == false else {
-            DebugLogger.shared.info("No preferred input device set - using system default", source: "ASRService")
-            return true
-        }
-
-        DebugLogger.shared.debug("Attempting to bind to preferred input device (uid: \(preferredUID))", source: "ASRService")
-
-        guard let device = AudioDevice.getInputDevice(byUID: preferredUID) else {
-            DebugLogger.shared.warning(
-                "Preferred input device not found (uid: \(preferredUID)). Falling back to system default input.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultInput()
-        }
-
-        DebugLogger.shared.debug("Found preferred input device: '\(device.name)' (id: \(device.id))", source: "ASRService")
-
-        let ok = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
-        if ok == false {
-            DebugLogger.shared.warning(
-                "Failed to bind engine input to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default input.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultInput()
-        }
-
-        DebugLogger.shared.info("✅ Successfully bound input to '\(device.name)'", source: "ASRService")
+        DebugLogger.shared.info("AVAudioEngine input follows system default (per-app selection uses direct capture)", source: "ASRService")
         return true
     }
 
-    /// In independent mode, attempt to bind AVAudioEngine's output to the user's preferred output device.
-    /// In sync-with-system mode, we intentionally do nothing so the engine follows macOS defaults.
-    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
+    /// The AVAudioEngine path always follows the macOS system default output.
+    ///
+    /// Output has no direct-capture equivalent (direct capture is input-only) and per-app output
+    /// selection is out of scope, so the output node always tracks the system default; binding a
+    /// non-default device here would hit the same `kAudioUnitErr_InvalidPropertyValue` (-10851)
+    /// limitation. `syncAudioDevicesWithSystem` is forced `true` whenever Direct Audio Capture is
+    /// off, so there is never a preferred output device to bind. Kept as an explicit,
+    /// always-succeeding seam alongside its input counterpart.
     @discardableResult
     private func bindPreferredOutputDeviceIfNeeded() -> Bool {
-        DebugLogger.shared.debug("bindPreferredOutputDeviceIfNeeded() - Starting output device binding", source: "ASRService")
-
-        // Output has no direct-capture equivalent (direct capture is input-only), so the
-        // AVAudioEngine output path always follows the macOS system default when Direct Audio
-        // Capture is enabled — avoiding the -10851 non-default-device binding limitation.
-        guard SettingsStore.shared.syncAudioDevicesWithSystem == false,
-              SettingsStore.shared.experimentalDirectAudioCaptureEnabled == false else {
-            DebugLogger.shared.info("Using system default output device (AVAudioEngine path)", source: "ASRService")
-            return true
-        }
-
-        guard let preferredUID = SettingsStore.shared.preferredOutputDeviceUID, preferredUID.isEmpty == false else {
-            DebugLogger.shared.info("No preferred output device set - using system default", source: "ASRService")
-            return true
-        }
-
-        DebugLogger.shared.debug("Attempting to bind to preferred output device (uid: \(preferredUID))", source: "ASRService")
-
-        guard let device = AudioDevice.getOutputDevice(byUID: preferredUID) else {
-            DebugLogger.shared.warning(
-                "Preferred output device not found (uid: \(preferredUID)). Falling back to system default output.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultOutput()
-        }
-
-        DebugLogger.shared.debug("Found preferred output device: '\(device.name)' (id: \(device.id))", source: "ASRService")
-
-        let ok = self.setEngineOutputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
-        if ok == false {
-            DebugLogger.shared.warning(
-                "Failed to bind engine output to preferred device '\(device.name)' (uid: \(device.uid)). Trying system default output.",
-                source: "ASRService"
-            )
-            // Try to use system default as fallback
-            return self.tryBindToSystemDefaultOutput()
-        }
-
-        DebugLogger.shared.info("✅ Successfully bound output to '\(device.name)'", source: "ASRService")
+        DebugLogger.shared.info("AVAudioEngine output follows system default", source: "ASRService")
         return true
-    }
-
-    /// Attempts to bind to the system default input device as a fallback.
-    /// Returns true if binding succeeded, false otherwise.
-    private func tryBindToSystemDefaultInput() -> Bool {
-        guard let defaultDevice = AudioDevice.getDefaultInputDevice() else {
-            DebugLogger.shared.error(
-                "No system default input device available. Cannot start audio capture.",
-                source: "ASRService"
-            )
-            return false
-        }
-
-        DebugLogger.shared.info(
-            "Attempting to bind to system default input: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
-            source: "ASRService"
-        )
-
-        let ok = self.setEngineInputDevice(
-            deviceID: defaultDevice.id,
-            deviceUID: defaultDevice.uid,
-            deviceName: defaultDevice.name
-        )
-
-        if !ok {
-            DebugLogger.shared.error(
-                "Failed to bind to system default input device '\(defaultDevice.name)'. Audio capture cannot proceed.",
-                source: "ASRService"
-            )
-        }
-
-        return ok
-    }
-
-    /// Attempts to bind to the system default output device as a fallback.
-    /// Returns true if binding succeeded, false otherwise.
-    private func tryBindToSystemDefaultOutput() -> Bool {
-        DebugLogger.shared.debug("tryBindToSystemDefaultOutput() - Starting", source: "ASRService")
-
-        guard let defaultDevice = AudioDevice.getDefaultOutputDevice() else {
-            DebugLogger.shared.error(
-                "No system default output device available. Cannot bind output.",
-                source: "ASRService"
-            )
-            return false
-        }
-
-        DebugLogger.shared.info(
-            "Attempting to bind to system default output: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
-            source: "ASRService"
-        )
-
-        let ok = self.setEngineOutputDevice(
-            deviceID: defaultDevice.id,
-            deviceUID: defaultDevice.uid,
-            deviceName: defaultDevice.name
-        )
-
-        if !ok {
-            DebugLogger.shared.error(
-                "Failed to bind to system default output device '\(defaultDevice.name)'. Audio playback may not work correctly.",
-                source: "ASRService"
-            )
-        }
-
-        return ok
     }
 
     /// Selects a specific CoreAudio device for AVAudioEngine's input node without changing system defaults.
@@ -2103,55 +1969,6 @@ final class ASRService: ObservableObject {
         }
 
         DebugLogger.shared.info("✅ Bound ASR input to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
-        return true
-    }
-
-    /// Selects a specific CoreAudio device for AVAudioEngine's output node without changing system defaults.
-    /// This uses the AUHAL AudioUnit backing `engine.outputNode` on macOS.
-    @discardableResult
-    private func setEngineOutputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
-        DebugLogger.shared.debug("setEngineOutputDevice() - Binding output to device ID: \(deviceID)", source: "ASRService")
-
-        let outputNode = self.engine.outputNode
-
-        // `AVAudioOutputNode` is backed by an AudioUnit on macOS. Setting this property selects
-        // which physical device the node outputs to.
-        guard let audioUnit = outputNode.audioUnit else {
-            DebugLogger.shared.error(
-                "Unable to access AudioUnit for AVAudioEngine.outputNode; cannot bind to '\(deviceName)' (uid: \(deviceUID))",
-                source: "ASRService"
-            )
-            return false
-        }
-
-        var mutableDeviceID = deviceID
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &mutableDeviceID,
-            UInt32(MemoryLayout<AudioObjectID>.size)
-        )
-
-        if status != noErr {
-            // OSStatus -10851 (kAudioUnitErr_InvalidPropertyValue) occurs for aggregate devices (Bluetooth, etc.)
-            // This is expected for certain device types - not a fatal error
-            if status == -10_851 {
-                DebugLogger.shared.warning(
-                    "Cannot bind OUTPUT to '\(deviceName)' - likely an aggregate device (OSStatus: \(status)). Will use system default.",
-                    source: "ASRService"
-                )
-            } else {
-                DebugLogger.shared.error(
-                    "AudioUnitSetProperty(CurrentDevice) failed for OUTPUT '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with OSStatus: \(status)",
-                    source: "ASRService"
-                )
-            }
-            return false
-        }
-
-        DebugLogger.shared.info("✅ Bound ASR output to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
         return true
     }
 
