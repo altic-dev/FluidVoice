@@ -37,6 +37,27 @@ struct FluidApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(after: .appSettings) {
+                KinwardSettingsCommand()
+            }
         }
+
+        Window("Kinward Settings", id: "kinward-settings") {
+            KinwardSettingsView()
+        }
+        .defaultSize(width: 520, height: 700)
+    }
+}
+
+/// Separated into its own view so it can read `openWindow` from the environment -
+/// `.commands` builders don't have view-level @Environment access otherwise.
+private struct KinwardSettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Kinward Settings...") {
+            self.openWindow(id: "kinward-settings")
+        }
+        .keyboardShortcut("k", modifiers: [.command, .shift])
     }
 }

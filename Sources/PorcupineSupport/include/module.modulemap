@@ -1,0 +1,6 @@
+module CPorcupine {
+    header "pv_porcupine.h"
+    header "picovoice.h"
+    link "pv_porcupine"
+    export *
+}

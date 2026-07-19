@@ -24,6 +24,16 @@ let package = Package(
                 .linkedFramework("CoreAudio"),
             ]
         ),
+        // Exposes Picovoice's Porcupine wake-word C API (vendored header + prebuilt
+        // libpv_porcupine.dylib, arm64 macOS - no official SPM/macOS Swift package exists
+        // upstream, only their CocoaPods iOS binding) as the CPorcupine module.
+        .target(
+            name: "PorcupineSupport",
+            path: "Sources/PorcupineSupport",
+            linkerSettings: [
+                .unsafeFlags(["-LSources/PorcupineSupport/lib"]),
+            ]
+        ),
         .executableTarget(
             name: "FluidVoice",
             dependencies: [
@@ -32,8 +42,12 @@ let package = Package(
                 "FluidAudio",
                 "PromiseKit",
                 "DynamicNotchKit",
+                "PorcupineSupport",
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
                 .product(name: "PostHog", package: "posthog-ios"),
+            ],
+            resources: [
+                .copy("Resources/porcupine_params.pv"),
             ]
         ),
     ]
