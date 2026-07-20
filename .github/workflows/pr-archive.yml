@@ -1,0 +1,318 @@
+name: PR Archive
+
+on:
+  # Repository Settings > Actions must require approval for all external
+  # contributors. This keeps fork PR builds read-only and secretless.
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'Sources/**'
+      - 'Fluid.xcodeproj/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Info.plist'
+      - 'Fluid.entitlements'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-archive-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  archive:
+    name: "Archive FluidVoice PR #${{ github.event.pull_request.number }}"
+    if: github.event.pull_request.draft == false
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      APP_NAME: "FluidVoice #${{ github.event.pull_request.number }}"
+      BUNDLE_IDENTIFIER: com.FluidApp.app.pr${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Validate PR commits
+        run: |
+          set -euo pipefail
+
+          for commit in "$PR_HEAD_SHA" "$PR_BASE_SHA"; do
+            if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "GitHub did not provide a valid PR head and base commit." >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout exact PR head commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge target branch into PR head
+        run: |
+          set -euo pipefail
+
+          CHECKED_OUT_SHA=$(git rev-parse HEAD)
+          if [[ "$CHECKED_OUT_SHA" != "$PR_HEAD_SHA" ]]; then
+            echo "Expected PR head $PR_HEAD_SHA, checked out $CHECKED_OUT_SHA." >&2
+            exit 1
+          fi
+
+          git remote add upstream "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags upstream "$PR_BASE_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-ff --no-edit "$PR_BASE_SHA"
+
+          PR_MERGE_SHA=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$PR_HEAD_SHA" "$PR_MERGE_SHA" || \
+             ! git merge-base --is-ancestor "$PR_BASE_SHA" "$PR_MERGE_SHA"; then
+            echo "Generated merge commit does not contain the expected PR head and base." >&2
+            exit 1
+          fi
+
+          echo "PR_MERGE_SHA=$PR_MERGE_SHA" >> "$GITHUB_ENV"
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Archive PR build
+        env:
+          ARCHIVE_PATH: ${{ runner.temp }}/FluidVoice-PR-${{ github.event.pull_request.number }}.xcarchive
+        run: |
+          set -euo pipefail
+
+          xcodebuild archive \
+            -project Fluid.xcodeproj \
+            -scheme Fluid \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=""
+
+      - name: Validate and package archive
+        id: package
+        env:
+          ARCHIVE_PATH: ${{ runner.temp }}/FluidVoice-PR-${{ github.event.pull_request.number }}.xcarchive
+          STAGING_PATH: ${{ runner.temp }}/FluidVoice-PR-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          ORIGINAL_APP_PATH="$ARCHIVE_PATH/Products/Applications/FluidVoice.app"
+          APP_PATH="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
+          EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/FluidVoice"
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          ARCHIVE_INFO_PLIST="$ARCHIVE_PATH/Info.plist"
+          MANIFEST_PATH="$STAGING_PATH/build-manifest.json"
+          MANIFEST_PLIST="$STAGING_PATH/build-manifest.plist"
+          README_PATH="$STAGING_PATH/README.txt"
+          ARCHIVE_ZIP="$STAGING_PATH/FluidVoice-PR-$PR_NUMBER.xcarchive.zip"
+          APP_ZIP="$STAGING_PATH/FluidVoice-PR-$PR_NUMBER.app.zip"
+          VERIFY_PATH="$RUNNER_TEMP/FluidVoice-PR-$PR_NUMBER-verify"
+          EFFECTIVE_ENTITLEMENTS="$RUNNER_TEMP/FluidVoice-PR-$PR_NUMBER.entitlements"
+          VERIFIED_ENTITLEMENTS="$RUNNER_TEMP/FluidVoice-PR-$PR_NUMBER-verified.entitlements"
+          SHORT_SHA="${PR_HEAD_SHA:0:12}"
+          ARTIFACT_NAME="FluidVoice-PR-$PR_NUMBER-$SHORT_SHA"
+
+          test -d "$ARCHIVE_PATH"
+          test -d "$ORIGINAL_APP_PATH"
+          test -f "$ARCHIVE_INFO_PLIST"
+
+          # Preserve Xcode's expanded entitlements, which combine Fluid.entitlements
+          # with target capabilities such as Hardened Runtime Audio Input.
+          codesign -d --entitlements - --xml "$ORIGINAL_APP_PATH" \
+            > "$EFFECTIVE_ENTITLEMENTS" 2>/dev/null
+          plutil -lint "$EFFECTIVE_ENTITLEMENTS"
+          if [[ "$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - "$EFFECTIVE_ENTITLEMENTS")" != "true" ]]; then
+            echo "Xcode's effective entitlements are missing Audio Input." >&2
+            exit 1
+          fi
+
+          mv "$ORIGINAL_APP_PATH" "$APP_PATH"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_IDENTIFIER" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_NAME" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :Name $APP_NAME" "$ARCHIVE_INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:ApplicationPath Applications/$APP_NAME.app" "$ARCHIVE_INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:CFBundleIdentifier $BUNDLE_IDENTIFIER" "$ARCHIVE_INFO_PLIST"
+
+          # Xcode's XCFramework copy flattens CTranscribe's version symlinks.
+          # Restore the canonical framework layout before replacing its stale
+          # upstream signature.
+          CTRANSCRIBE_FRAMEWORK="$APP_PATH/Contents/Frameworks/CTranscribe.framework"
+          test -d "$CTRANSCRIBE_FRAMEWORK/Versions/A"
+          rm -rf \
+            "$CTRANSCRIBE_FRAMEWORK/Versions/Current" \
+            "$CTRANSCRIBE_FRAMEWORK/CTranscribe" \
+            "$CTRANSCRIBE_FRAMEWORK/Resources" \
+            "$CTRANSCRIBE_FRAMEWORK/Versions/A/_CodeSignature"
+          ln -s A "$CTRANSCRIBE_FRAMEWORK/Versions/Current"
+          ln -s Versions/Current/CTranscribe "$CTRANSCRIBE_FRAMEWORK/CTranscribe"
+          ln -s Versions/Current/Resources "$CTRANSCRIBE_FRAMEWORK/Resources"
+
+          # Ad-hoc signing requires no certificate or secret, but gives macOS
+          # TCC a valid code identity for permissions such as Accessibility.
+          codesign --force --sign - --timestamp=none "$CTRANSCRIBE_FRAMEWORK"
+          codesign --force --sign - --timestamp=none \
+            "$APP_PATH/Contents/Frameworks/MediaRemoteAdapter.framework"
+          codesign --force --sign - --timestamp=none --options runtime \
+            --entitlements "$EFFECTIVE_ENTITLEMENTS" \
+            --identifier "$BUNDLE_IDENTIFIER" \
+            "$APP_PATH"
+
+          test -d "$APP_PATH"
+          test -f "$INFO_PLIST"
+          test -x "$EXECUTABLE_PATH"
+          test -x "$APP_PATH/Contents/Frameworks/MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter"
+          test -L "$CTRANSCRIBE_FRAMEWORK/Versions/Current"
+          test -L "$CTRANSCRIBE_FRAMEWORK/CTranscribe"
+          test -L "$CTRANSCRIBE_FRAMEWORK/Resources"
+
+          RPATH_DEPENDENCY_COUNT=0
+          while IFS= read -r DEPENDENCY; do
+            RPATH_DEPENDENCY_COUNT=$((RPATH_DEPENDENCY_COUNT + 1))
+            EMBEDDED_PATH="$APP_PATH/Contents/Frameworks/${DEPENDENCY#@rpath/}"
+            if [[ ! -e "$EMBEDDED_PATH" ]]; then
+              echo "Missing embedded runtime dependency: $DEPENDENCY" >&2
+              exit 1
+            fi
+          done < <(otool -L "$EXECUTABLE_PATH" | awk '$1 ~ /^@rpath\// { print $1 }')
+          if [[ "$RPATH_DEPENDENCY_COUNT" -eq 0 ]]; then
+            echo "Expected at least one bundled @rpath dependency." >&2
+            exit 1
+          fi
+
+          ACTUAL_BUNDLE_IDENTIFIER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")
+          if [[ "$ACTUAL_BUNDLE_IDENTIFIER" != "$BUNDLE_IDENTIFIER" ]]; then
+            echo "Expected bundle identifier '$BUNDLE_IDENTIFIER', found '$ACTUAL_BUNDLE_IDENTIFIER'." >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign -d --entitlements - --xml "$APP_PATH" \
+            > "$VERIFIED_ENTITLEMENTS" 2>/dev/null
+          if [[ "$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - "$VERIFIED_ENTITLEMENTS")" != "true" ]]; then
+            echo "The signed PR app is missing the Audio Input entitlement." >&2
+            exit 1
+          fi
+          SIGNATURE_DETAILS=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)
+          if ! grep -q '^Signature=adhoc$' <<< "$SIGNATURE_DETAILS"; then
+            echo "Expected a valid ad-hoc signature on the PR app." >&2
+            exit 1
+          fi
+          if ! grep -q "^Identifier=$BUNDLE_IDENTIFIER$" <<< "$SIGNATURE_DETAILS"; then
+            echo "The code-signing identifier does not match '$BUNDLE_IDENTIFIER'." >&2
+            exit 1
+          fi
+          if grep -q '^Authority=' <<< "$SIGNATURE_DETAILS"; then
+            echo "Expected no signing authority on the PR app." >&2
+            exit 1
+          fi
+          if grep -q '^TeamIdentifier=' <<< "$SIGNATURE_DETAILS" && \
+             ! grep -q '^TeamIdentifier=not set$' <<< "$SIGNATURE_DETAILS"; then
+            echo "Expected no signing team on the PR app." >&2
+            exit 1
+          fi
+
+          rm -rf "$STAGING_PATH" "$VERIFY_PATH"
+          mkdir -p "$STAGING_PATH" "$VERIFY_PATH"
+
+          XCODE_VERSION=$(xcodebuild -version | tr '\n' ' ' | xargs)
+          BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          plutil -create xml1 "$MANIFEST_PLIST"
+          plutil -insert pr_number -integer "$PR_NUMBER" "$MANIFEST_PLIST"
+          plutil -insert author_association -string "$AUTHOR_ASSOCIATION" "$MANIFEST_PLIST"
+          plutil -insert pr_head_sha -string "$PR_HEAD_SHA" "$MANIFEST_PLIST"
+          plutil -insert pr_merge_sha -string "$PR_MERGE_SHA" "$MANIFEST_PLIST"
+          plutil -insert xcode_version -string "$XCODE_VERSION" "$MANIFEST_PLIST"
+          plutil -insert app_name -string "$APP_NAME" "$MANIFEST_PLIST"
+          plutil -insert bundle_identifier -string "$BUNDLE_IDENTIFIER" "$MANIFEST_PLIST"
+          plutil -insert signing -string ad-hoc "$MANIFEST_PLIST"
+          plutil -insert audio_input_entitlement -bool true "$MANIFEST_PLIST"
+          plutil -insert build_timestamp -string "$BUILD_TIMESTAMP" "$MANIFEST_PLIST"
+          plutil -convert json -o "$MANIFEST_PATH" "$MANIFEST_PLIST"
+          rm "$MANIFEST_PLIST"
+
+          cat > "$README_PATH" <<EOF
+          FluidVoice PR #$PR_NUMBER
+          ========================
+
+          This is an ad-hoc-signed test build from pull request #$PR_NUMBER.
+
+          App name: $APP_NAME.app
+          Bundle identifier: $BUNDLE_IDENTIFIER
+          PR head SHA: $PR_HEAD_SHA
+          PR merge SHA: $PR_MERGE_SHA
+
+          Because the app is not Developer ID signed or notarized, macOS may prevent
+          it from opening normally.
+          Try opening the app from Finder, then use Open Anyway under
+          System Settings > Privacy & Security if macOS offers that option.
+
+          For trusted builds only, you can remove the downloaded quarantine marker:
+
+            xattr -dr com.apple.quarantine "/path/to/$APP_NAME.app"
+
+          The ad-hoc signature provides a local code identity for permissions such
+          as Accessibility, but a new build may need to be removed and re-added in
+          Privacy & Security. This PR build has a separate bundle identifier, so
+          permissions and preferences are separate from the release app.
+          EOF
+
+          ditto -c -k --sequesterRsrc --keepParent "$ARCHIVE_PATH" "$ARCHIVE_ZIP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"
+
+          test -s "$MANIFEST_PATH"
+          test -s "$README_PATH"
+          test -s "$ARCHIVE_ZIP"
+          test -s "$APP_ZIP"
+          unzip -tq "$ARCHIVE_ZIP"
+          unzip -tq "$APP_ZIP"
+
+          ditto -x -k "$APP_ZIP" "$VERIFY_PATH"
+          VERIFIED_APP_PATH="$VERIFY_PATH/$APP_NAME.app"
+          test -x "$VERIFIED_APP_PATH/Contents/MacOS/FluidVoice"
+          test -L "$VERIFIED_APP_PATH/Contents/Frameworks/CTranscribe.framework/Versions/Current"
+          codesign --verify --deep --strict --verbose=2 "$VERIFIED_APP_PATH"
+          if [[ "$(codesign -d --entitlements - --xml "$VERIFIED_APP_PATH" 2>/dev/null | plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - -)" != "true" ]]; then
+            echo "The packaged PR app is missing the Audio Input entitlement." >&2
+            exit 1
+          fi
+
+          echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "artifact-path=$STAGING_PATH" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### PR archive ready"
+            echo
+            echo "- Artifact: \`$ARTIFACT_NAME\`"
+            echo "- App: \`$APP_NAME.app\`"
+            echo "- Bundle identifier: \`$BUNDLE_IDENTIFIER\`"
+            echo "- Signing: ad-hoc (no certificate required)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload PR archive artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: ${{ steps.package.outputs.artifact-path }}
+          if-no-files-found: error
+          retention-days: 5
+          compression-level: 0

@@ -603,6 +603,34 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             return
         }
 
+        let followSystemItem = NSMenuItem(
+            title: "Use macOS Default Microphone",
+            action: #selector(toggleMicrophoneSelectionMode(_:)),
+            keyEquivalent: ""
+        )
+        followSystemItem.target = self
+        followSystemItem.state = SettingsStore.shared.microphoneSelectionMode == .system ? .on : .off
+        followSystemItem.isEnabled = !self.isRecording
+        submenu.addItem(followSystemItem)
+
+        // Capturing for FluidVoice alone is a property of the preferred-microphone modes, so it gets
+        // its own check-mark rather than another position in the follow-system toggle. Without it, a
+        // user could only leave this mode via `.manual`, which would move their system input
+        // — the exact side effect they opted out of.
+        if SettingsStore.shared.experimentalDirectAudioCaptureEnabled {
+            let fluidVoiceOnlyItem = NSMenuItem(
+                title: "Use for FluidVoice Only",
+                action: #selector(toggleFluidVoiceOnlyMode(_:)),
+                keyEquivalent: ""
+            )
+            fluidVoiceOnlyItem.target = self
+            fluidVoiceOnlyItem.state = SettingsStore.shared.microphoneSelectionMode == .fluidVoiceOnly ? .on : .off
+            fluidVoiceOnlyItem.isEnabled = !self.isRecording && SettingsStore.shared.microphoneSelectionMode != .system
+            submenu.addItem(fluidVoiceOnlyItem)
+        }
+
+        submenu.addItem(.separator())
+
         let currentUID = self.currentPreferredInputUID(defaultInputUID: defaultInputUID)
 
         for device in inputDevices {
@@ -625,13 +653,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func currentPreferredInputUID(defaultInputUID: String?) -> String? {
-        // In independent mode the menu bar should check-mark the device FluidVoice will
-        // actually capture (the preferred device), not the macOS system default.
-        if SettingsStore.shared.syncAudioDevicesWithSystem == false,
-           let preferred = SettingsStore.shared.preferredInputDeviceUID, preferred.isEmpty == false {
-            return preferred
+        switch SettingsStore.shared.microphoneSelectionMode {
+        case .system:
+            return defaultInputUID
+        case .manual, .fluidVoiceOnly:
+            return SettingsStore.shared.preferredInputDeviceUID ?? defaultInputUID
         }
-        return defaultInputUID
     }
 
     private var canCopyLastTranscript: Bool {
@@ -654,11 +681,51 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         guard self.isRecording == false else { return }
         guard let uid = sender.representedObject as? String, !uid.isEmpty else { return }
 
-        SettingsStore.shared.preferredInputDeviceUID = uid
-
-        if SettingsStore.shared.syncAudioDevicesWithSystem {
+        SettingsStore.shared.recordInputDeviceSelection(uid)
+        if SettingsStore.shared.shouldSyncInputSelectionToSystemDefault() {
             _ = AudioDevice.setDefaultInputDevice(uid: uid)
         }
+
+        self.refreshMicrophoneMenu()
+    }
+
+    @objc private func toggleMicrophoneSelectionMode(_ sender: NSMenuItem) {
+        guard self.isRecording == false else { return }
+
+        let nextMode: SettingsStore.MicrophoneSelectionMode =
+            SettingsStore.shared.microphoneSelectionMode == .system ? .manual : .system
+        let currentSystemInputUID = AudioDevice.getDefaultInputDevice()?.uid
+        let availableInputUIDs = Set(AudioDevice.listInputDevices().map(\.uid))
+        let restoredSystemInputUID = SettingsStore.shared.setMicrophoneSelectionMode(
+            nextMode,
+            currentSystemInputUID: currentSystemInputUID,
+            availableInputUIDs: availableInputUIDs
+        )
+
+        let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID ?? ""
+        if nextMode.usesPreferredInputDevice,
+           preferredInputUID.isEmpty,
+           let defaultUID = currentSystemInputUID
+        {
+            SettingsStore.shared.preferredInputDeviceUID = defaultUID
+        }
+
+        if nextMode == .system, let restoredSystemInputUID {
+            _ = AudioDevice.setDefaultInputDevice(uid: restoredSystemInputUID)
+        }
+
+        self.refreshMicrophoneMenu()
+    }
+
+    @objc private func toggleFluidVoiceOnlyMode(_ sender: NSMenuItem) {
+        guard self.isRecording == false else { return }
+        // Shares one implementation with the Settings switch — see `setFluidVoiceOnly`.
+        let enable = SettingsStore.shared.microphoneSelectionMode != .fluidVoiceOnly
+        AppServices.shared.microphonePreferenceCoordinator.setFluidVoiceOnly(
+            enable,
+            currentSystemInputUID: AudioDevice.getDefaultInputDevice()?.uid,
+            availableInputUIDs: Set(AudioDevice.listInputDevices().map(\.uid))
+        )
 
         self.refreshMicrophoneMenu()
     }

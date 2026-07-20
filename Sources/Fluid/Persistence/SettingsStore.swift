@@ -179,6 +179,35 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    enum MicrophoneSelectionMode: String, Codable, CaseIterable, Identifiable {
+        case system
+        case manual
+        /// Like `.manual`, but the preferred microphone is captured for FluidVoice alone and the
+        /// macOS default input is never changed. Only available on the direct Core Audio capture
+        /// path (`DirectCoreAudioInput`), which can bind an arbitrary device per-app.
+        case fluidVoiceOnly
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .system:
+                return "Use macOS Default"
+            case .manual:
+                return "Use Preferred Microphone"
+            case .fluidVoiceOnly:
+                return "Use Preferred Microphone (FluidVoice Only)"
+            }
+        }
+
+        /// Whether capture resolves `preferredInputDeviceUID` instead of the macOS default input.
+        var usesPreferredInputDevice: Bool {
+            self != .system
+        }
+    }
+
     enum DictationPromptSelection: Equatable {
         case off, `default`, privateAI
         case profile(String)
@@ -1785,26 +1814,78 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
-    /// When enabled (the default), changing audio devices in FluidVoice also updates the macOS
-    /// system default input/output. When disabled, FluidVoice captures its preferred *input*
-    /// device independently via the direct Core Audio IOProc path (see `DirectCoreAudioInput` /
-    /// `CoreAudioCaptureSupport.c`, which uses `AudioDeviceCreateIOProcID`). That path binds a
-    /// specific device per-app without changing the system default and without the AVAudioEngine
-    /// limitation (`kAudioUnitErr_InvalidPropertyValue` / -10851) that originally forced this mode
-    /// off for aggregate/Bluetooth devices.
-    ///
-    /// Independent mode therefore requires Direct Audio Capture: if that is disabled we return
-    /// `true` so the AVAudioEngine compatibility path keeps following the system default.
-    var syncAudioDevicesWithSystem: Bool {
+    var microphoneSelectionMode: MicrophoneSelectionMode {
         get {
-            // Per-app input selection is only safe on the direct-capture path.
-            guard self.experimentalDirectAudioCaptureEnabled else { return true }
-            return (self.defaults.object(forKey: Keys.syncAudioDevicesWithSystem) as? Bool) ?? true
+            if let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+               let mode = MicrophoneSelectionMode(rawValue: raw)
+            {
+                // FluidVoice-only capture exists solely on the direct Core Audio path. If that path is
+                // off, degrade to `.manual` — which still honours the preferred microphone, by
+                // moving the system default — rather than silently recording from whatever macOS
+                // happens to be pointed at.
+                if mode == .fluidVoiceOnly, self.experimentalDirectAudioCaptureEnabled == false {
+                    return .manual
+                }
+
+                return mode
+            }
+
+            return .system
         }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.syncAudioDevicesWithSystem)
+            self.defaults.set(newValue.rawValue, forKey: Keys.microphoneSelectionMode)
         }
+    }
+
+    func recordInputDeviceSelection(_ uid: String) {
+        guard uid.isEmpty == false else { return }
+        guard self.microphoneSelectionMode.usesPreferredInputDevice else { return }
+
+        self.preferredInputDeviceUID = uid
+    }
+
+    func shouldSyncInputSelectionToSystemDefault() -> Bool {
+        self.microphoneSelectionMode == .system
+    }
+
+    @discardableResult
+    func setMicrophoneSelectionMode(
+        _ mode: MicrophoneSelectionMode,
+        currentSystemInputUID: String?,
+        availableInputUIDs: Set<String>
+    ) -> String? {
+        let previousMode = self.microphoneSelectionMode
+
+        // `.manual` is the one mode that moves the macOS default, so capture the user's own default
+        // on the way *in* — from any other mode, since neither `.system` nor `.fluidVoiceOnly`
+        // disturbs it, which makes the current value genuinely theirs. Capturing only from
+        // `.system` would miss the `.fluidVoiceOnly` -> `.manual` -> `.fluidVoiceOnly` round trip
+        // and leave the system input stuck on FluidVoice's choice after the user opted back out.
+        if mode == .manual,
+           previousMode != .manual,
+           let currentSystemInputUID,
+           currentSystemInputUID.isEmpty == false
+        {
+            self.defaults.set(currentSystemInputUID, forKey: Keys.systemInputDeviceUIDBeforeManual)
+        }
+
+        self.microphoneSelectionMode = mode
+
+        // `.manual` is the only mode that holds the macOS default on FluidVoice's choice, so only
+        // *leaving* it hands the default back to whatever the user had before — whether that is for
+        // `.system` or for `.fluidVoiceOnly`. Restoring on any other transition would clobber a
+        // default the user changed themselves while FluidVoice was keeping its hands off it.
+        guard previousMode == .manual, mode != .manual else { return nil }
+
+        if let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
+           previousSystemInputUID.isEmpty == false,
+           availableInputUIDs.contains(previousSystemInputUID)
+        {
+            return previousSystemInputUID
+        }
+
+        return currentSystemInputUID
     }
 
     var visualizerNoiseThreshold: Double {
@@ -2990,6 +3071,7 @@ final class SettingsStore: ObservableObject {
             textInsertionMode: self.textInsertionMode,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
+            microphoneSelectionMode: self.microphoneSelectionMode,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
@@ -3103,6 +3185,9 @@ final class SettingsStore: ObservableObject {
         self.textInsertionMode = payload.textInsertionMode
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.preferredOutputDeviceUID = payload.preferredOutputDeviceUID
+        if let microphoneSelectionMode = payload.microphoneSelectionMode {
+            self.microphoneSelectionMode = microphoneSelectionMode
+        }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
@@ -4833,7 +4918,8 @@ private extension SettingsStore {
         static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
-        static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
+        static let microphoneSelectionMode = "MicrophoneSelectionMode"
+        static let systemInputDeviceUIDBeforeManual = "SystemInputDeviceUIDBeforeManual"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"

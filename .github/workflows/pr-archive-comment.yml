@@ -1,0 +1,113 @@
+name: PR Archive Comment
+
+on:
+  workflow_run:
+    workflows: ["PR Archive"]
+    types: [completed]
+
+permissions:
+  actions: read
+  issues: write
+  pull-requests: write 
+
+jobs:
+  comment:
+    name: Add PR archive download link
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+
+    steps:
+      # This trusted workflow reads artifact metadata only. Never download or
+      # execute artifacts produced by the untrusted pull_request workflow.
+      - name: Post archive download link
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "The completed workflow run is not associated with a pull request." >&2
+            exit 1
+          fi
+
+          ARTIFACT=$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+              --jq '.artifacts
+                | map(select((.expired == false) and (.name | startswith("FluidVoice-PR-"))))
+                | sort_by(.created_at)
+                | last
+                | [.id, .name]
+                | @tsv'
+          )
+          IFS=$'\t' read -r ARTIFACT_ID ARTIFACT_NAME <<< "$ARTIFACT"
+
+          EXPECTED_PREFIX="FluidVoice-PR-$EVENT_PR_NUMBER-"
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo "No valid archive artifact was found for PR #$EVENT_PR_NUMBER." >&2
+            exit 1
+          fi
+          if [[ "$ARTIFACT_NAME" =~ ^${EXPECTED_PREFIX}([0-9a-f]{12})$ ]]; then
+            ARTIFACT_SHORT_SHA="${BASH_REMATCH[1]}"
+          else
+            echo "The archive artifact name does not match PR #$EVENT_PR_NUMBER." >&2
+            exit 1
+          fi
+
+          CURRENT_HEAD_SHA=$(
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq '.head.sha'
+          )
+          if [[ "${CURRENT_HEAD_SHA:0:12}" != "$ARTIFACT_SHORT_SHA" ]]; then
+            echo "Skipping a superseded artifact for PR #$EVENT_PR_NUMBER."
+            exit 0
+          fi
+
+          ARTIFACT_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts/$ARTIFACT_ID"
+          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+          APP_NAME="FluidVoice #$EVENT_PR_NUMBER"
+          MARKER='<!-- fluidvoice-pr-archive -->'
+          BODY=$(cat <<EOF
+          $MARKER
+          ### FluidVoice PR build ready
+
+          [Download **$ARTIFACT_NAME**]($ARTIFACT_URL)
+
+          The artifact contains the ad-hoc-signed app ZIP, Xcode archive, build manifest, and installation instructions. It expires 5 days after the build.
+
+          #### Install the app
+
+          1. Extract the downloaded artifact, then extract **FluidVoice-PR-$EVENT_PR_NUMBER.app.zip**.
+          2. Move **$APP_NAME.app** into the **/Applications** folder.
+          3. Open Terminal and remove the download quarantine marker:
+
+                 xattr -dr com.apple.quarantine "/Applications/$APP_NAME.app"
+
+          4. In Applications, Control-click **$APP_NAME.app** and choose **Open**.
+          5. If macOS still blocks it, open **System Settings → Privacy & Security**, click **Open Anyway**, and confirm.
+
+          This build has its own app identity, so its permissions are separate from the release version of FluidVoice.
+
+          [View workflow run]($RUN_URL)
+          EOF
+          )
+
+          COMMENT_ID=$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/issues/$EVENT_PR_NUMBER/comments" \
+              --jq '.[] | select(.body | contains("<!-- fluidvoice-pr-archive -->")) | .id' \
+              | sed -n '1p'
+          )
+
+          if [[ -n "$COMMENT_ID" ]]; then
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" \
+              -f body="$BODY" \
+              >/dev/null
+          else
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/issues/$EVENT_PR_NUMBER/comments" \
+              -f body="$BODY" \
+              >/dev/null
+          fi

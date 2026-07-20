@@ -12,18 +12,13 @@ import {
 const LABEL = {
   name: "awaiting response",
   color: "FBCA04",
-  description: "Older issue will close after three days unless this label is removed.",
+  description: "Issue will close after three days unless this label is removed.",
 };
-const CUTOFF = new Date("2026-07-08T00:00:00Z");
 const DAYS_BEFORE_CLOSE = 3;
 const CLOSE_MARKER = "<!-- fluidvoice-awaiting-response-close -->";
 
 function eventPayload() {
   return JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-}
-
-function isOlderIssue(issue) {
-  return !issue.pull_request && new Date(issue.created_at) < CUTOFF;
 }
 
 async function latestLabelTime(context, issueNumber) {
@@ -44,7 +39,7 @@ async function latestLabelTime(context, issueNumber) {
 }
 
 async function warnOrClose(context, issue, now = new Date()) {
-  if (!isOlderIssue(issue)) return;
+  if (issue.pull_request) return;
 
   const labeledAt = await latestLabelTime(context, issue.number);
   if (!labeledAt) return;
@@ -69,9 +64,8 @@ async function warnOrClose(context, issue, now = new Date()) {
 }
 
 async function scanLabeledIssues(context) {
-  const cutoff = CUTOFF.toISOString().slice(0, 10);
   const query = encodeURIComponent(
-    `repo:${context.owner}/${context.repo} is:issue is:open created:<${cutoff} label:"${LABEL.name}"`,
+    `repo:${context.owner}/${context.repo} is:issue is:open label:"${LABEL.name}"`,
   );
   let page = 1;
 

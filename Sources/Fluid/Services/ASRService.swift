@@ -728,14 +728,7 @@ final class ASRService: ObservableObject {
     }
 
     private func resolvedInputDeviceForCapture() -> AudioDevice.Device? {
-        if SettingsStore.shared.syncAudioDevicesWithSystem == false,
-           let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
-           preferredUID.isEmpty == false,
-           let preferredDevice = AudioDevice.getInputDevice(byUID: preferredUID)
-        {
-            return preferredDevice
-        }
-        return AudioDevice.getDefaultInputDevice()
+        AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
     }
 
     /// Prepares the direct device callback without starting hardware IO. This
@@ -787,6 +780,20 @@ final class ASRService: ObservableObject {
     }
 
     private func startPreferredAudioCapture() throws {
+        // FluidVoice-only mode is pinned to one device. If that device is gone — unplugged, powered
+        // off — device resolution falls back to the macOS default, and both capture backends would
+        // happily record it while Settings still shows the missing microphone. Refuse before either
+        // backend starts, for the same reason the AVAudioEngine guard below exists.
+        if AppServices.shared.microphonePreferenceCoordinator.preferredInputIsMissing() {
+            throw NSError(
+                domain: "FluidVoice.MicrophoneSelection",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "The microphone selected for FluidVoice is not available. Reconnect it, or pick "
+                    + "another microphone in Settings."]
+            )
+        }
+
         let directCaptureEnabled = SettingsStore.shared.experimentalDirectAudioCaptureEnabled
         if directCaptureEnabled,
            self.prepareDirectAudioInputIfPossible(reason: "recording_start"),
@@ -817,6 +824,23 @@ final class ASRService: ObservableObject {
         if directCaptureEnabled == false, let directAudioInput = self.directAudioInput {
             directAudioInput.invalidate()
             self.directAudioInput = nil
+        }
+
+        // The AVAudioEngine path always records whatever macOS is pointed at: it cannot bind an
+        // arbitrary input device for this app alone (`kAudioUnitErr_InvalidPropertyValue`, -10851,
+        // on aggregate and Bluetooth devices). Falling back to it in FluidVoice-only mode would
+        // silently capture the system default while Settings and the menu bar still show the
+        // dedicated microphone, so fail loudly instead.
+        if SettingsStore.shared.microphoneSelectionMode == .fluidVoiceOnly {
+            let deviceName = self.resolvedInputDeviceForCapture()?.name ?? "the selected microphone"
+            throw NSError(
+                domain: "FluidVoice.MicrophoneSelection",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Could not record from \(deviceName) without changing your macOS input device. " +
+                    "Switch the microphone mode to \"\(SettingsStore.MicrophoneSelectionMode.manual.displayName)\" " +
+                    "in Settings, or choose a different microphone."]
+            )
         }
 
         try self.startCompatibilityAudioCapture(
@@ -966,7 +990,9 @@ final class ASRService: ObservableObject {
         (self.transcriptionProvider as? FluidAudioProvider)?.underlyingManager
     }
     #else
-    var asrManager: Any? { nil }
+    var asrManager: Any? {
+        nil
+    }
     #endif
 
     // Thread-safe buffer to prevent "Array mutation while enumerating" and memory corruption crashes
@@ -1004,7 +1030,10 @@ final class ASRService: ObservableObject {
     private var didPauseMediaForThisSession: Bool = false
 
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
-    var audioLevelPublisher: AnyPublisher<CGFloat, Never> { self.audioLevelSubject.eraseToAnyPublisher() }
+    var audioLevelPublisher: AnyPublisher<CGFloat, Never> {
+        self.audioLevelSubject.eraseToAnyPublisher()
+    }
+
     private var lastAudioLevelSentAt: TimeInterval = 0
 
     func consumeLastCompletedAudioSnapshot() -> DictationAudioSnapshot? {
@@ -1336,6 +1365,10 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
+            if SettingsStore.shared.microphoneSelectionMode == .manual {
+                AppServices.shared.microphonePreferenceCoordinator.enforcePreferredInput(reason: "recording start")
+            }
+
             try self.startPreferredAudioCapture()
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             self.isRunning = true
@@ -1893,34 +1926,121 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("✅ configureSession() - COMPLETED", source: "ASRService")
     }
 
-    /// The AVAudioEngine capture path always follows the macOS system default input.
-    ///
-    /// Per-app input selection instead rides the direct Core Audio IOProc path (see
-    /// `resolvedInputDeviceForCapture()` / `DirectCoreAudioInput`), which binds an arbitrary device
-    /// without touching the system default. Binding a non-default device through AVAudioEngine's
-    /// input node fails with `kAudioUnitErr_InvalidPropertyValue` (-10851) for aggregate/Bluetooth
-    /// devices, so it is never attempted on this path. `syncAudioDevicesWithSystem` is forced `true`
-    /// whenever Direct Audio Capture is off, so there is never a preferred device to bind here. Kept
-    /// as an explicit, always-succeeding seam so `startEngine()` reads clearly and the pre-`prepare()`
-    /// binding call order is preserved.
+    /// In `.manual` mode, attempt to bind AVAudioEngine's input to the user's preferred input device.
+    /// In `.system` mode we intentionally do nothing so the engine follows macOS defaults.
+    /// `.fluidVoiceOnly` never reaches this path — `startPreferredAudioCapture()` refuses the
+    /// AVAudioEngine fallback rather than let it record the system default.
+    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
     @discardableResult
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
-        DebugLogger.shared.info("AVAudioEngine input follows system default (per-app selection uses direct capture)", source: "ASRService")
+        DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
+
+        guard SettingsStore.shared.microphoneSelectionMode == .manual else {
+            DebugLogger.shared.info("Using current macOS default input device", source: "ASRService")
+            return true
+        }
+
+        guard let device = self.resolvedInputDeviceForCapture() else {
+            DebugLogger.shared.error(
+                "No input device available for manual microphone capture.",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.debug(
+            "Attempting to bind AVAudioEngine input to capture device '\(device.name)' (uid: \(device.uid))",
+            source: "ASRService"
+        )
+
+        let ok = self.setEngineInputDevice(deviceID: device.id, deviceUID: device.uid, deviceName: device.name)
+        if ok == false {
+            DebugLogger.shared.warning(
+                "Failed to bind engine input to '\(device.name)' (uid: \(device.uid)). Trying system default input.",
+                source: "ASRService"
+            )
+            return self.tryBindToSystemDefaultInput()
+        }
+
+        DebugLogger.shared.info("✅ Bound AVAudioEngine input to '\(device.name)'", source: "ASRService")
         return true
     }
 
-    /// The AVAudioEngine path always follows the macOS system default output.
-    ///
-    /// Output has no direct-capture equivalent (direct capture is input-only) and per-app output
-    /// selection is out of scope, so the output node always tracks the system default; binding a
-    /// non-default device here would hit the same `kAudioUnitErr_InvalidPropertyValue` (-10851)
-    /// limitation. `syncAudioDevicesWithSystem` is forced `true` whenever Direct Audio Capture is
-    /// off, so there is never a preferred output device to bind. Kept as an explicit,
-    /// always-succeeding seam alongside its input counterpart.
+    /// Output always follows the macOS default: per-app selection is input-only, so there is no
+    /// preferred output device to bind here.
+    /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
     @discardableResult
     private func bindPreferredOutputDeviceIfNeeded() -> Bool {
-        DebugLogger.shared.info("AVAudioEngine output follows system default", source: "ASRService")
+        DebugLogger.shared.debug("bindPreferredOutputDeviceIfNeeded() - Starting output device binding", source: "ASRService")
+
+        DebugLogger.shared.info("Using current macOS default output device", source: "ASRService")
         return true
+    }
+
+    /// Attempts to bind to the system default input device as a fallback.
+    /// Returns true if binding succeeded, false otherwise.
+    private func tryBindToSystemDefaultInput() -> Bool {
+        guard let defaultDevice = AudioDevice.getDefaultInputDevice() else {
+            DebugLogger.shared.error(
+                "No system default input device available. Cannot start audio capture.",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.info(
+            "Attempting to bind to system default input: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
+            source: "ASRService"
+        )
+
+        let ok = self.setEngineInputDevice(
+            deviceID: defaultDevice.id,
+            deviceUID: defaultDevice.uid,
+            deviceName: defaultDevice.name
+        )
+
+        if !ok {
+            DebugLogger.shared.error(
+                "Failed to bind to system default input device '\(defaultDevice.name)'. Audio capture cannot proceed.",
+                source: "ASRService"
+            )
+        }
+
+        return ok
+    }
+
+    /// Attempts to bind to the system default output device as a fallback.
+    /// Returns true if binding succeeded, false otherwise.
+    private func tryBindToSystemDefaultOutput() -> Bool {
+        DebugLogger.shared.debug("tryBindToSystemDefaultOutput() - Starting", source: "ASRService")
+
+        guard let defaultDevice = AudioDevice.getDefaultOutputDevice() else {
+            DebugLogger.shared.error(
+                "No system default output device available. Cannot bind output.",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        DebugLogger.shared.info(
+            "Attempting to bind to system default output: '\(defaultDevice.name)' (uid: \(defaultDevice.uid))",
+            source: "ASRService"
+        )
+
+        let ok = self.setEngineOutputDevice(
+            deviceID: defaultDevice.id,
+            deviceUID: defaultDevice.uid,
+            deviceName: defaultDevice.name
+        )
+
+        if !ok {
+            DebugLogger.shared.error(
+                "Failed to bind to system default output device '\(defaultDevice.name)'. Audio playback may not work correctly.",
+                source: "ASRService"
+            )
+        }
+
+        return ok
     }
 
     /// Selects a specific CoreAudio device for AVAudioEngine's input node without changing system defaults.
@@ -1969,6 +2089,55 @@ final class ASRService: ObservableObject {
         }
 
         DebugLogger.shared.info("✅ Bound ASR input to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
+        return true
+    }
+
+    /// Selects a specific CoreAudio device for AVAudioEngine's output node without changing system defaults.
+    /// This uses the AUHAL AudioUnit backing `engine.outputNode` on macOS.
+    @discardableResult
+    private func setEngineOutputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
+        DebugLogger.shared.debug("setEngineOutputDevice() - Binding output to device ID: \(deviceID)", source: "ASRService")
+
+        let outputNode = self.engine.outputNode
+
+        // `AVAudioOutputNode` is backed by an AudioUnit on macOS. Setting this property selects
+        // which physical device the node outputs to.
+        guard let audioUnit = outputNode.audioUnit else {
+            DebugLogger.shared.error(
+                "Unable to access AudioUnit for AVAudioEngine.outputNode; cannot bind to '\(deviceName)' (uid: \(deviceUID))",
+                source: "ASRService"
+            )
+            return false
+        }
+
+        var mutableDeviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioObjectID>.size)
+        )
+
+        if status != noErr {
+            // OSStatus -10851 (kAudioUnitErr_InvalidPropertyValue) occurs for aggregate devices (Bluetooth, etc.)
+            // This is expected for certain device types - not a fatal error
+            if status == -10_851 {
+                DebugLogger.shared.warning(
+                    "Cannot bind OUTPUT to '\(deviceName)' - likely an aggregate device (OSStatus: \(status)). Will use system default.",
+                    source: "ASRService"
+                )
+            } else {
+                DebugLogger.shared.error(
+                    "AudioUnitSetProperty(CurrentDevice) failed for OUTPUT '\(deviceName)' (uid: \(deviceUID), id: \(deviceID)) with OSStatus: \(status)",
+                    source: "ASRService"
+                )
+            }
+            return false
+        }
+
+        DebugLogger.shared.info("✅ Bound ASR output to '\(deviceName)' (uid: \(deviceUID), id: \(deviceID))", source: "ASRService")
         return true
     }
 
@@ -2263,22 +2432,31 @@ final class ASRService: ObservableObject {
     }
 
     private func handleDefaultInputChanged() {
-        // If we're not syncing with macOS system settings, ignore system-default changes.
-        // In independent mode, we explicitly bind to `preferredInputDeviceUID` on start/restart.
-        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
-            DebugLogger.shared.debug("Ignoring system default input change (sync disabled)", source: "ASRService")
+        switch SettingsStore.shared.microphoneSelectionMode {
+        case .manual:
+            if self.isRunning {
+                AppServices.shared.microphonePreferenceCoordinator.stabilizePreferredInputAfterHardwareChange(
+                    reason: "default input changed"
+                )
+                self.scheduleAudioRouteRecovery(reason: "manual preferred input reasserted")
+            }
             return
+        case .fluidVoiceOnly:
+            // The macOS default moved, but FluidVoice-only capture neither follows it nor pushes it
+            // back: the device we are bound to is unaffected, so there is nothing to recover.
+            DebugLogger.shared.info(
+                "Default input changed; FluidVoice-only capture keeps its own device",
+                source: "ASRService"
+            )
+            return
+        case .system:
+            break
         }
 
         self.scheduleAudioRouteRecovery(reason: "default input changed")
     }
 
     private func handleDefaultOutputChanged() {
-        guard SettingsStore.shared.syncAudioDevicesWithSystem else {
-            DebugLogger.shared.debug("Ignoring system default output change (sync disabled)", source: "ASRService")
-            return
-        }
-
         // Input-only direct capture has no output device dependency.
         if self.directAudioInput != nil {
             return
@@ -2475,10 +2653,8 @@ final class ASRService: ObservableObject {
 
         // Perform CoreAudio queries off the main thread — during a device topology change
         // the HAL may still be settling, and synchronous queries on main can deadlock.
-        let preferredUID = SettingsStore.shared.preferredInputDeviceUID
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let currentDevices = AudioDevice.listInputDevices()
-            let systemDefault = AudioDevice.getDefaultInputDevice()
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -2486,60 +2662,17 @@ final class ASRService: ObservableObject {
 
                 DebugLogger.shared.debug("Current input devices: \(currentDevices.map { $0.name }.joined(separator: ", "))", source: "ASRService")
 
-                // Check if preferred device is now available (for auto-switch)
-                if let preferredUID,
-                   let preferredDevice = currentDevices.first(where: { $0.uid == preferredUID })
-                {
-                    if let currentDevice = self.getCurrentlyBoundInputDevice(),
-                       currentDevice.uid != preferredUID,
-                       currentDevice.uid == systemDefault?.uid
-                    {
-                        DebugLogger.shared.info(
-                            "🔌 Preferred device '\(preferredDevice.name)' reconnected. Auto-switching...",
-                            source: "ASRService"
-                        )
-
-                        if self.isRunning {
-                            DebugLogger.shared.info(
-                                "Recording in progress - deferring preferred device switch until audio route recovery",
-                                source: "ASRService"
-                            )
-                            self.scheduleAudioRouteRecovery(reason: "preferred input reconnected")
-                        } else {
-                            DebugLogger.shared.info("Not recording - updating binding for next session", source: "ASRService")
-                            _ = self.setEngineInputDevice(
-                                deviceID: preferredDevice.id,
-                                deviceUID: preferredDevice.uid,
-                                deviceName: preferredDevice.name
-                            )
-                        }
-                    }
-                }
-
-                // Check for newly connected Bluetooth devices (auto-switch)
-                for device in currentDevices {
-                    if device.name.localizedCaseInsensitiveContains("airpods") ||
-                        device.name.localizedCaseInsensitiveContains("bluetooth")
-                    {
-                        if !cachedUIDs.contains(device.uid) {
-                            DebugLogger.shared.info(
-                                "🎧 New Bluetooth device detected: '\(device.name)'. Auto-switching...",
-                                source: "ASRService"
-                            )
-
-                            SettingsStore.shared.preferredInputDeviceUID = device.uid
-                            DebugLogger.shared.debug("Updated preferred input device to: \(device.uid)", source: "ASRService")
-
-                            if self.isRunning {
-                                DebugLogger.shared.info(
-                                    "Recording in progress - deferring Bluetooth switch until audio route recovery",
-                                    source: "ASRService"
-                                )
-                                self.scheduleAudioRouteRecovery(reason: "bluetooth input connected")
-                            } else {
-                                DebugLogger.shared.info("Not recording - Bluetooth device will be used on next recording", source: "ASRService")
-                            }
-                        }
+                if self.isRunning, Set(currentDevices.map(\.uid)) != cachedUIDs {
+                    switch SettingsStore.shared.microphoneSelectionMode {
+                    case .manual:
+                        AppServices.shared.microphonePreferenceCoordinator
+                            .stabilizePreferredInputAfterHardwareChange(reason: "input device list changed")
+                    case .fluidVoiceOnly:
+                        // Re-resolve the capture device so a reconnected preferred microphone is
+                        // picked up again, without reasserting anything onto the system default.
+                        self.scheduleAudioRouteRecovery(reason: "FluidVoice-only preferred input list changed")
+                    case .system:
+                        break
                     }
                 }
 
@@ -2612,7 +2745,7 @@ final class ASRService: ObservableObject {
         return nil
     }
 
-    // Device caching for change detection
+    /// Device caching for change detection
     private var cachedDeviceUIDs: Set<String> = []
 
     private func cacheCurrentDeviceList(_ devices: [AudioDevice.Device]) {

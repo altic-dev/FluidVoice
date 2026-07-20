@@ -195,11 +195,25 @@ open Fluid.xcodeproj
 
 Build and run in Xcode. All dependencies are managed via Swift Package Manager.
 
-Run the build using the script: `./build.sh`
+Run a signed Debug build using the script:
 
 ```bash
 ./build.sh
 ```
+
+The signed build is written to `DerivedData/Build/Products/Debug/FluidVoice Debug.app`.
+Keep launching that product after each rebuild so macOS can preserve its Accessibility
+authorization.
+
+For CI or contributors who do not have a signing identity, use the explicit unsigned
+fallback:
+
+```bash
+./build.sh unsigned
+```
+
+Unsigned builds are tied to a specific executable version and may require Accessibility
+permission to be removed and granted again after rebuilding.
 
 ---
 
@@ -210,7 +224,7 @@ Contributions are welcome! Please create an issue first to discuss major changes
 ### Development Setup
 
 1. Clone and open in Xcode as above.
-2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). Stored in `xcuserdata/` (gitignored).
+2. **Signing:** `FluidVoice → Signing & Capabilities → Automatically manage signing → pick your Team` (Personal Team is fine). If you have certificates for multiple teams, select one without changing the project by running `FLUIDVOICE_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build.sh`.
 3. Build and run — SPM handles dependencies.
 4. **(Optional) Pre-commit hook** to prevent accidental team ID commits:
    ```bash
