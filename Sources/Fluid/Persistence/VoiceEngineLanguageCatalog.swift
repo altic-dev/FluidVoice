@@ -93,6 +93,14 @@ enum VoiceEngineLanguageCatalog {
         self.allLanguages(availableModels: availableModels).first { $0.id == id }
     }
 
+    static var whisperLanguages: [VoiceEngineLanguage] {
+        self.languageDefinitions.filter { self.whisperLanguageCode(for: $0.id) != nil }
+    }
+
+    static func whisperLanguage(forCode languageCode: String) -> VoiceEngineLanguage? {
+        self.whisperLanguages.first { self.whisperLanguageCode(for: $0.id) == languageCode }
+    }
+
     static func routes(
         for language: VoiceEngineLanguage,
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
@@ -117,8 +125,10 @@ enum VoiceEngineLanguageCatalog {
         settings.selectedSpeechModel = route.model
 
         switch route.binding {
-        case .automatic, .whisper:
+        case .automatic:
             break
+        case let .whisper(languageCode):
+            settings.selectedWhisperLanguageCode = languageCode
         case let .appleSpeech(localeIdentifier):
             settings.selectedAppleSpeechLocaleIdentifier = localeIdentifier
         case let .cohere(language):
@@ -182,7 +192,7 @@ enum VoiceEngineLanguageCatalog {
         self.nemotronLanguageMap[languageID]
     }
 
-    private static func whisperLanguageCode(for languageID: String) -> String? {
+    static func whisperLanguageCode(for languageID: String) -> String? {
         self.whisperLanguageCodeMap[languageID]
     }
 

@@ -3170,6 +3170,7 @@ final class SettingsStore: ObservableObject {
             privateAIBackendPreference: self.privateAIBackendPreference,
             privateAIContextTokenLimit: self.privateAIContextTokenLimit,
             selectedSpeechModel: self.selectedSpeechModel,
+            selectedWhisperLanguageCode: self.selectedWhisperLanguageCode,
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
@@ -3287,6 +3288,7 @@ final class SettingsStore: ObservableObject {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
         self.selectedSpeechModel = payload.selectedSpeechModel
+        self.selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode
         self.selectedCohereLanguage = payload.selectedCohereLanguage
         if let selectedNemotronLanguage = payload.selectedNemotronLanguage {
             self.selectedNemotronLanguage = selectedNemotronLanguage
@@ -5348,6 +5350,7 @@ private extension SettingsStore {
 
         /// Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+        static let selectedWhisperLanguageCode = "SelectedWhisperLanguageCode"
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
@@ -5603,6 +5606,23 @@ extension SettingsStore {
             objectWillChange.send()
             let model = newValue == .nemotronStreaming320 ? SpeechModel.nemotronStreaming : newValue
             self.defaults.set(model.rawValue, forKey: Keys.selectedSpeechModel)
+        }
+    }
+
+    /// The language Whisper should transcribe, or `nil` to detect it from each recording.
+    /// Existing installs inherit the language chosen during onboarding until the user
+    /// explicitly selects Automatic or another language.
+    var selectedWhisperLanguageCode: String? {
+        get {
+            if let stored = self.defaults.string(forKey: Keys.selectedWhisperLanguageCode) {
+                guard stored != "auto" else { return nil }
+                return VoiceEngineLanguageCatalog.whisperLanguage(forCode: stored) == nil ? nil : stored
+            }
+            return VoiceEngineLanguageCatalog.whisperLanguageCode(for: self.onboardingSelectedLanguageID)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue ?? "auto", forKey: Keys.selectedWhisperLanguageCode)
         }
     }
 

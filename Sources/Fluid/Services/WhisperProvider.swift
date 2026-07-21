@@ -25,13 +25,20 @@ final class WhisperProvider: TranscriptionProvider {
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
+    private let languageCodeOverride: String?
 
     var modelOverride: SettingsStore.SpeechModel?
 
-    init(modelDirectory: URL? = nil, urlSession: URLSession = .shared, modelOverride: SettingsStore.SpeechModel? = nil) {
+    init(
+        modelDirectory: URL? = nil,
+        urlSession: URLSession = .shared,
+        modelOverride: SettingsStore.SpeechModel? = nil,
+        languageCodeOverride: String? = nil
+    ) {
         self.overriddenModelDirectory = modelDirectory
         self.urlSession = urlSession
         self.modelOverride = modelOverride
+        self.languageCodeOverride = languageCodeOverride
     }
 
     deinit {
@@ -309,12 +316,14 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        let transcript = try await session.run(
-            samples,
-            options: RunOptions(timestamps: .segment)
-        )
+        let languageCode = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+        let transcript = try await session.run(samples, options: Self.runOptions(languageCode: languageCode))
         let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
+    }
+
+    static func runOptions(languageCode: String? = SettingsStore.shared.selectedWhisperLanguageCode) -> RunOptions {
+        RunOptions(timestamps: .segment, language: languageCode)
     }
 
     func modelsExistOnDisk() -> Bool {

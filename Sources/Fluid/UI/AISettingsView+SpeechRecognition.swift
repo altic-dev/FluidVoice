@@ -548,7 +548,9 @@ extension VoiceEngineSettingsView {
 
     @ViewBuilder
     private func speechModelLanguagePicker(for model: SettingsStore.SpeechModel) -> some View {
-        if model == .cohereTranscribeSixBit {
+        if model.isWhisperModel {
+            self.whisperLanguagePickerButton
+        } else if model == .cohereTranscribeSixBit {
             Menu {
                 ForEach(SettingsStore.CohereLanguage.allCases) { language in
                     Button {
@@ -570,6 +572,112 @@ extension VoiceEngineSettingsView {
         } else if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
             self.nemotronLanguagePickerButton
         }
+    }
+
+    private var whisperLanguagePickerButton: some View {
+        Button {
+            self.whisperLanguageSearchText = ""
+            self.isShowingWhisperLanguagePicker.toggle()
+        } label: {
+            self.languageChipLabel(self.selectedWhisperLanguageName)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: self.$isShowingWhisperLanguagePicker, arrowEdge: .bottom) {
+            self.whisperLanguagePickerPopover
+        }
+    }
+
+    private var selectedWhisperLanguageName: String {
+        guard let languageCode = self.settings.selectedWhisperLanguageCode,
+              let language = VoiceEngineLanguageCatalog.whisperLanguage(forCode: languageCode)
+        else {
+            return "Automatic"
+        }
+        return language.displayName
+    }
+
+    private var filteredWhisperLanguages: [VoiceEngineLanguage] {
+        let query = self.normalizedWhisperLanguageSearchText
+        guard !query.isEmpty else { return VoiceEngineLanguageCatalog.whisperLanguages }
+        return VoiceEngineLanguageCatalog.whisperLanguages.filter { language in
+            language.displayName.lowercased().contains(query) ||
+                language.id.lowercased().contains(query) ||
+                language.aliases.contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    private var normalizedWhisperLanguageSearchText: String {
+        self.whisperLanguageSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var whisperLanguagePickerPopover: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(self.voiceEngineTertiaryText)
+                TextField("Search languages", text: self.$whisperLanguageSearchText)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+
+            Divider()
+
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if self.normalizedWhisperLanguageSearchText.isEmpty ||
+                        "automatic".contains(self.normalizedWhisperLanguageSearchText)
+                    {
+                        Button {
+                            self.settings.selectedWhisperLanguageCode = nil
+                            self.isShowingWhisperLanguagePicker = false
+                        } label: {
+                            self.whisperLanguagePickerRow(
+                                title: "Automatic",
+                                isSelected: self.settings.selectedWhisperLanguageCode == nil
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Divider()
+                            .padding(.vertical, 4)
+                    }
+
+                    ForEach(self.filteredWhisperLanguages) { language in
+                        let languageCode = VoiceEngineLanguageCatalog.whisperLanguageCode(for: language.id)
+                        Button {
+                            self.settings.selectedWhisperLanguageCode = languageCode
+                            self.isShowingWhisperLanguagePicker = false
+                        } label: {
+                            self.whisperLanguagePickerRow(
+                                title: language.displayName,
+                                isSelected: languageCode == self.settings.selectedWhisperLanguageCode
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        .frame(width: 280, height: 420)
+    }
+
+    private func whisperLanguagePickerRow(title: String, isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 12)
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.accent)
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.horizontal, 12)
+        .frame(height: 28)
     }
 
     private func languageChipLabel(_ title: String) -> some View {
