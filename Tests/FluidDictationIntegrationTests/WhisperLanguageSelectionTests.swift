@@ -20,6 +20,20 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertNil(WhisperProvider.runOptions(languageCode: nil).language)
     }
 
+    func testAutomaticWhisperLanguageRoundTripsThroughBackupValue() {
+        let backupValue = SettingsStore.whisperLanguageBackupValue(for: nil)
+
+        XCTAssertEqual(backupValue, "auto")
+        XCTAssertNil(SettingsStore.whisperLanguageCode(fromBackupValue: backupValue))
+    }
+
+    func testForcedWhisperLanguageRoundTripsThroughBackupValue() {
+        let backupValue = SettingsStore.whisperLanguageBackupValue(for: "hu")
+
+        XCTAssertEqual(backupValue, "hu")
+        XCTAssertEqual(SettingsStore.whisperLanguageCode(fromBackupValue: backupValue), "hu")
+    }
+
     func testWhisperLanguageCodesAreUnique() {
         let languageCodes = VoiceEngineLanguageCatalog.whisperLanguages.compactMap {
             VoiceEngineLanguageCatalog.whisperLanguageCode(for: $0.id)
