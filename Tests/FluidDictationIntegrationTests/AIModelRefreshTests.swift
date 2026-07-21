@@ -88,6 +88,33 @@ final class AIModelRefreshTests: XCTestCase {
         )
     }
 
+    func testLegacyCandidatesExcludeSortedDiscoveryOnlyCatalogs() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.legacyModelCandidates(
+                cachedModelsByProvider: [
+                    "openai": ["gpt-a", "gpt-b", "gpt-retired"],
+                    "groq": ["model-a", "model-z", "manual-model"],
+                ],
+                savedModelsByProvider: [:]
+            ),
+            ["groq": ["manual-model"]]
+        )
+    }
+
+    func testCustomModelsMergeWithBuiltInDefaultsWhenCacheIsMissing() {
+        let defaultModels = ModelRepository.shared.defaultModels(for: "openai")
+        XCTAssertFalse(defaultModels.isEmpty)
+
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.modelsByMergingCustomModels(
+                nil,
+                customModels: ["gpt-custom"],
+                providerKey: "openai"
+            ),
+            AIModelCatalog.normalized(defaultModels + ["gpt-custom"])
+        )
+    }
+
     func testRefreshDropsSelectedNonCustomModelMissingFromCatalog() {
         let selectedModel = "model/retired"
         let merged = AIModelCatalog.merged(

@@ -3137,8 +3137,6 @@ final class SettingsStore: ObservableObject {
         self.clearStoredLegacyModelCandidatesByProvider()
         if let customModelsByProvider = payload.customModelsByProvider {
             self.customModelsByProvider = customModelsByProvider
-        } else {
-            self.clearStoredCustomModelsByProvider()
         }
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {

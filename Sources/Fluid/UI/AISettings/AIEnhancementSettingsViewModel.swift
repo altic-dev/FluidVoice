@@ -229,9 +229,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             )
         }
         for (key, customModels) in normalizedCustom {
-            normalized[key] = AIModelCatalog.merged(
-                discoveredModels: normalized[key] ?? [],
-                customModels: customModels
+            normalized[key] = Self.modelsByMergingCustomModels(
+                normalized[key],
+                customModels: customModels,
+                providerKey: key
             )
         }
         self.availableModelsByProvider = normalized
@@ -671,32 +672,24 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         cachedModelsByProvider: [String: [String]],
         savedModelsByProvider: [String: [String]]
     ) -> [String: [String]] {
-        var candidates: [String: [String]] = [:]
+        self.migratedLegacyCustomModels(
+            cachedModelsByProvider: cachedModelsByProvider,
+            savedModelsByProvider: savedModelsByProvider
+        )
+    }
 
-        func providerKey(_ providerID: String) -> String {
-            let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "" }
-            let lower = trimmed.lowercased()
-            if ModelRepository.shared.isBuiltIn(lower) {
-                return lower
-            }
-            return trimmed.hasPrefix("custom:") ? trimmed : "custom:\(trimmed)"
-        }
-
-        for source in [cachedModelsByProvider, savedModelsByProvider] {
-            for (providerID, models) in source {
-                let key = providerKey(providerID)
-                let normalized = AIModelCatalog.normalized(models)
-                if !key.isEmpty, !normalized.isEmpty {
-                    candidates[key] = AIModelCatalog.merged(
-                        discoveredModels: candidates[key] ?? [],
-                        customModels: normalized
-                    )
-                }
-            }
-        }
-
-        return candidates
+    static func modelsByMergingCustomModels(
+        _ discoveredModels: [String]?,
+        customModels: [String],
+        providerKey: String
+    ) -> [String] {
+        let discoveredFallback = ModelRepository.shared.isBuiltIn(providerKey)
+            ? ModelRepository.shared.defaultModels(for: providerKey)
+            : []
+        return AIModelCatalog.merged(
+            discoveredModels: discoveredModels ?? discoveredFallback,
+            customModels: customModels
+        )
     }
 
     static func reconciledLegacyCustomModels(
