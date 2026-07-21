@@ -703,9 +703,22 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return AIModelCatalog.normalized(legacyModels).filter { !discovered.contains($0) }
     }
 
+    static func visibleModelsForManualAddition(
+        _ cachedModels: [String],
+        providerKey: String
+    ) -> [String] {
+        self.modelsByMergingCustomModels(
+            cachedModels,
+            customModels: [],
+            providerKey: providerKey,
+            useDefaultModels: cachedModels.isEmpty
+        )
+    }
+
     func addNewModel() {
         let key = self.providerKey(for: self.selectedProviderID)
-        let visibleModels = self.availableModelsByProvider[key] ?? self.availableModels
+        let cachedModels = self.availableModelsByProvider[key] ?? self.availableModels
+        let visibleModels = Self.visibleModelsForManualAddition(cachedModels, providerKey: key)
         let customModels = self.customModelsByProvider[key] ?? []
         guard let addition = Self.manualModelAddition(
             self.newModelName,

@@ -1433,6 +1433,16 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Self.customModelsByProviderDefaultsKey)
     }
 
+    func restoreCustomModelsByProvider(_ models: [String: [String]]?) {
+        if let models {
+            self.customModelsByProvider = models
+        } else {
+            // Legacy backups predate the dedicated custom-model store. Remove
+            // local state so the restored provider catalogs can be migrated.
+            self.clearStoredCustomModelsByProvider()
+        }
+    }
+
     var legacyModelCandidatesByProvider: [String: [String]] {
         get {
             (self.defaults.dictionary(
@@ -3135,9 +3145,7 @@ final class SettingsStore: ObservableObject {
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
         self.clearStoredLegacyModelCandidatesByProvider()
-        if let customModelsByProvider = payload.customModelsByProvider {
-            self.customModelsByProvider = customModelsByProvider
-        }
+        self.restoreCustomModelsByProvider(payload.customModelsByProvider)
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {
             self.privateAIPrefixKVCacheEnabled = privateAIPrefixKVCacheEnabled

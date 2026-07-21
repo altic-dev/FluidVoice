@@ -23,6 +23,24 @@ final class AIModelRefreshTests: XCTestCase {
         )
     }
 
+    func testRestoringLegacyBackupClearsStoredCustomModels() {
+        let defaults = UserDefaults.standard
+        let previousValue = defaults.object(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            }
+        }
+
+        SettingsStore.shared.customModelsByProvider = ["openai": ["stale-local-model"]]
+        SettingsStore.shared.restoreCustomModelsByProvider(nil)
+
+        XCTAssertFalse(SettingsStore.shared.hasStoredCustomModelsByProvider)
+        XCTAssertTrue(SettingsStore.shared.customModelsByProvider.isEmpty)
+    }
+
     func testEnteringDiscoveredModelSelectsWithoutPersistingAsCustom() {
         XCTAssertEqual(
             AIEnhancementSettingsViewModel.manualModelAddition(
@@ -112,6 +130,24 @@ final class AIModelRefreshTests: XCTestCase {
                 providerKey: "openai",
                 useDefaultModels: true
             ),
+            AIModelCatalog.normalized(defaultModels + ["gpt-custom"])
+        )
+    }
+
+    func testManualAdditionStartsWithBuiltInDefaultsWhenCacheIsMissing() {
+        let defaultModels = ModelRepository.shared.defaultModels(for: "openai")
+        let visibleModels = AIEnhancementSettingsViewModel.visibleModelsForManualAddition(
+            [],
+            providerKey: "openai"
+        )
+
+        XCTAssertEqual(visibleModels, AIModelCatalog.normalized(defaultModels))
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.manualModelAddition(
+                "gpt-custom",
+                visibleModels: visibleModels,
+                customModels: []
+            )?.visibleModels,
             AIModelCatalog.normalized(defaultModels + ["gpt-custom"])
         )
     }
