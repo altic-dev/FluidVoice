@@ -35,7 +35,7 @@ final class AIModelRefreshTests: XCTestCase {
         }
 
         SettingsStore.shared.customModelsByProvider = ["openai": ["stale-local-model"]]
-        SettingsStore.shared.restoreCustomModelsByProvider(nil)
+        SettingsStore.shared.clearStoredCustomModelsByProvider()
 
         XCTAssertFalse(SettingsStore.shared.hasStoredCustomModelsByProvider)
         XCTAssertTrue(SettingsStore.shared.customModelsByProvider.isEmpty)
