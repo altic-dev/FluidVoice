@@ -7,6 +7,11 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguage(forCode: "hu")?.displayName, "Hungarian")
     }
 
+    func testHebrewUsesWhisperLanguageCode() {
+        XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguageCode(for: "he"), "he")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguage(forCode: "he")?.displayName, "Hebrew")
+    }
+
     func testWhisperRunOptionsUseSelectedLanguage() {
         XCTAssertEqual(WhisperProvider.runOptions(languageCode: "hu").language, "hu")
     }

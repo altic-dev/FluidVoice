@@ -3288,7 +3288,9 @@ final class SettingsStore: ObservableObject {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
         self.selectedSpeechModel = payload.selectedSpeechModel
-        self.selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode
+        if let selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode {
+            self.selectedWhisperLanguageCode = selectedWhisperLanguageCode
+        }
         self.selectedCohereLanguage = payload.selectedCohereLanguage
         if let selectedNemotronLanguage = payload.selectedNemotronLanguage {
             self.selectedNemotronLanguage = selectedNemotronLanguage

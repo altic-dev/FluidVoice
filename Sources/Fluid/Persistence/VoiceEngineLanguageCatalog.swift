@@ -361,7 +361,7 @@ enum VoiceEngineLanguageCatalog {
     private static let whisperLanguageCodeMap: [String: String] = {
         var languageMap: [String: String] = [:]
         for language in Self.languageDefinitions {
-            let whisperCode = language.id == "he" ? "iw" : language.id
+            let whisperCode = language.id
             guard Self.whisperSupportedLanguageCodes.contains(whisperCode) else { continue }
             languageMap[language.id] = whisperCode
         }
@@ -372,7 +372,7 @@ enum VoiceEngineLanguageCatalog {
         "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
         "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
         "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
-        "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "iw", "ja",
+        "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
         "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
         "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
         "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",

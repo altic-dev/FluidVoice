@@ -322,7 +322,7 @@ final class WhisperProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
-    static func runOptions(languageCode: String? = SettingsStore.shared.selectedWhisperLanguageCode) -> RunOptions {
+    static func runOptions(languageCode: String?) -> RunOptions {
         RunOptions(timestamps: .segment, language: languageCode)
     }
 
