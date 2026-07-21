@@ -13,9 +13,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleVersion</key>
-		<string>15</string>
+		<string>16</string>
 	<key>CFBundleShortVersionString</key>
-		<string>1.6.4</string>
+		<string>1.6.5</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSApplicationCategoryType</key>

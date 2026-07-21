@@ -44,6 +44,7 @@ final class SettingsStore: ObservableObject {
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
+        self.disableExperimentalDirectAudioCaptureIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
     }
 
@@ -1781,17 +1782,22 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Direct Core Audio capture is enabled by default for faster recording
-    /// startup, while preserving explicit user opt-out.
+    /// Direct Core Audio capture is opt-in while the faster recording path is experimental.
     var experimentalDirectAudioCaptureEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.experimentalDirectAudioCaptureEnabled)
-            return value as? Bool ?? true
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
+    }
+
+    private func disableExperimentalDirectAudioCaptureIfNeeded() {
+        guard self.defaults.bool(forKey: Keys.experimentalDirectAudioCaptureForcedOff) == false else { return }
+        self.defaults.set(false, forKey: Keys.experimentalDirectAudioCaptureEnabled)
+        self.defaults.set(true, forKey: Keys.experimentalDirectAudioCaptureForcedOff)
     }
 
     var directAudioCaptureConsecutiveFailures: Int {
@@ -4934,6 +4940,7 @@ private extension SettingsStore {
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
         static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
+        static let experimentalDirectAudioCaptureForcedOff = "ExperimentalDirectAudioCaptureForcedOff"
         static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"

@@ -660,14 +660,18 @@ struct CustomDictionaryView: View {
                 VStack(alignment: .leading, spacing: 7) {
                     self.trainingInstruction(
                         number: 1,
-                        text: "Press Start once."
+                        text: "Type the correct word you want to teach in the box above."
                     )
                     self.trainingInstruction(
                         number: 2,
-                        text: "Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically."
+                        text: "Press Start once."
                     )
                     self.trainingInstruction(
                         number: 3,
+                        text: "Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically."
+                    )
+                    self.trainingInstruction(
+                        number: 4,
                         text: self.activePronunciationMatching
                             ? "Repeat 3 times to teach FluidVoice how your voice sounds."
                             : "Keep repeating it until the circle reaches 3/3."
