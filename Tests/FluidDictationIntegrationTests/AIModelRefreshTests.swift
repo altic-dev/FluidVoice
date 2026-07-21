@@ -107,9 +107,10 @@ final class AIModelRefreshTests: XCTestCase {
 
         XCTAssertEqual(
             AIEnhancementSettingsViewModel.modelsByMergingCustomModels(
-                nil,
+                [],
                 customModels: ["gpt-custom"],
-                providerKey: "openai"
+                providerKey: "openai",
+                useDefaultModels: true
             ),
             AIModelCatalog.normalized(defaultModels + ["gpt-custom"])
         )

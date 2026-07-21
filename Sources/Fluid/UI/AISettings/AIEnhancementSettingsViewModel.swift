@@ -229,10 +229,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             )
         }
         for (key, customModels) in normalizedCustom {
+            let hasDiscoveredModels = normalized[key] != nil
             normalized[key] = Self.modelsByMergingCustomModels(
-                normalized[key],
+                normalized[key] ?? [],
                 customModels: customModels,
-                providerKey: key
+                providerKey: key,
+                useDefaultModels: !hasDiscoveredModels
             )
         }
         self.availableModelsByProvider = normalized
@@ -679,15 +681,16 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     static func modelsByMergingCustomModels(
-        _ discoveredModels: [String]?,
+        _ discoveredModels: [String],
         customModels: [String],
-        providerKey: String
+        providerKey: String,
+        useDefaultModels: Bool
     ) -> [String] {
-        let discoveredFallback = ModelRepository.shared.isBuiltIn(providerKey)
+        let discoveredFallback = useDefaultModels && ModelRepository.shared.isBuiltIn(providerKey)
             ? ModelRepository.shared.defaultModels(for: providerKey)
-            : []
+            : discoveredModels
         return AIModelCatalog.merged(
-            discoveredModels: discoveredModels ?? discoveredFallback,
+            discoveredModels: discoveredFallback,
             customModels: customModels
         )
     }
