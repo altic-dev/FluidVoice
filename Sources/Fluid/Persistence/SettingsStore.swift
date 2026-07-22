@@ -185,7 +185,9 @@ final class SettingsStore: ObservableObject {
         case manual
         /// Like `.manual`, but the preferred microphone is captured for FluidVoice alone and the
         /// macOS default input is never changed. Only available on the direct Core Audio capture
-        /// path (`DirectCoreAudioInput`), which can bind an arbitrary device per-app.
+        /// path (`DirectCoreAudioInput`), which can bind an arbitrary device per-app. When the
+        /// preferred device is unavailable, capture falls back to the macOS default (still without
+        /// moving it) and the substitution is surfaced to the user rather than recorded silently.
         case fluidVoiceOnly
 
         var id: String {

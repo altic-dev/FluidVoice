@@ -4,7 +4,8 @@ import XCTest
 @testable import FluidVoice_Debug
 
 /// Covers `.fluidVoiceOnly` microphone mode: FluidVoice captures the preferred microphone through
-/// the direct Core Audio path while leaving the macOS default input alone.
+/// the direct Core Audio path while leaving the macOS default input alone. When that microphone is
+/// unavailable it falls back to the system default (still without moving it) rather than refusing.
 ///
 /// The contract that matters is negative — this mode must never call
 /// `setDefaultInputDevice` — so the coordinator is driven with a fake `AudioDeviceManaging` that
@@ -147,7 +148,7 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertEqual(SettingsStore.shared.microphoneSelectionMode, .system)
     }
 
-    // MARK: - Preferred microphone unplugged
+    // MARK: - Preferred microphone unplugged: fall back to the default
 
     /// A spy whose device list does *not* contain the preferred microphone — i.e. it is unplugged.
     private func makeSpyWithoutPreferred() -> SpyDeviceManager {
@@ -156,50 +157,46 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         return spy
     }
 
-    /// The regression this guards: capture resolution falls back to the macOS default when the
-    /// preferred device is gone, which in this mode would silently record the wrong microphone.
-    func testDetectsMissingPreferredMicrophone() {
+    /// The behaviour this locks in: when the pinned microphone is unplugged, capture resolves to the
+    /// macOS default and records *that* — dictation keeps working rather than refusing. The recording
+    /// path compares the resolved device against the preference and announces the substitution.
+    func testFallsBackToDefaultWhenPreferredMicrophoneUnplugged() {
         self.configure(mode: .fluidVoiceOnly, directCapture: true)
         let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: self.makeSpyWithoutPreferred())
 
-        XCTAssertTrue(coordinator.preferredInputIsMissing())
         XCTAssertEqual(
             coordinator.inputDeviceForCapture()?.uid,
             self.systemUID,
-            "Resolution still falls back — which is exactly why the recording path must check first"
+            "An unplugged preferred mic must fall back to the system default, not stop recording"
         )
     }
 
-    func testPresentPreferredMicrophoneIsNotMissing() {
+    /// When the pinned microphone is present, capture resolves to it (not the default), so there is
+    /// no substitution to announce.
+    func testUsesPreferredMicrophoneWhenPresent() {
         self.configure(mode: .fluidVoiceOnly, directCapture: true)
         let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: self.makeSpy())
 
-        XCTAssertFalse(coordinator.preferredInputIsMissing())
+        XCTAssertEqual(coordinator.inputDeviceForCapture()?.uid, self.preferredUID)
     }
 
-    /// `.manual` moves the system default rather than binding a device, so it tolerates a
-    /// disconnect and must not be blocked by this check.
-    func testManualModeToleratesMissingPreferredMicrophone() {
+    /// `.manual` moves the system default rather than binding a device, so a disconnect leaves it on
+    /// whatever the default now is — it too resolves to the default rather than refusing.
+    func testManualModeFallsBackToDefaultWhenPreferredMicrophoneUnplugged() {
         self.configure(mode: .manual, directCapture: true)
         let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: self.makeSpyWithoutPreferred())
 
-        XCTAssertFalse(coordinator.preferredInputIsMissing())
+        XCTAssertEqual(coordinator.inputDeviceForCapture()?.uid, self.systemUID)
     }
 
-    func testNoPreferenceIsNotMissing() {
+    /// With no preference recorded, capture resolves to the system default regardless of mode.
+    func testResolvesToDefaultWhenNoPreferenceRecorded() {
         UserDefaults.standard.set(true, forKey: self.directCaptureKey)
         UserDefaults.standard.set(SettingsStore.MicrophoneSelectionMode.fluidVoiceOnly.rawValue, forKey: self.modeKey)
         UserDefaults.standard.removeObject(forKey: self.preferredInputKey)
         let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: self.makeSpyWithoutPreferred())
 
-        XCTAssertFalse(coordinator.preferredInputIsMissing())
-    }
-
-    func testSystemModeIsNeverMissing() {
-        self.configure(mode: .system, directCapture: true)
-        let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: self.makeSpyWithoutPreferred())
-
-        XCTAssertFalse(coordinator.preferredInputIsMissing())
+        XCTAssertEqual(coordinator.inputDeviceForCapture()?.uid, self.systemUID)
     }
 
     // MARK: - Handing the system default back

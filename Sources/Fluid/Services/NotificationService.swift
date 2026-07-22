@@ -10,6 +10,38 @@ enum NotificationService {
         static let aiProcessingFallback = "aiProcessingFallback"
         static let audioCaptureFallback = "audioCaptureFallback"
         static let commandModeFailure = "commandModeFailure"
+        static let preferredMicrophoneFallback = "preferredMicrophoneFallback"
+    }
+
+    /// Announces that FluidVoice-only mode could not use the pinned microphone and is recording
+    /// through the macOS default instead. The fallback itself is intended behaviour — this only
+    /// makes it visible so the substitution is never silent.
+    static func showPreferredMicrophoneFallback(fallbackDeviceName: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.deliverPreferredMicrophoneFallback(fallbackDeviceName: fallbackDeviceName, using: center)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert]) { granted, requestError in
+                    if let requestError {
+                        DebugLogger.shared.warning(
+                            "Notification permission request failed: \(requestError.localizedDescription)",
+                            source: "NotificationService"
+                        )
+                    }
+                    guard granted else { return }
+                    self.deliverPreferredMicrophoneFallback(fallbackDeviceName: fallbackDeviceName, using: center)
+                }
+            case .denied:
+                DebugLogger.shared.debug(
+                    "Skipping preferred microphone fallback notification because notification permission is denied",
+                    source: "NotificationService"
+                )
+            @unknown default:
+                break
+            }
+        }
     }
 
     static func showAudioCaptureFallback(
@@ -161,6 +193,32 @@ enum NotificationService {
             if let addError {
                 DebugLogger.shared.warning(
                     "Failed to show audio capture fallback notification: \(addError.localizedDescription)",
+                    source: "NotificationService"
+                )
+            }
+        }
+    }
+
+    private static func deliverPreferredMicrophoneFallback(
+        fallbackDeviceName: String,
+        using center: UNUserNotificationCenter
+    ) {
+        let content = UNMutableNotificationContent()
+        content.title = "Preferred microphone unavailable"
+        content.body = "Recording through \(fallbackDeviceName) until your selected microphone is reconnected."
+        content.sound = nil
+        content.userInfo = [UserInfoKey.kind: Kind.preferredMicrophoneFallback]
+
+        let request = UNNotificationRequest(
+            identifier: "preferred-microphone-fallback-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        center.add(request) { addError in
+            if let addError {
+                DebugLogger.shared.warning(
+                    "Failed to show preferred microphone fallback notification: \(addError.localizedDescription)",
                     source: "NotificationService"
                 )
             }

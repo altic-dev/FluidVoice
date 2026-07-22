@@ -621,6 +621,10 @@ final class ASRService: ObservableObject {
     private var directAudioInput: DirectCoreAudioInput?
     private var activeAudioCaptureBackend: AudioCaptureBackend = .none
     private var isFallingBackFromDirectCapture = false
+    /// UID of the device the FluidVoice-only "preferred mic unavailable" notification last named, so
+    /// a single fallback announces once rather than on every recording. Reset (to nil) when the
+    /// preferred device is used again. See `announcePreferredMicrophoneFallbackIfNeeded(recording:)`.
+    private var lastAnnouncedFallbackDeviceUID: String?
 
     private var hasPreparedAudioCapture: Bool {
         self.directAudioInput != nil || self.hasWarmAudioEngine
@@ -809,19 +813,11 @@ final class ASRService: ObservableObject {
     }
 
     private func startPreferredAudioCapture() async throws {
-        // FluidVoice-only mode is pinned to one device. If that device is gone — unplugged, powered
-        // off — device resolution falls back to the macOS default, and both capture backends would
-        // happily record it while Settings still shows the missing microphone. Refuse before either
-        // backend starts, for the same reason the AVAudioEngine guard below exists.
-        if AppServices.shared.microphonePreferenceCoordinator.preferredInputIsMissing() {
-            throw NSError(
-                domain: "FluidVoice.MicrophoneSelection",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "The microphone selected for FluidVoice is not available. Reconnect it, or pick "
-                    + "another microphone in Settings."]
-            )
-        }
+        // FluidVoice-only mode prefers one microphone but does not require it. If the preferred
+        // device is unavailable — unplugged, or unbindable on this hardware — capture records the
+        // macOS default instead, through this same private path and without ever moving the system
+        // input. That substitution is announced (never silent) at whichever backend actually starts,
+        // so this mode records rather than refuses.
 
         // A non-route path may have scheduled a fire-and-forget retirement. Do
         // not let capture startup overlap any final AVAudioEngine release that is
@@ -844,6 +840,9 @@ final class ASRService: ObservableObject {
                     "audio_backend kind=direct_core_audio device=\(directAudioInput.deviceID) " +
                         "frames=\(directAudioInput.hardwareBufferFrameSize) callbackMs=\(callbackMs)"
                 )
+                // The direct path bound whatever resolution returned — the preferred device, or the
+                // macOS default when it was unavailable. Announce the latter.
+                self.announcePreferredMicrophoneFallbackIfNeeded(recording: self.resolvedInputDeviceForCapture())
                 return
             } catch {
                 DebugLogger.shared.warning(
@@ -860,26 +859,47 @@ final class ASRService: ObservableObject {
             self.directAudioInput = nil
         }
 
-        // The AVAudioEngine path always records whatever macOS is pointed at: it cannot bind an
-        // arbitrary input device for this app alone (`kAudioUnitErr_InvalidPropertyValue`, -10851,
-        // on aggregate and Bluetooth devices). Falling back to it in FluidVoice-only mode would
-        // silently capture the system default while Settings and the menu bar still show the
-        // dedicated microphone, so fail loudly instead.
-        if SettingsStore.shared.microphoneSelectionMode == .fluidVoiceOnly {
-            let deviceName = self.resolvedInputDeviceForCapture()?.name ?? "the selected microphone"
-            throw NSError(
-                domain: "FluidVoice.MicrophoneSelection",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "Could not record from \(deviceName) without changing your macOS input device. " +
-                    "Switch the microphone mode to \"\(SettingsStore.MicrophoneSelectionMode.manual.displayName)\" " +
-                    "in Settings, or choose a different microphone."]
-            )
-        }
-
+        // The AVAudioEngine path can only record the current macOS default input — it cannot bind an
+        // arbitrary device for this app alone (`kAudioUnitErr_InvalidPropertyValue`, -10851, on
+        // aggregate and Bluetooth devices). In FluidVoice-only mode the default is the correct
+        // target here: either the preferred device was unavailable and resolved to the default, or
+        // the direct path could not bind it on this hardware and the default is the best capture we
+        // have. Announce the substitution (this backend always records the default, so pass it
+        // explicitly rather than the resolved preference), then record rather than refuse.
+        self.announcePreferredMicrophoneFallbackIfNeeded(recording: AudioDevice.getDefaultInputDevice())
         try await self.startCompatibilityAudioCapture(
             reason: directCaptureEnabled ? "direct_unavailable" : "experimental_disabled"
         )
+    }
+
+    /// FluidVoice-only mode prefers one microphone but does not require it. When capture lands on a
+    /// device other than the pinned one — the preferred mic is unplugged, or the direct path cannot
+    /// bind it on this hardware — it records the macOS default through the private path, without ever
+    /// moving the system input. That substitution is invisible to the audio pipeline, so announce it
+    /// once per distinct fallback device; the record resets whenever the preferred device is used
+    /// again (`device.uid == preferredUID`), so a later fallback announces afresh.
+    ///
+    /// `device` is the input actually being recorded, passed by the caller because it differs by
+    /// backend: the direct path binds the resolved device, while AVAudioEngine always records the
+    /// macOS default regardless of the preference.
+    private func announcePreferredMicrophoneFallbackIfNeeded(recording device: AudioDevice.Device?) {
+        guard SettingsStore.shared.microphoneSelectionMode == .fluidVoiceOnly,
+              let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
+              preferredUID.isEmpty == false,
+              let device,
+              device.uid != preferredUID
+        else {
+            self.lastAnnouncedFallbackDeviceUID = nil
+            return
+        }
+        guard self.lastAnnouncedFallbackDeviceUID != device.uid else { return }
+        self.lastAnnouncedFallbackDeviceUID = device.uid
+
+        DebugLogger.shared.info(
+            "Preferred microphone unavailable; recording through fallback '\(device.name)'",
+            source: "ASRService"
+        )
+        NotificationService.showPreferredMicrophoneFallback(fallbackDeviceName: device.name)
     }
 
     private func startCompatibilityAudioCapture(reason: String) async throws {
@@ -1983,8 +2003,9 @@ final class ASRService: ObservableObject {
 
     /// In `.manual` mode, attempt to bind AVAudioEngine's input to the user's preferred input device.
     /// In `.system` mode we intentionally do nothing so the engine follows macOS defaults.
-    /// `.fluidVoiceOnly` never reaches this path — `startPreferredAudioCapture()` refuses the
-    /// AVAudioEngine fallback rather than let it record the system default.
+    /// `.fluidVoiceOnly` also does nothing here: if it has reached the AVAudioEngine path at all, the
+    /// preferred device could not be captured directly, so recording the macOS default is the
+    /// intended fallback (announced by `announcePreferredMicrophoneFallbackIfNeeded()`).
     /// Returns true if binding succeeded or if no binding was needed, false if binding failed completely.
     @discardableResult
     private func bindPreferredInputDeviceIfNeeded() -> Bool {

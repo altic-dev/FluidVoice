@@ -150,24 +150,10 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
         return nextMode
     }
 
-    /// True when the user pinned FluidVoice to one specific microphone and that microphone is not
-    /// currently connected.
-    ///
-    /// `inputDeviceForCapture()` deliberately falls back to the macOS default so `.manual` mode
-    /// keeps working through a disconnect, but in `.fluidVoiceOnly` mode that same fallback would
-    /// record the system microphone while Settings still shows the missing one. The recording path
-    /// uses this to refuse rather than capture the wrong device.
-    func preferredInputIsMissing() -> Bool {
-        guard self.settings.microphoneSelectionMode == .fluidVoiceOnly,
-              let preferredUID = self.settings.preferredInputDeviceUID,
-              preferredUID.isEmpty == false
-        else {
-            return false
-        }
-
-        return self.devices.listInputDevices().contains(where: { $0.uid == preferredUID }) == false
-    }
-
+    /// Resolves the device capture should use: the user's pinned microphone when it is connected,
+    /// otherwise the macOS default. The fallback deliberately keeps both preferred modes working
+    /// through a disconnect; in `.fluidVoiceOnly` the recording path notices the resolved device
+    /// differs from the pinned one and announces the substitution rather than recording it silently.
     func inputDeviceForCapture() -> AudioDevice.Device? {
         if self.settings.microphoneSelectionMode.usesPreferredInputDevice,
            let preferredUID = self.settings.preferredInputDeviceUID,
