@@ -1511,11 +1511,28 @@ final class SettingsStore: ObservableObject {
         )
     }
 
-    func prepareLegacyModelCatalogRestore() {
+    func prepareLegacyModelCatalogRestore(savedProviders: [SavedProvider]) {
         self.availableModels = []
-        self.availableModelsByProvider = [:]
+        self.availableModelsByProvider = Self.availableModelsAfterRestore(
+            customModelsByProvider: [:],
+            savedProviders: savedProviders
+        )
         self.clearStoredCustomModelsByProvider()
         self.clearStoredLegacyModelCandidatesByProvider()
+    }
+
+    func customModelsByProviderForBackup() -> [String: [String]] {
+        guard !self.hasStoredCustomModelsByProvider else {
+            return self.customModelsByProvider
+        }
+        let savedModelsByProvider = Dictionary(
+            self.savedProviders.map { ($0.id, $0.models) },
+            uniquingKeysWith: { _, newer in newer }
+        )
+        return AIModelCatalog.migratedLegacyCustomModels(
+            cachedModelsByProvider: self.availableModelsByProvider,
+            savedModelsByProvider: savedModelsByProvider
+        )
     }
 
     var enableDebugLogs: Bool {
@@ -3100,7 +3117,7 @@ final class SettingsStore: ObservableObject {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
             selectedModelByProvider: self.selectedModelByProvider,
-            customModelsByProvider: self.customModelsByProvider,
+            customModelsByProvider: self.customModelsByProviderForBackup(),
             savedProviders: self.savedProviders,
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
@@ -3208,7 +3225,7 @@ final class SettingsStore: ObservableObject {
                 savedProviders: self.savedProviders
             )
         } else {
-            self.prepareLegacyModelCatalogRestore()
+            self.prepareLegacyModelCatalogRestore(savedProviders: self.savedProviders)
         }
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {

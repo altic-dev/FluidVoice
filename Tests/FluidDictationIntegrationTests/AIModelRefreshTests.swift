@@ -44,13 +44,81 @@ final class AIModelRefreshTests: XCTestCase {
         SettingsStore.shared.availableModels = ["stale-local-model"]
         SettingsStore.shared.availableModelsByProvider = ["openai": ["gpt-default", "stale-local-model"]]
         SettingsStore.shared.legacyModelCandidatesByProvider = ["openai": ["stale-local-model"]]
-        SettingsStore.shared.prepareLegacyModelCatalogRestore()
+        SettingsStore.shared.prepareLegacyModelCatalogRestore(savedProviders: [])
 
         XCTAssertFalse(SettingsStore.shared.hasStoredCustomModelsByProvider)
         XCTAssertTrue(SettingsStore.shared.customModelsByProvider.isEmpty)
         XCTAssertTrue(SettingsStore.shared.availableModels.isEmpty)
         XCTAssertTrue(SettingsStore.shared.availableModelsByProvider.isEmpty)
         XCTAssertTrue(SettingsStore.shared.legacyModelCandidatesByProvider.isEmpty)
+    }
+
+    func testRestoringLegacyBackupRehydratesSavedProviderCatalog() {
+        let previousAvailableModels = SettingsStore.shared.availableModels
+        let previousAvailableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+        defer {
+            SettingsStore.shared.availableModels = previousAvailableModels
+            SettingsStore.shared.availableModelsByProvider = previousAvailableModelsByProvider
+        }
+
+        SettingsStore.shared.availableModelsByProvider = ["custom:provider-id": ["stale-model"]]
+        SettingsStore.shared.prepareLegacyModelCatalogRestore(
+            savedProviders: [
+                SettingsStore.SavedProvider(
+                    id: "provider-id",
+                    name: "Provider",
+                    baseURL: "https://example.com",
+                    models: ["provider-model"]
+                ),
+            ]
+        )
+
+        XCTAssertEqual(
+            SettingsStore.shared.availableModelsByProvider["custom:provider-id"],
+            ["provider-model"]
+        )
+    }
+
+    func testBackupMigratesLegacyManualModelsBeforeSettingsLoad() {
+        let defaults = UserDefaults.standard
+        let previousCustomModels = defaults.object(
+            forKey: SettingsStore.customModelsByProviderDefaultsKey
+        )
+        let previousAvailableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+        let previousSavedProviders = SettingsStore.shared.savedProviders
+        defer {
+            if let previousCustomModels {
+                defaults.set(
+                    previousCustomModels,
+                    forKey: SettingsStore.customModelsByProviderDefaultsKey
+                )
+            } else {
+                defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            }
+            SettingsStore.shared.availableModelsByProvider = previousAvailableModelsByProvider
+            SettingsStore.shared.savedProviders = previousSavedProviders
+        }
+
+        SettingsStore.shared.clearStoredCustomModelsByProvider()
+        SettingsStore.shared.availableModelsByProvider = [
+            "openai": ["gpt-a", "gpt-z", "manual-a"],
+        ]
+        SettingsStore.shared.savedProviders = [
+            SettingsStore.SavedProvider(
+                id: "provider-id",
+                name: "Provider",
+                baseURL: "https://example.com",
+                models: ["model-a", "model-z", "manual-provider"]
+            ),
+        ]
+
+        let payload = SettingsStore.shared.makeBackupPayload()
+
+        XCTAssertEqual(payload.customModelsByProvider?["openai"], ["manual-a"])
+        XCTAssertEqual(
+            payload.customModelsByProvider?["custom:provider-id"],
+            ["manual-provider"]
+        )
     }
 
     func testRestoringCustomModelsRehydratesAvailableCatalog() {

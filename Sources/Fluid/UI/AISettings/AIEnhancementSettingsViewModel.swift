@@ -628,46 +628,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         cachedModelsByProvider: [String: [String]],
         savedModelsByProvider: [String: [String]]
     ) -> [String: [String]] {
-        var migrated: [String: [String]] = [:]
-
-        func providerKey(_ providerID: String) -> String {
-            let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "" }
-            let lower = trimmed.lowercased()
-            if ModelRepository.shared.isBuiltIn(lower) {
-                return lower
-            }
-            return trimmed.hasPrefix("custom:") ? trimmed : "custom:\(trimmed)"
-        }
-
-        func appendedManualModels(_ models: [String]) -> [String] {
-            let normalizedInOrder = models
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            guard normalizedInOrder.count > 1,
-                  let firstAppendedIndex = (1 ..< normalizedInOrder.count).first(where: {
-                      normalizedInOrder[$0] < normalizedInOrder[$0 - 1]
-                  })
-            else {
-                return []
-            }
-            return AIModelCatalog.normalized(Array(normalizedInOrder[firstAppendedIndex...]))
-        }
-
-        for source in [cachedModelsByProvider, savedModelsByProvider] {
-            for (providerID, models) in source {
-                let key = providerKey(providerID)
-                let appendedModels = appendedManualModels(models)
-                if !key.isEmpty, !appendedModels.isEmpty {
-                    migrated[key] = AIModelCatalog.merged(
-                        discoveredModels: migrated[key] ?? [],
-                        customModels: appendedModels
-                    )
-                }
-            }
-        }
-
-        return migrated
+        AIModelCatalog.migratedLegacyCustomModels(
+            cachedModelsByProvider: cachedModelsByProvider,
+            savedModelsByProvider: savedModelsByProvider
+        )
     }
 
     static func legacyModelCandidates(
