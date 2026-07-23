@@ -101,7 +101,7 @@ final class AIModelRefreshTests: XCTestCase {
 
         SettingsStore.shared.clearStoredCustomModelsByProvider()
         SettingsStore.shared.availableModelsByProvider = [
-            "openai": ["gpt-a", "gpt-z", "manual-a"],
+            "openai": ["gpt-a", "gpt-z", "custom-mid"],
         ]
         SettingsStore.shared.savedProviders = [
             SettingsStore.SavedProvider(
@@ -114,7 +114,7 @@ final class AIModelRefreshTests: XCTestCase {
 
         let payload = SettingsStore.shared.makeBackupPayload()
 
-        XCTAssertEqual(payload.customModelsByProvider?["openai"], ["manual-a"])
+        XCTAssertEqual(payload.customModelsByProvider?["openai"], ["custom-mid"])
         XCTAssertEqual(
             payload.customModelsByProvider?["custom:provider-id"],
             ["manual-provider"]
