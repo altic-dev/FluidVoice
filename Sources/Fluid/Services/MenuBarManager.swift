@@ -47,6 +47,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var pendingShowOperation: DispatchWorkItem?
     private var pendingHideOperation: DispatchWorkItem?
     private var pendingProcessingShowOperation: DispatchWorkItem?
+    /// Keep capture live briefly before presenting the recording UI.
+    private let recordingVisualDelay: DispatchTimeInterval = .milliseconds(500)
     /// Show immediately so users see the processing state right away.
     private let processingVisualDelay: DispatchTimeInterval = .milliseconds(0)
     /// Legacy debounce used by generic processing callers. Successful dictation
@@ -72,16 +74,22 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     func configure(asrService: ASRService) {
         self.asrService = asrService
 
-        // Subscribe to recording state changes
+        // Keep menu bar state tied to the capture lifecycle.
         asrService.$isRunning
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isRunning in
                 self?.isRecording = isRunning
                 self?.updateMenuBarIcon()
                 self?.updateMenu()
+            }
+            .store(in: &self.cancellables)
 
-                // Handle overlay lifecycle (independent of window state)
-                self?.handleOverlayState(isRunning: isRunning, asrService: asrService)
+        // The recording overlay represents usable audio capture, not merely a
+        // backend that has returned successfully from start().
+        asrService.$isAudioCaptureReady
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isCaptureReady in
+                self?.handleOverlayState(isCaptureReady: isCaptureReady, asrService: asrService)
             }
             .store(in: &self.cancellables)
 
@@ -97,8 +105,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             .store(in: &self.cancellables)
     }
 
-    private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
-        self.overlayBench("handle_state isRunning=\(isRunning) overlayVisible=\(self.overlayVisible) processing=\(self.isProcessingActive) mode=\(self.currentOverlayMode.rawValue)")
+    private func handleOverlayState(isCaptureReady: Bool, asrService: ASRService) {
+        self.overlayBench("handle_state isCaptureReady=\(isCaptureReady) overlayVisible=\(self.overlayVisible) processing=\(self.isProcessingActive) mode=\(self.currentOverlayMode.rawValue)")
 
         // Dictionary training owns its recording controls, so showing the
         // regular dictation notch here would create two competing overlays.
@@ -115,24 +123,28 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         // Don't hide the overlay while AI processing is active.
         // Without this, the notch can disappear during the short "Refining..." phase because
         // `isRunning` becomes false before post-processing completes.
-        if !isRunning, self.isProcessingActive {
+        if !isCaptureReady, self.isProcessingActive {
             self.overlayBench("handle_state_return reason=processing_active")
             return
         }
 
         // Prevent rapid state changes that could cause cycles
-        guard self.overlayVisible != isRunning else {
+        guard self.overlayVisible != isCaptureReady else {
             self.overlayBench("handle_state_return reason=visibility_unchanged")
             return
         }
 
-        if isRunning {
+        if isCaptureReady {
+            if self.currentOverlayMode == .dictation {
+                AutomaticDictionaryCorrectionTracker.shared.cancel()
+            }
+
             // Cancel any pending hide operation
             self.pendingHideOperation?.cancel()
             self.pendingHideOperation = nil
 
             self.overlayVisible = true
-            self.overlayBench("show_request mode=\(self.currentOverlayMode.rawValue)")
+            self.overlayBench("show_request mode=\(self.currentOverlayMode.rawValue) delayMs=500")
 
             // If expanded command output is showing, check if we should keep it or close it
             if NotchOverlayManager.shared.isCommandOutputExpanded {
@@ -172,6 +184,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
                 // Show notch overlay
                 self.overlayBench("show_workitem_execute mode=\(self.currentOverlayMode.rawValue)")
+                if self.currentOverlayMode == .dictation,
+                   SettingsStore.shared.enableTranscriptionSounds
+                {
+                    TranscriptionSoundPlayer.shared.playStartSound()
+                }
                 NotchOverlayManager.shared.show(
                     audioLevelPublisher: asrService.audioLevelPublisher,
                     mode: self.currentOverlayMode
@@ -181,7 +198,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 self.pendingShowOperation = nil
             }
             self.pendingShowOperation = showItem
-            DispatchQueue.main.async(execute: showItem)
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + self.recordingVisualDelay,
+                execute: showItem
+            )
         } else {
             // Cancel any pending show operation
             self.pendingShowOperation?.cancel()
@@ -220,48 +240,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.pendingHideOperation = hideItem
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30), execute: hideItem)
         }
-    }
-
-    func showRecordingOverlayImmediately() {
-        AutomaticDictionaryCorrectionTracker.shared.cancel()
-
-        guard let asrService else {
-            self.overlayBench("instant_show_return reason=no_asr_service")
-            return
-        }
-
-        self.pendingHideOperation?.cancel()
-        self.pendingHideOperation = nil
-        self.pendingShowOperation?.cancel()
-        self.pendingShowOperation = nil
-
-        guard !self.overlayVisible else {
-            self.overlayBench("instant_show_return reason=already_visible")
-            return
-        }
-
-        self.overlayVisible = true
-        self.overlayBench("instant_show_request mode=\(self.currentOverlayMode.rawValue)")
-
-        if NotchOverlayManager.shared.isCommandOutputExpanded {
-            if self.currentOverlayMode == .command, NotchOverlayManager.shared.supportsCommandNotchUI {
-                NotchContentState.shared.setRecordingInExpandedMode(true)
-                self.expandedModeAudioSubscription = asrService.audioLevelPublisher
-                    .receive(on: DispatchQueue.main)
-                    .sink { level in
-                        NotchContentState.shared.updateExpandedModeAudioLevel(level)
-                    }
-                return
-            }
-            NotchOverlayManager.shared.hideExpandedCommandOutput()
-        }
-
-        self.overlayBench("show_workitem_execute mode=\(self.currentOverlayMode.rawValue)")
-        NotchOverlayManager.shared.show(
-            audioLevelPublisher: asrService.audioLevelPublisher,
-            mode: self.currentOverlayMode
-        )
-        self.overlayBench("show_workitem_return mode=\(self.currentOverlayMode.rawValue)")
     }
 
     func hideRecordingOverlayImmediately(reason: String) {

@@ -3045,9 +3045,6 @@ struct ContentView: View {
         self.advanceOverlayLifecycle()
         self.setActiveRecordingMode(.dictate)
         let shouldShowDictationOverlay = !self.isRecordingForCommand && !self.isRecordingForRewrite
-        let shouldPlayStartSound = !self.isRecordingForCommand
-            && !self.isRecordingForRewrite
-            && self.asr.micStatus == .authorized
 
         // Ensure normal dictation mode is set (command/rewrite modes set their own)
         if shouldShowDictationOverlay {
@@ -3055,15 +3052,9 @@ struct ContentView: View {
         }
 
         Task {
-            if shouldPlayStartSound, !self.asr.isRunning {
-                TranscriptionSoundPlayer.shared.playStartSound()
-            }
             await self.asr.start(onCaptureStarted: {
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: .primary)
-                if shouldShowDictationOverlay {
-                    self.menuBarManager.showRecordingOverlayImmediately()
-                }
             })
             if !self.asr.isRunning {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
@@ -3680,14 +3671,10 @@ extension ContentView {
         Task {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
-            if SettingsStore.shared.enableTranscriptionSounds, !self.asr.isRunning {
-                TranscriptionSoundPlayer.shared.playStartSound()
-            }
             await self.asr.start(onCaptureStarted: {
                 self.captureRecordingContext()
                 self.appBench("overlay_mode_request mode=Dictation")
                 self.menuBarManager.setOverlayMode(.dictation)
-                self.menuBarManager.showRecordingOverlayImmediately()
                 self.appBench("overlay_mode_requested mode=Dictation")
                 self.prewarmPrivateAIDictationIfNeeded(for: slot)
             })

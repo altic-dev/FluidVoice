@@ -86,6 +86,7 @@ final class ASRService: ObservableObject {
     }
 
     @Published var isRunning: Bool = false
+    @Published private(set) var isAudioCaptureReady: Bool = false
     @Published var finalText: String = ""
     @Published var partialTranscription: String = ""
     @Published var wordBoostStatusText: String = "Word boost: off"
@@ -105,6 +106,7 @@ final class ASRService: ObservableObject {
 
     private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pendingCaptureStartedHandler: (@MainActor () -> Void)?
     var isRunningOrStarting: Bool { self.isRunning || self.isStarting }
     private var hasCompletedFirstTranscription: Bool = false // Track if model has warmed up with first transcription
     private var lastBoostHitTerm: String?
@@ -1068,14 +1070,15 @@ final class ASRService: ObservableObject {
     /// from CoreAudio's realtime callback thread.
     private lazy var audioCapturePipeline: AudioCapturePipeline = .init(
         audioBuffer: self.audioBuffer,
-        onFirstAudio: { sessionID, sampleCount, frameLength, sampleRate, acquisitionMs, elapsedMs in
-            DispatchQueue.main.async {
+        onFirstAudio: { [weak self] sessionID, sampleCount, frameLength, sampleRate, acquisitionMs, elapsedMs in
+            Task { @MainActor [weak self] in
                 let bufferMs = Int((Double(frameLength) / sampleRate * 1000).rounded())
                 DebugLogger.shared.benchmark(
                     "ASR_BENCH",
                     message: "session=\(sessionID) first_audio sampleCount=\(sampleCount) frameLength=\(frameLength) sampleRate=\(Int(sampleRate.rounded())) bufferMs=\(bufferMs) acquisitionMs=\(acquisitionMs) elapsedMs=\(elapsedMs)",
                     source: "ASRBenchmark"
                 )
+                self?.markAudioCaptureReady(sessionID: sessionID)
             }
         },
         onDurationMismatch: { [weak self] sessionID, capturedMilliseconds, elapsedMilliseconds in
@@ -1334,6 +1337,9 @@ final class ASRService: ObservableObject {
             return
         }
         self.isStarting = true
+        self.isAudioCaptureReady = false
+        self.pendingCaptureStartedHandler = onCaptureStarted
+        self.isDictionaryTrainingCaptureActive = forDictionaryTraining
         defer { self.finishAudioCaptureStart() }
 
         // Reset media pause state for this session
@@ -1369,18 +1375,14 @@ final class ASRService: ObservableObject {
         self.benchmarkLog("recording_start model=\(dims.model) provider=\(dims.provider) supportsStreaming=\(SettingsStore.shared.selectedSpeechModel.supportsStreaming)")
         DebugLogger.shared.debug("✅ Buffers cleared", source: "ASRService")
 
-        self.isDictionaryTrainingCaptureActive = false
-
         do {
             if SettingsStore.shared.microphoneSelectionMode == .manual {
                 AppServices.shared.microphonePreferenceCoordinator.enforcePreferredInput(reason: "recording start")
             }
 
             try await self.startPreferredAudioCapture()
-            self.isDictionaryTrainingCaptureActive = forDictionaryTraining
             self.isRunning = true
             DebugLogger.shared.info("✅ Audio capture running", source: "ASRService")
-            onCaptureStarted?()
 
             // Pause only after capture is live so media control cannot delay the
             // first PCM packet. A quick stop while this await is in flight is
@@ -1421,6 +1423,8 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
         } catch {
             self.isDictionaryTrainingCaptureActive = false
+            self.isAudioCaptureReady = false
+            self.pendingCaptureStartedHandler = nil
             self.audioCapturePipeline.setRecordingEnabled(false)
             self.isRunning = false
             self.stopActiveAudioCapture()
@@ -1458,6 +1462,19 @@ final class ASRService: ObservableObject {
                 userInfo: ["errorMessage": errorMessage]
             )
         }
+    }
+
+    private func markAudioCaptureReady(sessionID: Int) {
+        guard sessionID == self.benchmarkSessionID,
+              self.isRunning || self.isStarting,
+              self.isAudioCaptureReady == false
+        else { return }
+
+        self.isAudioCaptureReady = true
+        let handler = self.pendingCaptureStartedHandler
+        self.pendingCaptureStartedHandler = nil
+        DebugLogger.shared.info("✅ Audio capture accepted its first buffer", source: "ASRService")
+        handler?()
     }
 
     func waitForPendingStart() async {
@@ -1549,6 +1566,8 @@ final class ASRService: ObservableObject {
 
         // Set isRunning to false before teardown so in-flight ASR chunks stop safely.
         DebugLogger.shared.debug("🚫 Setting isRunning = false...", source: "ASRService")
+        self.isAudioCaptureReady = false
+        self.pendingCaptureStartedHandler = nil
         self.isRunning = false
         DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
 
@@ -1882,6 +1901,8 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.info("🛑 Stopping recording - releasing audio devices", source: "ASRService")
 
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
+        self.isAudioCaptureReady = false
+        self.pendingCaptureStartedHandler = nil
         self.isRunning = false
         self.audioCapturePipeline.setRecordingEnabled(false)
 
