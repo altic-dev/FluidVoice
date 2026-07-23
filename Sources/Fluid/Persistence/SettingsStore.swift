@@ -1450,6 +1450,74 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Self.legacyModelCandidatesDefaultsKey)
     }
 
+    static func availableModelsAfterRestore(
+        customModelsByProvider: [String: [String]],
+        savedProviders: [SavedProvider]
+    ) -> [String: [String]] {
+        func normalized(_ models: [String]) -> [String] {
+            var seen: Set<String> = []
+            return models.compactMap { model in
+                let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+                return trimmed
+            }
+        }
+
+        func providerKey(_ providerID: String) -> String {
+            let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "" }
+            let lower = trimmed.lowercased()
+            if ModelRepository.shared.isBuiltIn(lower) {
+                return lower
+            }
+            return trimmed.hasPrefix("custom:") ? trimmed : "custom:\(trimmed)"
+        }
+
+        var restored: [String: [String]] = [:]
+        for provider in savedProviders {
+            let key = providerKey(provider.id)
+            let models = normalized(provider.models)
+            if !key.isEmpty, !models.isEmpty {
+                restored[key] = models
+            }
+        }
+
+        for (providerID, customModels) in customModelsByProvider {
+            let key = providerKey(providerID)
+            guard !key.isEmpty else { continue }
+            let defaults = ModelRepository.shared.isBuiltIn(key)
+                ? ModelRepository.shared.defaultModels(for: key)
+                : restored[key] ?? []
+            let models = normalized(defaults + customModels)
+            if models.isEmpty {
+                restored.removeValue(forKey: key)
+            } else {
+                restored[key] = models
+            }
+        }
+        return restored
+    }
+
+    func restoreModelCatalogState(
+        customModelsByProvider: [String: [String]],
+        savedProviders: [SavedProvider]
+    ) {
+        self.availableModels = []
+        self.clearStoredLegacyModelCandidatesByProvider()
+        self.customModelsByProvider = customModelsByProvider
+        self.availableModelsByProvider = Self.availableModelsAfterRestore(
+            customModelsByProvider: customModelsByProvider,
+            savedProviders: savedProviders
+        )
+    }
+
+    func prepareLegacyModelCatalogRestore() {
+        self.availableModels = []
+        self.availableModelsByProvider = [:]
+        self.clearStoredCustomModelsByProvider()
+        self.clearStoredLegacyModelCandidatesByProvider()
+    }
+
     var enableDebugLogs: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableDebugLogs)
@@ -3134,13 +3202,13 @@ final class SettingsStore: ObservableObject {
         self.savedProviders = payload.savedProviders
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
-        self.clearStoredLegacyModelCandidatesByProvider()
         if let customModelsByProvider = payload.customModelsByProvider {
-            self.customModelsByProvider = customModelsByProvider
+            self.restoreModelCatalogState(
+                customModelsByProvider: customModelsByProvider,
+                savedProviders: self.savedProviders
+            )
         } else {
-            // Legacy backups predate the dedicated custom-model store. Remove
-            // local state so the restored provider catalogs can be migrated.
-            self.clearStoredCustomModelsByProvider()
+            self.prepareLegacyModelCatalogRestore()
         }
         self.modelReasoningConfigs = payload.modelReasoningConfigs
         if let privateAIPrefixKVCacheEnabled = payload.privateAIPrefixKVCacheEnabled {

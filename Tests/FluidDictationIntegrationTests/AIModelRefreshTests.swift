@@ -26,19 +26,77 @@ final class AIModelRefreshTests: XCTestCase {
     func testRestoringLegacyBackupClearsStoredCustomModels() {
         let defaults = UserDefaults.standard
         let previousValue = defaults.object(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+        let previousAvailableModels = SettingsStore.shared.availableModels
+        let previousAvailableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+        let previousLegacyCandidates = SettingsStore.shared.legacyModelCandidatesByProvider
         defer {
             if let previousValue {
                 defaults.set(previousValue, forKey: SettingsStore.customModelsByProviderDefaultsKey)
             } else {
                 defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
             }
+            SettingsStore.shared.availableModels = previousAvailableModels
+            SettingsStore.shared.availableModelsByProvider = previousAvailableModelsByProvider
+            SettingsStore.shared.legacyModelCandidatesByProvider = previousLegacyCandidates
         }
 
         SettingsStore.shared.customModelsByProvider = ["openai": ["stale-local-model"]]
-        SettingsStore.shared.clearStoredCustomModelsByProvider()
+        SettingsStore.shared.availableModels = ["stale-local-model"]
+        SettingsStore.shared.availableModelsByProvider = ["openai": ["gpt-default", "stale-local-model"]]
+        SettingsStore.shared.legacyModelCandidatesByProvider = ["openai": ["stale-local-model"]]
+        SettingsStore.shared.prepareLegacyModelCatalogRestore()
 
         XCTAssertFalse(SettingsStore.shared.hasStoredCustomModelsByProvider)
         XCTAssertTrue(SettingsStore.shared.customModelsByProvider.isEmpty)
+        XCTAssertTrue(SettingsStore.shared.availableModels.isEmpty)
+        XCTAssertTrue(SettingsStore.shared.availableModelsByProvider.isEmpty)
+        XCTAssertTrue(SettingsStore.shared.legacyModelCandidatesByProvider.isEmpty)
+    }
+
+    func testRestoringCustomModelsRehydratesAvailableCatalog() {
+        let defaults = UserDefaults.standard
+        let previousValue = defaults.object(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+        let previousAvailableModels = SettingsStore.shared.availableModels
+        let previousAvailableModelsByProvider = SettingsStore.shared.availableModelsByProvider
+        let previousLegacyCandidates = SettingsStore.shared.legacyModelCandidatesByProvider
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            }
+            SettingsStore.shared.availableModels = previousAvailableModels
+            SettingsStore.shared.availableModelsByProvider = previousAvailableModelsByProvider
+            SettingsStore.shared.legacyModelCandidatesByProvider = previousLegacyCandidates
+        }
+
+        SettingsStore.shared.availableModelsByProvider = [:]
+        SettingsStore.shared.restoreModelCatalogState(
+            customModelsByProvider: [
+                "openai": ["gpt-custom"],
+                "custom:provider-id": ["provider-custom"],
+            ],
+            savedProviders: [
+                SettingsStore.SavedProvider(
+                    id: "provider-id",
+                    name: "Provider",
+                    baseURL: "https://example.com",
+                    models: ["provider-discovered"]
+                ),
+            ]
+        )
+
+        XCTAssertEqual(SettingsStore.shared.customModelsByProvider["openai"], ["gpt-custom"])
+        XCTAssertEqual(
+            SettingsStore.shared.availableModelsByProvider["openai"],
+            AIModelCatalog.normalized(
+                ModelRepository.shared.defaultModels(for: "openai") + ["gpt-custom"]
+            )
+        )
+        XCTAssertEqual(
+            SettingsStore.shared.availableModelsByProvider["custom:provider-id"],
+            ["provider-discovered", "provider-custom"]
+        )
     }
 
     func testEnteringDiscoveredModelSelectsWithoutPersistingAsCustom() {
@@ -101,6 +159,25 @@ final class AIModelRefreshTests: XCTestCase {
             AIEnhancementSettingsViewModel.reconciledLegacyCustomModels(
                 legacyModels: ["model-a", "model-b", "model-c"],
                 discoveredModels: ["model-a", "model-b", "model-c"]
+            ),
+            []
+        )
+    }
+
+    func testLegacyCandidateReconciliationReplacesCandidateSubset() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.customModelsAfterReconcilingLegacyCandidates(
+                customModels: ["official-model", "new-manual-model", "legacy-only-model"],
+                legacyCandidates: ["official-model", "legacy-only-model"],
+                discoveredModels: ["official-model"]
+            ),
+            ["new-manual-model", "legacy-only-model"]
+        )
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.customModelsAfterReconcilingLegacyCandidates(
+                customModels: ["official-model"],
+                legacyCandidates: ["official-model"],
+                discoveredModels: ["official-model"]
             ),
             []
         )

@@ -703,6 +703,23 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return AIModelCatalog.normalized(legacyModels).filter { !discovered.contains($0) }
     }
 
+    static func customModelsAfterReconcilingLegacyCandidates(
+        customModels: [String],
+        legacyCandidates: [String],
+        discoveredModels: [String]
+    ) -> [String] {
+        let candidates = Set(AIModelCatalog.normalized(legacyCandidates))
+        let retainedCustomModels = AIModelCatalog.normalized(customModels).filter {
+            !candidates.contains($0)
+        }
+        return AIModelCatalog.normalized(
+            retainedCustomModels + self.reconciledLegacyCustomModels(
+                legacyModels: legacyCandidates,
+                discoveredModels: discoveredModels
+            )
+        )
+    }
+
     static func visibleModelsForManualAddition(
         _ cachedModels: [String],
         providerKey: String
@@ -1279,15 +1296,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         providerKey: String
     ) -> [String] {
         if let legacyModels = self.legacyModelCandidatesByProvider.removeValue(forKey: providerKey) {
-            let reconciled = Self.reconciledLegacyCustomModels(
-                legacyModels: legacyModels,
+            let reconciledCustomModels = Self.customModelsAfterReconcilingLegacyCandidates(
+                customModels: self.customModelsByProvider[providerKey] ?? [],
+                legacyCandidates: legacyModels,
                 discoveredModels: discoveredModels
             )
-            if !reconciled.isEmpty {
-                self.customModelsByProvider[providerKey] = AIModelCatalog.merged(
-                    discoveredModels: self.customModelsByProvider[providerKey] ?? [],
-                    customModels: reconciled
-                )
+            if reconciledCustomModels.isEmpty {
+                self.customModelsByProvider.removeValue(forKey: providerKey)
+            } else {
+                self.customModelsByProvider[providerKey] = reconciledCustomModels
             }
             self.settings.legacyModelCandidatesByProvider = self.legacyModelCandidatesByProvider
             self.settings.customModelsByProvider = self.customModelsByProvider
