@@ -54,9 +54,32 @@ final class AIModelRefreshTests: XCTestCase {
     }
 
     func testRestoringLegacyBackupRehydratesSavedProviderCatalog() {
+        let defaults = UserDefaults.standard
+        let previousCustomModels = defaults.object(
+            forKey: SettingsStore.customModelsByProviderDefaultsKey
+        )
+        let previousLegacyCandidates = defaults.object(
+            forKey: SettingsStore.legacyModelCandidatesDefaultsKey
+        )
         let previousAvailableModels = SettingsStore.shared.availableModels
         let previousAvailableModelsByProvider = SettingsStore.shared.availableModelsByProvider
         defer {
+            if let previousCustomModels {
+                defaults.set(
+                    previousCustomModels,
+                    forKey: SettingsStore.customModelsByProviderDefaultsKey
+                )
+            } else {
+                defaults.removeObject(forKey: SettingsStore.customModelsByProviderDefaultsKey)
+            }
+            if let previousLegacyCandidates {
+                defaults.set(
+                    previousLegacyCandidates,
+                    forKey: SettingsStore.legacyModelCandidatesDefaultsKey
+                )
+            } else {
+                defaults.removeObject(forKey: SettingsStore.legacyModelCandidatesDefaultsKey)
+            }
             SettingsStore.shared.availableModels = previousAvailableModels
             SettingsStore.shared.availableModelsByProvider = previousAvailableModelsByProvider
         }
@@ -323,6 +346,30 @@ final class AIModelRefreshTests: XCTestCase {
             AIModelCatalog.Addition(
                 modelID: "model/a",
                 models: ["model/a", "model/b"]
+            )
+        )
+    }
+
+    func testDeletingCustomModelRemovesOnlyManualCatalogEntries() {
+        XCTAssertEqual(
+            AIEnhancementSettingsViewModel.manualModelDeletion(
+                "model/custom",
+                visibleModels: ["model/discovered", "model/custom"],
+                customModels: ["model/custom"],
+                fallbackModels: ["model/fallback"]
+            ),
+            AIEnhancementSettingsViewModel.ManualModelDeletion(
+                visibleModels: ["model/discovered"],
+                customModels: [],
+                selectedModel: "model/discovered"
+            )
+        )
+        XCTAssertNil(
+            AIEnhancementSettingsViewModel.manualModelDeletion(
+                "model/discovered",
+                visibleModels: ["model/discovered", "model/custom"],
+                customModels: ["model/custom"],
+                fallbackModels: ["model/fallback"]
             )
         )
     }

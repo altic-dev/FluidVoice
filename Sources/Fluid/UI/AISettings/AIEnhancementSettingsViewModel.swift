@@ -109,6 +109,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let customModels: [String]
     }
 
+    struct ManualModelDeletion: Equatable {
+        let visibleModels: [String]
+        let customModels: [String]
+        let selectedModel: String
+    }
+
     @Published var cachedProviderItems: [ProviderItemData] = []
     @Published var cachedVerifiedProviderItems: [ProviderItemData] = []
     @Published var cachedUnverifiedProviderItems: [ProviderItemData] = []
@@ -1306,46 +1312,86 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.invalidateVerification(for: self.selectedProviderID)
     }
 
-    func deleteSelectedModel() {
-        let key = self.providerKey(for: self.selectedProviderID)
-        self.customModelsByProvider[key]?.removeAll { $0 == self.selectedModel }
-        self.legacyModelCandidatesByProvider[key]?.removeAll { $0 == self.selectedModel }
-        if self.customModelsByProvider[key]?.isEmpty == true {
+    func deleteSelectedModel(for providerID: String) {
+        let key = self.providerKey(for: providerID)
+        let selectedModel = self.selectedModelByProvider[key] ?? ""
+        let visibleModels = self.availableModelsByProvider[key] ?? []
+        guard let deletion = Self.manualModelDeletion(
+            selectedModel,
+            visibleModels: visibleModels,
+            customModels: self.customModelsByProvider[key] ?? [],
+            fallbackModels: ModelRepository.shared.defaultModels(for: key)
+        ) else { return }
+
+        if deletion.customModels.isEmpty {
             self.customModelsByProvider.removeValue(forKey: key)
+        } else {
+            self.customModelsByProvider[key] = deletion.customModels
         }
+        self.legacyModelCandidatesByProvider[key]?.removeAll { $0 == selectedModel }
         if self.legacyModelCandidatesByProvider[key]?.isEmpty == true {
             self.legacyModelCandidatesByProvider.removeValue(forKey: key)
         }
         self.settings.customModelsByProvider = self.customModelsByProvider
         self.settings.legacyModelCandidatesByProvider = self.legacyModelCandidatesByProvider
 
-        var list = self.availableModelsByProvider[key] ?? self.availableModels
-        list.removeAll { $0 == self.selectedModel }
-        if list.isEmpty { list = ModelRepository.shared.defaultModels(for: key) }
-        self.availableModelsByProvider[key] = list
+        self.availableModelsByProvider[key] = deletion.visibleModels
         self.settings.availableModelsByProvider = self.availableModelsByProvider
 
-        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+        if let providerIndex = savedProviders.firstIndex(where: { $0.id == providerID }) {
             let updatedProvider = SettingsStore.SavedProvider(
                 id: self.savedProviders[providerIndex].id,
                 name: self.savedProviders[providerIndex].name,
                 baseURL: self.savedProviders[providerIndex].baseURL,
-                models: list
+                models: deletion.visibleModels
             )
             self.savedProviders[providerIndex] = updatedProvider
             self.saveSavedProviders()
         }
 
-        self.availableModels = list
-        self.selectedModel = list.first ?? ""
-        self.selectedModelByProvider[key] = self.selectedModel
+        self.selectedModelByProvider[key] = deletion.selectedModel
         self.settings.selectedModelByProvider = self.selectedModelByProvider
+        if self.selectedProviderID == providerID {
+            self.availableModels = deletion.visibleModels
+            self.selectedModel = deletion.selectedModel
+        }
+    }
+
+    func deleteSelectedModel() {
+        self.deleteSelectedModel(for: self.selectedProviderID)
+    }
+
+    func canDeleteSelectedModel(for providerID: String) -> Bool {
+        let key = self.providerKey(for: providerID)
+        guard let selectedModel = self.selectedModelByProvider[key] else { return false }
+        return self.customModelsByProvider[key]?.contains(selectedModel) == true
     }
 
     func canDeleteSelectedModel() -> Bool {
-        let key = self.providerKey(for: self.selectedProviderID)
-        return !ModelRepository.shared.isBuiltIn(self.selectedProviderID) ||
-            (self.customModelsByProvider[key]?.contains(self.selectedModel) == true)
+        self.canDeleteSelectedModel(for: self.selectedProviderID)
+    }
+
+    static func manualModelDeletion(
+        _ selectedModel: String,
+        visibleModels: [String],
+        customModels: [String],
+        fallbackModels: [String]
+    ) -> ManualModelDeletion? {
+        let customModels = AIModelCatalog.normalized(customModels)
+        guard customModels.contains(selectedModel) else { return nil }
+
+        let remainingCustomModels = customModels.filter { $0 != selectedModel }
+        var remainingVisibleModels = AIModelCatalog.normalized(
+            visibleModels.filter { $0 != selectedModel }
+        )
+        if remainingVisibleModels.isEmpty {
+            remainingVisibleModels = AIModelCatalog.normalized(fallbackModels)
+        }
+        return ManualModelDeletion(
+            visibleModels: remainingVisibleModels,
+            customModels: remainingCustomModels,
+            selectedModel: remainingVisibleModels.first ?? ""
+        )
     }
 
     func fetchModelsForCurrentProvider() async {
