@@ -2151,14 +2151,12 @@ struct SettingsView: View {
             .disabled(!isRecording && self.isRecordingAnyShortcut)
 
             Button("Remove") {
-                guard self.primaryDictationShortcuts.count > 1,
-                      self.primaryDictationShortcuts.indices.contains(index)
-                else { return }
+                guard self.primaryDictationShortcuts.indices.contains(index) else { return }
                 self.primaryDictationShortcuts.remove(at: index)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(self.primaryDictationShortcuts.count <= 1 || self.isRecordingAnyShortcut)
+            .disabled(self.isRecordingAnyShortcut)
 
             if isRecording,
                let recordingMessage = self.shortcutRecordingMessage,

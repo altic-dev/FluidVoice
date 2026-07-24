@@ -1119,7 +1119,14 @@ struct ContentView: View {
                 shortcuts.append(shortcut)
             }
         }
-        self.primaryDictationShortcuts = shortcuts
+        self.updatePrimaryDictationShortcuts(shortcuts)
+    }
+
+    private func updatePrimaryDictationShortcuts(_ shortcuts: [HotkeyShortcut]) {
+        SettingsStore.shared.primaryDictationShortcuts = shortcuts
+        let storedShortcuts = SettingsStore.shared.primaryDictationShortcuts
+        self.primaryDictationShortcuts = storedShortcuts
+        self.hotkeyManager?.updatePrimaryShortcuts(storedShortcuts)
     }
 
     private func setShortcutTargetEnabled(_ enabled: Bool, for target: ShortcutRecordingTarget) {
@@ -1464,7 +1471,10 @@ struct ContentView: View {
             inputDevices: self.$inputDevices,
             outputDevices: self.$outputDevices,
             accessibilityEnabled: self.$accessibilityEnabled,
-            primaryDictationShortcuts: self.$primaryDictationShortcuts,
+            primaryDictationShortcuts: Binding(
+                get: { self.primaryDictationShortcuts },
+                set: { self.updatePrimaryDictationShortcuts($0) }
+            ),
             activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
             shortcutRecordingMessage: self.$shortcutRecordingMessage,
             commandModeShortcut: self.$commandModeHotkeyShortcut,

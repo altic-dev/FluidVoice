@@ -159,6 +159,18 @@ final class HotkeyShortcutTests: XCTestCase {
         }
     }
 
+    func testPrimaryDictationShortcutsCanBeExplicitlyCleared() throws {
+        try self.withRestoredDefaults(keys: [self.legacyHotkeyShortcutKey, self.primaryDictationShortcutsKey]) {
+            let legacyShortcut = HotkeyShortcut(keyCode: 12, modifierFlags: [.option])
+            SettingsStore.shared.hotkeyShortcut = legacyShortcut
+
+            SettingsStore.shared.primaryDictationShortcuts = []
+
+            XCTAssertEqual(SettingsStore.shared.primaryDictationShortcuts, [])
+            XCTAssertEqual(SettingsStore.shared.primaryDictationShortcutDisplayString, "")
+        }
+    }
+
     func testPasteLastTranscriptionShortcutDefaultsToUnboundAndDisabled() throws {
         try self.withRestoredDefaults(keys: [
             self.pasteLastTranscriptionShortcutKey,

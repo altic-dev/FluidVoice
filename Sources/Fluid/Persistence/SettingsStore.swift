@@ -1669,7 +1669,7 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            let shortcuts = Self.normalizedPrimaryDictationShortcuts([newValue], fallback: Self.defaultPrimaryDictationShortcut)
+            let shortcuts = Self.normalizedPrimaryDictationShortcuts([newValue])
             self.storePrimaryDictationShortcuts(shortcuts)
             self.storeLegacyHotkeyShortcut(shortcuts[0])
         }
@@ -1680,7 +1680,7 @@ final class SettingsStore: ObservableObject {
             .map(\.displayString)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return displays.isEmpty ? Self.defaultPrimaryDictationShortcut.displayString : displays.joined(separator: " / ")
+        return displays.joined(separator: " / ")
     }
 
     var primaryDictationShortcuts: [HotkeyShortcut] {
@@ -1689,15 +1689,17 @@ final class SettingsStore: ObservableObject {
             if let data = defaults.data(forKey: Keys.primaryDictationShortcutsKey),
                let shortcuts = try? JSONDecoder().decode([HotkeyShortcut].self, from: data)
             {
-                return Self.normalizedPrimaryDictationShortcuts(shortcuts, fallback: fallback)
+                return Self.normalizedPrimaryDictationShortcuts(shortcuts)
             }
             return [fallback]
         }
         set {
             objectWillChange.send()
-            let shortcuts = Self.normalizedPrimaryDictationShortcuts(newValue, fallback: self.legacyHotkeyShortcut)
+            let shortcuts = Self.normalizedPrimaryDictationShortcuts(newValue)
             self.storePrimaryDictationShortcuts(shortcuts)
-            self.storeLegacyHotkeyShortcut(shortcuts[0])
+            if let firstShortcut = shortcuts.first {
+                self.storeLegacyHotkeyShortcut(firstShortcut)
+            }
         }
     }
 
@@ -1714,16 +1716,10 @@ final class SettingsStore: ObservableObject {
         return Self.defaultPrimaryDictationShortcut
     }
 
-    private static func normalizedPrimaryDictationShortcuts(
-        _ shortcuts: [HotkeyShortcut],
-        fallback: HotkeyShortcut
-    ) -> [HotkeyShortcut] {
+    private static func normalizedPrimaryDictationShortcuts(_ shortcuts: [HotkeyShortcut]) -> [HotkeyShortcut] {
         var unique: [HotkeyShortcut] = []
         for shortcut in shortcuts where !unique.contains(shortcut) {
             unique.append(shortcut)
-        }
-        if unique.isEmpty {
-            unique.append(fallback)
         }
         return unique
     }
