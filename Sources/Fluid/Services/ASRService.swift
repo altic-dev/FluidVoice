@@ -864,12 +864,15 @@ final class ASRService: ObservableObject {
         // aggregate and Bluetooth devices). In FluidVoice-only mode the default is the correct
         // target here: either the preferred device was unavailable and resolved to the default, or
         // the direct path could not bind it on this hardware and the default is the best capture we
-        // have. Announce the substitution (this backend always records the default, so pass it
-        // explicitly rather than the resolved preference), then record rather than refuse.
-        self.announcePreferredMicrophoneFallbackIfNeeded(recording: AudioDevice.getDefaultInputDevice())
+        // have. Record it rather than refuse.
         try await self.startCompatibilityAudioCapture(
             reason: directCaptureEnabled ? "direct_unavailable" : "experimental_disabled"
         )
+        // Announce the substitution only after the capture has actually started, so a failed start
+        // never leaves a misleading "recording through …" notification behind. This backend always
+        // records the macOS default, so pass it explicitly rather than the resolved preference. (The
+        // direct-capture site above announces after its `start()` for the same reason.)
+        self.announcePreferredMicrophoneFallbackIfNeeded(recording: AudioDevice.getDefaultInputDevice())
     }
 
     /// FluidVoice-only mode prefers one microphone but does not require it. When capture lands on a
