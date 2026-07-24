@@ -2839,9 +2839,19 @@ final class ASRService: ObservableObject {
                         AppServices.shared.microphonePreferenceCoordinator
                             .stabilizePreferredInputAfterHardwareChange(reason: "input device list changed")
                     case .fluidVoiceOnly:
-                        // Re-resolve the capture device so a reconnected preferred microphone is
-                        // picked up again, without reasserting anything onto the system default.
-                        self.scheduleAudioRouteRecovery(reason: "FluidVoice-only preferred input list changed")
+                        // A device-list change never interrupts an in-progress FluidVoice-only
+                        // recording. Direct capture is bound to one device by ID and is unaffected by
+                        // unrelated hardware coming or going, so reacting here would needlessly halt
+                        // the pipeline (missed audio, gap in transcription) on any unrelated USB or
+                        // Bluetooth event. If the *bound* device itself disconnects, the per-device
+                        // availability monitor (handleDeviceAvailabilityChanged) recovers it
+                        // separately; a changed device preference is applied on the next recording,
+                        // which re-resolves. So leave the running capture alone.
+                        DebugLogger.shared.debug(
+                            "Input device list changed during FluidVoice-only recording; " +
+                                "leaving direct capture undisturbed (re-resolves on next recording)",
+                            source: "ASRService"
+                        )
                     case .system:
                         break
                     }
