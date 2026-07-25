@@ -10,6 +10,7 @@ final class HotkeyShortcutTests: XCTestCase {
     private let pasteLastTranscriptionShortcutKey = "PasteLastTranscriptionHotkeyShortcut"
     private let pasteLastTranscriptionEnabledKey = "PasteLastTranscriptionShortcutEnabled"
     private let microphoneSelectionModeKey = "MicrophoneSelectionMode"
+    private let dictationPromptConfigurationsKey = "DictationPromptConfigurations"
     private let preferredInputDeviceUIDKey = "PreferredInputDeviceUID"
     private let systemInputDeviceUIDBeforeManualKey = "SystemInputDeviceUIDBeforeManual"
 
@@ -199,6 +200,46 @@ final class HotkeyShortcutTests: XCTestCase {
             XCTAssertEqual(stored, mouseShortcut)
             XCTAssertTrue(stored?.isMouseShortcut ?? false)
             XCTAssertTrue(stored?.matchesMouse(button: 3, modifiers: [.option]) ?? false)
+        }
+    }
+
+    /// Regression test for altic-dev/FluidVoice#675: a residual `.shortcut` left behind by the
+    /// retired legacy secondary-prompt-mode hotkey kept firing as an always-on global hotkey
+    /// (most commonly a bare Command keypress under the `__default__` entry) because
+    /// `dictationPromptShortcutAssignments()` has no dependency on `PromptModeShortcutEnabled`.
+    func testClearOrphanedDictationPromptShortcutsRemovesShortcutButKeepsProviderOverrides() throws {
+        try self.withRestoredDefaults(keys: [self.dictationPromptConfigurationsKey]) {
+            let orphanedDefault = SettingsStore.DictationPromptConfiguration(
+                shortcut: HotkeyShortcut(keyCode: 55, modifierFlags: []), // bare Command, matches field reports
+                providerID: "",
+                modelName: ""
+            )
+            let profileWithOverride = SettingsStore.DictationPromptConfiguration(
+                shortcut: HotkeyShortcut(keyCode: 62, modifierFlags: []),
+                providerID: "openrouter",
+                modelName: "some-model"
+            )
+            SettingsStore.shared.dictationPromptConfigurations = [
+                "__default__": orphanedDefault,
+                "__privateAI__": profileWithOverride,
+            ]
+            XCTAssertEqual(SettingsStore.shared.dictationPromptShortcutAssignments().count, 2)
+
+            SettingsStore.shared.clearOrphanedDictationPromptShortcuts()
+
+            let result = SettingsStore.shared.dictationPromptConfigurations
+            XCTAssertNil(result["__default__"], "Entry left with no shortcut, provider, or model should be dropped entirely")
+            XCTAssertNil(result["__privateAI__"]?.shortcut, "Shortcut binding must be cleared")
+            XCTAssertEqual(result["__privateAI__"]?.providerID, "openrouter", "Provider override must survive the cleanup")
+            XCTAssertEqual(result["__privateAI__"]?.modelName, "some-model", "Model override must survive the cleanup")
+            XCTAssertTrue(
+                SettingsStore.shared.dictationPromptShortcutAssignments().isEmpty,
+                "No stale shortcut should remain reachable as a live global hotkey"
+            )
+
+            // Calling it again once already clean is a no-op, not a crash or a re-write.
+            SettingsStore.shared.clearOrphanedDictationPromptShortcuts()
+            XCTAssertEqual(SettingsStore.shared.dictationPromptConfigurations, result)
         }
     }
 

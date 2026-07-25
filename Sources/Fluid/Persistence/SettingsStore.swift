@@ -3343,7 +3343,31 @@ final class SettingsStore: ObservableObject {
         self.defaults.set(true, forKey: Keys.secondaryDictationPromptOff)
         self.defaults.removeObject(forKey: Keys.promptModeHotkeyShortcut)
         self.defaults.removeObject(forKey: Keys.promptModeSelectedPromptID)
+        self.clearOrphanedDictationPromptShortcuts()
         self.defaults.set(true, forKey: Keys.legacySecondaryPromptShortcutRetired)
+    }
+
+    /// Before per-prompt "Custom shortcut" assignments existed, the single legacy secondary-prompt
+    /// hotkey (`PromptModeHotkeyShortcut` / `PromptModeSelectedPromptID`, cleared above) left a
+    /// residual `.shortcut` behind in `DictationPromptConfigurations` — most commonly a bare Command
+    /// keypress under the `__default__` entry. `dictationPromptShortcutAssignments()` treats any
+    /// stored `.shortcut` as an always-on global hotkey with no dependency on
+    /// `PromptModeShortcutEnabled`, so that residue kept firing dictation on every Cmd+key chord even
+    /// though the feature that created it was retired (altic-dev/FluidVoice#675). Provider/model
+    /// overrides are unaffected — only the shortcut binding is cleared, and only once, here, at the
+    /// same retirement boundary that already governs the legacy key.
+    func clearOrphanedDictationPromptShortcuts() {
+        var configurations = self.dictationPromptConfigurations
+        guard configurations.values.contains(where: { $0.shortcut != nil }) else { return }
+
+        for key in configurations.keys {
+            configurations[key]?.shortcut = nil
+        }
+        configurations = configurations.filter { _, configuration in
+            !configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        self.dictationPromptConfigurations = configurations
     }
 
     private func normalizePromptSelectionsIfNeeded() {
