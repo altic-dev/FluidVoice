@@ -56,8 +56,13 @@ final class LocalAPIServer {
                     handler.start(on: self.queue)
                 }
             }
-            listener.stateUpdateHandler = { state in
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
                 Task { @MainActor in
+                    // Ignore callbacks from a superseded listener. A rapid off→on toggle
+                    // (now user-reachable via refresh()) can install a new listener before
+                    // an old one's async .cancelled/.failed callback reaches the main actor;
+                    // without this guard that stale callback would clear/cancel the new one.
+                    guard let self, let listener, self.listener === listener else { return }
                     self.handleState(state)
                 }
             }

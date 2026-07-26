@@ -863,7 +863,7 @@ struct SettingsView: View {
 
                                     self.optionToggleRow(
                                         title: "Local API (on-device agents)",
-                                        description: "Expose a loopback-only HTTP API on 127.0.0.1 (default port 47733) so local agents/apps on this Mac can reuse FluidVoice's transcription (POST /v1/transcribe). Off by default; never leaves this machine.",
+                                        description: "Loopback-only HTTP API (127.0.0.1, default port 47733) so on-device agents can reuse transcription (POST /v1/transcribe). Off by default; non-loopback connections are refused. Note: /v1/postprocess runs your configured AI provider, which may be remote.",
                                         isOn: Binding(
                                             get: { SettingsStore.shared.localAPIEnabled },
                                             set: { newValue in

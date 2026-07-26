@@ -19,10 +19,16 @@ defaults write com.FluidApp.app LocalAPIPort -int 47733
 
 ## Security
 
-- The server binds to `127.0.0.1` only and **rejects any non-loopback connection** at the
-  listener level, so it is reachable only from processes on this Mac.
+- The listener **refuses all non-loopback connections** — any non-local peer is rejected at
+  accept time, before it can send a request — so the API is usable only from processes on this Mac.
 - It is opt-in and off by default.
-- Maximum request body size is 25 MB.
+- Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request (longer audio is
+  rejected). These caps are independent — compressed audio can satisfy the byte limit yet still hit the
+  duration limit.
+- **Locality caveat:** `/v1/transcribe` runs fully on-device. `/v1/postprocess` runs your configured
+  post-processing provider (Settings → AI Enhancement); if that provider is a remote API
+  (OpenAI/Groq/Anthropic/…), the submitted text is sent there. Only the HTTP listener and transcription
+  are guaranteed local.
 
 ## Endpoints
 
