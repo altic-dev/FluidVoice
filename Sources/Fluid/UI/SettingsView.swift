@@ -281,7 +281,7 @@ struct SettingsView: View {
                             self.settingsToggleRow(
                                 title: "Local API (on-device agents)",
                                 description: "Loopback-only HTTP API for on-device agents to reuse transcription (POST /v1/transcribe).",
-                                footnote: "127.0.0.1, default port 47733. Off by default; non-loopback connections are refused. /v1/postprocess runs your configured AI provider, which may be remote.",
+                                footnote: "127.0.0.1:47733, off by default. /v1/postprocess may use a remote AI provider.",
                                 isOn: Binding(
                                     get: { SettingsStore.shared.localAPIEnabled },
                                     set: { newValue in
