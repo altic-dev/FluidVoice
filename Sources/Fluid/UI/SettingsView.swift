@@ -277,6 +277,21 @@ struct SettingsView: View {
                             )
                             Divider().opacity(0.2)
 
+                            // Local API (on-device agents)
+                            self.settingsToggleRow(
+                                title: "Local API (on-device agents)",
+                                description: "Loopback-only HTTP API for on-device agents to reuse transcription (POST /v1/transcribe).",
+                                footnote: "127.0.0.1, default port 47733. Off by default; non-loopback connections are refused. /v1/postprocess runs your configured AI provider, which may be remote.",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.localAPIEnabled },
+                                    set: { newValue in
+                                        SettingsStore.shared.localAPIEnabled = newValue
+                                        LocalAPIServer.shared.refresh()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
                             // Accent Color
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(alignment: .center) {
@@ -859,20 +874,6 @@ struct SettingsView: View {
                                     .onChange(of: self.copyToClipboard) { _, newValue in
                                         SettingsStore.shared.copyTranscriptionToClipboard = newValue
                                     }
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Local API (on-device agents)",
-                                        description: "Loopback-only HTTP API (127.0.0.1, default port 47733) so on-device agents can reuse transcription (POST /v1/transcribe). Off by default; non-loopback connections are refused. Note: /v1/postprocess runs your configured AI provider, which may be remote.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.localAPIEnabled },
-                                            set: { newValue in
-                                                SettingsStore.shared.localAPIEnabled = newValue
-                                                LocalAPIServer.shared.refresh()
-                                            }
-                                        ),
-                                        allowsDescriptionWrapping: true
-                                    )
                                     Divider().opacity(0.2)
 
                                     HStack(alignment: .center) {
