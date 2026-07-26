@@ -79,6 +79,17 @@ final class LocalAPIServer {
         self.listener = nil
     }
 
+    /// Start or stop the server to match the current `LocalAPIEnabled` setting.
+    /// Call this after the user toggles the Local API preference so the change takes
+    /// effect immediately, without restarting the app.
+    func refresh() {
+        if LocalAPI.Configuration.current.enabled {
+            self.start()
+        } else {
+            self.stop()
+        }
+    }
+
     private func handleState(_ state: NWListener.State) {
         switch state {
         case .ready:

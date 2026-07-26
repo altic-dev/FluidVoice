@@ -173,6 +173,28 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 ---
 
+## Local API (for on-device agents)
+
+FluidVoice can expose a **loopback-only** HTTP API so other apps and AI agents running **on the same Mac** can reuse its transcription and post-processing — instead of bundling and loading their own ASR model. One model stays warm in FluidVoice; agents get FluidVoice-quality transcription with no extra memory footprint.
+
+**Enable it:** `Settings → Local API (on-device agents)`. It is **off by default** and only ever binds to `127.0.0.1` (non-loopback connections are rejected at the listener).
+
+- Base URL: `http://127.0.0.1:47733` (port configurable via the `LocalAPIPort` preference)
+- `GET  /v1/health` — liveness check
+- `POST /v1/transcribe` — transcribe an audio file → `{ text, confidence, sampleCount, provider }`
+- `POST /v1/postprocess` — run text post-processing/enhancement
+
+```bash
+curl -s http://127.0.0.1:47733/v1/transcribe \
+  -H 'Content-Type: application/json' \
+  -d '{"path": "/absolute/path/to/audio.ogg"}'
+# → {"text":"…","confidence":0.97,"sampleCount":…,"provider":"Parakeet TDT v3 (Multilingual)"}
+```
+
+Audio can also be sent inline as `{"audioBase64": "…", "filename": "clip.wav"}` (max request 25 MB). Full reference: [docs/local-api.md](docs/local-api.md).
+
+---
+
 ## Requirements
 
 - macOS 15.0 (Sequoia) or later

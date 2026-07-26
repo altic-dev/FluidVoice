@@ -861,6 +861,20 @@ struct SettingsView: View {
                                     }
                                     Divider().opacity(0.2)
 
+                                    self.optionToggleRow(
+                                        title: "Local API (on-device agents)",
+                                        description: "Expose a loopback-only HTTP API on 127.0.0.1 (default port 47733) so local agents/apps on this Mac can reuse FluidVoice's transcription (POST /v1/transcribe). Off by default; never leaves this machine.",
+                                        isOn: Binding(
+                                            get: { SettingsStore.shared.localAPIEnabled },
+                                            set: { newValue in
+                                                SettingsStore.shared.localAPIEnabled = newValue
+                                                LocalAPIServer.shared.refresh()
+                                            }
+                                        ),
+                                        allowsDescriptionWrapping: true
+                                    )
+                                    Divider().opacity(0.2)
+
                                     HStack(alignment: .center) {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text("Text Insertion Mode")

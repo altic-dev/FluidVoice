@@ -1799,6 +1799,15 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard) }
     }
 
+    /// When enabled, the loopback-only Local API server (`LocalAPIServer`) is started so
+    /// on-device agents can reuse FluidVoice's transcription (POST /v1/transcribe) instead
+    /// of shipping their own ASR model. Off by default. Uses the same "LocalAPIEnabled"
+    /// key that `LocalAPI.Configuration` reads.
+    var localAPIEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.localAPIEnabled) }
+        set { self.defaults.set(newValue, forKey: Keys.localAPIEnabled) }
+    }
+
     var preferredInputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredInputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredInputDeviceUID) }
@@ -4915,6 +4924,7 @@ private extension SettingsStore {
         static let experimentalDirectAudioCaptureForcedOff = "ExperimentalDirectAudioCaptureForcedOff"
         static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
+        static let localAPIEnabled = "LocalAPIEnabled"
         static let textInsertionMode = "TextInsertionMode"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let betaReleasesEnabled = "BetaReleasesEnabled"
