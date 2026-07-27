@@ -40,7 +40,10 @@ final class LocalAPIServer {
                 }
 
                 Task { @MainActor [weak self] in
-                    guard let self else {
+                    // Drop connections accepted just before the server was disabled: stop()
+                    // clears `listener`, so a task still queued here must not spin up a handler
+                    // after the API was turned off (e.g. a live toggle-off via refresh()).
+                    guard let self, self.listener != nil else {
                         connection.cancel()
                         return
                     }

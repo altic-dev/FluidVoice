@@ -17,14 +17,19 @@ defaults write com.FluidApp.app LocalAPIEnabled -bool true
 defaults write com.FluidApp.app LocalAPIPort -int 47733
 ```
 
+The Settings toggle starts/stops the server immediately. Setting the preference with `defaults`
+while FluidVoice is running only writes the value — **relaunch FluidVoice** (or use the toggle) for
+it to take effect, since the server is otherwise started only at app launch.
+
 ## Security
 
 - The listener **refuses all non-loopback connections** — any non-local peer is rejected at
   accept time, before it can send a request — so the API is usable only from processes on this Mac.
 - It is opt-in and off by default.
-- Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request (longer audio is
-  rejected). These caps are independent — compressed audio can satisfy the byte limit yet still hit the
-  duration limit.
+- Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request. For file-`path`
+  input, audio longer than the limit is **rejected**; for inline `audioBase64` input it is currently
+  **truncated to the first 300 s**. These caps are independent — compressed audio can satisfy the byte
+  limit yet still hit the duration limit.
 - **Locality caveat:** `/v1/transcribe` runs fully on-device. `/v1/postprocess` runs your configured
   post-processing provider (Settings → AI Enhancement); if that provider is a remote API
   (OpenAI/Groq/Anthropic/…), the submitted text is sent there. Only the HTTP listener and transcription
