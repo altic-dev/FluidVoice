@@ -52,6 +52,7 @@ final class BottomOverlayWindowController {
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
     private var presentationGeneration: UInt64 = 0
+    private let recordingRevealDelay: TimeInterval = 0.09
     private let dismissalDuration: TimeInterval = 0.02
     private var isHideInProgress = false
     private var activeHideGeneration: UInt64?
@@ -135,16 +136,18 @@ final class BottomOverlayWindowController {
         NotchContentState.shared.setBottomOverlayDismissing(false)
 
         self.targetScreen = OverlayScreenResolver.screenForCurrentPointer()
-        self.positionWindow()
-
-        // Submit one complete frame to WindowServer.
-        self.window?.setAccessibilityChildren(nil)
-        self.window?.setAccessibilityElement(true)
         self.window?.alphaValue = 1
-        self.window?.orderFrontRegardless()
         self.window?.contentView?.displayIfNeeded()
         self.window?.displayIfNeeded()
         CATransaction.flush()
+
+        let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+        Thread.sleep(forTimeInterval: max(self.recordingRevealDelay - elapsed, 0))
+
+        self.positionWindow()
+        self.window?.setAccessibilityChildren(nil)
+        self.window?.setAccessibilityElement(true)
+        self.window?.orderFrontRegardless()
         Self.overlayBench("bottom_order_front elapsedMs=\(Self.elapsedMs(since: startedAt))")
         Self.overlayBench("bottom_visible elapsedMs=\(Self.elapsedMs(since: startedAt))")
 
