@@ -45,6 +45,7 @@ final class SettingsStore: ObservableObject {
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
+        self.disableExperimentalDirectAudioCaptureIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
     }
 
@@ -176,6 +177,24 @@ final class SettingsStore: ObservableObject {
                 return "Primary Dictation Shortcut"
             case .secondary:
                 return "Secondary Dictation Shortcut"
+            }
+        }
+    }
+
+    enum MicrophoneSelectionMode: String, Codable, CaseIterable, Identifiable {
+        case system
+        case manual
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .system:
+                return "Use macOS Default"
+            case .manual:
+                return "Use Preferred Microphone"
             }
         }
     }
@@ -1742,6 +1761,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Skips clearly silent recordings up to four seconds before invoking ASR.
+    /// Opt-in so quiet speech keeps the existing transcription behavior by default.
+    var skipSilentRecordingsEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.skipSilentRecordingsEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.skipSilentRecordingsEnabled)
+        }
+    }
+
     var enableAIStreaming: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableAIStreaming)
@@ -1753,17 +1782,22 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Direct Core Audio capture is enabled by default for faster recording
-    /// startup, while preserving explicit user opt-out.
+    /// Direct Core Audio capture is opt-in while the faster recording path is experimental.
     var experimentalDirectAudioCaptureEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.experimentalDirectAudioCaptureEnabled)
-            return value as? Bool ?? true
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
+    }
+
+    private func disableExperimentalDirectAudioCaptureIfNeeded() {
+        guard self.defaults.bool(forKey: Keys.experimentalDirectAudioCaptureForcedOff) == false else { return }
+        self.defaults.set(false, forKey: Keys.experimentalDirectAudioCaptureEnabled)
+        self.defaults.set(true, forKey: Keys.experimentalDirectAudioCaptureForcedOff)
     }
 
     var directAudioCaptureConsecutiveFailures: Int {
@@ -1786,18 +1820,61 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
-    /// When enabled, changing audio devices in FluidVoice will also update macOS system audio settings.
-    /// ALWAYS TRUE: Independent mode removed due to CoreAudio aggregate device limitations (OSStatus -10851)
-    var syncAudioDevicesWithSystem: Bool {
+    var microphoneSelectionMode: MicrophoneSelectionMode {
         get {
-            // Always return true - independent mode doesn't work for Bluetooth/aggregate devices
-            return true
+            if let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+               let mode = MicrophoneSelectionMode(rawValue: raw)
+            {
+                return mode
+            }
+
+            return .system
         }
         set {
-            // No-op: sync mode is always enabled
-            // Kept for backward compatibility but value is ignored
-            _ = newValue
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.microphoneSelectionMode)
         }
+    }
+
+    func recordInputDeviceSelection(_ uid: String) {
+        guard uid.isEmpty == false else { return }
+        guard self.microphoneSelectionMode == .manual else { return }
+
+        self.preferredInputDeviceUID = uid
+    }
+
+    func shouldSyncInputSelectionToSystemDefault() -> Bool {
+        self.microphoneSelectionMode == .system
+    }
+
+    @discardableResult
+    func setMicrophoneSelectionMode(
+        _ mode: MicrophoneSelectionMode,
+        currentSystemInputUID: String?,
+        availableInputUIDs: Set<String>
+    ) -> String? {
+        let previousMode = self.microphoneSelectionMode
+
+        if previousMode == .system,
+           mode == .manual,
+           let currentSystemInputUID,
+           currentSystemInputUID.isEmpty == false
+        {
+            self.defaults.set(currentSystemInputUID, forKey: Keys.systemInputDeviceUIDBeforeManual)
+        }
+
+        self.microphoneSelectionMode = mode
+
+        guard mode == .system else { return nil }
+
+        if let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
+           previousSystemInputUID.isEmpty == false,
+           availableInputUIDs.contains(previousSystemInputUID)
+        {
+            return previousSystemInputUID
+        }
+
+        return currentSystemInputUID
     }
 
     var visualizerNoiseThreshold: Double {
@@ -1873,6 +1950,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.overlayPosition)
+            NotificationCenter.default.post(name: NSNotification.Name("OverlayPositionChanged"), object: nil)
         }
     }
 
@@ -3000,11 +3078,13 @@ final class SettingsStore: ObservableObject {
             pressAndHoldMode: self.pressAndHoldMode,
             hotkeyMode: self.hotkeyMode,
             enableStreamingPreview: self.enableStreamingPreview,
+            skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
+            microphoneSelectionMode: self.microphoneSelectionMode,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
@@ -3113,11 +3193,17 @@ final class SettingsStore: ObservableObject {
         self.shareAnonymousAnalytics = payload.shareAnonymousAnalytics
         self.hotkeyMode = payload.hotkeyMode ?? (payload.pressAndHoldMode ? .hold : .toggle)
         self.enableStreamingPreview = payload.enableStreamingPreview
+        if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
+            self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
+        }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
         self.textInsertionMode = payload.textInsertionMode
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.preferredOutputDeviceUID = payload.preferredOutputDeviceUID
+        if let microphoneSelectionMode = payload.microphoneSelectionMode {
+            self.microphoneSelectionMode = microphoneSelectionMode
+        }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
@@ -4845,7 +4931,8 @@ private extension SettingsStore {
         static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
-        static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
+        static let microphoneSelectionMode = "MicrophoneSelectionMode"
+        static let systemInputDeviceUIDBeforeManual = "SystemInputDeviceUIDBeforeManual"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
@@ -4858,8 +4945,10 @@ private extension SettingsStore {
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
         static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
+        static let experimentalDirectAudioCaptureForcedOff = "ExperimentalDirectAudioCaptureForcedOff"
         static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"

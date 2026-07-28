@@ -393,7 +393,10 @@ final class MeetingTranscriptionService: ObservableObject {
                 // Convert buffer to 16kHz mono Float32 samples
                 let samples: [Float]
                 do {
-                    samples = try self.resampleBuffer(buffer, targetSampleRate: sampleRate)
+                    samples = try AudioBufferConverter.monoSamples(
+                        from: buffer,
+                        targetSampleRate: sampleRate
+                    )
                 } catch {
                     throw TranscriptionError.audioConversionFailed("Could not resample audio: \(error.localizedDescription)")
                 }
@@ -870,100 +873,5 @@ final class MeetingTranscriptionService: ObservableObject {
         ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
             .map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-    }
-
-    // MARK: - Audio Resampling Helpers
-
-    /// Resample an audio buffer to 16kHz mono Float32 samples
-    /// - Parameters:
-    ///   - buffer: Source audio buffer
-    ///   - targetSampleRate: Target sample rate (default 16000 Hz)
-    /// - Returns: Array of Float32 samples at target sample rate
-    private nonisolated func resampleBuffer(_ buffer: AVAudioPCMBuffer, targetSampleRate: Double = 16_000) throws -> [Float] {
-        let sourceFormat = buffer.format
-        let sourceSampleRate = sourceFormat.sampleRate
-        let sourceChannels = sourceFormat.channelCount
-
-        // Create target format (16kHz mono Float32)
-        guard let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetSampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
-            throw NSError(
-                domain: "MeetingTranscriptionService",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create target audio format"]
-            )
-        }
-
-        // If already in correct format, just extract samples
-        // Must also verify the format is Float32 - if source is Float64, floatChannelData returns nil
-        if sourceSampleRate == targetSampleRate,
-           sourceChannels == 1,
-           sourceFormat.commonFormat == .pcmFormatFloat32
-        {
-            guard let channelData = buffer.floatChannelData else {
-                throw NSError(
-                    domain: "MeetingTranscriptionService",
-                    code: -2,
-                    userInfo: [NSLocalizedDescriptionKey: "Could not access audio channel data"]
-                )
-            }
-            let frameLength = Int(buffer.frameLength)
-            return Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
-        }
-
-        // Create converter
-        guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-            throw NSError(
-                domain: "MeetingTranscriptionService",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create audio converter"]
-            )
-        }
-
-        // Calculate output buffer size
-        let ratio = targetSampleRate / sourceSampleRate
-        let estimatedFrameCount = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: estimatedFrameCount + 1024) else {
-            throw NSError(
-                domain: "MeetingTranscriptionService",
-                code: -4,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create output buffer"]
-            )
-        }
-
-        // Convert
-        var error: NSError?
-        var inputConsumed = false
-
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            if inputConsumed {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            inputConsumed = true
-            outStatus.pointee = .haveData
-            return buffer
-        }
-
-        if let error = error {
-            throw error
-        }
-
-        // Extract samples
-        guard let channelData = outputBuffer.floatChannelData else {
-            throw NSError(
-                domain: "MeetingTranscriptionService",
-                code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "Could not access converted audio data"]
-            )
-        }
-
-        let frameLength = Int(outputBuffer.frameLength)
-        return Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
     }
 }

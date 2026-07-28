@@ -1,4 +1,4 @@
-name: Close Older Issues Awaiting Response
+name: Close Issues Awaiting Response
 
 on:
   issues:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   awaiting-response:
-    name: Close older issues awaiting response
+    name: Close issues awaiting response
     runs-on: ubuntu-latest
     steps:
       - name: Checkout policy from default branch

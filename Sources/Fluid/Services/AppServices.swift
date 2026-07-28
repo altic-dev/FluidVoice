@@ -68,6 +68,16 @@ final class AppServices: ObservableObject {
         return service
     }
 
+    private var _microphonePreferenceCoordinator: MicrophonePreferenceCoordinator?
+    var microphonePreferenceCoordinator: MicrophonePreferenceCoordinator {
+        if let existing = self._microphonePreferenceCoordinator {
+            return existing
+        }
+        let coordinator = MicrophonePreferenceCoordinator()
+        self._microphonePreferenceCoordinator = coordinator
+        return coordinator
+    }
+
     private var cancellables = Set<AnyCancellable>()
 
     private init() {

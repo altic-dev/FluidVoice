@@ -24,6 +24,13 @@ enum OverlayMode: String {
 final class NotchOverlayManager {
     static let shared = NotchOverlayManager()
 
+    private typealias RecordingNotch = DynamicNotch<
+        NotchExpandedView,
+        NotchCompactLeadingView,
+        NotchCompactTrailingView,
+        NotchCompactBottomView
+    >
+
     struct NotchPresentationPolicy: Equatable {
         let usesCompactPresentation: Bool
         let showsPromptSelector: Bool
@@ -34,7 +41,7 @@ final class NotchOverlayManager {
         let allowsExpandedCommandOutput: Bool
     }
 
-    private var notch: DynamicNotch<NotchExpandedView, NotchCompactLeadingView, NotchCompactTrailingView, NotchCompactBottomView>?
+    private var notch: RecordingNotch?
     private var commandOutputNotch: DynamicNotch<
         NotchCommandOutputExpandedView,
         NotchCompactLeadingView,
@@ -82,10 +89,10 @@ final class NotchOverlayManager {
     private var generation: UInt64 = 0
     private var commandOutputGeneration: UInt64 = 0
     private var isHideInProgress = false
-    private var hideWaiters: [CheckedContinuation<Void, Never>] = []
-
-    /// Track pending retry task for cancellation
-    private var pendingRetryTask: Task<Void, Never>?
+    private var activeHideGeneration: UInt64?
+    private var hideWaiters: [CheckedContinuation<RecordingOverlayHideOutcome, Never>] = []
+    private var notchAnimationTask: Task<Void, Never>?
+    private var notchPresentationTask: Task<Void, Never>?
 
     // Cancel shortcut monitors for dismissing notch / overlay
     private var globalEscapeMonitor: Any?
@@ -145,6 +152,7 @@ final class NotchOverlayManager {
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
         self.refreshNotchPresentationPolicy()
         Self.overlayBench("show_called mode=\(mode.rawValue) state=\(self.state) commandExpanded=\(self.isCommandOutputExpanded)")
+        self.cancelInFlightHideForNewPresentation()
 
         // Don't show regular notch if expanded command output is visible
         if self.isCommandOutputExpanded {
@@ -154,35 +162,13 @@ final class NotchOverlayManager {
             return
         }
 
-        // Cancel any pending retry operations
-        self.pendingRetryTask?.cancel()
-        self.pendingRetryTask = nil
-
-        // If already visible or in transition, wait for cleanup to complete
+        // A rapid restart should never wait for the previous notch animation.
+        // Remove the old panel from the screen synchronously, then let its
+        // internal cleanup finish without blocking the new presentation.
         if self.notch != nil || self.state != .idle {
-            Self.overlayBench("show_retry_after_cleanup state=\(self.state) notchExists=\(self.notch != nil)")
-
-            // Increment generation to invalidate stale operations
+            Self.overlayBench("show_replace_existing state=\(self.state) notchExists=\(self.notch != nil)")
             self.generation &+= 1
-            let targetGeneration = self.generation
-
-            // Start async cleanup and retry
-            self.pendingRetryTask = Task { [weak self] in
-                guard let self = self else { return }
-
-                // Perform cleanup synchronously first
-                await self.performCleanup()
-
-                // Small delay to ensure cleanup completes
-                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
-
-                // Check if we're still the active operation
-                guard !Task.isCancelled, self.generation == targetGeneration else { return }
-
-                // Retry show
-                self.showInternal(audioLevelPublisher: audioLevelPublisher, mode: mode)
-            }
-            return
+            self.retireCurrentNotchImmediately(reason: "rapid_restart")
         }
 
         self.showInternal(audioLevelPublisher: audioLevelPublisher, mode: mode)
@@ -216,11 +202,6 @@ final class NotchOverlayManager {
         let startedAt = ProcessInfo.processInfo.systemUptime
         Self.overlayBench("bottom_route_start mode=\(mode.rawValue)")
         self.generation &+= 1
-
-        // Hide any existing notch first
-        if self.notch != nil {
-            Task { await self.performCleanup() }
-        }
 
         self.lastAudioPublisher = audioLevelPublisher
         self.currentMode = self.normalizedOverlayMode(mode)
@@ -268,6 +249,12 @@ final class NotchOverlayManager {
         } compactBottom: {
             NotchCompactBottomView()
         }
+        newNotch.transitionConfiguration = .init(
+            openingAnimation: .snappy(duration: 0.1),
+            closingAnimation: .linear(duration: 0.02),
+            conversionAnimation: .snappy(duration: 0.1),
+            skipIntermediateHides: true
+        )
 
         self.notch = newNotch
         let shouldUseCompactPresentation = self.currentNotchPresentationPolicy.usesCompactPresentation
@@ -275,13 +262,43 @@ final class NotchOverlayManager {
         Self.overlayBench("notch_task_scheduled mode=\(self.currentMode.rawValue) presentation=\(presentation) screen=\(targetScreen.localizedName)")
 
         // Resolve presentation from policy so future notch modes don't require call-site changes.
-        Task { [weak self] in
-            Self.overlayBench("notch_animation_start presentation=\(presentation)")
+        let animationTask = Task { @MainActor in
+            guard !Task.isCancelled else { return }
             if shouldUseCompactPresentation {
                 await newNotch.compact(on: targetScreen)
             } else {
                 await newNotch.expand(on: targetScreen)
             }
+        }
+        self.notchAnimationTask = animationTask
+
+        self.notchPresentationTask = Task { [weak self] in
+            Self.overlayBench("notch_animation_start presentation=\(presentation)")
+
+            // DynamicNotchKit applies a fixed 150 ms window fade. The content
+            // animation is already running before the panel is ordered front,
+            // so make that panel opaque on its first run-loop opportunity.
+            let windowDeadline = ProcessInfo.processInfo.systemUptime + 0.05
+            while newNotch.windowController?.window == nil,
+                  !Task.isCancelled,
+                  !animationTask.isCancelled,
+                  ProcessInfo.processInfo.systemUptime < windowDeadline
+            {
+                await Task.yield()
+            }
+            guard !Task.isCancelled, !animationTask.isCancelled else { return }
+            if newNotch.windowController?.window == nil {
+                await animationTask.value
+            }
+            guard let window = newNotch.windowController?.window else {
+                Self.overlayBench("notch_visible_drop reason=no_window")
+                return
+            }
+            window.alphaValue = 1
+            Self.overlayBench("notch_window_visible elapsedMs=\(Self.elapsedMs(since: startedAt))")
+
+            await animationTask.value
+            guard !Task.isCancelled else { return }
             Self.overlayBench("notch_animation_complete presentation=\(presentation) elapsedMs=\(Self.elapsedMs(since: startedAt))")
             // Only update state if we're still the active generation
             guard let self = self, self.generation == currentGeneration else {
@@ -298,36 +315,38 @@ final class NotchOverlayManager {
         self.isHideInProgress = true
         self.generation &+= 1
         let currentGeneration = self.generation
+        self.activeHideGeneration = currentGeneration
         Task { [weak self] in
             guard let self else { return }
-            await self.performHideAndWait(generation: currentGeneration)
-            self.completeHideOperation()
+            let outcome = await self.performHideAndWait(generation: currentGeneration)
+            self.completeHideOperation(generation: currentGeneration, outcome: outcome)
         }
     }
 
-    /// Dismisses the active recording overlay and returns only after its visual
-    /// exit is complete. This gives output delivery an explicit ordering point.
-    func hideAndWait() async {
+    /// Reports whether the active overlay finished hiding or a newer
+    /// presentation superseded this request.
+    func hideAndWait() async -> RecordingOverlayHideOutcome {
         if self.isHideInProgress {
-            await withCheckedContinuation { continuation in
+            return await withCheckedContinuation { continuation in
                 self.hideWaiters.append(continuation)
             }
-            return
         }
 
         self.isHideInProgress = true
         self.generation &+= 1
         let currentGeneration = self.generation
-        await self.performHideAndWait(generation: currentGeneration)
-        self.completeHideOperation()
+        self.activeHideGeneration = currentGeneration
+        let outcome = await self.performHideAndWait(generation: currentGeneration)
+        self.completeHideOperation(generation: currentGeneration, outcome: outcome)
+        return outcome
     }
 
-    private func performHideAndWait(generation currentGeneration: UInt64) async {
+    private func performHideAndWait(generation currentGeneration: UInt64) async -> RecordingOverlayHideOutcome {
         let startedAt = ProcessInfo.processInfo.systemUptime
         Self.overlayBench("hide_called state=\(self.state) bottomVisible=\(self.isBottomOverlayVisible)")
         guard self.generation == currentGeneration else {
             Self.overlayBench("hide_return reason=stale_generation")
-            return
+            return .superseded
         }
 
         // Stop monitoring active app changes
@@ -335,69 +354,76 @@ final class NotchOverlayManager {
 
         // Hide bottom overlay if visible
         if self.isBottomOverlayVisible {
-            await BottomOverlayWindowController.shared.hideAndWait()
+            let bottomOutcome = await BottomOverlayWindowController.shared.hideAndWait()
+            guard bottomOutcome == .hidden else {
+                Self.overlayBench("hide_return reason=bottom_superseded")
+                return .superseded
+            }
             guard self.generation == currentGeneration else {
                 Self.overlayBench("hide_return reason=stale_generation")
-                return
+                return .superseded
             }
             self.isBottomOverlayVisible = false
         }
-
-        // Cancel any pending retry operations
-        self.pendingRetryTask?.cancel()
-        self.pendingRetryTask = nil
 
         // Safety: reset processing state when hiding
         NotchContentState.shared.setProcessing(false)
 
         // Handle visible or showing states (can hide while still expanding)
-        guard self.state == .visible || self.state == .showing, let currentNotch = notch else {
+        guard self.state == .visible || self.state == .showing, self.notch != nil else {
             // A bottom overlay has already completed its dismissal. Clean up
             // any inconsistent notch state without scheduling another task.
             Self.overlayBench("hide_return reason=not_visible state=\(self.state) notchExists=\(self.notch != nil)")
-            if let existingNotch = self.notch {
-                await existingNotch.hide()
-            }
-            guard self.generation == currentGeneration else { return }
-            self.notch = nil
-            self.state = .idle
+            self.retireCurrentNotchImmediately(reason: "inconsistent_state")
             Self.overlayBench("hide_complete target=none elapsedMs=\(Self.elapsedMs(since: startedAt))")
-            return
+            return .hidden
         }
 
         self.state = .hiding
-        Self.overlayBench("hide_animation_start")
-        await currentNotch.hide()
-        Self.overlayBench("hide_animation_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
-        // Only clear if we're still the active operation
-        guard self.generation == currentGeneration else { return }
-        self.notch = nil
-        self.state = .idle
-        Self.overlayBench("state_idle target=notch")
+        Self.overlayBench("hide_visual_start")
+        self.retireCurrentNotchImmediately(reason: "hide")
+        Self.overlayBench("hide_visual_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
+        return .hidden
     }
 
-    private func completeHideOperation() {
+    private func completeHideOperation(generation: UInt64, outcome: RecordingOverlayHideOutcome) {
+        guard self.activeHideGeneration == generation else { return }
+        self.activeHideGeneration = nil
         self.isHideInProgress = false
         let waiters = self.hideWaiters
         self.hideWaiters.removeAll(keepingCapacity: true)
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.resume(returning: outcome) }
     }
 
-    /// Async cleanup that properly waits for hide to complete
-    private func performCleanup() async {
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        Self.overlayBench("cleanup_start state=\(self.state) notchExists=\(self.notch != nil)")
+    private func cancelInFlightHideForNewPresentation() {
+        guard self.isHideInProgress else { return }
+        self.activeHideGeneration = nil
+        self.isHideInProgress = false
+        let waiters = self.hideWaiters
+        self.hideWaiters.removeAll(keepingCapacity: true)
+        waiters.forEach { $0.resume(returning: .superseded) }
+        Self.overlayBench("hide_cancelled_for_new_presentation")
+    }
 
-        // Cancel any pending retry operations
-        self.pendingRetryTask?.cancel()
-        self.pendingRetryTask = nil
-
-        if let existingNotch = notch {
-            await existingNotch.hide()
+    private func retireCurrentNotchImmediately(reason: String) {
+        guard let existingNotch = self.notch else {
+            self.state = .idle
+            return
         }
+
+        existingNotch.windowController?.window?.orderOut(nil)
+        self.notchAnimationTask?.cancel()
+        self.notchAnimationTask = nil
+        self.notchPresentationTask?.cancel()
+        self.notchPresentationTask = nil
         self.notch = nil
         self.state = .idle
-        Self.overlayBench("cleanup_complete elapsedMs=\(Self.elapsedMs(since: startedAt))")
+        Self.overlayBench("notch_retired reason=\(reason)")
+
+        Task {
+            await existingNotch.hide()
+            Self.overlayBench("notch_retire_cleanup_complete reason=\(reason)")
+        }
     }
 
     func setMode(_ mode: OverlayMode) {

@@ -53,7 +53,7 @@ struct MeetingTranscriptionView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("Upload audio or video files to transcribe")
+                Text("Choose an audio or video file to transcribe")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -251,7 +251,7 @@ struct MeetingTranscriptionView: View {
                         Image(systemName: "arrow.up.doc.fill")
                             .font(.system(size: 32))
 
-                        Text("Choose Audio or Video File")
+                        Text("Drag and drop a file here, or click to open")
                             .font(.headline)
 
                         Text(MeetingTranscriptionService.supportedFormatsDescription)

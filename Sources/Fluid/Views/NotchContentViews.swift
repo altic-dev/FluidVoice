@@ -145,6 +145,7 @@ class NotchContentState: ObservableObject {
     // MARK: - Bottom Overlay Audio Level
 
     @Published var bottomOverlayAudioLevel: CGFloat = 0 // Audio level for bottom overlay waveform
+    @Published var isBottomOverlayPresented: Bool = false
     @Published var isBottomOverlayReleaseTransitioning: Bool = false
     @Published var isBottomOverlayDismissing: Bool = false
     @Published var bottomOverlayDismissOffsetY: CGFloat = 8
@@ -183,6 +184,11 @@ class NotchContentState: ObservableObject {
     func setBottomOverlayReleaseTransitioning(_ transitioning: Bool) {
         guard self.isBottomOverlayReleaseTransitioning != transitioning else { return }
         self.isBottomOverlayReleaseTransitioning = transitioning
+    }
+
+    func setBottomOverlayPresented(_ presented: Bool) {
+        guard self.isBottomOverlayPresented != presented else { return }
+        self.isBottomOverlayPresented = presented
     }
 
     func setBottomOverlayDismissing(_ dismissing: Bool) {
@@ -1134,6 +1140,7 @@ struct NotchCompactLeadingView: View {
                     .frame(width: 8, height: 8)
             }
         }
+        .frame(width: 34, height: 16)
     }
 }
 

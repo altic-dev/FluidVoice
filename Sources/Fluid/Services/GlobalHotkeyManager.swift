@@ -564,7 +564,7 @@ final class GlobalHotkeyManager: NSObject {
             setModeKeyPressed: { self.isKeyPressed = $0 },
             onHoldStart: { self.startRecordingIfNeeded() },
             onToggleRelease: {
-                if self.asrService.isRunning {
+                if self.asrService.isRunningOrStarting {
                     let isSameMode = self.isDictateRecordingProvider?() ?? false
                     DebugLogger.shared.info(
                         "Hotkey route | pressed=dictate(mod) | active=\(isSameMode ? "dictate" : "other") | asrRunning=true | action=\(isSameMode ? "stop" : "switch")",
@@ -620,7 +620,7 @@ final class GlobalHotkeyManager: NSObject {
             if SettingsStore.shared.cancelRecordingHotkeyShortcut.matches(keyCode: keyCode, modifiers: eventModifiers) {
                 var handled = false
 
-                if self.asrService.isRunning {
+                if self.asrService.isRunning || self.asrService.isStarting {
                     DebugLogger.shared.info("Cancel shortcut pressed - cancelling recording", source: "GlobalHotkeyManager")
                     Task { @MainActor in
                         await self.asrService.stopWithoutTranscription()
@@ -682,7 +682,7 @@ final class GlobalHotkeyManager: NSObject {
                         }
                     }
                 case .toggle:
-                    if self.asrService.isRunning {
+                    if self.asrService.isRunningOrStarting {
                         if self.isPromptModeRecordingProvider?() ?? false {
                             DebugLogger.shared.info("Prompt shortcut pressed in Prompt mode - stopping", source: "GlobalHotkeyManager")
                             self.stopRecordingIfNeeded()
@@ -738,7 +738,7 @@ final class GlobalHotkeyManager: NSObject {
                     }
                 case .toggle:
                     // Toggle mode: press to start, press again to stop
-                    if self.asrService.isRunning {
+                    if self.asrService.isRunningOrStarting {
                         if self.isCommandRecordingProvider?() ?? false {
                             DebugLogger.shared.info("Command mode shortcut pressed in Command mode - stopping", source: "GlobalHotkeyManager")
                             self.stopRecordingIfNeeded()
@@ -789,7 +789,7 @@ final class GlobalHotkeyManager: NSObject {
                         }
                     case .toggle:
                         // Toggle mode: press to start, press again to stop
-                        if self.asrService.isRunning {
+                        if self.asrService.isRunningOrStarting {
                             if self.isRewriteRecordingProvider?() ?? false {
                                 DebugLogger.shared.info("Rewrite mode shortcut pressed in Edit mode - stopping", source: "GlobalHotkeyManager")
                                 self.stopRecordingIfNeeded()
@@ -929,7 +929,7 @@ final class GlobalHotkeyManager: NSObject {
                        setModeKeyPressed: { self.isCommandModeKeyPressed = $0 },
                        onHoldStart: { self.triggerCommandMode() },
                        onToggleRelease: {
-                           if self.asrService.isRunning {
+                           if self.asrService.isRunningOrStarting {
                                if self.isCommandRecordingProvider?() ?? false {
                                    DebugLogger.shared.info("Command mode modifier released (toggle, same mode) - stopping", source: "GlobalHotkeyManager")
                                    self.stopRecordingIfNeeded()
@@ -961,7 +961,7 @@ final class GlobalHotkeyManager: NSObject {
                     setModeKeyPressed: { self.isRewriteKeyPressed = $0 },
                     onHoldStart: { self.triggerRewriteMode() },
                     onToggleRelease: {
-                        if self.asrService.isRunning {
+                        if self.asrService.isRunningOrStarting {
                             if self.isRewriteRecordingProvider?() ?? false {
                                 DebugLogger.shared.info("Rewrite mode modifier released (toggle, same mode) - stopping", source: "GlobalHotkeyManager")
                                 self.stopRecordingIfNeeded()
@@ -1145,7 +1145,7 @@ final class GlobalHotkeyManager: NSObject {
                 }
             }
         case .toggle:
-            if self.asrService.isRunning {
+            if self.asrService.isRunningOrStarting {
                 let isSameMode = self.isDictateRecordingProvider?() ?? false
                 DebugLogger.shared.debug(
                     "GlobalHotkeyManager: dictation tap path while already running",
@@ -1392,7 +1392,7 @@ final class GlobalHotkeyManager: NSObject {
                 }
             }
         case .toggle:
-            if self.asrService.isRunning {
+            if self.asrService.isRunningOrStarting {
                 if self.isPromptModeRecordingProvider?() ?? false {
                     DebugLogger.shared.info("Prompt mode shortcut pressed in Prompt mode - stopping", source: "GlobalHotkeyManager")
                     self.stopRecordingIfNeeded()
@@ -1439,7 +1439,7 @@ final class GlobalHotkeyManager: NSObject {
                 setModeKeyPressed: { self.isPromptModeKeyPressed = $0 },
                 onHoldStart: { self.triggerPromptMode() },
                 onToggleRelease: {
-                    if self.asrService.isRunning {
+                    if self.asrService.isRunningOrStarting {
                         if self.isPromptModeRecordingProvider?() ?? false {
                             DebugLogger.shared.info("Prompt mode modifier released (toggle, same mode) - stopping", source: "GlobalHotkeyManager")
                             self.stopRecordingIfNeeded()
@@ -1473,7 +1473,7 @@ final class GlobalHotkeyManager: NSObject {
                     setModeKeyPressed: { self.isPromptAssignmentKeyPressed = $0 },
                     onHoldStart: { self.triggerPromptSelection(assignment.selection) },
                     onToggleRelease: {
-                        if self.asrService.isRunning {
+                        if self.asrService.isRunningOrStarting {
                             if self.isPromptModeRecordingProvider?() ?? false {
                                 DebugLogger.shared.info("Prompt shortcut modifier released (toggle, same mode) - stopping", source: "GlobalHotkeyManager")
                                 self.stopRecordingIfNeeded()
@@ -1767,7 +1767,7 @@ final class GlobalHotkeyManager: NSObject {
             // Prevent new operations while stop is processing
             guard self.canTriggerRecordingAction("toggle") else { return }
 
-            if self.asrService.isRunning {
+            if self.asrService.isRunningOrStarting {
                 await self.stopRecordingInternal()
             } else {
                 // Use callback if available, otherwise fallback to direct start
@@ -1811,7 +1811,7 @@ final class GlobalHotkeyManager: NSObject {
                 return
             }
 
-            guard self.asrService.isRunning else {
+            guard self.asrService.isRunningOrStarting else {
                 return
             }
 
@@ -1821,6 +1821,10 @@ final class GlobalHotkeyManager: NSObject {
 
     @MainActor
     private func stopRecordingInternal() async {
+        if self.asrService.isStarting, self.asrService.isRunning == false {
+            DebugLogger.shared.debug("Waiting for audio capture start before stopping", source: "GlobalHotkeyManager")
+            await self.asrService.waitForPendingStart()
+        }
         guard self.asrService.isRunning else { return }
         guard !self.asrService.isDictionaryTrainingCaptureActive else {
             DebugLogger.shared.debug("Stop ignored - dictionary training capture is active", source: "GlobalHotkeyManager")

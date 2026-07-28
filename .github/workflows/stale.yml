@@ -39,7 +39,7 @@ jobs:
             Closing this pull request because it remained inactive for 2 days
             after being marked stale.
 
-          exempt-issue-labels: keep-open,pinned,needs reproduction
+          exempt-issue-labels: keep-open,pinned,needs reproduction,awaiting response
           exempt-pr-labels: keep-open,pinned,needs PR template,needs screenshots
           exempt-draft-pr: true
           remove-stale-when-updated: true
