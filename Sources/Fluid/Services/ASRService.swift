@@ -764,14 +764,50 @@ final class ASRService: ObservableObject {
         self.audioEngineRetirementDrain.schedule(token)
     }
 
-    /// Route recovery and engine retry paths use this completion barrier so the
-    /// old AVAudioEngine and its AVAudioIOUnit are fully deallocated before a
-    /// replacement can touch Core Audio.
-    private func retireAudioEngineAndWait(reason: String) async {
+    private struct AudioEngineRetirementTimeout: LocalizedError {
+        let reason: String
+
+        var errorDescription: String? {
+            "The previous audio engine did not stop in time (\(self.reason))."
+        }
+    }
+
+    private static let audioEngineRetirementTimeout: TimeInterval = 3
+
+    /// Route recovery and engine retry paths use this bounded completion barrier
+    /// so a wedged AVAudioIOUnit cannot block every future recording attempt.
+    private func retireAudioEngineAndWait(reason: String) async throws {
+        let completed: Bool
         if let token = self.detachAudioEngineForRetirement(reason: reason) {
-            await self.audioEngineRetirementDrain.releaseAndWait(token)
+            completed = await self.audioEngineRetirementDrain.releaseAndWait(
+                token,
+                timeout: Self.audioEngineRetirementTimeout
+            )
         } else {
-            await self.audioEngineRetirementDrain.waitForScheduledReleases()
+            completed = await self.audioEngineRetirementDrain.waitForScheduledReleases(
+                timeout: Self.audioEngineRetirementTimeout
+            )
+        }
+
+        guard completed else {
+            DebugLogger.shared.error(
+                "Audio engine retirement timed out (\(reason))",
+                source: "ASRService"
+            )
+            throw AudioEngineRetirementTimeout(reason: reason)
+        }
+    }
+
+    private func waitForAudioEngineRetirement(reason: String) async throws {
+        let completed = await self.audioEngineRetirementDrain.waitForScheduledReleases(
+            timeout: Self.audioEngineRetirementTimeout
+        )
+        guard completed else {
+            DebugLogger.shared.error(
+                "Audio engine retirement barrier timed out (\(reason))",
+                source: "ASRService"
+            )
+            throw AudioEngineRetirementTimeout(reason: reason)
         }
     }
 
@@ -908,11 +944,6 @@ final class ASRService: ObservableObject {
     }
 
     private func startPreferredAudioCapture() async throws {
-        // A non-route path may have scheduled a fire-and-forget retirement. Do
-        // not let capture startup overlap any final AVAudioEngine release that is
-        // already queued.
-        await self.audioEngineRetirementDrain.waitForScheduledReleases()
-
         let directCaptureEnabled = SettingsStore.shared.experimentalDirectAudioCaptureEnabled
         if directCaptureEnabled,
            self.prepareDirectAudioInputIfPossible(reason: "recording_start"),
@@ -951,7 +982,7 @@ final class ASRService: ObservableObject {
     }
 
     private func startCompatibilityAudioCapture(reason: String) async throws {
-        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        try await self.waitForAudioEngineRetirement(reason: "compatibility_start:\(reason)")
         self.benchmarkLog("audio_backend kind=av_audio_engine_fallback reason=\(reason)")
         try self.configureSession()
         try await self.startEngine()
@@ -1525,7 +1556,7 @@ final class ASRService: ObservableObject {
             self.audioCapturePipeline.setRecordingEnabled(false)
             self.isRunning = false
             self.stopActiveAudioCapture()
-            await self.retireAudioEngineAndWait(reason: "start_failed")
+            try? await self.retireAudioEngineAndWait(reason: "start_failed")
             DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
 
             // Resume media if we paused it before the failure
@@ -2033,7 +2064,7 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("Audio capture stopped", source: "ASRService")
 
         // Cancel/no-transcription paths stay conservative and retire the engine.
-        await self.retireAudioEngineAndWait(reason: "stop_without_transcription")
+        try? await self.retireAudioEngineAndWait(reason: "stop_without_transcription")
 
         // CRITICAL FIX: Await completion of streaming task AND any pending transcriptions
         // This prevents use-after-free crashes (EXC_BAD_ACCESS) when clearing buffer
@@ -2419,7 +2450,7 @@ final class ASRService: ObservableObject {
                 // If this isn't the last attempt, recreate engine and reconfigure
                 if attempts < 3 {
                     DebugLogger.shared.debug("⚠️ Start failed, recreating engine for retry...", source: "ASRService")
-                    await self.retireAudioEngineAndWait(reason: "start_retry")
+                    try await self.retireAudioEngineAndWait(reason: "start_retry")
                     // Need to reconfigure the new engine
                     try? self.configureSession()
                     DebugLogger.shared.debug("✅ Engine recreated and reconfigured, will retry", source: "ASRService")
@@ -2583,7 +2614,7 @@ final class ASRService: ObservableObject {
         _ = await task?.result
         self.audioRouteRecoveryTask = nil
         self.isRecoveringAudioRoute = false
-        await self.audioEngineRetirementDrain.waitForScheduledReleases()
+        try? await self.waitForAudioEngineRetirement(reason: "cancel_route_recovery")
     }
 
     private func performAudioRouteRecovery(_ request: AudioRouteRecoveryRequest) async {
@@ -2629,7 +2660,15 @@ final class ASRService: ObservableObject {
             reason: request.reason,
             requiresIdlePrewarm: true
         )
-        await self.retireAudioEngineAndWait(reason: "idle_route_change:\(request.reason)")
+        do {
+            try await self.retireAudioEngineAndWait(reason: "idle_route_change:\(request.reason)")
+        } catch {
+            DebugLogger.shared.error(
+                "Idle audio route recovery stopped: \(error.localizedDescription)",
+                source: "ASRService"
+            )
+            return
+        }
 
         guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
         self.prewarmAudioEngineIfPossible(
@@ -2648,11 +2687,10 @@ final class ASRService: ObservableObject {
         self.audioCapturePipeline.setRecordingEnabled(false)
         self.stopMonitoringDevice()
         self.stopActiveAudioCapture()
-        await self.retireAudioEngineAndWait(reason: "audio_route_recovery")
-
-        guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
-
         do {
+            try await self.retireAudioEngineAndWait(reason: "audio_route_recovery")
+            guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
+
             self.audioCapturePipeline.setRecordingEnabled(
                 true,
                 sessionID: self.benchmarkSessionID,

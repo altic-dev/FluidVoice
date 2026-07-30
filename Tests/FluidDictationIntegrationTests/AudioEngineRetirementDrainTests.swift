@@ -10,7 +10,7 @@ final class AudioEngineRetirementDrainTests: XCTestCase {
         let token = AudioEngineRetirementToken(try XCTUnwrap(probe))
         probe = nil
 
-        await drain.releaseAndWait(token)
+        await drain.releaseAndWait(token, timeout: 1)
 
         XCTAssertEqual(
             recorder.events,
@@ -29,7 +29,7 @@ final class AudioEngineRetirementDrainTests: XCTestCase {
         second = nil
 
         drain.schedule(firstToken)
-        await drain.releaseAndWait(secondToken)
+        await drain.releaseAndWait(secondToken, timeout: 1)
 
         XCTAssertEqual(
             recorder.events,
@@ -38,6 +38,44 @@ final class AudioEngineRetirementDrainTests: XCTestCase {
                 DeinitEvent(id: 2, occurredOnMainThread: false),
             ]
         )
+    }
+
+    func testWaitForScheduledReleasesTimesOutWhenEngineDeinitIsBlocked() async throws {
+        let drain = AudioEngineRetirementDrain(label: "test.audio-engine-retirement.timeout")
+        let releaseStarted = DispatchSemaphore(value: 0)
+        let allowRelease = DispatchSemaphore(value: 0)
+        var probe: BlockingDeinitProbe? = BlockingDeinitProbe(
+            releaseStarted: releaseStarted,
+            allowRelease: allowRelease
+        )
+        let token = AudioEngineRetirementToken(try XCTUnwrap(probe))
+        probe = nil
+
+        drain.schedule(token)
+        XCTAssertEqual(releaseStarted.wait(timeout: .now() + 1), .success)
+
+        let completedBeforeTimeout = await drain.waitForScheduledReleases(timeout: 0.01)
+        XCTAssertFalse(completedBeforeTimeout)
+
+        allowRelease.signal()
+        let completedAfterRelease = await drain.waitForScheduledReleases(timeout: 1)
+        XCTAssertTrue(completedAfterRelease)
+    }
+
+}
+
+private final class BlockingDeinitProbe {
+    private let releaseStarted: DispatchSemaphore
+    private let allowRelease: DispatchSemaphore
+
+    init(releaseStarted: DispatchSemaphore, allowRelease: DispatchSemaphore) {
+        self.releaseStarted = releaseStarted
+        self.allowRelease = allowRelease
+    }
+
+    deinit {
+        self.releaseStarted.signal()
+        self.allowRelease.wait()
     }
 }
 

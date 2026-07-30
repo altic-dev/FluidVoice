@@ -1,5 +1,25 @@
 import Foundation
 
+private final nonisolated class AudioEngineRetirementWait: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(completed: Bool) {
+        self.lock.lock()
+        guard let continuation = self.continuation else {
+            self.lock.unlock()
+            return
+        }
+        self.continuation = nil
+        self.lock.unlock()
+        continuation.resume(returning: completed)
+    }
+}
+
 /// Owns the last strong reference to an audio engine while it is waiting to be
 /// released on the dedicated retirement queue.
 ///
@@ -36,8 +56,12 @@ final nonisolated class AudioEngineRetirementDrain: @unchecked Sendable {
         }
     }
 
-    func releaseAndWait(_ token: AudioEngineRetirementToken) async {
-        await self.enqueueAndWait {
+    @discardableResult
+    func releaseAndWait(
+        _ token: AudioEngineRetirementToken,
+        timeout: TimeInterval
+    ) async -> Bool {
+        await self.enqueueAndWait(timeout: timeout) {
             token.releaseEngine()
         }
     }
@@ -45,15 +69,26 @@ final nonisolated class AudioEngineRetirementDrain: @unchecked Sendable {
     /// Waits for every release already submitted to this drain. This is used at
     /// capture start so a fire-and-forget retirement from a non-route path cannot
     /// overlap construction of the next AVAudioEngine.
-    func waitForScheduledReleases() async {
-        await self.enqueueAndWait {}
+    @discardableResult
+    func waitForScheduledReleases(timeout: TimeInterval) async -> Bool {
+        await self.enqueueAndWait(timeout: timeout) {}
     }
 
-    private func enqueueAndWait(_ operation: @escaping @Sendable () -> Void) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    private func enqueueAndWait(
+        timeout: TimeInterval,
+        operation: @escaping @Sendable () -> Void
+    ) async -> Bool {
+        precondition(timeout > 0, "Audio engine retirement timeout must be positive")
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let wait = AudioEngineRetirementWait(continuation)
             self.queue.async {
                 operation()
-                continuation.resume()
+                wait.finish(completed: true)
+            }
+
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+                wait.finish(completed: false)
             }
         }
     }
