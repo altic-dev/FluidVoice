@@ -2051,6 +2051,14 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(SimpleUpdater.isRollbackVersion(nil, differentFrom: "1.5.11-beta.3"))
     }
 
+    @MainActor
+    func testUpdatePromptDeferralCoversOutputDelivery() {
+        AppServices.shared.setDictationOutputDeliveryActive(true)
+        defer { AppServices.shared.setDictationOutputDeliveryActive(false) }
+
+        XCTAssertTrue(AppServices.shared.hasActiveDictation)
+    }
+
     // MARK: - Model download HTML/markup rejection (#353)
 
     func testLooksLikeHTML_rejectsMarkupVariants() {
