@@ -65,6 +65,35 @@ git switch main && git merge --squash phase/0-fork-hygiene && git commit
 git branch -d phase/0-fork-hygiene
 ```
 
+## Stacked branches
+
+Phases often depend on each other, and waiting for review before starting the next one wastes the
+sequencing. Branch the next phase off the current one and open its PR against that parent rather
+than `main`, so each PR's diff shows only its own phase instead of replaying everything beneath it.
+
+Two things about that arrangement are easy to get wrong, and both were learned the hard way:
+
+**Do not delete a branch that another open PR is stacked on.** Merging with "delete branch" — the
+default in `gh pr merge --delete-branch` and in the GitHub UI — races the automatic retarget, and
+the stacked PR is **closed** rather than moved to `main`. GitHub then refuses to reopen it, because
+its base branch no longer exists, and refuses to retarget it, because it is closed. The only way
+out is opening a replacement PR, which loses the review history. Keep the branch; retarget the
+stacked PR to `main` afterwards, then delete it.
+
+**Restack after every squash-merge.** Squashing creates a *new* commit, so a branch stacked on the
+old one no longer descends from anything in `main`. Left alone, its PR diff replays the parent
+phase's changes on top of its own. Rebase it before anyone reads that diff:
+
+```bash
+git fetch origin && git switch phase/6-practice-ui
+git rebase origin/main          # drops the already-applied parent commit automatically
+git push --force-with-lease origin phase/6-practice-ui
+```
+
+The rebase reports `skipped previously applied commit` — that is the parent phase being recognized
+in `main`, not a problem. Use `--force-with-lease` rather than `--force`, so a push that would
+discard someone else's work fails instead of succeeding quietly.
+
 ## `main` guarantees
 
 One rule, and it is the only rule worth enforcing: **`main` always builds.** `./build.sh unsigned`
