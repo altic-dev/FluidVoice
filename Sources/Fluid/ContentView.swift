@@ -1175,7 +1175,9 @@ struct ContentView: View {
             }
 
             Section {
-                self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
+                // ponytail: Command Mode (voice-driven shell agent) is out of scope for a
+                // speech-practice app. Link removed; CommandModeService and its .commandMode
+                // sidebar case stay dormant so upstream changes still merge cleanly.
                 self.sidebarNavigationLink(.meetingTools, title: "File Transcription", systemImage: "doc.text.fill")
             } header: {
                 self.sidebarSectionHeader("Use")
@@ -1191,7 +1193,10 @@ struct ContentView: View {
             Section {
                 self.sidebarNavigationLink(.welcome, title: "Getting Started", systemImage: "house.fill")
                 self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
+                // ponytail: FeedbackView POSTs the user's email plus the last 30 log lines
+                // to altic.dev — upstream's endpoint, not ours. Link removed so no Voix user
+                // can send data to the upstream vendor. View stays dormant; repoint
+                // submitFeedback() before restoring this link.
             } header: {
                 self.sidebarSectionHeader("Help")
             }

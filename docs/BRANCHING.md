@@ -109,6 +109,17 @@ you hit it:
 - **`project.pbxproj`** — bundle identifier and product name stay Voix. Take **ours** for those
   keys, take upstream for build settings, file references, and target membership. Read this one
   hunk by hunk; pbxproj conflicts resolved carelessly break the project file.
+  Note that `PRODUCT_NAME` is load-bearing beyond the app filename: it feeds `TEST_HOST` and
+  `BUNDLE_LOADER` (which hardcode the `.app` path) and the Swift module name that tests
+  `@testable import`. Voix builds `Voix Debug.app` / module `Voix_Debug`; if upstream touches any
+  of those three, keep ours in all three or the test target stops building.
+- **`SimpleUpdater.swift`** — keep the `selfReplacementEnabled = false` switch and both guards
+  (top of `checkAndUpdate`, top of `performSwapAndRelaunch`). If upstream restructures either
+  function, re-apply the guards to the new shape. Losing them re-arms self-replacement, and every
+  inherited caller still passes `owner: "altic-dev"`.
+- **`Tests/…/*.swift`** — the `@testable import Voix_Debug` lines. Upstream's say
+  `FluidVoice_Debug`; take ours. Only the import lines differ, and the literal string
+  `"FluidVoice"` appears in test *fixtures* where it is data, not a name to update.
 - **`ContentView.swift`** — sidebar region. Ours removes Command Mode and adds `.practice`; upstream
   may add its own items. This is a genuine **both-sides** merge, not a take-one.
 - **`ASRService.swift`** — the `forPracticeSession:` parameter on `stop()` and its two effects

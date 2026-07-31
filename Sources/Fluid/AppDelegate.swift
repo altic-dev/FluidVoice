@@ -12,7 +12,6 @@ import SwiftUI
 import UserNotifications
 
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    private var updateCheckTimer: Timer?
     private var didRevealMainWindowOnLaunch = false
     private var didRequestMainWindowReopen = false
     private var shouldSuppressNextReopenActivation = false
@@ -51,11 +50,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             properties: ["accessibility_trusted": AXIsProcessTrusted()]
         )
 
-        // Check for updates automatically if enabled (initial check on launch)
-        self.checkForUpdatesAutomatically()
-
-        // Schedule periodic update checks every hour while app is running
-        self.schedulePeriodicUpdateChecks()
+        // ponytail: Voix does not auto-update. Upstream's check pointed at
+        // altic-dev/Fluid-oss releases and would replace this app with FluidVoice.
+        // Removing the launch check and the hourly timer also means no outbound
+        // GitHub request on launch. SimpleUpdater stays in the tree but cannot
+        // swap the bundle — see the guard in performSwapAndRelaunch.
 
         // Login Items can launch hidden; reveal the real SwiftUI window so ContentView startup runs.
         self.openMainWindowOnLaunch()
@@ -77,9 +76,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         self.shutdownPrivateAIRuntimeForTermination()
         self.shutdownASRRuntimeForTermination()
         LocalAPIServer.shared.stop()
-        // Clean up the update check timer
-        self.updateCheckTimer?.invalidate()
-        self.updateCheckTimer = nil
     }
 
     private func shutdownASRRuntimeForTermination() {
@@ -328,20 +324,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         return window.title == "FluidVoice" || window.title.contains("FluidVoice")
     }
 
-    // MARK: - Periodic Update Checks
-
-    private func schedulePeriodicUpdateChecks() {
-        // Schedule a timer to check for updates every hour (3600 seconds)
-        // The actual check logic inside checkForUpdatesAutomatically() handles:
-        // - Whether auto-updates are enabled
-        // - Whether enough time has passed since last check
-        // - Whether the user snoozed the prompt
-        self.updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            DebugLogger.shared.debug("Periodic update check timer fired", source: "AppDelegate")
-            self?.checkForUpdatesAutomatically()
-        }
-    }
-
     // MARK: - Manual Update Check
 
     @objc func checkForUpdatesManually() {
@@ -395,88 +377,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     )
                 }
             }
-        }
-    }
-
-    // MARK: - Automatic Update Check
-
-    private func checkForUpdatesAutomatically() {
-        // Check if we should perform an automatic update check
-        guard SettingsStore.shared.shouldCheckForUpdates() else {
-            let reason = !SettingsStore.shared.autoUpdateCheckEnabled ? "disabled by user" : "checked recently"
-            DebugLogger.shared.debug("Automatic update check skipped (\(reason))", source: "AppDelegate")
-            return
-        }
-
-        DebugLogger.shared.info("Scheduling automatic update check...", source: "AppDelegate")
-
-        // Delay check slightly to avoid slowing down app launch
-        Task {
-            // Wait 3 seconds after launch before checking
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-
-            DebugLogger.shared.info("Performing automatic update check for altic-dev/Fluid-oss", source: "AppDelegate")
-
-            do {
-                let includePrerelease = SettingsStore.shared.betaReleasesEnabled
-                let result = try await SimpleUpdater.shared.checkForUpdate(
-                    owner: "altic-dev",
-                    repo: "Fluid-oss",
-                    includePrerelease: includePrerelease
-                )
-
-                // Update the last check date regardless of result
-                await MainActor.run {
-                    SettingsStore.shared.updateLastCheckDate()
-                }
-
-                if result.hasUpdate {
-                    DebugLogger.shared.info("✅ Update available: \(result.latestVersion)", source: "AppDelegate")
-
-                    // Check if user snoozed this version (clicked "Later")
-                    if SettingsStore.shared.shouldShowUpdatePrompt(forVersion: result.latestVersion) {
-                        // Show update notification on main thread
-                        await MainActor.run {
-                            self.showUpdateNotification(version: result.latestVersion)
-                        }
-                    } else {
-                        DebugLogger.shared.debug("Update prompt snoozed for \(result.latestVersion), skipping notification", source: "AppDelegate")
-                    }
-                } else {
-                    DebugLogger.shared.info("✅ App is up to date", source: "AppDelegate")
-                }
-            } catch {
-                // Silently log the error, don't bother the user with failed automatic checks
-                DebugLogger.shared.debug("Automatic update check failed: \(error.localizedDescription)", source: "AppDelegate")
-
-                // Still update last check date to avoid hammering the API on failure
-                await MainActor.run {
-                    SettingsStore.shared.updateLastCheckDate()
-                }
-            }
-        }
-    }
-
-    @MainActor
-    private func showUpdateNotification(version: String) {
-        DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
-
-        let alert = NSAlert()
-        alert.messageText = "Update Available"
-        alert.informativeText = "FluidVoice \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Install Now")
-        alert.addButton(withTitle: "Later")
-
-        let response = alert.runModal()
-
-        if response == .alertFirstButtonReturn {
-            DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
-            SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
-            self.checkForUpdatesManually()
-        } else {
-            DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
-            SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
         }
     }
 

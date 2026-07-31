@@ -1,4 +1,4 @@
-@testable import FluidVoice_Debug
+@testable import Voix_Debug
 import Foundation
 import XCTest
 

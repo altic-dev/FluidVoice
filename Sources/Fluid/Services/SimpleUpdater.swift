@@ -14,6 +14,7 @@ enum SimpleUpdateError: Error, LocalizedError {
     case codesignMismatch
     case rollbackUnavailable
     case rollbackRestoreFailed
+    case updatesDisabled
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,7 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .codesignMismatch: return "Downloaded app’s code signature does not match current app."
         case .rollbackUnavailable: return "No rollback backup is available."
         case .rollbackRestoreFailed: return "Failed to restore a previous version."
+        case .updatesDisabled: return "Voix does not install updates automatically."
         }
     }
 }
@@ -110,6 +112,16 @@ final class SimpleUpdater {
 
     static let shared = SimpleUpdater()
     private init() {}
+
+    /// ponytail: master switch for replacing the running app bundle. Both
+    /// `checkAndUpdate()` and `rollbackToLatestBackup()` route through
+    /// `performSwapAndRelaunch()`, so guarding that one function disables every
+    /// self-replacement path at once — launch check, menu bar, Settings, rollback —
+    /// instead of one guard per call site. Voix publishes no releases to update from,
+    /// and every inherited caller still passes `owner: "altic-dev"`, which would swap
+    /// this app for upstream FluidVoice. Flip to `true` only once those callers point
+    /// at a Voix release feed.
+    private static let selfReplacementEnabled = false
 
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
@@ -298,6 +310,14 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws {
+        // ponytail: fail before the network call, not after. performSwapAndRelaunch()
+        // would reject this anyway, but only after downloading upstream's full release
+        // archive. Bailing here also keeps a manual "Check for Updates" click from
+        // reaching api.github.com at all.
+        guard Self.selfReplacementEnabled else {
+            throw SimpleUpdateError.updatesDisabled
+        }
+
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
 
         guard let latest = self.selectLatestRelease(
@@ -736,6 +756,11 @@ final class SimpleUpdater {
     }
 
     private func performSwapAndRelaunch(installedAppURL: URL, downloadedAppURL: URL) throws {
+        guard Self.selfReplacementEnabled else {
+            DebugLogger.shared.info("SimpleUpdater: self-replacement disabled, ignoring swap request", source: "SimpleUpdater")
+            throw SimpleUpdateError.updatesDisabled
+        }
+
         // Handle app name changes: if the downloaded app has a different name,
         // we need to replace the old app and use the new name
         let installedAppName = installedAppURL.lastPathComponent

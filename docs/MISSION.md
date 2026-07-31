@@ -72,12 +72,22 @@ Explicitly deferred, with the reason:
 This is a product where people rehearse things they are nervous about saying. That deserves a stated
 position, not an inherited default.
 
-Recording and transcription are fully local. The only outbound traffic in v1 is the coaching call to
-whichever LLM provider the user configured — and with Ollama configured, there is none at all.
-Phase 0 blanks the inherited PostHog analytics key, removes the auto-updater that would otherwise
-replace the app with upstream FluidVoice, and removes the feedback button that posts transcripts to
-a third-party endpoint. A network audit confirming exactly one possible outbound destination is a
-release gate, not a nice-to-have.
+Recording and transcription are fully local. Your voice never leaves the machine.
+
+In steady-state use the only outbound traffic is the coaching call to whichever LLM provider the
+user configured — and with Ollama, there is none at all. Two other destinations exist and are
+accounted for rather than hidden: **huggingface.co**, contacted once per ASR model to download
+weights, and **api.github.com**, contacted only if the user opens the changelog or asks for a
+previous build. Neither carries user content.
+
+Phase 0 closed everything else. The PostHog key is blank, which disables telemetry at the guard
+(`isConfigured` is `!postHogApiKey.isEmpty`), not merely at the key. The auto-updater is gone, and
+self-replacement is disabled at the two choke points every caller routes through, so no path
+replaces Voix with upstream FluidVoice. Both endpoints that POSTed to `altic.dev` are closed — one
+sent full transcripts, the other the user's email plus recent log lines.
+
+A network audit is a release gate, not a nice-to-have. It should show the configured LLM endpoint,
+plus model downloads and changelog reads if those were exercised, and nothing else.
 
 ## License and upstream obligations
 
@@ -98,4 +108,6 @@ See [BRANCHING.md](BRANCHING.md) for how upstream changes are pulled in.
 - End to end on a real 60-second pitch: transcript, metrics cards, contour chart, and coaching
   feedback all render, and the feedback quotes the measured numbers. Quit and relaunch, the session
   is still there.
-- Network audit shows the configured LLM endpoint and nothing else.
+- Network audit shows the configured LLM endpoint, plus `huggingface.co` and `api.github.com` only
+  if model download or the changelog was exercised, and nothing else. Specifically: no
+  `posthog.com`, no `altic.dev`.
