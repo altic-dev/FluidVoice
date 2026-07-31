@@ -76,11 +76,15 @@ final class PracticeSessionService: ObservableObject {
         self.phase = .recording
         self.recordingStartedAt = Date()
 
+        // Claim the recorder before starting it, so the dictation pipeline stands down
+        // for the whole session rather than racing us at either end.
+        asr.isPracticeSessionActive = true
         await asr.start()
 
         // start() returns without throwing even when it bailed (denied mic, no model),
         // so a stuck non-running engine is the signal that capture never began.
         if !asr.isRunning {
+            asr.isPracticeSessionActive = false
             self.phase = .failed("Could not start recording. Check microphone access and that a speech model is installed.")
             self.recordingStartedAt = nil
         }
@@ -97,6 +101,9 @@ final class PracticeSessionService: ObservableObject {
         let asr = AppServices.shared.asr
         let transcript = await asr.stop(forPracticeSession: true)
         let snapshot = asr.consumeLastCompletedAudioSnapshot()
+        // Released only after the snapshot is in hand: awaiting stop() is a suspension
+        // point, and handing the recorder back any earlier reopens the race.
+        asr.isPracticeSessionActive = false
 
         guard let snapshot, !snapshot.samples.isEmpty else {
             self.phase = .failed("No audio was captured for this session.")

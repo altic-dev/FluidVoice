@@ -2027,6 +2027,18 @@ struct ContentView: View {
 
     private func stopAndProcessTranscription(route: DictationOutputRoute = .normal) async {
         DebugLogger.shared.debug("stopAndProcessTranscription called", source: "ContentView")
+
+        // PracticeSessionService owns the recorder during a practice run and handles
+        // its own stop. Letting this path also run would stop the engine underneath it,
+        // consume the audio snapshot the analyzer needs, and type the transcript into
+        // the frontmost app.
+        guard !self.asr.isPracticeSessionActive else {
+            DebugLogger.shared.info(
+                "stopAndProcessTranscription skipped - practice session owns the recorder",
+                source: "ContentView"
+            )
+            return
+        }
         DebugLogger.shared.info("Output route selected: \(route.rawValue)", source: "ContentView")
         self.appBench("stop_path_enter route=\(route.rawValue)")
 

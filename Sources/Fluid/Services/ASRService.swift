@@ -86,6 +86,12 @@ final class ASRService: ObservableObject {
     }
 
     @Published var isRunning: Bool = false
+
+    /// True while a Voix practice session owns the recorder. The dictation pipeline
+    /// is driven by the same ASRService, so without this it also stops the engine,
+    /// consumes the audio snapshot, writes dictation history and types the transcript
+    /// into whatever app has focus — none of which should happen for a practice run.
+    @Published var isPracticeSessionActive: Bool = false
     @Published var finalText: String = ""
     @Published var partialTranscription: String = ""
     @Published var wordBoostStatusText: String = "Word boost: off"
@@ -1524,7 +1530,6 @@ final class ASRService: ObservableObject {
         if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
             self.lastDictionaryTrainingResult = nil
         }
-        self.lastCompletedAudioSnapshot = nil
         let stopStartedAt = Date().timeIntervalSince1970
         self.benchmarkLog("stop_start ageMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) bufferedSamples=\(self.audioBuffer.count)")
 
@@ -1533,6 +1538,12 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
             return ""
         }
+
+        // Clear only once this call owns a real stop. Clearing before the isRunning
+        // guard let a second, no-op stop() destroy the snapshot the first one had just
+        // produced — and callers read the snapshot *after* awaiting stop(), which is a
+        // suspension point another @MainActor task can run inside.
+        self.lastCompletedAudioSnapshot = nil
         let useDictionaryTrainingPath = forDictionaryTraining || self.isDictionaryTrainingCaptureActive
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
