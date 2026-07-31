@@ -294,7 +294,8 @@ final class TypingService {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?,
-        tracksDictionaryCorrections: Bool = false
+        tracksDictionaryCorrections: Bool = false,
+        completion: (() -> Void)? = nil
     ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let text = plan.plainText
@@ -315,6 +316,7 @@ final class TypingService {
         guard text.isEmpty == false else {
             self.bench("request_return reason=empty_text")
             self.log("[TypingService] ERROR: Empty text provided, aborting")
+            completion?()
             return
         }
 
@@ -322,6 +324,7 @@ final class TypingService {
         guard !self.isCurrentlyTyping else {
             self.bench("request_return reason=already_typing")
             self.log("[TypingService] WARNING: Skipping text injection - already in progress")
+            completion?()
             return
         }
 
@@ -330,6 +333,7 @@ final class TypingService {
             self.bench("request_return reason=accessibility_not_trusted")
             self.log("[TypingService] ERROR: Accessibility permissions required for text injection")
             self.log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
+            completion?()
             return
         }
 
@@ -347,6 +351,7 @@ final class TypingService {
                     "complete totalMs=\(Self.elapsedMs(from: requestedAt, to: completedAt)) textReadyToCompleteMs=\(textReadyAt.map { String(Self.elapsedMs(from: $0, to: completedAt)) } ?? "nil")"
                 )
                 self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
+                completion?()
             }
 
             self.log("[TypingService] Starting async text insertion process")

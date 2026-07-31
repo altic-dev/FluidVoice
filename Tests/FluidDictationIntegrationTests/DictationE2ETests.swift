@@ -2059,6 +2059,18 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(AppServices.shared.hasActiveDictation)
     }
 
+    func testTypingCompletionRunsWhenNoOutputIsQueued() async {
+        let completed = self.expectation(description: "Typing completion")
+        TypingService().typeOutputPlanInstantly(
+            .plain(""),
+            preferredTargetPID: nil,
+            textReadyAt: nil,
+            completion: { completed.fulfill() }
+        )
+
+        await self.fulfillment(of: [completed], timeout: 1)
+    }
+
     // MARK: - Model download HTML/markup rejection (#353)
 
     func testLooksLikeHTML_rejectsMarkupVariants() {
