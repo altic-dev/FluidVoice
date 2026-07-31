@@ -1510,9 +1510,15 @@ final class ASRService: ObservableObject {
     ///   final transcription pass. Use this for immediate stop cues that
     ///   shouldn't wait on finalization. Only invoked when capture was actually
     ///   running (i.e. not when `stop()` early-returns because `isRunning` is false).
+    /// - Parameter forPracticeSession: Routes the result to Voix's speech-practice
+    ///   flow instead of dictation. Filler words survive (the analyzer counts them
+    ///   and the coach needs to see what was actually said) and the PCM snapshot is
+    ///   always retained for acoustic analysis, regardless of the dictation-history
+    ///   settings that normally gate it.
     func stop(
         onCaptureStopped: (@MainActor () -> Void)? = nil,
-        forDictionaryTraining: Bool = false
+        forDictionaryTraining: Bool = false,
+        forPracticeSession: Bool = false
     ) async -> String {
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
         if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
@@ -1717,7 +1723,11 @@ final class ASRService: ObservableObject {
             }
 
             // Do not update self.finalText here to avoid instant binding insert in playground
-            let textWithoutFillers = ASRService.removeFillerWords(result.text)
+            // Practice sessions keep their fillers: SpeechAnalysisService counts them
+            // and the coach cannot critique what has already been stripped out.
+            let textWithoutFillers = forPracticeSession
+                ? result.text
+                : ASRService.removeFillerWords(result.text)
             let dictionaryText = useDictionaryTrainingPath
                 ? textWithoutFillers
                 : ASRService.applyCustomDictionary(textWithoutFillers)
@@ -1729,9 +1739,15 @@ final class ASRService: ObservableObject {
             }
             DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
             self.benchmarkLog("stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)")
+            // Practice sessions always need the PCM — it is the input to the delivery
+            // analysis, not an optional history extra — so it bypasses the two
+            // dictation-history settings that gate the snapshot otherwise.
+            let shouldRetainAudio = forPracticeSession || (
+                SettingsStore.shared.saveTranscriptionHistory &&
+                    SettingsStore.shared.saveAudioWithTranscriptionHistory
+            )
             if !useDictionaryTrainingPath,
-               SettingsStore.shared.saveTranscriptionHistory,
-               SettingsStore.shared.saveAudioWithTranscriptionHistory,
+               shouldRetainAudio,
                !capturedPCM.isEmpty
             {
                 self.lastCompletedAudioSnapshot = DictationAudioSnapshot(
