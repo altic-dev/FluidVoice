@@ -593,7 +593,11 @@ struct CommandModeView: View {
                 }
             }
         } else {
-            Task { await self.asr.start() }
+            self.appServices.beginDictationStartup()
+            Task {
+                defer { self.appServices.endDictationStartup() }
+                await self.asr.start()
+            }
         }
     }
 

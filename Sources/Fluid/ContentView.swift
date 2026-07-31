@@ -3110,7 +3110,9 @@ struct ContentView: View {
             )
         }
 
+        self.appServices.beginDictationStartup()
         Task {
+            defer { self.appServices.endDictationStartup() }
             let startOutcome = await self.asr.start(onCaptureStarted: {
                 if shouldPlayStartSound {
                     TranscriptionSoundPlayer.shared.playStartSound()
@@ -3367,7 +3369,9 @@ struct ContentView: View {
                     "Starting voice recording for command",
                     source: "ContentView"
                 )
+                self.appServices.beginDictationStartup()
                 Task {
+                    defer { self.appServices.endDictationStartup() }
                     let startOutcome = await self.asr.start(onCaptureStarted: {
                         TranscriptionSoundPlayer.shared.playStartSound()
                         self.appBench("overlay_phase phase=recording trigger=first_pcm mode=command")
@@ -3413,7 +3417,9 @@ struct ContentView: View {
 
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
+                self.appServices.beginDictationStartup()
                 Task {
+                    defer { self.appServices.endDictationStartup() }
                     let startOutcome = await self.asr.start(onCaptureStarted: {
                         TranscriptionSoundPlayer.shared.playStartSound()
                         self.appBench("overlay_phase phase=recording trigger=first_pcm mode=edit")
@@ -3758,7 +3764,9 @@ extension ContentView {
             self.appBench("overlay_mode_requested mode=Dictation")
             self.appBench("overlay_phase phase=connecting")
         }
+        self.appServices.beginDictationStartup()
         Task {
+            defer { self.appServices.endDictationStartup() }
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
             let startOutcome = await self.asr.start(onCaptureStarted: {

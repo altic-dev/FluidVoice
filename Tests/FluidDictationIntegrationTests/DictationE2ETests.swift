@@ -2059,6 +2059,16 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(AppServices.shared.hasActiveDictation)
     }
 
+    @MainActor
+    func testUpdatePromptDeferralCoversScheduledStartup() {
+        AppServices.shared.beginDictationStartup()
+        AppServices.shared.beginDictationStartup()
+        AppServices.shared.endDictationStartup()
+        defer { AppServices.shared.endDictationStartup() }
+
+        XCTAssertTrue(AppServices.shared.hasActiveDictation)
+    }
+
     func testTypingCompletionRunsWhenNoOutputIsQueued() async {
         let completed = self.expectation(description: "Typing completion")
         TypingService().typeOutputPlanInstantly(

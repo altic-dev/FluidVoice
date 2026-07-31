@@ -57,6 +57,7 @@ final class AppServices: ObservableObject {
 
     /// Automatic speech recognition service (lazily initialized)
     private var _asr: ASRService?
+    private var pendingDictationStartCount = 0
     private var isDeliveringDictationOutput = false
     var asr: ASRService {
         if let existing = self._asr {
@@ -70,8 +71,17 @@ final class AppServices: ObservableObject {
     }
 
     var hasActiveDictation: Bool {
-        self.isDeliveringDictationOutput ||
+        self.pendingDictationStartCount > 0 ||
+            self.isDeliveringDictationOutput ||
             (self._asr.map { $0.isRunningOrStarting || $0.isFinalizing } ?? false)
+    }
+
+    func beginDictationStartup() {
+        self.pendingDictationStartCount += 1
+    }
+
+    func endDictationStartup() {
+        self.pendingDictationStartCount = max(0, self.pendingDictationStartCount - 1)
     }
 
     func setDictationOutputDeliveryActive(_ active: Bool) {

@@ -345,13 +345,15 @@ final class TypingService {
             self.bench("worker_start queueDelayMs=\(Self.elapsedMs(from: requestedAt, to: workerStartedAt))")
 
             defer {
-                let completedAt = ProcessInfo.processInfo.systemUptime
-                self.isCurrentlyTyping = false
-                self.bench(
-                    "complete totalMs=\(Self.elapsedMs(from: requestedAt, to: completedAt)) textReadyToCompleteMs=\(textReadyAt.map { String(Self.elapsedMs(from: $0, to: completedAt)) } ?? "nil")"
-                )
-                self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
-                completion?()
+                Self.pasteboardRestoreQueue.async {
+                    let completedAt = ProcessInfo.processInfo.systemUptime
+                    self.isCurrentlyTyping = false
+                    self.bench(
+                        "complete totalMs=\(Self.elapsedMs(from: requestedAt, to: completedAt)) textReadyToCompleteMs=\(textReadyAt.map { String(Self.elapsedMs(from: $0, to: completedAt)) } ?? "nil")"
+                    )
+                    self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
+                    completion?()
+                }
             }
 
             self.log("[TypingService] Starting async text insertion process")

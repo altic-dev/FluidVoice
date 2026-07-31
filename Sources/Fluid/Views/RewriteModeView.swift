@@ -262,7 +262,11 @@ struct RewriteModeView: View {
                 _ = self.asr.consumeLastCompletedAudioSnapshot()
             }
         } else {
-            Task { await self.asr.start() }
+            self.appServices.beginDictationStartup()
+            Task {
+                defer { self.appServices.endDictationStartup() }
+                await self.asr.start()
+            }
         }
     }
 
