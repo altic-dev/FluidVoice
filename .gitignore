@@ -200,7 +200,10 @@ RELEASE_NOTES_*
 **.dmg
 **.dmg.zip
 # Documentation backups (for future reference, not needed in repo)
-docs/
+# Voix tracks its own project docs here; add a negation per file.
+docs/*
+!docs/MISSION.md
+!docs/BRANCHING.md
 
 
 .agent/
