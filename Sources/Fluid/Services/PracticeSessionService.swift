@@ -51,10 +51,8 @@ final class PracticeSessionService: ObservableObject {
         self.phase == .recording
     }
 
-    /// Live partial transcript from the ASR provider, for on-screen preview.
-    var partialTranscript: String {
-        AppServices.shared.asr.partialTranscription
-    }
+    // Live preview reads ASRService.partialTranscription directly. Mirroring it here
+    // would look like a published property while never actually publishing.
 
     // MARK: - Session lifecycle
 

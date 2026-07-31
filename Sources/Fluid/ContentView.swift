@@ -74,6 +74,7 @@ private final class DictationAIStreamPreviewBuffer {
 // MARK: - Sidebar Item Enum
 
 enum SidebarItem: Hashable {
+    case practice
     case welcome
     case voiceEngine
     case aiEnhancements
@@ -568,8 +569,7 @@ struct ContentView: View {
         }
 
         if self.selectedSidebarItem == nil {
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = self.defaultSidebarItem
         }
         self.handlePendingAppNavigation()
 
@@ -1175,6 +1175,7 @@ struct ContentView: View {
             }
 
             Section {
+                self.sidebarNavigationLink(.practice, title: "Practice", systemImage: "mic.circle.fill")
                 // ponytail: Command Mode (voice-driven shell agent) is out of scope for a
                 // speech-practice app. Link removed; CommandModeService and its .commandMode
                 // sidebar case stay dormant so upstream changes still merge cleanly.
@@ -1214,6 +1215,14 @@ struct ContentView: View {
             .textCase(nil)
             .padding(.top, self.theme.metrics.spacing.sm)
             .padding(.bottom, self.theme.metrics.spacing.xs)
+    }
+
+    /// Where the app rests when nothing else is selected — on first launch, and
+    /// whenever a mode view closes. Practice is Voix's home screen; someone who has
+    /// not set up a speech model yet still needs Getting Started first.
+    private var defaultSidebarItem: SidebarItem {
+        let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
+        return isOnboarded ? .practice : .welcome
     }
 
     private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
@@ -1279,6 +1288,8 @@ struct ContentView: View {
             ))
         case .preferences:
             return AnyView(self.preferencesView)
+        case .practice:
+            return AnyView(PracticeView())
         case .meetingTools:
             return AnyView(self.meetingToolsView)
         case .customDictionary:
@@ -1504,15 +1515,13 @@ struct ContentView: View {
 
     private var commandModeView: some View {
         CommandModeView(service: self.commandModeService, onClose: {
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = self.defaultSidebarItem
         })
     }
 
     private var rewriteModeView: some View {
         RewriteModeView(service: self.rewriteModeService, onClose: {
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = self.defaultSidebarItem
         })
     }
 
@@ -3477,8 +3486,7 @@ struct ContentView: View {
 
         if self.selectedSidebarItem == .rewriteMode {
             DebugLogger.shared.debug("Cancel shortcut: closing mode view", source: "ContentView")
-            let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-            self.selectedSidebarItem = isOnboarded ? .preferences : .welcome
+            self.selectedSidebarItem = self.defaultSidebarItem
             handled = true
         }
 
@@ -3802,8 +3810,7 @@ extension ContentView {
     private func completeOnboarding(selecting target: SidebarItem? = nil) {
         self.settings.onboardingCompleted = true
 
-        let isOnboarded = self.asr.isAsrReady || self.asr.modelsExistOnDisk
-        self.selectedSidebarItem = target ?? (isOnboarded ? .preferences : .welcome)
+        self.selectedSidebarItem = target ?? self.defaultSidebarItem
     }
 
     private func missingOnboardingCompletionRequirements(allowsAIConfiguration: Bool = false) -> [String] {
