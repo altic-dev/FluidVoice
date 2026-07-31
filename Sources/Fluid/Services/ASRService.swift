@@ -190,6 +190,7 @@ final class ASRService: ObservableObject {
     private(set) var dictionaryTrainingAudioGeneration = 0
 
     @Published private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
+    @Published private(set) var isFinalizing: Bool = false
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
@@ -1797,8 +1798,10 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("⚠️ STOP() - not running, returning empty string", source: "ASRService")
             return ""
         }
+        self.isFinalizing = true
         let useDictionaryTrainingPath = forDictionaryTraining || self.isDictionaryTrainingCaptureActive
         defer {
+            self.isFinalizing = false
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
         }

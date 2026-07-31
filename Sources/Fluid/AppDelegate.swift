@@ -459,6 +459,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     @MainActor
     private func showUpdateNotification(version: String) {
+        guard !AppServices.shared.hasActiveDictation else {
+            DebugLogger.shared.info(
+                "Deferring update notification for \(version) until dictation finishes",
+                source: "AppDelegate"
+            )
+            Task { @MainActor in
+                while AppServices.shared.hasActiveDictation {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+                self.showUpdateNotification(version: version)
+            }
+            return
+        }
+
         DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
 
         let alert = NSAlert()

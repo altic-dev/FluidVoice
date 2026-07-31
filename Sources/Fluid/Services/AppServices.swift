@@ -68,6 +68,10 @@ final class AppServices: ObservableObject {
         return service
     }
 
+    var hasActiveDictation: Bool {
+        self._asr.map { $0.isRunningOrStarting || $0.isFinalizing } ?? false
+    }
+
     private var _microphonePreferenceCoordinator: MicrophonePreferenceCoordinator?
     var microphonePreferenceCoordinator: MicrophonePreferenceCoordinator {
         if let existing = self._microphonePreferenceCoordinator {
