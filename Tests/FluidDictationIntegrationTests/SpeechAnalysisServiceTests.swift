@@ -207,6 +207,95 @@ final class SpeechAnalysisServiceTests: XCTestCase {
         XCTAssertEqual(metrics.fillerCounts, ["um": 1, "uh": 2])
     }
 
+    // MARK: - Signal quality gate
+
+    /// The failure this gate exists for. A recording of nothing but room tone has its
+    /// adaptive threshold fitted to the room tone, so it reads as continuous confident
+    /// speech. Observed live: 88s of ambient noise reported 0 pauses and 99.6% voiced.
+    func testUniformRoomNoiseIsRejected() {
+        let metrics = SpeechAnalysisService.analyze(
+            pcm: self.speechShapedNoise(seconds: 30, seed: 7, amplitude: 0.05),
+            sampleRate: self.sampleRate,
+            rawTranscript: "so there's so many notes and single ones",
+            fillerWords: []
+        )
+
+        XCTAssertFalse(metrics.quality.isReliable)
+        XCTAssertLessThan(metrics.quality.signalToNoiseDb, 12)
+        XCTAssertNotNil(metrics.quality.warning)
+    }
+
+    /// Speech-like input — loud bursts over a quiet floor — must still pass, or the
+    /// gate is just an off switch.
+    func testSpeechOverQuietFloorIsAccepted() {
+        var pcm: [Float] = []
+        for burst in 0..<6 {
+            pcm += self.speechShapedNoise(seconds: 1.5, seed: UInt64(burst), amplitude: 0.3)
+            pcm += self.speechShapedNoise(seconds: 0.8, seed: UInt64(burst + 50), amplitude: 0.002)
+        }
+
+        let metrics = SpeechAnalysisService.analyze(
+            pcm: pcm,
+            sampleRate: self.sampleRate,
+            rawTranscript: "the plan is ready and the numbers support it",
+            fillerWords: []
+        )
+
+        XCTAssertTrue(metrics.quality.isReliable, "warning was: \(metrics.quality.warning ?? "none")")
+        XCTAssertGreaterThan(metrics.quality.signalToNoiseDb, 12)
+        XCTAssertNil(metrics.quality.warning)
+    }
+
+    func testClippedInputIsRejected() {
+        // Full-scale square wave: loud, well separated, and completely distorted.
+        let count = Int(self.sampleRate * 3)
+        let pcm = (0..<count).map { index in Float(index % 100 < 50 ? 1.0 : -1.0) }
+
+        let metrics = SpeechAnalysisService.analyze(
+            pcm: pcm,
+            sampleRate: self.sampleRate,
+            rawTranscript: "hello",
+            fillerWords: []
+        )
+
+        XCTAssertFalse(metrics.quality.isReliable)
+        XCTAssertGreaterThan(metrics.quality.clippedSampleRatio, 0.005)
+        XCTAssertEqual(metrics.quality.warning?.contains("clipping"), true)
+    }
+
+    func testFaintRecordingIsRejected() {
+        var pcm = self.sine(frequency: 150, seconds: 2, amplitude: 0.0015)
+        pcm += self.silence(seconds: 1)
+        pcm += self.sine(frequency: 150, seconds: 2, amplitude: 0.0015)
+
+        let metrics = SpeechAnalysisService.analyze(
+            pcm: pcm,
+            sampleRate: self.sampleRate,
+            rawTranscript: "barely audible",
+            fillerWords: []
+        )
+
+        XCTAssertFalse(metrics.quality.isReliable)
+        XCTAssertEqual(metrics.quality.warning?.contains("too quiet"), true)
+    }
+
+    /// The point of the gate: an unreliable recording must not hand numbers to the
+    /// coach, because a model given caveated measurements still reasons about them.
+    func testSummaryWithholdsNumbersWhenUnreliable() {
+        let metrics = SpeechAnalysisService.analyze(
+            pcm: self.speechShapedNoise(seconds: 30, seed: 7, amplitude: 0.05),
+            sampleRate: self.sampleRate,
+            rawTranscript: "so there's so many notes",
+            fillerWords: []
+        )
+        let summary = metrics.summaryText()
+
+        XCTAssertTrue(summary.contains("DELIVERY METRICS UNAVAILABLE"))
+        XCTAssertFalse(summary.contains("WPM"))
+        XCTAssertFalse(summary.contains("Articulation rate"))
+        XCTAssertFalse(summary.contains("Pauses"))
+    }
+
     // MARK: - Degenerate input
 
     func testEmptyAudioProducesEmptyMetrics() {
@@ -220,7 +309,9 @@ final class SpeechAnalysisServiceTests: XCTestCase {
         XCTAssertEqual(metrics, .empty)
     }
 
-    func testPureSilenceProducesEmptyMetrics() {
+    /// Silence yields no measurements, but must still say *why* — "too quiet" sends
+    /// the user to fix their microphone, where a bare empty result tells them nothing.
+    func testPureSilenceProducesEmptyMetricsWithAReason() {
         let metrics = SpeechAnalysisService.analyze(
             pcm: self.silence(seconds: 3),
             sampleRate: self.sampleRate,
@@ -228,7 +319,12 @@ final class SpeechAnalysisServiceTests: XCTestCase {
             fillerWords: []
         )
 
-        XCTAssertEqual(metrics, .empty)
+        XCTAssertEqual(metrics.totalWords, 0)
+        XCTAssertEqual(metrics.speakingSeconds, 0)
+        XCTAssertEqual(metrics.pauseCount, 0)
+        XCTAssertTrue(metrics.pitchContour.isEmpty)
+        XCTAssertFalse(metrics.quality.isReliable)
+        XCTAssertEqual(metrics.quality.warning?.contains("too quiet"), true)
     }
 
     // MARK: - Serialization and rendering

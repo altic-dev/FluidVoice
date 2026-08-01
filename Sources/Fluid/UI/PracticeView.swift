@@ -24,6 +24,9 @@ struct PracticeView: View {
                 self.recorderCard
 
                 if let session = service.currentSession {
+                    if !session.metrics.quality.isReliable {
+                        self.qualityWarningCard(session.metrics.quality)
+                    }
                     self.metricsRow(session.metrics)
                     self.contourCard(session.metrics)
                     self.transcriptCard(session)
@@ -150,6 +153,35 @@ struct PracticeView: View {
         guard let startedAt = service.recordingStartedAt else { return "0:00" }
         let total = Int(Date().timeIntervalSince(startedAt))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    // MARK: - Quality
+
+    /// Shown instead of letting the cards below speak for themselves. The numbers are
+    /// still rendered — seeing them is how you learn what a bad recording looks like —
+    /// but they are labelled as untrustworthy rather than presented as measurements.
+    private func qualityWarningCard(_ quality: DeliveryMetrics.SignalQuality) -> some View {
+        ThemedCard(style: .prominent) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Delivery could not be measured reliably", systemImage: "waveform.badge.exclamationmark")
+                    .font(.headline)
+                    .foregroundStyle(self.theme.palette.warning)
+
+                if let warning = quality.warning {
+                    Text(warning.prefix(1).uppercased() + warning.dropFirst() + ".")
+                        .font(.callout)
+                }
+
+                Text("The numbers below were still computed, but they describe the recording rather than your delivery — treat them as unreliable and record again. The coach was told to skip delivery feedback for this session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(String(format: "Signal-to-noise %.0f dB · speech level %.0f dBFS", quality.signalToNoiseDb, quality.speechLevelDb))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: - Metrics

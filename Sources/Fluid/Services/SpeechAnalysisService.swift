@@ -22,6 +22,36 @@ nonisolated struct DeliveryMetrics: Codable, Equatable {
         let durationSeconds: Double
     }
 
+    /// Whether the recording is good enough for the delivery numbers to mean anything.
+    ///
+    /// Every other metric here is computed against an *adaptive* threshold, which is
+    /// what makes them robust across rooms and microphones — and also what makes them
+    /// fail silently. A recording of nothing but room tone has its threshold fitted to
+    /// the room tone, so it reads as continuous confident speech: 99.6% voiced, zero
+    /// pauses, a pitch track fitted to noise. The numbers stay precise while becoming
+    /// entirely fictional, which is worse than refusing to answer.
+    struct SignalQuality: Codable, Equatable {
+        /// Separation between the loud and quiet populations of the level
+        /// distribution (95th minus 10th percentile). Speech typically clears 20 dB;
+        /// a room with no speech in it sits near zero.
+        let signalToNoiseDb: Double
+        /// Level of the loud population, for catching recordings that are simply faint.
+        let speechLevelDb: Double
+        /// Fraction of samples pinned at full scale — the opposite failure, distortion.
+        let clippedSampleRatio: Double
+        let isReliable: Bool
+        /// Why the recording was rejected, phrased for the user. Nil when reliable.
+        let warning: String?
+
+        static let unknown = SignalQuality(
+            signalToNoiseDb: 0,
+            speechLevelDb: 0,
+            clippedSampleRatio: 0,
+            isReliable: false,
+            warning: "No audio was analyzed."
+        )
+    }
+
     // Basics
     let durationSeconds: Double
     let speechSpanSeconds: Double
@@ -57,6 +87,38 @@ nonisolated struct DeliveryMetrics: Codable, Equatable {
     /// Spacing between contour samples, for plotting against a time axis.
     let contourIntervalSeconds: Double
 
+    /// Read this before trusting anything above it.
+    let quality: SignalQuality
+
+    /// Carries a quality verdict onto an otherwise empty result, so a rejected
+    /// recording can explain itself instead of reading as "nothing was captured".
+    func replacingQuality(_ quality: SignalQuality) -> DeliveryMetrics {
+        DeliveryMetrics(
+            durationSeconds: self.durationSeconds,
+            speechSpanSeconds: self.speechSpanSeconds,
+            speakingSeconds: self.speakingSeconds,
+            totalWords: self.totalWords,
+            pauses: self.pauses,
+            totalPauseSeconds: self.totalPauseSeconds,
+            longestPauseSeconds: self.longestPauseSeconds,
+            speakingRatio: self.speakingRatio,
+            wordsPerMinute: self.wordsPerMinute,
+            articulationRate: self.articulationRate,
+            fillerCounts: self.fillerCounts,
+            fillersPerMinute: self.fillersPerMinute,
+            meanPitchHz: self.meanPitchHz,
+            pitchRangeHz: self.pitchRangeHz,
+            pitchStdDevHz: self.pitchStdDevHz,
+            pitchContour: self.pitchContour,
+            meanLevelDb: self.meanLevelDb,
+            dynamicRangeDb: self.dynamicRangeDb,
+            levelStdDevDb: self.levelStdDevDb,
+            energyContour: self.energyContour,
+            contourIntervalSeconds: self.contourIntervalSeconds,
+            quality: quality
+        )
+    }
+
     var pauseCount: Int { self.pauses.count }
     var totalFillers: Int { self.fillerCounts.values.reduce(0, +) }
 
@@ -84,7 +146,8 @@ nonisolated struct DeliveryMetrics: Codable, Equatable {
         dynamicRangeDb: 0,
         levelStdDevDb: 0,
         energyContour: [],
-        contourIntervalSeconds: 0
+        contourIntervalSeconds: 0,
+        quality: .unknown
     )
 
     /// Compact rendering handed to the coaching LLM alongside the transcript.
@@ -92,6 +155,20 @@ nonisolated struct DeliveryMetrics: Codable, Equatable {
     func summaryText() -> String {
         func f(_ value: Double, _ places: Int = 1) -> String {
             String(format: "%.\(places)f", value)
+        }
+
+        // Withhold the numbers rather than caveating them. A model handed unreliable
+        // measurements plus a warning will still reason about them — we watched it
+        // explain, fluently and precisely, a 24.5 WPM delivery that never happened.
+        guard self.quality.isReliable else {
+            return """
+            DELIVERY METRICS UNAVAILABLE
+            The recording could not be measured reliably: \(self.quality.warning ?? "unknown audio problem").
+            Do not comment on pace, pauses, pitch, volume or filler rate, and do not \
+            estimate them from the transcript. Say plainly that delivery could not be \
+            measured this time and that the recording needs to be redone, then critique \
+            the content only.
+            """
         }
 
         var lines: [String] = []
@@ -171,6 +248,17 @@ nonisolated enum SpeechAnalysisService {
 
     private static let maxContourPoints = 240
 
+    /// Minimum separation between the loud and quiet populations for the delivery
+    /// numbers to be trustworthy. Speech in a quiet room clears 30 dB and in a noisy
+    /// one still clears ~18 dB; a recording of room tone alone sits under 8 dB. 12 dB
+    /// sits in the empty space between those, well clear of both.
+    private static let minSignalToNoiseDb = 12.0
+    /// Below this the recording is simply too faint to analyze, however clean it is.
+    private static let minSpeechLevelDb = -45.0
+    /// Above this fraction of samples pinned at full scale, the waveform is distorted
+    /// and every level-derived number is compressed.
+    private static let maxClippedSampleRatio = 0.005
+
     static func analyze(
         pcm: [Float],
         sampleRate: Double = 16_000,
@@ -186,6 +274,8 @@ nonisolated enum SpeechAnalysisService {
         let levelsDb = self.frameLevelsDb(pcm: pcm, frameLength: frameLength)
         guard !levelsDb.isEmpty else { return .empty }
 
+        let quality = self.assessQuality(pcm: pcm, levelsDb: levelsDb)
+
         let threshold = self.silenceThresholdDb(levelsDb: levelsDb)
         let isSpeech = levelsDb.map { $0 > threshold }
 
@@ -193,8 +283,9 @@ nonisolated enum SpeechAnalysisService {
         guard let firstSpeech = isSpeech.firstIndex(of: true),
               let lastSpeech = isSpeech.lastIndex(of: true)
         else {
-            // Nothing above the threshold — silence, or a recording that is all noise.
-            return .empty
+            // Nothing above the threshold. Carry the quality verdict out anyway, so the
+            // user is told *why* rather than just "no audio".
+            return .empty.replacingQuality(quality)
         }
 
         let speechSpanSeconds = Double(lastSpeech - firstSpeech + 1) * frameDuration
@@ -245,7 +336,49 @@ nonisolated enum SpeechAnalysisService {
             contourIntervalSeconds: self.contourInterval(
                 frameCount: levelsDb.count,
                 frameDuration: frameDuration
+            ),
+            quality: quality
+        )
+    }
+
+    // MARK: - Signal quality
+
+    /// The gate. Runs on the same per-frame levels every other metric uses, so it
+    /// costs one extra pass over the samples for clipping and nothing else.
+    private static func assessQuality(pcm: [Float], levelsDb: [Double]) -> DeliveryMetrics.SignalQuality {
+        let sorted = levelsDb.sorted()
+        let noiseFloor = self.percentile(sorted, 0.10)
+        let speechLevel = self.percentile(sorted, 0.95)
+        let separation = speechLevel - noiseFloor
+
+        var clipped = 0
+        for sample in pcm where abs(sample) >= 0.99 { clipped += 1 }
+        let clippedRatio = pcm.isEmpty ? 0 : Double(clipped) / Double(pcm.count)
+
+        // Most specific failure first: a clipped recording is also loud, and a silent
+        // one also has poor separation, so reporting the wrong cause would send the
+        // user to fix the wrong thing.
+        let warning: String?
+        if clippedRatio > self.maxClippedSampleRatio {
+            warning = "the input is clipping — lower the microphone gain or move further from it"
+        } else if speechLevel < self.minSpeechLevelDb {
+            warning = "the recording is too quiet — move closer to the microphone or raise its input level"
+        } else if separation < self.minSignalToNoiseDb {
+            warning = String(
+                format: "speech is not clearly separated from background noise (%.0f dB of separation, %.0f dB needed)",
+                separation,
+                self.minSignalToNoiseDb
             )
+        } else {
+            warning = nil
+        }
+
+        return DeliveryMetrics.SignalQuality(
+            signalToNoiseDb: separation,
+            speechLevelDb: speechLevel,
+            clippedSampleRatio: clippedRatio,
+            isReliable: warning == nil,
+            warning: warning
         )
     }
 
