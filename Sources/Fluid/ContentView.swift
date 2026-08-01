@@ -84,7 +84,6 @@ enum SidebarItem: Hashable {
     case stats
     case history
     case changelog
-    case feedback
     case commandMode
     case rewriteMode
 }
@@ -1194,10 +1193,10 @@ struct ContentView: View {
             Section {
                 self.sidebarNavigationLink(.welcome, title: "Getting Started", systemImage: "house.fill")
                 self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                // ponytail: FeedbackView POSTs the user's email plus the last 30 log lines
-                // to altic.dev — upstream's endpoint, not ours. Link removed so no Voix user
-                // can send data to the upstream vendor. View stays dormant; repoint
-                // submitFeedback() before restoring this link.
+                // ponytail: upstream's Feedback screen is deleted, not dormant. It POSTed
+                // the user's email plus the last 30 debug-log lines to altic.dev, and an
+                // unreachable exfiltration path still ships the endpoint in the binary.
+                // Reintroduce a feedback screen pointing somewhere we control if wanted.
             } header: {
                 self.sidebarSectionHeader("Help")
             }
@@ -1296,8 +1295,6 @@ struct ContentView: View {
             return AnyView(CustomDictionaryView())
         case .stats:
             return AnyView(self.statsView)
-        case .feedback:
-            return AnyView(FeedbackView())
         case .changelog:
             return AnyView(ChangelogView())
         case .commandMode:
