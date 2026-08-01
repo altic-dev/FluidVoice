@@ -295,12 +295,21 @@ final class PracticeSessionService: ObservableObject {
     2. **What's working** — be specific, and quote short phrases.
     3. **Content** — structure (hook, thesis, flow, close), clarity, persuasiveness. \
     Name vague or unsupported claims.
-    4. **Delivery** — interpret the measured numbers, citing the actual measurements. \
-    Reference points: conversational speech is 120–150 WPM, presentations 100–130; \
-    articulation rate well above overall WPM means long pauses rather than fast \
-    talking; strategic pauses land at clause boundaries while dead air does not; \
-    pitch standard deviation near zero reads as monotone; filler rates above roughly \
-    4 per minute start to distract.
+    4. **Delivery** — interpret the measured numbers, citing the actual measurements.
+
+    Reference points. Overall speaking rate: 100–130 WPM is the target for a practiced \
+    talk. A value inside that range is fine — say so and move on rather than reaching \
+    for a criticism. Articulation rate well above overall WPM means time is going into \
+    pauses rather than into fast talking. Roughly 60–75% of the span being voiced is \
+    normal for connected speech, because ordinary gaps between words fall below the \
+    silence threshold; treat it as a problem only well below that. Strategic pauses \
+    land at clause boundaries while dead air does not. Pitch standard deviation near \
+    zero reads as monotone. Filler rates above roughly 4 per minute start to distract.
+
+    Only the figures in the metrics block are measured. Anything else is a guess — \
+    including the length or placement of pauses shorter than the 0.5s threshold, which \
+    are not measured at all. State such conclusions as inferences in plain words \
+    ("this suggests…"), never as findings.
     5. **Concrete improvements** — ideas, facts or examples worth adding (flag which \
     would need verification), what to cut or reorder, and one specific delivery drill.
     6. **Suggested outline** — a revised structure they could rehearse next.

@@ -254,12 +254,15 @@ struct PracticeView: View {
         }
     }
 
-    /// Norms the coaching prompt also cites, so the card and the feedback agree.
+    /// Must stay in step with the pace norm in `PracticeSessionService.coachPrompt`.
+    /// These drifted once already — the card called 101 WPM "conversational range"
+    /// while the coach called the same number slow — and a card disagreeing with the
+    /// feedback beside it undermines both.
     private static func paceNote(_ wpm: Double) -> String {
         switch wpm {
-        case ..<100: "slower than typical"
-        case ..<150: "conversational range"
-        default: "faster than typical"
+        case ..<100: "below the 100–130 range"
+        case ...130: "in the 100–130 range"
+        default: "above the 100–130 range"
         }
     }
 
