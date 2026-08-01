@@ -184,6 +184,17 @@ final class PracticeSessionService: ObservableObject {
         let model: String
     }
 
+    enum CoachingError: LocalizedError {
+        case exhaustedByReasoning
+
+        var errorDescription: String? {
+            switch self {
+            case .exhaustedByReasoning:
+                "The model used its entire token budget reasoning and never wrote an answer. Try a non-reasoning model, or a shorter recording."
+            }
+        }
+    }
+
     /// Mirrors the non-PrivateAI branch of `DictationPostProcessingService.process`
     /// — same route resolution, same missing-model/key guards, same client — but
     /// deliberately not its prompt: `effectiveDictationSystemPrompt` is a transcript
@@ -235,13 +246,25 @@ final class PracticeSessionService: ObservableObject {
             temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.7,
             extraParameters: [:]
         )
-        // Coaching is a long structured answer over a possibly long transcript, and
-        // it runs in the background rather than in a typing hot path.
+        // Coaching is a long structured answer over a possibly long transcript, and it
+        // runs in the background rather than in a typing hot path.
+        //
+        // The budget is deliberately generous because reasoning models spend it before
+        // writing anything. At 4000 this failed in the field: deepseek-v4-flash spent
+        // 45s and ~17 KB on reasoning_content for a 142-word transcript and returned an
+        // empty answer. A six-section critique is only ~1500 tokens; the rest is
+        // headroom for models that think first.
         config.timeoutSeconds = 180
-        config.maxTokens = 4000
+        config.maxTokens = 16_000
 
         let response = try await LLMClient.shared.call(config)
         guard !response.content.isEmpty else {
+            // LLMClient routes reasoning_content into `thinking`, so reasoning present
+            // with no answer means the budget ran out mid-thought rather than the model
+            // declining to respond. Those need different fixes, so name them differently.
+            if response.thinking?.isEmpty == false {
+                throw CoachingError.exhaustedByReasoning
+            }
             throw AIProcessingError.emptyResponse
         }
         return CoachingResult(text: response.content, model: resolved.model)
