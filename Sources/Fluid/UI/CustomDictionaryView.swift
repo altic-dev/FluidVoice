@@ -47,6 +47,10 @@ struct CustomDictionaryView: View {
     @State private var isAutomaticTrainingEnabled = false
     @State private var isTrainedReplacementButtonHovered = false
     @State private var isTrainedReplacementGlowExpanded = false
+    @State private var hasReachedVerifyStep = false
+    @State private var manualExpandedTrainingStep: DictionaryTrainingStep?
+    @State private var lastAnnouncedTrainingStep: DictionaryTrainingStep = .word
+    @FocusState private var isTrainingWordFieldFocused: Bool
     @State private var replacementConfirmation: ReplacementConfirmation?
     @State private var composerMode: DictionaryComposerMode = .train
     @State private var manualTriggerDraft = ""
@@ -76,12 +80,8 @@ struct CustomDictionaryView: View {
         )
     }
 
-    private var trainingTargetReference: String {
-        DictionaryTrainingCopy.target(for: self.normalizedTrainingReplacement)
-    }
-
     private var composerModeDetail: String {
-        DictionaryTrainingCopy.composerDetail(mode: self.composerMode, target: self.trainingTargetReference)
+        self.composerMode.detail
     }
 
     private var canUseTrainingRecorderButton: Bool {
@@ -93,7 +93,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingRecorderIsStop: Bool {
-        self.isAutomaticTrainingEnabled || self.isTrainingRecording || self.isTrainingStarting
+        self.isTrainingRecordingLocked
     }
 
     private var trainingRecorderButtonTitle: String {
@@ -101,30 +101,6 @@ struct CustomDictionaryView: View {
             return "Stop"
         }
         return self.canRetryTrainingAfterMaximum ? "Try Again" : "Start"
-    }
-
-    private var trainingFinalOutputIsReady: Bool {
-        if self.activePronunciationMatching {
-            return !self.trainingAlreadyCorrectWithoutReplacement &&
-                self.trainingPronunciationEnrollments.count >= CustomDictionaryTrainingMerge.readyCoveredCount
-        }
-        return !self.trainingAlreadyCorrectWithoutReplacement &&
-            self.trainingOutputIsCovered &&
-            self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount
-    }
-
-    private var trainingAlreadyCorrectWithoutReplacement: Bool {
-        if self.activePronunciationMatching {
-            return self.trainingVariants.isEmpty &&
-                !self.lastTrainingOutput.isEmpty &&
-                self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
-                self.trainingPronunciationEnrollments.count >= CustomDictionaryTrainingMerge.readyCoveredCount
-        }
-        return self.trainingVariants.isEmpty &&
-            self.trainingOutputIsCovered &&
-            !self.lastTrainingOutput.isEmpty &&
-            self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
-            self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount
     }
 
     private var trainingReadinessProgress: Int {
@@ -139,11 +115,14 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingOutputIsCovered: Bool {
-        if self.activePronunciationMatching {
-            return !self.trainingPronunciationEnrollments.isEmpty
-        }
-        return self.lastTrainingOutputIsCovered
+        DictionaryTrainingStepModel.isOutputCovered(
+            lastTrainingOutputIsCovered: self.lastTrainingOutputIsCovered,
+            pronunciationEnrollmentCount: self.trainingPronunciationEnrollments.count,
+            activePronunciationMatching: self.activePronunciationMatching
+        )
     }
+
+    // MARK: - Train by Voice accordion
 
     private var trainingFinalOutputText: String {
         guard !self.lastTrainingOutput.isEmpty else { return "Record to check" }
@@ -480,76 +459,6 @@ struct CustomDictionaryView: View {
         )
     }
 
-    private var trainReplacementComposer: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            TextField("Type the correct text, e.g. FluidVoice", text: self.$trainingReplacement)
-                .dictionaryInputChrome()
-                .disabled(self.isTrainingRecording || self.isTrainingProcessing)
-                .onChange(of: self.trainingReplacement) { oldValue, newValue in
-                    self.handleTrainingReplacementChange(oldValue: oldValue, newValue: newValue)
-                }
-
-            self.voiceMatchingSettingsRow
-
-            self.trainingRecorderPanel
-
-            self.trainingFinalOutputPanel
-
-            if !self.trainingVariants.isEmpty {
-                self.trainingHeardSection
-            }
-
-            self.trainingFooter
-
-            Spacer(minLength: 0)
-
-            Button {
-                Task { await self.addTrainedReplacement() }
-            } label: {
-                Label(
-                    self.trainedReplacementButtonTitle,
-                    systemImage: self.shouldEmphasizeTrainedReplacementButton
-                        ? "sparkles"
-                        : (self.trainingAlreadyCorrectWithoutReplacement ? "checkmark" : "plus")
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
-            }
-            .fluidButton(self.shouldEmphasizeTrainedReplacementButton ? .accent : .compact, size: .small)
-            .disabled(!self.canAddTrainedReplacement)
-            .opacity(self.canAddTrainedReplacement ? 1 : 0.62)
-            .overlay(self.trainedReplacementButtonReadyOutline)
-            .shadow(
-                color: self.shouldEmphasizeTrainedReplacementButton
-                    ? self.theme.palette.accent.opacity(self.isTrainedReplacementGlowExpanded ? 0.34 : 0.14)
-                    : .clear,
-                radius: self.shouldEmphasizeTrainedReplacementButton
-                    ? (self.isTrainedReplacementGlowExpanded ? 18 : 8)
-                    : 0,
-                x: 0,
-                y: 4
-            )
-            .onHover { self.isTrainedReplacementButtonHovered = $0 }
-            .onAppear { self.updateTrainedReplacementGlow() }
-            .onChange(of: self.shouldPulseTrainedReplacementButton) { _, _ in
-                self.updateTrainedReplacementGlow()
-            }
-        }
-        .task {
-            await DictionaryTrainingEndpointMonitor.shared.prepare()
-        }
-    }
-
-    private var trainedReplacementButtonReadyOutline: some View {
-        RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-            .stroke(
-                self.shouldEmphasizeTrainedReplacementButton ? self.theme.palette.success.opacity(0.72) : .clear,
-                lineWidth: 1.5
-            )
-            .padding(-3)
-            .allowsHitTesting(false)
-    }
-
     private var manualReplacementComposer: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             ViewThatFits(in: .horizontal) {
@@ -640,41 +549,18 @@ struct CustomDictionaryView: View {
 
     private var trainingRecorderPanel: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Text("Teach FluidVoice your pronunciation")
-                .font(self.theme.typography.bodySmallStrong)
-
-            if self.trainingAlreadyCorrectWithoutReplacement {
-                Label("\(self.trainingTargetReference) is already recognized correctly.", systemImage: "checkmark.circle.fill")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
-            } else if self.trainingFinalOutputIsReady {
-                Label(
-                    self.activePronunciationMatching
-                        ? "Voice profile for \(self.trainingTargetReference) captured 3 times."
-                        : "FluidVoice recognized \(self.trainingTargetReference) 3 times in a row.",
-                    systemImage: "checkmark.circle.fill"
-                )
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.accent)
-            } else {
+            // Once ready or already correct, the ring and its caption carry the outcome.
+            if !self.trainingAlreadyCorrectWithoutReplacement, !self.trainingFinalOutputIsReady {
                 VStack(alignment: .leading, spacing: 7) {
                     self.trainingInstruction(
                         number: 1,
-                        text: "Type the correct word you want to teach in the box above."
+                        text: "Press Start, say the word naturally, then pause."
                     )
                     self.trainingInstruction(
                         number: 2,
-                        text: "Press Start once."
-                    )
-                    self.trainingInstruction(
-                        number: 3,
-                        text: "Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically."
-                    )
-                    self.trainingInstruction(
-                        number: 4,
                         text: self.activePronunciationMatching
-                            ? "Repeat 3 times to teach FluidVoice how your voice sounds."
-                            : "Keep repeating it until the circle reaches 3/3."
+                            ? "Repeat 3 times so FluidVoice learns how your voice sounds."
+                            : "Repeat until the ring reaches 3/3."
                     )
                 }
             }
@@ -728,7 +614,6 @@ struct CustomDictionaryView: View {
 
     private var trainingReadinessCaption: String {
         DictionaryTrainingCopy.readinessCaption(
-            target: self.trainingTargetReference,
             isAlreadyCorrect: self.trainingAlreadyCorrectWithoutReplacement,
             isReady: self.trainingFinalOutputIsReady,
             usesVoiceMatching: self.activePronunciationMatching
@@ -816,12 +701,6 @@ struct CustomDictionaryView: View {
     private var trainingFooter: some View {
         if self.trainingHasError || self.isTrainingActive || !self.trainingVariants.isEmpty {
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                if self.trainingHasError {
-                    Label(self.trainingStatusMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.warning)
-                }
-
                 if self.isTrainingActive || !self.trainingVariants.isEmpty || !self.normalizedTrainingReplacement.isEmpty {
                     Spacer()
 
@@ -1870,6 +1749,11 @@ struct CustomDictionaryView: View {
         await self.startTrainingSample()
     }
 
+    private func resetTrainingStepLatches() {
+        self.hasReachedVerifyStep = false
+        self.lastAnnouncedTrainingStep = .word
+    }
+
     private func resetTrainingVerificationAttempts() {
         self.trainingSampleCount = 0
         self.lastTrainingOutput = ""
@@ -1877,6 +1761,8 @@ struct CustomDictionaryView: View {
         self.consecutiveCoveredCaptures = 0
         self.trainingStatusMessage = ""
         self.trainingHasError = false
+        // Drop both latches, or Try Again leaves the accordion stuck on step ③.
+        self.resetTrainingStepLatches()
     }
 
     private func addTrainingVariant(from transcript: String) {
@@ -1905,7 +1791,7 @@ struct CustomDictionaryView: View {
             self.trainingHasError = false
             if self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount {
                 self.trainingStatusMessage = self.trainingVariants.isEmpty
-                    ? "Looks good already. No replacement needed."
+                    ? DictionaryTrainingCopy.alreadyCorrectCaption
                     : "Looks ready. Add this replacement when you're ready."
             } else {
                 self.trainingStatusMessage = "Covered. Try a couple more."
@@ -1995,6 +1881,8 @@ struct CustomDictionaryView: View {
     private func removeTrainingVariant(_ variant: String) {
         self.trainingVariants.removeAll { $0 == variant }
         self.refreshLastTrainingCoverage()
+        // May drop below ready; clear the latches so the step re-derives from coverage.
+        self.resetTrainingStepLatches()
     }
 
     private func refreshLastTrainingCoverage() {
@@ -2034,6 +1922,8 @@ struct CustomDictionaryView: View {
         self.isTrainingRecording = false
         self.trainingStopRequestedDuringStart = false
         self.isTrainingProcessing = false
+        self.resetTrainingStepLatches()
+        self.manualExpandedTrainingStep = nil
     }
 
     private func handleTrainingReplacementChange(oldValue: String, newValue: String) {
@@ -2048,6 +1938,7 @@ struct CustomDictionaryView: View {
         self.lastTrainingOutputIsCovered = false
         self.consecutiveCoveredCaptures = 0
         self.isTrainingActive = false
+        self.resetTrainingStepLatches()
         if newKey.isEmpty {
             self.trainingStatusMessage = "Type the correct text."
         } else if self.trainingVariants.isEmpty {
@@ -2256,7 +2147,9 @@ struct CustomDictionaryView: View {
 }
 
 private extension CustomDictionaryView {
-    var asr: ASRService { self.appServices.asr }
+    var asr: ASRService {
+        self.appServices.asr
+    }
 
     var trainedReplacementButtonTitle: String {
         self.trainingAlreadyCorrectWithoutReplacement ? "Nothing to Save" : "Add Replacement"
@@ -2285,10 +2178,313 @@ private extension CustomDictionaryView {
         DictionaryTrainingEndpointMonitor.shared.stop()
         self.trainingVariants = self.existingTrainingVariants(for: self.trainingReplacement)
         self.trainingPronunciationEnrollments = []
-        self.resetTrainingVerificationAttempts()
+        self.resetTrainingVerificationAttempts() // also clears hasReachedVerifyStep
+        // Progress is reset, so a stale manual override would pin the wrong panel.
+        self.manualExpandedTrainingStep = nil
         self.trainingStatusMessage = self.normalizedTrainingReplacement.isEmpty
             ? "Type the correct text."
             : ""
+    }
+}
+
+// MARK: - Train by Voice accordion
+
+/// Split out to keep type_body_length in check; behavior is unchanged.
+private extension CustomDictionaryView {
+    var trainingSnapshot: DictionaryTrainingSnapshot {
+        DictionaryTrainingSnapshot(
+            normalizedWord: self.normalizedTrainingReplacement,
+            consecutiveCoveredCaptures: self.consecutiveCoveredCaptures,
+            pronunciationEnrollmentCount: self.trainingPronunciationEnrollments.count,
+            lastTrainingOutput: self.lastTrainingOutput,
+            lastTrainingOutputIsCovered: self.lastTrainingOutputIsCovered,
+            trainingVariantsIsEmpty: self.trainingVariants.isEmpty,
+            activePronunciationMatching: self.activePronunciationMatching
+        )
+    }
+
+    var trainingFinalOutputIsReady: Bool {
+        DictionaryTrainingStepModel.finalOutputIsReady(
+            self.trainingSnapshot,
+            readyCoveredCount: CustomDictionaryTrainingMerge.readyCoveredCount
+        )
+    }
+
+    var trainingAlreadyCorrectWithoutReplacement: Bool {
+        DictionaryTrainingStepModel.alreadyCorrectWithoutReplacement(
+            self.trainingSnapshot,
+            readyCoveredCount: CustomDictionaryTrainingMerge.readyCoveredCount
+        )
+    }
+
+    var isTrainingRecordingLocked: Bool {
+        self.isTrainingRecording || self.isTrainingStarting || self.isAutomaticTrainingEnabled
+    }
+
+    var isTrainingVerifyReady: Bool {
+        self.trainingFinalOutputIsReady || self.trainingAlreadyCorrectWithoutReplacement
+    }
+
+    var derivedTrainingStep: DictionaryTrainingStep {
+        DictionaryTrainingStepModel.derivedStep(
+            self.trainingSnapshot,
+            readyCoveredCount: CustomDictionaryTrainingMerge.readyCoveredCount,
+            hasReachedVerify: self.hasReachedVerifyStep
+        )
+    }
+
+    var expandedTrainingStep: DictionaryTrainingStep {
+        DictionaryTrainingStepModel.resolveExpandedStep(
+            derived: self.derivedTrainingStep,
+            manualOverride: self.manualExpandedTrainingStep,
+            isRecordingLocked: self.isTrainingRecordingLocked,
+            isWordFieldFocused: self.isTrainingWordFieldFocused
+        )
+    }
+
+    /// True when step ① is manually reopened after progress exists.
+    var isReopeningTrainingWordStepAfterProgress: Bool {
+        self.manualExpandedTrainingStep == .word &&
+            self.derivedTrainingStep != .word &&
+            (self.trainingSampleCount > 0 || !self.trainingPronunciationEnrollments.isEmpty)
+    }
+
+    func isTrainingStepInteractive(_ step: DictionaryTrainingStep) -> Bool {
+        DictionaryTrainingStepModel.isStepInteractive(
+            step,
+            derived: self.derivedTrainingStep,
+            isRecordingLocked: self.isTrainingRecordingLocked,
+            wordIsEmpty: self.normalizedTrainingReplacement.isEmpty
+        )
+    }
+
+    func selectTrainingStep(_ step: DictionaryTrainingStep) {
+        guard self.isTrainingStepInteractive(step) else { return }
+        self.manualExpandedTrainingStep = step
+        if step == .word {
+            // Programmatic focus to a not-yet-rendered field is unreliable on macOS.
+            Task { @MainActor in
+                self.isTrainingWordFieldFocused = true
+            }
+        } else {
+            self.isTrainingWordFieldFocused = false
+        }
+    }
+
+    var trainReplacementComposer: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            self.trainingStepHeader(.word)
+            if self.expandedTrainingStep == .word {
+                self.trainingWordStepBody
+            }
+
+            self.trainingStepHeader(.record)
+            if self.expandedTrainingStep == .record {
+                self.trainingRecordStepBody
+            }
+
+            self.trainingStepHeader(.verify)
+            if self.expandedTrainingStep == .verify {
+                self.trainingVerifyStepBody
+            }
+
+            // Outside the step bodies so failures surface whichever step is expanded.
+            if self.trainingHasError {
+                Label(self.trainingStatusMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
+            }
+        }
+        .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.22), value: self.expandedTrainingStep)
+        .task {
+            await DictionaryTrainingEndpointMonitor.shared.prepare()
+        }
+        // On the accordion, not the TextField: step ① may be collapsed when the word changes.
+        .onChange(of: self.trainingReplacement) { oldValue, newValue in
+            self.handleTrainingReplacementChange(oldValue: oldValue, newValue: newValue)
+        }
+        .onChange(of: self.derivedTrainingStep) { _, _ in
+            self.manualExpandedTrainingStep = nil
+        }
+        .onChange(of: self.expandedTrainingStep) { oldStep, newStep in
+            self.announceTrainingStepEdgeIfNeeded(from: oldStep, to: newStep)
+        }
+        .onChange(of: self.isTrainingRecordingLocked) { _, isLocked in
+            if isLocked {
+                self.manualExpandedTrainingStep = nil
+            }
+        }
+        .onChange(of: self.isTrainingVerifyReady) { _, isReady in
+            if isReady {
+                self.hasReachedVerifyStep = true
+            }
+        }
+    }
+
+    func announceTrainingStepEdgeIfNeeded(from oldStep: DictionaryTrainingStep, to newStep: DictionaryTrainingStep) {
+        guard oldStep != newStep else { return }
+        // Lower the latch on a backward edge so a later re-advance announces again.
+        if newStep.rawValue < self.lastAnnouncedTrainingStep.rawValue {
+            self.lastAnnouncedTrainingStep = newStep
+        }
+        // Includes the word→verify jump; the same-step guard prevents double announces.
+        guard newStep.rawValue > oldStep.rawValue, self.lastAnnouncedTrainingStep != newStep else { return }
+        self.lastAnnouncedTrainingStep = newStep
+        AccessibilityNotification.Announcement(DictionaryTrainingCopy.stepAnnouncement(for: newStep)).post()
+    }
+
+    @ViewBuilder
+    func trainingStepHeader(_ step: DictionaryTrainingStep) -> some View {
+        let isInteractive = self.isTrainingStepInteractive(step)
+        DictionaryTrainingStepHeaderView(
+            step: step,
+            status: self.trainingStepStatus(step),
+            title: DictionaryTrainingCopy.stepTitle(step),
+            isExpanded: self.expandedTrainingStep == step,
+            isInteractive: isInteractive
+        ) {
+            self.selectTrainingStep(step)
+        }
+    }
+
+    func trainingStepStatus(_ step: DictionaryTrainingStep) -> DictionaryTrainingStepHeaderView.Status {
+        if step.rawValue < self.derivedTrainingStep.rawValue {
+            // Latched Verify doesn't mean Record is complete — captures are no longer sufficient.
+            if step == .record, self.derivedTrainingStep == .verify, !self.isTrainingVerifyReady {
+                return .current
+            }
+            return .complete
+        }
+        if step == self.derivedTrainingStep {
+            return .current
+        }
+        return .upcoming
+    }
+
+    var trainingWordStepBody: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            TextField("Type the correct text, e.g. FluidVoice", text: self.$trainingReplacement)
+                .dictionaryInputChrome()
+                .disabled(self.isTrainingRecording || self.isTrainingProcessing)
+                .focused(self.$isTrainingWordFieldFocused)
+                .onSubmit {
+                    self.advanceFromWordStep()
+                }
+
+            if self.isReopeningTrainingWordStepAfterProgress {
+                Label(DictionaryTrainingCopy.editingWordRestartsTrainingCaption, systemImage: "exclamationmark.circle")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
+            }
+        }
+        .padding(.leading, self.trainingStepBodyLeadingInset)
+    }
+
+    /// Commits the word and advances past step ①. No-op while empty, so Tab/Return
+    /// can't strand the user on an empty Record step.
+    func advanceFromWordStep() {
+        guard !self.normalizedTrainingReplacement.isEmpty else { return }
+        self.manualExpandedTrainingStep = nil
+        self.isTrainingWordFieldFocused = false
+    }
+
+    var trainingRecordStepBody: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            self.voiceMatchingSettingsRow
+
+            self.trainingRecorderPanel
+
+            if let caption = self.trainingStartDisabledCaption {
+                Label(caption, systemImage: "info.circle")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+
+            if !self.trainingVariants.isEmpty {
+                self.trainingHeardSection
+            }
+
+            self.trainingFooter
+        }
+        .padding(.leading, self.trainingStepBodyLeadingInset)
+    }
+
+    /// Copy for the three Start-disabled causes in step ②. Word-empty is excluded:
+    /// the Record header is inert without a word.
+    var trainingStartDisabledCaption: String? {
+        if self.asr.isRunning, !self.isTrainingRecording, !self.isTrainingStarting, !self.isAutomaticTrainingEnabled {
+            return DictionaryTrainingCopy.dictationRunningCaption
+        }
+        if self.isTrainingProcessing {
+            return DictionaryTrainingCopy.trainingProcessingCaption
+        }
+        if self.trainingSampleCount >= CustomDictionaryTrainingMerge.maxSamples {
+            return DictionaryTrainingCopy.maxSamplesReachedCaption
+        }
+        return nil
+    }
+
+    var trainingVerifyStepBody: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            if !self.trainingVariants.isEmpty {
+                self.trainingHeardSection
+            }
+
+            self.trainingFinalOutputPanel
+
+            if self.trainingAlreadyCorrectWithoutReplacement {
+                Label(DictionaryTrainingCopy.alreadyCorrectCaption, systemImage: "checkmark.circle.fill")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.accent)
+            }
+
+            Button {
+                Task { await self.addTrainedReplacement() }
+            } label: {
+                Label(
+                    self.trainedReplacementButtonTitle,
+                    systemImage: self.shouldEmphasizeTrainedReplacementButton
+                        ? "sparkles"
+                        : (self.trainingAlreadyCorrectWithoutReplacement ? "checkmark" : "plus")
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+            }
+            .fluidButton(self.shouldEmphasizeTrainedReplacementButton ? .accent : .compact, size: .small)
+            .disabled(!self.canAddTrainedReplacement)
+            .opacity(self.canAddTrainedReplacement ? 1 : 0.62)
+            .overlay(self.trainedReplacementButtonReadyOutline)
+            .shadow(
+                color: self.shouldEmphasizeTrainedReplacementButton
+                    ? self.theme.palette.accent.opacity(self.isTrainedReplacementGlowExpanded ? 0.34 : 0.14)
+                    : .clear,
+                radius: self.shouldEmphasizeTrainedReplacementButton
+                    ? (self.isTrainedReplacementGlowExpanded ? 18 : 8)
+                    : 0,
+                x: 0,
+                y: 4
+            )
+            .onHover { self.isTrainedReplacementButtonHovered = $0 }
+            .onAppear { self.updateTrainedReplacementGlow() }
+            .onChange(of: self.shouldPulseTrainedReplacementButton) { _, _ in
+                self.updateTrainedReplacementGlow()
+            }
+        }
+        .padding(.leading, self.trainingStepBodyLeadingInset)
+    }
+
+    var trainingStepBodyLeadingInset: CGFloat {
+        28
+    }
+
+    var trainedReplacementButtonReadyOutline: some View {
+        RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+            .stroke(
+                self.shouldEmphasizeTrainedReplacementButton ? self.theme.palette.success.opacity(0.72) : .clear,
+                lineWidth: 1.5
+            )
+            .padding(-3)
+            .allowsHitTesting(false)
     }
 }
 
@@ -2368,9 +2564,11 @@ private struct VoiceMatchingSettingsRow: View {
                     .fill(
                         isSelected
                             ? self.theme.palette.accent
-                            : (isHovered
-                                ? self.theme.palette.accent.opacity(0.1)
-                                : self.theme.palette.cardBackground.opacity(0.5))
+                            : (
+                                isHovered
+                                    ? self.theme.palette.accent.opacity(0.1)
+                                    : self.theme.palette.cardBackground.opacity(0.5)
+                            )
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -2510,39 +2708,58 @@ private struct DictionaryFocusDismissMonitor: NSViewRepresentable {
 }
 
 private enum DictionaryTrainingCopy {
-    static func target(for normalizedTarget: String) -> String {
-        normalizedTarget.isEmpty ? "the word" : "“\(normalizedTarget)”"
-    }
-
-    static func composerDetail(mode: DictionaryComposerMode, target: String) -> String {
-        mode == .train && target != "the word" ? "Teach \(target) by speaking it." : mode.detail
-    }
-
+    /// The word is already on screen in step ①, so readiness copy doesn't echo it.
     static func readinessCaption(
-        target: String,
         isAlreadyCorrect: Bool,
         isReady: Bool,
         usesVoiceMatching: Bool
     ) -> String {
         if isAlreadyCorrect {
-            return "No replacement is needed for \(target)."
+            return "No replacement needed."
         }
         if isReady {
             return usesVoiceMatching
-                ? "Ready. FluidVoice learned how \(target) sounds in your voice."
-                : "Ready. FluidVoice got \(target) right 3 times in a row."
+                ? "Ready. FluidVoice learned how you say it."
+                : "Ready. Recognized 3 times in a row."
         }
         return usesVoiceMatching
-            ? "Say \(target) 3 times to unlock Add Replacement."
-            : "Keep trying until FluidVoice gets \(target) right 3 times in a row."
+            ? "Say it 3 times to unlock Add Replacement."
+            : "Keep going until it is recognized 3 times in a row."
     }
+
+    // MARK: - Train by Voice accordion
+
+    /// Titles carry the instruction, so steps need no subtitle.
+    static func stepTitle(_ step: DictionaryTrainingStep) -> String {
+        switch step {
+        case .word: return "Type the word to teach"
+        case .record: return "Say it 3 times"
+        case .verify: return "Verify & save"
+        }
+    }
+
+    static func stepAnnouncement(for step: DictionaryTrainingStep) -> String {
+        switch step {
+        case .word: return "Step 1, Word."
+        case .record: return "Step 2, Record."
+        case .verify: return "Step 3, Verify and Save."
+        }
+    }
+
+    static let editingWordRestartsTrainingCaption = "Editing the word restarts voice training."
+    static let dictationRunningCaption = "Dictation is running — stop dictating to train."
+    static let trainingProcessingCaption = "Processing…"
+    static let maxSamplesReachedCaption = "Max samples reached — press Try Again or Clear."
+    static let alreadyCorrectCaption = "Looks good already. No replacement needed."
 }
 
 private enum DictionaryComposerMode: CaseIterable, Identifiable {
     case train
     case manual
 
-    var id: Self { self }
+    var id: Self {
+        self
+    }
 
     var title: String {
         switch self {
@@ -2621,9 +2838,11 @@ private struct DictionaryComposerModeTab: View {
             .fill(
                 self.isSelected
                     ? self.theme.palette.accent
-                    : (self.isHovered
-                        ? self.theme.palette.accent.opacity(0.1)
-                        : self.theme.palette.cardBackground.opacity(0.5))
+                    : (
+                        self.isHovered
+                            ? self.theme.palette.accent.opacity(0.1)
+                            : self.theme.palette.cardBackground.opacity(0.5)
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
@@ -2634,6 +2853,106 @@ private struct DictionaryComposerModeTab: View {
                         lineWidth: self.isSelected || self.isHovered ? 1.25 : 1
                     )
             )
+    }
+}
+
+private struct DictionaryTrainingStepHeaderView: View {
+    enum Status {
+        case upcoming
+        case current
+        case complete
+    }
+
+    let step: DictionaryTrainingStep
+    let status: Status
+    let title: String
+    let isExpanded: Bool
+    let isInteractive: Bool
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: self.action) {
+            HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+                self.statusGlyph
+
+                Text("\(self.step.rawValue + 1). \(self.title)")
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(1)
+
+                Spacer(minLength: self.theme.metrics.spacing.sm)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+                    .rotationEffect(.degrees(self.isExpanded ? 90 : 0))
+            }
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                    .fill(
+                        self.isExpanded
+                            ? self.theme.palette.contentBackground.opacity(0.55)
+                            : (
+                                self.isHovered
+                                    ? self.theme.palette.contentBackground.opacity(0.32)
+                                    : Color.clear
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                            .stroke(self.theme.palette.cardBorder.opacity(self.isExpanded ? 0.28 : 0), lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!self.isInteractive)
+        .opacity(self.isInteractive ? 1 : 0.55)
+        .onHover { hovering in
+            guard self.isInteractive else { return }
+            guard !self.reduceMotion else {
+                self.isHovered = hovering
+                return
+            }
+            withAnimation(.easeOut(duration: 0.14)) {
+                self.isHovered = hovering
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(self.step.rawValue + 1), \(self.title), \(self.statusAccessibilityDescription)")
+        .accessibilityAddTraits(self.isExpanded ? .isSelected : [])
+    }
+
+    private var statusAccessibilityDescription: String {
+        switch self.status {
+        case .upcoming: return "not started"
+        case .current: return "in progress"
+        case .complete: return "complete"
+        }
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        switch self.status {
+        case .upcoming:
+            Circle()
+                .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1.5)
+                .frame(width: 18, height: 18)
+        case .current:
+            Circle()
+                .fill(self.theme.palette.accent)
+                .frame(width: 18, height: 18)
+        case .complete:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(self.theme.palette.success)
+        }
     }
 }
 
@@ -2961,7 +3280,9 @@ private enum BoostStrengthPreset: String, CaseIterable, Identifiable {
     case balanced = "Balanced"
     case strong = "Strong"
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var weight: Float {
         switch self {
