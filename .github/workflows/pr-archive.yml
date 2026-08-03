@@ -25,7 +25,7 @@ jobs:
   archive:
     name: "Archive FluidVoice PR #${{ github.event.pull_request.number }}"
     if: github.event.pull_request.draft == false
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 45
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -83,10 +83,16 @@ jobs:
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
-          xcode-version: latest-stable
+          xcode-version: '16.0'
 
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Diagnostic Info
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+          xcode-select -p
 
       - name: Archive PR build
         env:
@@ -145,6 +151,10 @@ jobs:
           fi
 
           mv "$ORIGINAL_APP_PATH" "$APP_PATH"
+
+          # Verify deployment target
+          ./scripts/verify-macos-deployment-target.sh "$APP_PATH"
+
           /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_IDENTIFIER" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$INFO_PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_NAME" "$INFO_PLIST"

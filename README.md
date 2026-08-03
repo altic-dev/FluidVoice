@@ -175,9 +175,10 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 ## Requirements
 
-- macOS 15.0 (Sequoia) or later
-- Apple Silicon Mac for all models
+- macOS 14.0 (Sonoma) or later
+- Apple Silicon Mac for all models (except Whisper)
 - Intel Macs supported via Whisper models (from 1.5.1+)
+- Xcode 16.0 or later (required to build from source)
 - ~1 GB disk space for a voice model
 - ~3.5 GB disk space for the Fluid Intelligence model (optional)
 - Microphone access
@@ -185,7 +186,15 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 ---
 
+## Sonoma Support
+
+FluidVoice 1.6.6 and later are compatible with macOS 14 Sonoma. While the core dictation and UI components work fully on Sonoma, some high-performance models (such as Qwen3 ASR and certain Cohere pipelines) require macOS 15+ due to system-level dependencies. These models are automatically labeled and disabled when running on Sonoma.
+
 ## Building from Source
+
+Build requirements:
+- **Xcode 16.0** or later
+- **Swift 6** toolchain (included with Xcode 16)
 
 ```bash
 git clone https://github.com/altic-dev/FluidVoice.git

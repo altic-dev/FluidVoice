@@ -209,10 +209,13 @@ create_dmg_only.sh
 !Sources/Fluid/Resources/*.m4a
 # Scratch directory
 scratch/
-
 assets/
 .swiftpm/
-scripts/
+# scripts/  <-- Don't ignore the whole directory if we want to track some files in it
+scripts/*.sh
+!scripts/check-team-id.sh
+!scripts/format-and-lint.sh
+!scripts/verify-macos-deployment-target.sh
 
 # Benchmark / eval reports (local-only)
 benchmark_reports/

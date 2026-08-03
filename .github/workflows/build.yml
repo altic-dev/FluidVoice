@@ -64,30 +64,36 @@ jobs:
     name: Build FluidVoice
     if: needs.changes.outputs.relevant == 'true' && needs.lint.result == 'success'
     needs: [changes, lint]
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 20
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '16.0'
+    
+    - name: Diagnostic Info
+      run: |
+        sw_vers
+        uname -m
+        xcodebuild -version
+        xcrun swift --version
+        xcrun --sdk macosx --show-sdk-version
+        xcode-select -p
+
     - name: Install xcpretty
       run: sudo gem install xcpretty
-
+      
     - name: Cache Whisper models
       uses: actions/cache@v4
       with:
         path: ~/Library/Caches/WhisperModels
         key: ${{ runner.os }}-whisper-models-transcribecpp-v1
 
-    - name: Setup Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: latest-stable
-    
-    - name: Show Xcode version
-      run: xcodebuild -version
-      
     # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
     # Keep this E2E assertion in the suite for local validation, but skip it in CI.
     - name: Build and test (excluding flaky Tiny Whisper E2E)

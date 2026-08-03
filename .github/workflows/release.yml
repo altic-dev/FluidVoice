@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_draft:
+        description: 'Create a draft GitHub Release'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Package Release
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.0'
+
+      - name: Diagnostic Info
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+          xcode-select -p
+
+      - name: Cache Whisper models
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/WhisperModels
+          key: ${{ runner.os }}-whisper-models-transcribecpp-v1
+
+      - name: Archive FluidVoice
+        env:
+          ARCHIVE_PATH: ${{ runner.temp }}/FluidVoice.xcarchive
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Fluid.xcodeproj \
+            -scheme Fluid \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            MACOSX_DEPLOYMENT_TARGET=14.0 \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=""
+
+      - name: Verify and Package
+        id: package
+        env:
+          ARCHIVE_PATH: ${{ runner.temp }}/FluidVoice.xcarchive
+          STAGING_PATH: ${{ runner.temp }}/staging
+        run: |
+          set -euo pipefail
+          mkdir -p "$STAGING_PATH"
+          
+          APP_PATH="$ARCHIVE_PATH/Products/Applications/FluidVoice.app"
+          
+          # 1. Verify deployment target
+          ./scripts/verify-macos-deployment-target.sh "$APP_PATH"
+          
+          # 2. Package .app
+          # We use ditto to preserve macOS metadata and symlinks
+          ZIP_NAME="FluidVoice-macOS-14-plus-arm64.zip"
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            ZIP_NAME="FluidVoice-${VERSION}-macOS-14-plus.zip"
+          fi
+          
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$STAGING_PATH/$ZIP_NAME"
+          
+          # 3. Generate Checksum
+          cd "$STAGING_PATH"
+          shasum -a 256 "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+          
+          echo "artifact-path=$STAGING_PATH" >> "$GITHUB_OUTPUT"
+          echo "zip-name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.zip-name }}
+          path: ${{ steps.package.outputs.artifact-path }}
+          if-no-files-found: error
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_draft == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          STAGING_PATH="${{ steps.package.outputs.artifact-path }}"
+          ZIP_NAME="${{ steps.package.outputs.zip-name }}"
+          
+          RELEASE_OPTS=()
+          if [[ "${{ github.event.inputs.create_draft }}" == "true" && ! (startsWith(github.ref, 'refs/tags/v')) ]]; then
+             TAG_NAME="manual-$(date +%Y%m%d%H%M%S)"
+             RELEASE_OPTS+=(--draft --title "Manual Build $TAG_NAME" "$TAG_NAME")
+          else
+             TAG_NAME="${{ github.ref_name }}"
+             RELEASE_OPTS+=("$TAG_NAME")
+          fi
+          
+          gh release create "${RELEASE_OPTS[@]}" \
+            "$STAGING_PATH/$ZIP_NAME" \
+            "$STAGING_PATH/${ZIP_NAME}.sha256" \
+            --notes "FluidVoice Release Compatible with macOS 14 Sonoma and 15 Sequoia."
