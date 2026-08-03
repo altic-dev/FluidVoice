@@ -11,7 +11,7 @@ import Foundation
 
 // MARK: - Audio Device Manager
 
-nonisolated enum AudioDevice {
+enum AudioDevice {
     struct Device: Identifiable, Hashable {
         let id: AudioObjectID
         let uid: String

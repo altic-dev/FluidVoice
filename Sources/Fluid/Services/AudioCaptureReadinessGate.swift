@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum AudioCaptureReadinessResult: Equatable {
+enum AudioCaptureReadinessResult: Equatable {
     case ready
     case cancelled
     case formatInvalidated

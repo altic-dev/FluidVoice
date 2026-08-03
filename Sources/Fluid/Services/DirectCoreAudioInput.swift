@@ -4,7 +4,7 @@ import CoreAudioCaptureSupport
 #endif
 import Foundation
 
-nonisolated enum DirectCoreAudioDeviceSelection: Equatable {
+enum DirectCoreAudioDeviceSelection: Equatable {
     case systemDefault
     case preferredUID(String)
 }
@@ -17,7 +17,7 @@ typealias DirectCoreAudioPacketHandler = @Sendable (
     _ inputSampleTime: Int64
 ) -> Void
 
-nonisolated struct DirectCoreAudioStreamFormatFingerprint: Equatable {
+struct DirectCoreAudioStreamFormatFingerprint: Equatable {
     let sampleRate: Double
     let formatID: AudioFormatID
     let formatFlags: AudioFormatFlags
@@ -47,7 +47,7 @@ nonisolated struct DirectCoreAudioStreamFormatFingerprint: Equatable {
     }
 }
 
-nonisolated struct DirectCoreAudioFormatFingerprint: Equatable {
+struct DirectCoreAudioFormatFingerprint: Equatable {
     let deviceID: AudioObjectID
     let streamID: AudioStreamID
     let virtualFormat: DirectCoreAudioStreamFormatFingerprint
@@ -370,7 +370,7 @@ nonisolated struct DirectCoreAudioFormatFingerprint: Equatable {
 /// ring in C. This Swift wrapper drains that ring away from Core Audio's
 /// realtime thread, so resampling, level calculation, logging, and ASR buffer
 /// mutation never happen in the device callback.
-nonisolated protocol DirectCoreAudioInputControlling: AnyObject, Sendable {
+protocol DirectCoreAudioInputControlling: AnyObject, Sendable {
     var deviceID: AudioObjectID { get }
     var sampleRate: Double { get }
     var hardwareBufferFrameSize: UInt32 { get }

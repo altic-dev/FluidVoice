@@ -340,8 +340,13 @@ final class ASRService: ObservableObject {
 
         switch model {
         case .appleSpeechAnalyzer:
-            if #available(macOS 26.0, *) {
-                return self.getAppleSpeechAnalyzerProvider()
+            if #available(macOS 15.0, *) {
+                if #available(macOS 26.0, *) {
+                    return self.getAppleSpeechAnalyzerProvider()
+                } else {
+                    // Fallback to legacy Apple Speech on current macOS 15
+                    return self.getAppleSpeechProvider()
+                }
             } else {
                 // Fallback to legacy Apple Speech on older macOS
                 return self.getAppleSpeechProvider()
@@ -353,7 +358,11 @@ final class ASRService: ObservableObject {
         case .parakeetRealtime:
             return self.getParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
-            return self.getExternalCoreMLProvider()
+            if #available(macOS 15.0, *) {
+                return self.getExternalCoreMLProvider()
+            } else {
+                return self.getWhisperProvider()
+            }
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return self.getNemotronProvider(mode: model.nemotronProviderMode)
         case .qwen3Asr:
@@ -388,6 +397,7 @@ final class ASRService: ObservableObject {
         return provider
     }
 
+    @available(macOS 15.0, *)
     private func getExternalCoreMLProvider() -> ExternalCoreMLTranscriptionProvider {
         if let existing = externalCoreMLProvider {
             return existing

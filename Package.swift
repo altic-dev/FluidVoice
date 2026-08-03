@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "FluidVoice",
     platforms: [
-        .macOS("15.0"),
+        .macOS("14.0"),
     ],
     dependencies: [
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
@@ -15,6 +15,7 @@ let package = Package(
         .package(url: "https://github.com/altic-dev/DynamicNotchKit.git", branch: "main"),
         .package(url: "https://github.com/altic-dev/transcribe-cpp-swift.git", exact: "0.1.2"),
         .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.0.0"),
+        .package(url: "https://github.com/ejbills/mediaremote-adapter", branch: "master"),
     ],
     targets: [
         .target(
@@ -34,6 +35,13 @@ let package = Package(
                 "DynamicNotchKit",
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
                 .product(name: "PostHog", package: "posthog-ios"),
+                .product(name: "MediaRemoteAdapter", package: "mediaremote-adapter"),
+            ],
+            path: "Sources/Fluid",
+            exclude: [
+                "CoreAudioCaptureSupportBridge.c",
+                "CoreAudioCaptureSupportBridge.h",
+                "Fluid-Bridging-Header.h"
             ]
         ),
     ]

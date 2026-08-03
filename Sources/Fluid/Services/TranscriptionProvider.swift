@@ -1,13 +1,13 @@
 import Foundation
 
-nonisolated enum ModelPreparationPhase: Sendable, Equatable {
+enum ModelPreparationPhase: Sendable, Equatable {
     case preparingDownload
     case downloading
     case optimizing
     case loading
 }
 
-nonisolated struct ModelPreparationProgress: Sendable, Equatable {
+struct ModelPreparationProgress: Sendable, Equatable {
     let phase: ModelPreparationPhase
     let fractionCompleted: Double?
 
