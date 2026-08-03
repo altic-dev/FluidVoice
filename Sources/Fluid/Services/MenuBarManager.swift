@@ -71,6 +71,19 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     func configure(asrService: ASRService) {
         self.asrService = asrService
+        if SettingsStore.shared.overlayPosition == .bottom {
+            DispatchQueue.main.async {
+                guard SettingsStore.shared.overlayPosition == .bottom else { return }
+                BottomOverlayWindowController.shared.prepare()
+            }
+        }
+        NotificationCenter.default.publisher(for: NSNotification.Name("OverlayPositionChanged"))
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                guard SettingsStore.shared.overlayPosition == .bottom else { return }
+                BottomOverlayWindowController.shared.prepare()
+            }
+            .store(in: &self.cancellables)
 
         // Subscribe to recording state changes
         asrService.$isRunning
@@ -377,9 +390,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         NotchOverlayManager.shared.setProcessing(false)
         self.overlayBench("finish_hide_request")
-        await NotchOverlayManager.shared.hideAndWait()
+        let hideOutcome = await NotchOverlayManager.shared.hideAndWait()
         self.overlayBench(
-            "finish_hide_complete elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))"
+            "finish_hide_complete outcome=\(hideOutcome) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))"
         )
     }
 

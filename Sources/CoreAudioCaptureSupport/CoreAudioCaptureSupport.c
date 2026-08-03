@@ -22,6 +22,7 @@ typedef struct {
 
 typedef struct {
     AudioObjectID deviceID;
+    AudioStreamID streamID;
     AudioDeviceIOProcID ioProcID;
     AudioStreamBasicDescription format;
     uint32_t bufferFrameSize;
@@ -31,11 +32,14 @@ typedef struct {
     _Atomic uint64_t readIndex;
     _Atomic uint64_t droppedPackets;
     _Atomic bool running;
+    _Atomic bool formatDirty;
+    _Atomic bool packetGateOpen;
     FVPacketSlot slots[FV_RING_CAPACITY];
 } FVCapture;
 
 static OSStatus fv_get_input_stream_format(
     AudioObjectID deviceID,
+    AudioStreamID *streamID,
     AudioStreamBasicDescription *format
 ) {
     AudioObjectPropertyAddress streamsAddress = {
@@ -57,17 +61,20 @@ static OSStatus fv_get_input_stream_format(
         return status != noErr ? status : kAudioHardwareUnsupportedOperationError;
     }
 
-    AudioStreamID streamID = kAudioObjectUnknown;
+    AudioStreamID resolvedStreamID = kAudioObjectUnknown;
     status = AudioObjectGetPropertyData(
         deviceID,
         &streamsAddress,
         0,
         NULL,
         &streamsSize,
-        &streamID
+        &resolvedStreamID
     );
-    if (status != noErr || streamID == kAudioObjectUnknown) {
+    if (status != noErr || resolvedStreamID == kAudioObjectUnknown) {
         return status != noErr ? status : kAudioHardwareBadObjectError;
+    }
+    if (streamID != NULL) {
+        *streamID = resolvedStreamID;
     }
 
     AudioObjectPropertyAddress formatAddress = {
@@ -77,7 +84,7 @@ static OSStatus fv_get_input_stream_format(
     };
     UInt32 formatSize = sizeof(*format);
     return AudioObjectGetPropertyData(
-        streamID,
+        resolvedStreamID,
         &formatAddress,
         0,
         NULL,
@@ -94,6 +101,35 @@ static OSStatus fv_get_buffer_frame_size(AudioObjectID deviceID, uint32_t *frame
     };
     UInt32 size = sizeof(*frameSize);
     return AudioObjectGetPropertyData(deviceID, &address, 0, NULL, &size, frameSize);
+}
+
+static OSStatus fv_get_maximum_buffer_frame_size(
+    AudioObjectID deviceID,
+    uint32_t fallbackFrameSize,
+    uint32_t *maximumFrameSize
+) {
+    AudioObjectPropertyAddress address = {
+        kAudioDevicePropertyUsesVariableBufferFrameSizes,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain,
+    };
+    if (!AudioObjectHasProperty(deviceID, &address)) {
+        *maximumFrameSize = fallbackFrameSize;
+        return noErr;
+    }
+    UInt32 size = sizeof(*maximumFrameSize);
+    OSStatus status = AudioObjectGetPropertyData(
+        deviceID,
+        &address,
+        0,
+        NULL,
+        &size,
+        maximumFrameSize
+    );
+    if (status == noErr && *maximumFrameSize == 0) {
+        *maximumFrameSize = fallbackFrameSize;
+    }
+    return status;
 }
 
 static bool fv_format_is_supported(
@@ -239,7 +275,9 @@ static OSStatus fv_io_proc(
 
     FVCapture *capture = (FVCapture *) inClientData;
     if (capture == NULL || inInputData == NULL ||
-        !atomic_load_explicit(&capture->running, memory_order_relaxed)) {
+        !atomic_load_explicit(&capture->running, memory_order_relaxed) ||
+        atomic_load_explicit(&capture->formatDirty, memory_order_acquire) ||
+        !atomic_load_explicit(&capture->packetGateOpen, memory_order_acquire)) {
         return noErr;
     }
 
@@ -332,7 +370,11 @@ int32_t fv_core_audio_capture_create(
     }
     capture->deviceID = deviceID;
 
-    OSStatus status = fv_get_input_stream_format(deviceID, &capture->format);
+    OSStatus status = fv_get_input_stream_format(
+        deviceID,
+        &capture->streamID,
+        &capture->format
+    );
     if (status == noErr &&
         !fv_format_is_supported(&capture->format, &capture->bytesPerSample)) {
         status = kAudioHardwareUnsupportedOperationError;
@@ -340,9 +382,17 @@ int32_t fv_core_audio_capture_create(
     if (status == noErr) {
         status = fv_get_buffer_frame_size(deviceID, &capture->bufferFrameSize);
     }
+    uint32_t maximumBufferFrameSize = capture->bufferFrameSize;
+    if (status == noErr) {
+        status = fv_get_maximum_buffer_frame_size(
+            deviceID,
+            capture->bufferFrameSize,
+            &maximumBufferFrameSize
+        );
+    }
     if (status == noErr &&
         (capture->bufferFrameSize == 0 ||
-         capture->bufferFrameSize > FV_MAX_FRAMES_PER_PACKET)) {
+         maximumBufferFrameSize > FV_MAX_FRAMES_PER_PACKET)) {
         status = kAudioHardwareUnsupportedOperationError;
     }
     if (status != noErr) {
@@ -359,6 +409,8 @@ int32_t fv_core_audio_capture_create(
     atomic_init(&capture->readIndex, 0);
     atomic_init(&capture->droppedPackets, 0);
     atomic_init(&capture->running, false);
+    atomic_init(&capture->formatDirty, false);
+    atomic_init(&capture->packetGateOpen, false);
 
     status = AudioDeviceCreateIOProcID(
         deviceID,
@@ -387,6 +439,7 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
         return noErr;
     }
 
+    atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
     atomic_store_explicit(&capture->running, true, memory_order_release);
     OSStatus status = AudioDeviceStart(capture->deviceID, capture->ioProcID);
     if (status != noErr) {
@@ -406,31 +459,41 @@ int32_t fv_core_audio_capture_stop(FVCoreAudioCaptureRef captureRef) {
         return noErr;
     }
 
-    // Keep accepting callbacks until AudioDeviceStop has synchronized with the
-    // IOProc. Packets acquired before the caller's stop boundary can then be
-    // timestamp-trimmed by the consumer instead of being dropped here.
+    // Close publication before synchronizing with the IOProc. The consumer
+    // still drains every packet already committed to the ring.
+    atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
     OSStatus status = AudioDeviceStop(capture->deviceID, capture->ioProcID);
     atomic_store_explicit(&capture->running, false, memory_order_release);
     dispatch_semaphore_signal(capture->packetSemaphore);
     return status;
 }
 
-void fv_core_audio_capture_destroy(FVCoreAudioCaptureRef captureRef) {
+int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef captureRef) {
     FVCapture *capture = (FVCapture *) captureRef;
     if (capture == NULL) {
-        return;
+        return noErr;
     }
     if (atomic_load_explicit(&capture->running, memory_order_acquire)) {
-        (void) fv_core_audio_capture_stop(captureRef);
+        OSStatus stopStatus = fv_core_audio_capture_stop(captureRef);
+        if (stopStatus != noErr) {
+            return stopStatus;
+        }
     }
     if (capture->ioProcID != NULL) {
-        (void) AudioDeviceDestroyIOProcID(capture->deviceID, capture->ioProcID);
+        OSStatus destroyStatus = AudioDeviceDestroyIOProcID(
+            capture->deviceID,
+            capture->ioProcID
+        );
+        if (destroyStatus != noErr) {
+            return destroyStatus;
+        }
         capture->ioProcID = NULL;
     }
 #if !OS_OBJECT_USE_OBJC
     dispatch_release(capture->packetSemaphore);
 #endif
     free(capture);
+    return noErr;
 }
 
 bool fv_core_audio_capture_wait(
@@ -453,7 +516,8 @@ bool fv_core_audio_capture_peek(
     FVCoreAudioPacket *packet
 ) {
     FVCapture *capture = (FVCapture *) captureRef;
-    if (capture == NULL || packet == NULL) {
+    if (capture == NULL || packet == NULL ||
+        atomic_load_explicit(&capture->formatDirty, memory_order_acquire)) {
         return false;
     }
     const uint64_t readIndex =
@@ -513,6 +577,47 @@ bool fv_core_audio_capture_is_running(FVCoreAudioCaptureRef captureRef) {
     FVCapture *capture = (FVCapture *) captureRef;
     return capture != NULL &&
         atomic_load_explicit(&capture->running, memory_order_acquire);
+}
+
+void fv_core_audio_capture_mark_format_dirty(FVCoreAudioCaptureRef captureRef) {
+    FVCapture *capture = (FVCapture *) captureRef;
+    if (capture == NULL) {
+        return;
+    }
+    atomic_store_explicit(&capture->formatDirty, true, memory_order_release);
+    atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
+}
+
+bool fv_core_audio_capture_open_packet_gate_if_clean(
+    FVCoreAudioCaptureRef captureRef
+) {
+    FVCapture *capture = (FVCapture *) captureRef;
+    if (capture == NULL ||
+        !atomic_load_explicit(&capture->running, memory_order_acquire) ||
+        atomic_load_explicit(&capture->formatDirty, memory_order_acquire)) {
+        return false;
+    }
+
+    atomic_store_explicit(&capture->packetGateOpen, true, memory_order_release);
+    if (atomic_load_explicit(&capture->formatDirty, memory_order_acquire)) {
+        atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+bool fv_core_audio_capture_copy_stream_format(
+    FVCoreAudioCaptureRef captureRef,
+    AudioStreamID *streamID,
+    AudioStreamBasicDescription *format
+) {
+    const FVCapture *capture = (const FVCapture *) captureRef;
+    if (capture == NULL || streamID == NULL || format == NULL) {
+        return false;
+    }
+    *streamID = capture->streamID;
+    *format = capture->format;
+    return true;
 }
 
 double fv_core_audio_capture_sample_rate(FVCoreAudioCaptureRef captureRef) {

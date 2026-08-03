@@ -40,7 +40,7 @@ int32_t fv_core_audio_capture_create(
 
 int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef capture);
 int32_t fv_core_audio_capture_stop(FVCoreAudioCaptureRef capture);
-void fv_core_audio_capture_destroy(FVCoreAudioCaptureRef capture);
+int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef capture);
 
 /// Waits until the realtime producer publishes a packet or capture stops.
 /// Returns true when the consumer should attempt to drain the ring.
@@ -54,6 +54,13 @@ void fv_core_audio_capture_clear(FVCoreAudioCaptureRef capture);
 void fv_core_audio_capture_wake(FVCoreAudioCaptureRef capture);
 
 bool fv_core_audio_capture_is_running(FVCoreAudioCaptureRef capture);
+void fv_core_audio_capture_mark_format_dirty(FVCoreAudioCaptureRef capture);
+bool fv_core_audio_capture_open_packet_gate_if_clean(FVCoreAudioCaptureRef capture);
+bool fv_core_audio_capture_copy_stream_format(
+    FVCoreAudioCaptureRef capture,
+    AudioStreamID *streamID,
+    AudioStreamBasicDescription *format
+);
 double fv_core_audio_capture_sample_rate(FVCoreAudioCaptureRef capture);
 uint32_t fv_core_audio_capture_buffer_frame_size(FVCoreAudioCaptureRef capture);
 uint64_t fv_core_audio_capture_dropped_packet_count(FVCoreAudioCaptureRef capture);

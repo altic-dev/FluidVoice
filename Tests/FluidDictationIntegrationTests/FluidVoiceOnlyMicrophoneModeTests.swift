@@ -347,4 +347,49 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertTrue(SettingsStore.MicrophoneSelectionMode.manual.usesPreferredInputDevice)
         XCTAssertTrue(SettingsStore.MicrophoneSelectionMode.fluidVoiceOnly.usesPreferredInputDevice)
     }
+
+    // MARK: - Direct-capture device selection
+
+    /// The direct path picks its device from the mode alone, separately from the coordinator. A mode
+    /// routed to the wrong branch here does not fail — it records the wrong microphone while the UI
+    /// still names the preferred one — so pin the mapping rather than trusting it to stay correct
+    /// across changes to the capture path.
+    func testFluidVoiceOnlySelectsThePreferredDeviceAndToleratesItsAbsence() {
+        XCTAssertEqual(
+            ASRService.directCaptureSelection(mode: .fluidVoiceOnly, preferredUID: self.preferredUID),
+            .preferredUIDOrDefault(self.preferredUID),
+            "FluidVoice-only must bind the preferred UID, and must not refuse when it is unplugged"
+        )
+    }
+
+    func testManualSelectsThePreferredDeviceAndSystemFollowsTheDefault() {
+        XCTAssertEqual(
+            ASRService.directCaptureSelection(mode: .manual, preferredUID: self.preferredUID),
+            .preferredUID(self.preferredUID)
+        )
+        XCTAssertEqual(
+            ASRService.directCaptureSelection(mode: .system, preferredUID: self.preferredUID),
+            .systemDefault,
+            "System mode follows the macOS default even when a preference is stored"
+        )
+    }
+
+    func testAnEmptyPreferenceFallsBackToTheSystemDefaultInEveryMode() {
+        for mode in [
+            SettingsStore.MicrophoneSelectionMode.system,
+            .manual,
+            .fluidVoiceOnly,
+        ] {
+            XCTAssertEqual(
+                ASRService.directCaptureSelection(mode: mode, preferredUID: nil),
+                .systemDefault,
+                "\(mode) with no preference must not bind an empty UID"
+            )
+            XCTAssertEqual(
+                ASRService.directCaptureSelection(mode: mode, preferredUID: ""),
+                .systemDefault,
+                "\(mode) with an empty preference must not bind an empty UID"
+            )
+        }
+    }
 }

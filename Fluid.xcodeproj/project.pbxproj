@@ -20,6 +20,7 @@
 		A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000001 /* AudioBufferConverterTests.swift */; };
 		A62300000000000000000004 /* FluidVoiceOnlyMicrophoneModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000003 /* FluidVoiceOnlyMicrophoneModeTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
+		DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
@@ -56,6 +57,7 @@
 		A62300000000000000000001 /* AudioBufferConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferConverterTests.swift; sourceTree = "<group>"; };
 		A62300000000000000000003 /* FluidVoiceOnlyMicrophoneModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidVoiceOnlyMicrophoneModeTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
+		DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAudioReliabilityTests.swift; sourceTree = "<group>"; };
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
 		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -135,6 +137,7 @@
 				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
 				A62300000000000000000003 /* FluidVoiceOnlyMicrophoneModeTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
+				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -295,6 +298,7 @@
 				A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */,
 				A62300000000000000000004 /* FluidVoiceOnlyMicrophoneModeTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
+				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

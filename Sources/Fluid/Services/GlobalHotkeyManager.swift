@@ -1822,8 +1822,8 @@ final class GlobalHotkeyManager: NSObject {
     @MainActor
     private func stopRecordingInternal() async {
         if self.asrService.isStarting, self.asrService.isRunning == false {
-            DebugLogger.shared.debug("Waiting for audio capture start before stopping", source: "GlobalHotkeyManager")
-            await self.asrService.waitForPendingStart()
+            DebugLogger.shared.debug("Cancelling pending audio capture start", source: "GlobalHotkeyManager")
+            await self.asrService.cancelPendingAudioCaptureStart(reason: "hotkey_released")
         }
         guard self.asrService.isRunning else { return }
         guard !self.asrService.isDictionaryTrainingCaptureActive else {

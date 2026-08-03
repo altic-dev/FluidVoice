@@ -44,7 +44,6 @@ final class SettingsStore: ObservableObject {
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
-        self.disableExperimentalDirectAudioCaptureIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
     }
 
@@ -1773,6 +1772,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Skips clearly silent recordings up to four seconds before invoking ASR.
+    /// Opt-in so quiet speech keeps the existing transcription behavior by default.
+    var skipSilentRecordingsEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.skipSilentRecordingsEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.skipSilentRecordingsEnabled)
+        }
+    }
+
     var enableAIStreaming: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableAIStreaming)
@@ -1784,27 +1793,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Direct Core Audio capture is opt-in while the faster recording path is experimental.
+    /// Direct Core Audio capture defaults on while preserving stored user choices.
     var experimentalDirectAudioCaptureEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.experimentalDirectAudioCaptureEnabled)
-            return value as? Bool ?? false
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
-    }
-
-    private func disableExperimentalDirectAudioCaptureIfNeeded() {
-        guard self.defaults.bool(forKey: Keys.experimentalDirectAudioCaptureForcedOff) == false else { return }
-        self.defaults.set(false, forKey: Keys.experimentalDirectAudioCaptureEnabled)
-        self.defaults.set(true, forKey: Keys.experimentalDirectAudioCaptureForcedOff)
-    }
-
-    var directAudioCaptureConsecutiveFailures: Int {
-        get { self.defaults.integer(forKey: Keys.directAudioCaptureConsecutiveFailures) }
-        set { self.defaults.set(max(0, newValue), forKey: Keys.directAudioCaptureConsecutiveFailures) }
     }
 
     var copyTranscriptionToClipboard: Bool {
@@ -1969,6 +1967,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.overlayPosition)
+            NotificationCenter.default.post(name: NSNotification.Name("OverlayPositionChanged"), object: nil)
         }
     }
 
@@ -3074,6 +3073,7 @@ final class SettingsStore: ObservableObject {
             pressAndHoldMode: self.pressAndHoldMode,
             hotkeyMode: self.hotkeyMode,
             enableStreamingPreview: self.enableStreamingPreview,
+            skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
@@ -3188,6 +3188,9 @@ final class SettingsStore: ObservableObject {
         self.shareAnonymousAnalytics = payload.shareAnonymousAnalytics
         self.hotkeyMode = payload.hotkeyMode ?? (payload.pressAndHoldMode ? .hold : .toggle)
         self.enableStreamingPreview = payload.enableStreamingPreview
+        if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
+            self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
+        }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
         self.textInsertionMode = payload.textInsertionMode
@@ -4940,10 +4943,9 @@ private extension SettingsStore {
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
         static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
-        static let experimentalDirectAudioCaptureForcedOff = "ExperimentalDirectAudioCaptureForcedOff"
-        static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"

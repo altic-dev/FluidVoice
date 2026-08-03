@@ -995,6 +995,17 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
+                                        title: "Skip Silent Recordings",
+                                        description: "Avoid transcription when a recording up to four seconds contains only clear silence. Disabled by default to preserve quiet speech.",
+                                        isOn: Binding(
+                                            get: { SettingsStore.shared.skipSilentRecordingsEnabled },
+                                            set: { SettingsStore.shared.skipSilentRecordingsEnabled = $0 }
+                                        ),
+                                        allowsDescriptionWrapping: true
+                                    )
+                                    Divider().opacity(0.2)
+
+                                    self.optionToggleRow(
                                         title: "Pause Media During Transcription",
                                         description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
                                         isOn: Binding(
@@ -1121,9 +1132,7 @@ struct SettingsView: View {
                                         Text("Loading...").tag("")
                                     } else {
                                         ForEach(self.inputDevices, id: \.uid) { dev in
-                                            // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
-                                            let isSystemDefault = !self.cachedDefaultInputName.isEmpty && dev.name == self.cachedDefaultInputName
-                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
+                                            Text(self.inputDeviceTitle(dev)).tag(dev.uid)
                                         }
                                     }
                                 }
@@ -1220,17 +1229,7 @@ struct SettingsView: View {
                                 }
                             }
 
-                            // CRITICAL FIX: Use cached values instead of querying CoreAudio in view body.
-                            // Querying AudioDevice here triggers HALSystem::InitializeShell() race condition.
-                            if !self.cachedDefaultInputName.isEmpty && !self.cachedDefaultOutputName.isEmpty {
-                                HStack {
-                                    Spacer()
-                                    Text("Default: \(self.cachedDefaultInputName) / \(self.cachedDefaultOutputName)")
-                                        .font(.caption)
-                                        .foregroundStyle(self.settingsTertiaryText)
-                                        .lineLimit(1)
-                                }
-                            }
+                            self.microphoneQualityGuidance
                         }
                     }
                     .padding(16)
@@ -2302,6 +2301,59 @@ struct SettingsView: View {
 }
 
 private extension SettingsView {
+    var selectedInputDevice: AudioDevice.Device? {
+        self.inputDevices.first { $0.uid == self.selectedInputUID }
+    }
+
+    func inputDeviceTitle(_ device: AudioDevice.Device) -> String {
+        var annotations: [String] = []
+        if self.cachedDefaultInputName.isEmpty == false,
+           device.name == self.cachedDefaultInputName
+        {
+            annotations.append("System Default")
+        }
+        if device.isBuiltIn {
+            annotations.append("Recommended")
+        } else if device.isBluetooth {
+            annotations.append("Reduces output quality")
+        }
+
+        guard annotations.isEmpty == false else { return device.name }
+        return "\(device.name) (\(annotations.joined(separator: ", ")))"
+    }
+
+    @ViewBuilder
+    var microphoneQualityGuidance: some View {
+        if self.selectedInputDevice?.isBluetooth == true {
+            self.microphoneQualityGuidanceRow(
+                message: "AirPods and other Bluetooth microphones reduce headphone audio quality. Use your Mac’s microphone or another non-Bluetooth mic.",
+                systemImage: "exclamationmark.triangle.fill",
+                color: self.theme.palette.warning
+            )
+        } else {
+            self.microphoneQualityGuidanceRow(
+                message: "For the best audio quality, use your Mac’s microphone or another non-Bluetooth mic.",
+                systemImage: "info.circle",
+                color: self.settingsSecondaryText
+            )
+        }
+    }
+
+    func microphoneQualityGuidanceRow(
+        message: String,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+            Text(message)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     var microphoneModeInfo: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle")
@@ -2639,9 +2691,6 @@ private extension SettingsView {
                     get: { self.settings.experimentalDirectAudioCaptureEnabled },
                     set: { enabled in
                         self.settings.experimentalDirectAudioCaptureEnabled = enabled
-                        if enabled {
-                            self.settings.directAudioCaptureConsecutiveFailures = 0
-                        }
                         self.asr.refreshAudioCaptureBackendPreference()
                     }
                 )

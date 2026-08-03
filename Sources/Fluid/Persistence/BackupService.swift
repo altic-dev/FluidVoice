@@ -57,6 +57,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
     let enableStreamingPreview: Bool
+    // Optional so backups created before the silence filter still decode.
+    let skipSilentRecordingsEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
