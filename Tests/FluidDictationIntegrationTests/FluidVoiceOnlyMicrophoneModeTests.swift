@@ -351,26 +351,45 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
     // MARK: - The announcement state machine across a sequence of recordings
 
     /// The rules only mean anything in sequence, which is what the stored record exists for. Each
-    /// step here is one recording start; a `nil` result means the user is told nothing.
+    /// step here is one recording start.
     func testFallbackIsAnnouncedOncePerSubstitutionAcrossRecordings() {
         var announcer = ASRService.PreferredMicrophoneFallbackAnnouncer()
         let fallback = self.device(self.systemUID, "System Mic")
         let preferred = self.device(self.preferredUID, "Preferred Mic")
 
-        func recording(_ device: AudioDevice.Device) -> String? {
+        func recording(_ device: AudioDevice.Device) -> ASRService.PreferredMicrophoneFallbackAnnouncer.Action {
             announcer.announcementNeeded(
                 mode: .fluidVoiceOnly, preferredUID: self.preferredUID, recording: device
             )
         }
 
-        XCTAssertEqual(recording(fallback), "System Mic", "first fallback: tell the user")
-        XCTAssertNil(recording(fallback), "same fallback again: stay quiet")
-        XCTAssertNil(recording(fallback), "and again")
-        XCTAssertNil(recording(preferred), "preferred mic is back: nothing to announce")
+        XCTAssertEqual(recording(fallback), .announce("System Mic"), "first fallback: tell the user")
+        XCTAssertEqual(recording(fallback), .doNothing, "same fallback again: stay quiet")
+        XCTAssertEqual(recording(fallback), .doNothing, "and again")
+        XCTAssertEqual(
+            recording(preferred),
+            .withdraw,
+            "preferred mic is back: retract the banner, which claims it is still unavailable"
+        )
         XCTAssertEqual(
             recording(fallback),
-            "System Mic",
+            .announce("System Mic"),
             "dropped out again: this is a new substitution and must be announced afresh"
+        )
+    }
+
+    /// Without this the app would fire a removal on every ordinary recording, since the common case
+    /// (using the preferred device, nothing ever announced) also resolves to "say nothing".
+    func testNothingIsWithdrawnWhenNothingWasEverAnnounced() {
+        var announcer = ASRService.PreferredMicrophoneFallbackAnnouncer()
+
+        XCTAssertEqual(
+            announcer.announcementNeeded(
+                mode: .fluidVoiceOnly,
+                preferredUID: self.preferredUID,
+                recording: self.device(self.preferredUID, "Preferred Mic")
+            ),
+            .doNothing
         )
     }
 

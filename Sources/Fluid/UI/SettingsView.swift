@@ -2692,6 +2692,13 @@ private extension SettingsView {
                     set: { enabled in
                         self.settings.experimentalDirectAudioCaptureEnabled = enabled
                         self.asr.refreshAudioCaptureBackendPreference()
+                        // FluidVoice-only capture exists only on the direct path, so the store
+                        // reports `.manual` once this is off. Re-read it: this bound state is
+                        // otherwise only refreshed at launch, and a stale `.fluidVoiceOnly` would
+                        // leave the UI promising the macOS input is left alone while the next
+                        // recording actually moves it. The *stored* preference is deliberately
+                        // untouched, so re-enabling this restores FluidVoice-only.
+                        self.microphoneSelectionMode = SettingsStore.shared.microphoneSelectionMode
                     }
                 )
             )

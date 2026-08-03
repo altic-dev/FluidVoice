@@ -974,6 +974,38 @@ final class ASRService: ObservableObject {
     /// that instead — through this same private path, without ever moving the system input. The
     /// substitution is announced (never silent) at whichever backend actually starts, so this mode
     /// records rather than refuses.
+    /// Resolves a device for `selection` and starts direct capture on it, returning the device
+    /// actually bound. Shared by the normal start and the FluidVoice-only retry below so both take
+    /// the same path.
+    @discardableResult
+    private func startDirectCapture(
+        selection: DirectCoreAudioDeviceSelection,
+        reason: String
+    ) async throws -> AudioDevice.Device {
+        let device = try await self.directAudioLifecycleController.resolveDevice(
+            selection: selection,
+            reason: reason
+        )
+        let snapshot = try await self.directAudioLifecycleController.start(
+            deviceID: device.id,
+            deviceName: device.name,
+            reason: reason
+        )
+        try Task.checkCancellation()
+        self.activeAudioCaptureBackend = .directCoreAudio
+        let callbackDurationMilliseconds =
+            Double(snapshot.bufferFrameSize ?? 0) /
+            max(snapshot.sampleRate ?? 0, 1) * 1000
+        let callbackMs = Int(callbackDurationMilliseconds.rounded())
+        self.benchmarkLog(
+            "audio_backend kind=direct_core_audio device=\(snapshot.deviceID ?? 0) " +
+                "generation=\(snapshot.generation) frames=\(snapshot.bufferFrameSize ?? 0) " +
+                "sampleRate=\(Int((snapshot.sampleRate ?? 0).rounded())) callbackMs=\(callbackMs) " +
+                "reason=\(reason)"
+        )
+        return device
+    }
+
     private func startConfiguredAudioCapture() async throws {
         if SettingsStore.shared.experimentalDirectAudioCaptureEnabled {
             // A non-route path may have scheduled a fire-and-forget retirement.
@@ -981,25 +1013,9 @@ final class ASRService: ObservableObject {
             // release.
             await self.audioEngineRetirementDrain.waitForScheduledReleases()
             do {
-                let device = try await self.directAudioLifecycleController.resolveDevice(
+                _ = try await self.startDirectCapture(
                     selection: self.directCoreAudioDeviceSelection(),
                     reason: "recording_start"
-                )
-                let snapshot = try await self.directAudioLifecycleController.start(
-                    deviceID: device.id,
-                    deviceName: device.name,
-                    reason: "recording_start"
-                )
-                try Task.checkCancellation()
-                self.activeAudioCaptureBackend = .directCoreAudio
-                let callbackDurationMilliseconds =
-                    Double(snapshot.bufferFrameSize ?? 0) /
-                    max(snapshot.sampleRate ?? 0, 1) * 1000
-                let callbackMs = Int(callbackDurationMilliseconds.rounded())
-                self.benchmarkLog(
-                    "audio_backend kind=direct_core_audio device=\(snapshot.deviceID ?? 0) " +
-                        "generation=\(snapshot.generation) frames=\(snapshot.bufferFrameSize ?? 0) " +
-                        "sampleRate=\(Int((snapshot.sampleRate ?? 0).rounded())) callbackMs=\(callbackMs)"
                 )
                 // The direct path bound whatever resolution returned — the preferred device, or the
                 // macOS default when it was unavailable. Announce the latter.
@@ -1011,6 +1027,32 @@ final class ASRService: ObservableObject {
                     "Direct Core Audio capture failed: \(error.localizedDescription)",
                     source: "ASRService"
                 )
+
+                // FluidVoice-only promises "prefer the pinned mic, else the macOS default" — a
+                // preference, not a requirement. Resolution already covers a *missing* device; this
+                // covers one that is present but cannot be bound (a multi-stream aggregate, which
+                // the capture helper rejects, or a device that fails to start). Retry once on the
+                // default rather than refusing to record, and announce the substitution.
+                //
+                // Deliberately scoped to this mode: `.manual` and `.system` keep the fail-loud
+                // behaviour shipped in #732.
+                if SettingsStore.shared.microphoneSelectionMode == .fluidVoiceOnly,
+                   self.directCoreAudioDeviceSelection() != .systemDefault
+                {
+                    DebugLogger.shared.warning(
+                        "Preferred microphone could not be bound; retrying on the macOS default",
+                        source: "ASRService"
+                    )
+                    if let device = try? await self.startDirectCapture(
+                        selection: .systemDefault,
+                        reason: "preferred_unbindable_fallback"
+                    ) {
+                        self.announcePreferredMicrophoneFallbackIfNeeded(recording: device)
+                        return
+                    }
+                    await self.directAudioLifecycleController.invalidate(reason: "fallback_start_failed")
+                }
+
                 throw error
             }
         }
@@ -1045,14 +1087,23 @@ final class ASRService: ObservableObject {
     /// Keeping the record here rather than in the service is what makes the reset rule verifiable:
     /// staying quiet on a repeat must *not* clear it, while returning to the preferred device must.
     struct PreferredMicrophoneFallbackAnnouncer {
+        /// What the caller should do about the notification.
+        enum Action: Equatable {
+            case doNothing
+            case announce(String)
+            /// The preferred device is back after a substitution was announced. The banner says
+            /// "until your selected microphone is reconnected", so leaving it sitting in
+            /// Notification Centre would state something that is no longer true — withdraw it.
+            case withdraw
+        }
+
         private(set) var lastAnnouncedFallbackDeviceUID: String?
 
-        /// Returns the device name to announce, or nil to stay quiet, updating the record.
         mutating func announcementNeeded(
             mode: SettingsStore.MicrophoneSelectionMode,
             preferredUID: String?,
             recording device: AudioDevice.Device?
-        ) -> String? {
+        ) -> Action {
             switch ASRService.preferredMicrophoneFallbackAnnouncement(
                 mode: mode,
                 preferredUID: preferredUID,
@@ -1060,13 +1111,16 @@ final class ASRService: ObservableObject {
                 lastAnnouncedFallbackDeviceUID: self.lastAnnouncedFallbackDeviceUID
             ) {
             case .none:
+                // Only withdraw if something was actually announced; otherwise every ordinary
+                // recording would fire a pointless removal.
+                guard self.lastAnnouncedFallbackDeviceUID != nil else { return .doNothing }
                 self.lastAnnouncedFallbackDeviceUID = nil
-                return nil
+                return .withdraw
             case .alreadyAnnounced:
-                return nil
+                return .doNothing
             case let .announce(deviceUID, deviceName):
                 self.lastAnnouncedFallbackDeviceUID = deviceUID
-                return deviceName
+                return .announce(deviceName)
             }
         }
     }
@@ -1106,19 +1160,26 @@ final class ASRService: ObservableObject {
     }
 
     private func announcePreferredMicrophoneFallbackIfNeeded(recording device: AudioDevice.Device?) {
-        guard let deviceName = self.fallbackAnnouncer.announcementNeeded(
+        switch self.fallbackAnnouncer.announcementNeeded(
             mode: SettingsStore.shared.microphoneSelectionMode,
             preferredUID: SettingsStore.shared.preferredInputDeviceUID,
             recording: device
-        ) else {
-            return
+        ) {
+        case .doNothing:
+            break
+        case let .announce(deviceName):
+            DebugLogger.shared.info(
+                "Preferred microphone unavailable; recording through fallback '\(deviceName)'",
+                source: "ASRService"
+            )
+            NotificationService.showPreferredMicrophoneFallback(fallbackDeviceName: deviceName)
+        case .withdraw:
+            DebugLogger.shared.info(
+                "Preferred microphone is back; withdrawing the fallback notification",
+                source: "ASRService"
+            )
+            NotificationService.withdrawPreferredMicrophoneFallback()
         }
-
-        DebugLogger.shared.info(
-            "Preferred microphone unavailable; recording through fallback '\(deviceName)'",
-            source: "ASRService"
-        )
-        NotificationService.showPreferredMicrophoneFallback(fallbackDeviceName: deviceName)
     }
 
     private func startAVAudioEngineCapture() async throws {

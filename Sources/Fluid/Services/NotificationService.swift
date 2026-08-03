@@ -12,6 +12,18 @@ enum NotificationService {
         static let preferredMicrophoneFallback = "preferredMicrophoneFallback"
     }
 
+    enum Identifier {
+        static let preferredMicrophoneFallback = "preferred-microphone-fallback"
+    }
+
+    /// Retracts the fallback notification once the preferred microphone is in use again, so the
+    /// banner does not keep claiming the device is unavailable after it has reconnected.
+    static func withdrawPreferredMicrophoneFallback() {
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: [Identifier.preferredMicrophoneFallback])
+        center.removePendingNotificationRequests(withIdentifiers: [Identifier.preferredMicrophoneFallback])
+    }
+
     /// Announces that FluidVoice-only mode could not use the pinned microphone and is recording
     /// through the macOS default instead. The fallback itself is intended behaviour — this only
     /// makes it visible so the substitution is never silent.
@@ -137,8 +149,11 @@ enum NotificationService {
         content.sound = nil
         content.userInfo = [UserInfoKey.kind: Kind.preferredMicrophoneFallback]
 
+        // Stable, not per-UUID: this notification promises "until your selected microphone is
+        // reconnected", so it has to be retractable. A fresh UUID each time would also stack up one
+        // banner per recording. Re-posting with the same identifier replaces the existing one.
         let request = UNNotificationRequest(
-            identifier: "preferred-microphone-fallback-\(UUID().uuidString)",
+            identifier: Identifier.preferredMicrophoneFallback,
             content: content,
             trigger: nil
         )
