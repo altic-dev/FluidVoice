@@ -430,6 +430,43 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertNil(announcer.lastAnnouncedFallbackDeviceUID)
     }
 
+    // MARK: - The stored mode survives the read-time downgrade
+
+    /// `.fluidVoiceOnly` is kept on disk while direct capture is off so re-enabling restores it.
+    /// Anything that persists the mode onward has to read the stored value, or the downgrade
+    /// becomes permanent — a backup taken in this state would silently demote the user to `.manual`.
+    func testStoredModeKeepsFluidVoiceOnlyWhileTheEffectiveModeDegrades() {
+        self.configure(mode: .fluidVoiceOnly, directCapture: false)
+
+        XCTAssertEqual(
+            SettingsStore.shared.microphoneSelectionMode,
+            .manual,
+            "Behaviour degrades while the direct path is off"
+        )
+        XCTAssertEqual(
+            SettingsStore.shared.storedMicrophoneSelectionMode,
+            .fluidVoiceOnly,
+            "…but the preference itself is preserved"
+        )
+    }
+
+    func testBackupPreservesALatentFluidVoiceOnlyPreference() {
+        self.configure(mode: .fluidVoiceOnly, directCapture: false)
+
+        XCTAssertEqual(
+            SettingsStore.shared.makeBackupPayload().microphoneSelectionMode,
+            .fluidVoiceOnly,
+            "A backup taken while Faster Recording Start is off must not bake in the downgrade"
+        )
+    }
+
+    func testStoredModeMatchesTheEffectiveModeWhenDirectCaptureIsOn() {
+        self.configure(mode: .fluidVoiceOnly, directCapture: true)
+
+        XCTAssertEqual(SettingsStore.shared.microphoneSelectionMode, .fluidVoiceOnly)
+        XCTAssertEqual(SettingsStore.shared.storedMicrophoneSelectionMode, .fluidVoiceOnly)
+    }
+
     // MARK: - Direct-capture device selection
 
     /// The direct path picks its device from the mode alone, separately from the coordinator. A mode

@@ -1013,13 +1013,15 @@ final class ASRService: ObservableObject {
             // release.
             await self.audioEngineRetirementDrain.waitForScheduledReleases()
             do {
-                _ = try await self.startDirectCapture(
+                let boundDevice = try await self.startDirectCapture(
                     selection: self.directCoreAudioDeviceSelection(),
                     reason: "recording_start"
                 )
-                // The direct path bound whatever resolution returned — the preferred device, or the
-                // macOS default when it was unavailable. Announce the latter.
-                self.announcePreferredMicrophoneFallbackIfNeeded(recording: self.resolvedInputDeviceForCapture())
+                // Announce against the device capture actually bound, not a fresh lookup: if the
+                // preferred mic reconnects between binding and here, re-resolving would report it
+                // as in use and suppress the notification while this recording is still running on
+                // the fallback.
+                self.announcePreferredMicrophoneFallbackIfNeeded(recording: boundDevice)
                 return
             } catch {
                 await self.directAudioLifecycleController.invalidate(reason: "recording_start_failed")

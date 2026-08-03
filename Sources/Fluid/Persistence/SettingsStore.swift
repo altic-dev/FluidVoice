@@ -1820,6 +1820,19 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
+    /// The mode as persisted, without the read-time downgrade below. `.fluidVoiceOnly` is kept on
+    /// disk while direct capture is off so that re-enabling it restores the mode rather than
+    /// silently discarding the preference — which means anything *persisting* the mode onward (a
+    /// settings backup) must read it from here, or it would bake the downgrade in permanently.
+    var storedMicrophoneSelectionMode: MicrophoneSelectionMode {
+        guard let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+              let mode = MicrophoneSelectionMode(rawValue: raw)
+        else {
+            return .system
+        }
+        return mode
+    }
+
     var microphoneSelectionMode: MicrophoneSelectionMode {
         get {
             if let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
@@ -3079,7 +3092,10 @@ final class SettingsStore: ObservableObject {
             textInsertionMode: self.textInsertionMode,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
-            microphoneSelectionMode: self.microphoneSelectionMode,
+            // The *stored* mode, not the read-time downgrade. `microphoneSelectionMode` reports
+            // `.manual` while direct capture is off, so backing up in that state would bake the
+            // downgrade in and silently lose a saved FluidVoice-only preference on restore.
+            microphoneSelectionMode: self.storedMicrophoneSelectionMode,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
