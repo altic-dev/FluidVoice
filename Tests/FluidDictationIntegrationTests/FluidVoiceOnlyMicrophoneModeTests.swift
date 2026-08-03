@@ -374,6 +374,95 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         )
     }
 
+    // MARK: - The fallback announcement
+
+    private func device(_ uid: String, _ name: String) -> AudioDevice.Device {
+        AudioDevice.Device(id: 9, uid: uid, name: name, hasInput: true, hasOutput: false)
+    }
+
+    private func announcement(
+        recording uid: String,
+        named name: String = "Fallback Mic",
+        lastAnnounced: String? = nil,
+        mode: SettingsStore.MicrophoneSelectionMode = .fluidVoiceOnly
+    ) -> ASRService.PreferredMicrophoneFallbackAnnouncement {
+        ASRService.preferredMicrophoneFallbackAnnouncement(
+            mode: mode,
+            preferredUID: self.preferredUID,
+            recording: self.device(uid, name),
+            lastAnnouncedFallbackDeviceUID: lastAnnounced
+        )
+    }
+
+    func testRecordingThePreferredDeviceAnnouncesNothing() {
+        XCTAssertEqual(self.announcement(recording: self.preferredUID), .none)
+    }
+
+    func testRecordingSomethingElseAnnouncesTheDeviceActuallyBeingRecorded() {
+        XCTAssertEqual(
+            self.announcement(recording: self.systemUID, named: "System Mic"),
+            .announce(deviceUID: self.systemUID, deviceName: "System Mic"),
+            "The notification must name the fallback device, not the preference it replaced"
+        )
+    }
+
+    func testTheSameFallbackIsNotAnnouncedTwice() {
+        XCTAssertEqual(
+            self.announcement(recording: self.systemUID, lastAnnounced: self.systemUID),
+            .alreadyAnnounced,
+            "Re-announcing every recording would make the notification noise"
+        )
+    }
+
+    func testADifferentFallbackDeviceAnnouncesAfresh() {
+        XCTAssertEqual(
+            self.announcement(recording: "third-mic", named: "Third Mic", lastAnnounced: self.systemUID),
+            .announce(deviceUID: "third-mic", deviceName: "Third Mic"),
+            "Falling back to a *different* device is a new substitution the user has not been told about"
+        )
+    }
+
+    /// The reset is what makes a later fallback announce again: `.none` clears the record, so
+    /// unplug -> announce -> replug -> unplug announces a second time rather than staying silent.
+    func testReturningToThePreferredDeviceClearsTheAnnouncementRecord() {
+        XCTAssertEqual(
+            self.announcement(recording: self.preferredUID, lastAnnounced: self.systemUID),
+            .none
+        )
+    }
+
+    func testOtherModesNeverAnnounce() {
+        for mode in [SettingsStore.MicrophoneSelectionMode.manual, .system] {
+            XCTAssertEqual(
+                self.announcement(recording: self.systemUID, mode: mode),
+                .none,
+                "\(mode) does not promise to capture a pinned device, so a fallback is not a substitution"
+            )
+        }
+    }
+
+    func testNoPreferenceOrNoDeviceAnnouncesNothing() {
+        XCTAssertEqual(
+            ASRService.preferredMicrophoneFallbackAnnouncement(
+                mode: .fluidVoiceOnly,
+                preferredUID: nil,
+                recording: self.device(self.systemUID, "System Mic"),
+                lastAnnouncedFallbackDeviceUID: nil
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            ASRService.preferredMicrophoneFallbackAnnouncement(
+                mode: .fluidVoiceOnly,
+                preferredUID: self.preferredUID,
+                recording: nil,
+                lastAnnouncedFallbackDeviceUID: nil
+            ),
+            .none,
+            "No resolved device means nothing was recorded to announce"
+        )
+    }
+
     func testAnEmptyPreferenceFallsBackToTheSystemDefaultInEveryMode() {
         for mode in [
             SettingsStore.MicrophoneSelectionMode.system,
