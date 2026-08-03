@@ -467,6 +467,40 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertEqual(SettingsStore.shared.storedMicrophoneSelectionMode, .fluidVoiceOnly)
     }
 
+    /// Leaving a *degraded* `.fluidVoiceOnly` must not hand back a device from some older manual
+    /// session. Nothing captures a pre-manual device on the way into that state — toggling Faster
+    /// Recording Start is not a mode transition — so any stored value is stale, and applying it
+    /// would move the user's input to a device they have not chosen in a long time.
+    func testLeavingDegradedFluidVoiceOnlyDoesNotRestoreAStaleDefault() {
+        UserDefaults.standard.set("stale-device-from-an-old-manual-session", forKey: "SystemInputDeviceUIDBeforeManual")
+        self.configure(mode: .fluidVoiceOnly, directCapture: false)
+        XCTAssertEqual(SettingsStore.shared.microphoneSelectionMode, .manual, "precondition: reads as manual")
+
+        let restored = SettingsStore.shared.setMicrophoneSelectionMode(
+            .system,
+            currentSystemInputUID: self.systemUID,
+            availableInputUIDs: ["stale-device-from-an-old-manual-session", self.systemUID]
+        )
+
+        XCTAssertNil(restored, "A degraded FluidVoice-only session never took the default over, so there is nothing to hand back")
+    }
+
+    /// The counterpart: a genuine manual session still hands the default back.
+    func testLeavingARealManualSessionStillRestoresTheUsersDefault() {
+        self.configure(mode: .system, directCapture: true)
+        SettingsStore.shared.setMicrophoneSelectionMode(
+            .manual, currentSystemInputUID: self.systemUID, availableInputUIDs: [self.systemUID, self.preferredUID]
+        )
+
+        let restored = SettingsStore.shared.setMicrophoneSelectionMode(
+            .system,
+            currentSystemInputUID: self.preferredUID,
+            availableInputUIDs: [self.systemUID, self.preferredUID]
+        )
+
+        XCTAssertEqual(restored, self.systemUID)
+    }
+
     // MARK: - Direct-capture device selection
 
     /// The direct path picks its device from the mode alone, separately from the coordinator. A mode

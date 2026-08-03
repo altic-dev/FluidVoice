@@ -1875,6 +1875,7 @@ final class SettingsStore: ObservableObject {
         availableInputUIDs: Set<String>
     ) -> String? {
         let previousMode = self.microphoneSelectionMode
+        let previouslyStoredMode = self.storedMicrophoneSelectionMode
 
         // `.manual` is the one mode that moves the macOS default, so capture the user's own default
         // on the way *in* — from any other mode, since neither `.system` nor `.fluidVoiceOnly`
@@ -1895,7 +1896,13 @@ final class SettingsStore: ObservableObject {
         // *leaving* it hands the default back to whatever the user had before — whether that is for
         // `.system` or for `.fluidVoiceOnly`. Restoring on any other transition would clobber a
         // default the user changed themselves while FluidVoice was keeping its hands off it.
-        guard previousMode == .manual, mode != .manual else { return nil }
+        //
+        // This one tests the *stored* mode, unlike the capture above. A stored `.fluidVoiceOnly`
+        // reads as `.manual` while direct capture is off, but nothing captured a pre-manual device
+        // on the way into that state (toggling Faster Recording Start is not a mode transition), so
+        // treating it as a real manual session would hand back whatever a much older manual session
+        // left behind and move the user's input to a stale device.
+        guard previouslyStoredMode == .manual, mode != .manual else { return nil }
 
         if let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
            previousSystemInputUID.isEmpty == false,
