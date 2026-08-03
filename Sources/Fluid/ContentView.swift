@@ -2353,9 +2353,14 @@ struct ContentView: View {
         }
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
+        let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
+        // Clipboard-only is the primary delivery method, so it must write even when FluidVoice is
+        // frontmost — suppressing it there would leave the user with nothing on the clipboard. The
+        // backup-copy checkbox keeps its `!isFluidFrontmost` guard, since the bound editor already
+        // holds the text in that self-target case.
         let shouldCopyToClipboard = shouldPersistOutputs &&
-            SettingsStore.shared.copyTranscriptionToClipboard &&
-            !isFluidFrontmost
+            (isClipboardOnlyMode ||
+                (!isFluidFrontmost && SettingsStore.shared.copyTranscriptionToClipboard))
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
@@ -2369,7 +2374,7 @@ struct ContentView: View {
         }
 
         var didTypeExternally = false
-        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost
+        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost && !isClipboardOnlyMode
 
         DebugLogger.shared.debug(
             "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), willTypeExternally: \(shouldTypeExternally)",
@@ -2422,7 +2427,7 @@ struct ContentView: View {
                 aiProvider: modelInfo.provider
             )
         } else if shouldPersistOutputs,
-                  SettingsStore.shared.copyTranscriptionToClipboard == false,
+                  !shouldCopyToClipboard,
                   SettingsStore.shared.saveTranscriptionHistory
         {
             AnalyticsService.shared.capture(
@@ -2927,8 +2932,13 @@ struct ContentView: View {
         if !self.rewriteModeService.rewrittenText.isEmpty {
             DebugLogger.shared.info("Rewrite successful, typing result (chars: \(self.rewriteModeService.rewrittenText.count))", source: "ContentView")
 
+            // In clipboard-only mode the delivery below already writes the pasteboard and emits a
+            // single `.clipboard` event, so skip the backup copy to avoid double-counting that
+            // delivery — mirroring how the dictation path collapses these into one event. (#481)
+            let isClipboardOnlyMode = SettingsStore.shared.textInsertionMode == .clipboardOnly
+
             // Copy to clipboard as backup
-            if SettingsStore.shared.copyTranscriptionToClipboard {
+            if SettingsStore.shared.copyTranscriptionToClipboard, !isClipboardOnlyMode {
                 ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
                 AnalyticsService.shared.capture(
                     .outputDelivered,
@@ -2939,7 +2949,9 @@ struct ContentView: View {
                 )
             }
 
-            // Type the rewritten text
+            // Deliver the rewritten text. In clipboard-only mode the insertion machinery writes to
+            // the pasteboard instead of typing, so report the matching analytics method rather than
+            // unconditionally claiming a typed insertion. (#481)
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
@@ -2952,7 +2964,9 @@ struct ContentView: View {
                 .outputDelivered,
                 properties: [
                     "mode": AnalyticsMode.rewrite.rawValue,
-                    "method": AnalyticsOutputMethod.typed.rawValue,
+                    "method": isClipboardOnlyMode
+                        ? AnalyticsOutputMethod.clipboard.rawValue
+                        : AnalyticsOutputMethod.typed.rawValue,
                 ]
             )
 
