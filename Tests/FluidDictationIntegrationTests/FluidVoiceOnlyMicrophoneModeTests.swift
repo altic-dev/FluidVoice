@@ -348,6 +348,69 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertTrue(SettingsStore.MicrophoneSelectionMode.fluidVoiceOnly.usesPreferredInputDevice)
     }
 
+    // MARK: - The announcement state machine across a sequence of recordings
+
+    /// The rules only mean anything in sequence, which is what the stored record exists for. Each
+    /// step here is one recording start; a `nil` result means the user is told nothing.
+    func testFallbackIsAnnouncedOncePerSubstitutionAcrossRecordings() {
+        var announcer = ASRService.PreferredMicrophoneFallbackAnnouncer()
+        let fallback = self.device(self.systemUID, "System Mic")
+        let preferred = self.device(self.preferredUID, "Preferred Mic")
+
+        func recording(_ device: AudioDevice.Device) -> String? {
+            announcer.announcementNeeded(
+                mode: .fluidVoiceOnly, preferredUID: self.preferredUID, recording: device
+            )
+        }
+
+        XCTAssertEqual(recording(fallback), "System Mic", "first fallback: tell the user")
+        XCTAssertNil(recording(fallback), "same fallback again: stay quiet")
+        XCTAssertNil(recording(fallback), "and again")
+        XCTAssertNil(recording(preferred), "preferred mic is back: nothing to announce")
+        XCTAssertEqual(
+            recording(fallback),
+            "System Mic",
+            "dropped out again: this is a new substitution and must be announced afresh"
+        )
+    }
+
+    /// Guards the subtle half of the contract: staying quiet on a repeat must NOT clear the record,
+    /// or every second recording would re-announce the same substitution.
+    func testStayingQuietOnARepeatDoesNotClearTheRecord() {
+        var announcer = ASRService.PreferredMicrophoneFallbackAnnouncer()
+        let fallback = self.device(self.systemUID, "System Mic")
+
+        _ = announcer.announcementNeeded(
+            mode: .fluidVoiceOnly, preferredUID: self.preferredUID, recording: fallback
+        )
+        _ = announcer.announcementNeeded(
+            mode: .fluidVoiceOnly, preferredUID: self.preferredUID, recording: fallback
+        )
+
+        XCTAssertEqual(
+            announcer.lastAnnouncedFallbackDeviceUID,
+            self.systemUID,
+            "A quiet repeat still remembers what was announced"
+        )
+    }
+
+    func testReturningToThePreferredDeviceClearsTheRecordSoALaterFallbackSpeaks() {
+        var announcer = ASRService.PreferredMicrophoneFallbackAnnouncer()
+
+        _ = announcer.announcementNeeded(
+            mode: .fluidVoiceOnly,
+            preferredUID: self.preferredUID,
+            recording: self.device(self.systemUID, "System Mic")
+        )
+        _ = announcer.announcementNeeded(
+            mode: .fluidVoiceOnly,
+            preferredUID: self.preferredUID,
+            recording: self.device(self.preferredUID, "Preferred Mic")
+        )
+
+        XCTAssertNil(announcer.lastAnnouncedFallbackDeviceUID)
+    }
+
     // MARK: - Direct-capture device selection
 
     /// The direct path picks its device from the mode alone, separately from the coordinator. A mode

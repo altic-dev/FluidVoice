@@ -14,6 +14,26 @@ nonisolated enum DirectCoreAudioDeviceSelection: Equatable {
     case preferredUIDOrDefault(String)
 }
 
+/// Read-only device lookup used by direct-capture resolution. Deliberately narrower than
+/// `AudioDeviceManaging`: resolution runs off-main on the lifecycle queue (so this must be
+/// `Sendable`), and it must never be able to *move* the system default input — "captures a device
+/// without touching the macOS default" is the contract, and here the type system enforces it rather
+/// than a test asserting a negative.
+protocol InputDeviceResolving: Sendable {
+    func defaultInputDevice() -> AudioDevice.Device?
+    func inputDevice(uid: String) -> AudioDevice.Device?
+}
+
+struct CoreAudioInputDeviceResolver: InputDeviceResolving {
+    func defaultInputDevice() -> AudioDevice.Device? {
+        AudioDevice.getDefaultInputDevice()
+    }
+
+    func inputDevice(uid: String) -> AudioDevice.Device? {
+        AudioDevice.getInputDevice(byUID: uid)
+    }
+}
+
 typealias DirectCoreAudioPacketHandler = @Sendable (
     _ samples: UnsafePointer<Float>,
     _ frameCount: Int,
@@ -688,6 +708,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     private let packetHandler: PacketHandler
     private let inputFactory: InputFactory
     private let fingerprintReader: FingerprintReader
+    private let deviceResolver: any InputDeviceResolving
     private let onFormatInvalidated: @Sendable (FormatInvalidation) -> Void
     private let installsHardwareListeners: Bool
 
@@ -708,12 +729,14 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         fingerprintReader: @escaping FingerprintReader = {
             try DirectCoreAudioFormatFingerprint.read(deviceID: $0)
         },
+        deviceResolver: any InputDeviceResolving = CoreAudioInputDeviceResolver(),
         installsHardwareListeners: Bool = true,
         onFormatInvalidated: @escaping @Sendable (FormatInvalidation) -> Void
     ) {
         self.packetHandler = packetHandler
         self.inputFactory = inputFactory
         self.fingerprintReader = fingerprintReader
+        self.deviceResolver = deviceResolver
         self.installsHardwareListeners = installsHardwareListeners
         self.onFormatInvalidated = onFormatInvalidated
     }
@@ -755,11 +778,11 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                 let device: AudioDevice.Device?
                 switch selection {
                 case .systemDefault:
-                    device = AudioDevice.getDefaultInputDevice()
+                    device = self.deviceResolver.defaultInputDevice()
                 case let .preferredUID(uid):
-                    device = AudioDevice.getInputDevice(byUID: uid)
+                    device = self.deviceResolver.inputDevice(uid: uid)
                 case let .preferredUIDOrDefault(uid):
-                    device = AudioDevice.getInputDevice(byUID: uid) ?? AudioDevice.getDefaultInputDevice()
+                    device = self.deviceResolver.inputDevice(uid: uid) ?? self.deviceResolver.defaultInputDevice()
                 }
                 guard let device else {
                     continuation.resume(

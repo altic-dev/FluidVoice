@@ -753,10 +753,10 @@ final class ASRService: ObservableObject {
     }()
 
     private var activeAudioCaptureBackend: AudioCaptureBackend = .none
-    /// UID of the device the FluidVoice-only "preferred mic unavailable" notification last named, so
-    /// a single fallback announces once rather than on every recording. Reset (to nil) when the
-    /// preferred device is used again. See `announcePreferredMicrophoneFallbackIfNeeded(recording:)`.
-    private var lastAnnouncedFallbackDeviceUID: String?
+    /// Tracks which fallback device the FluidVoice-only "preferred mic unavailable" notification
+    /// last named, so a single fallback announces once rather than on every recording.
+    /// See `announcePreferredMicrophoneFallbackIfNeeded(recording:)`.
+    private var fallbackAnnouncer = PreferredMicrophoneFallbackAnnouncer()
 
     private var hasPreparedAudioCapture: Bool {
         self.directAudioLifecycleController.snapshot.isPrepared || self.hasWarmAudioEngine
@@ -1040,6 +1040,37 @@ final class ASRService: ObservableObject {
     /// `device` is the input actually being recorded, passed by the caller because it differs by
     /// backend: the direct path binds the resolved device, while AVAudioEngine always records the
     /// macOS default regardless of the preference.
+    /// Owns the "have we already said this?" record behind the FluidVoice-only fallback
+    /// notification, so the state transitions are testable without an `ASRService` instance.
+    /// Keeping the record here rather than in the service is what makes the reset rule verifiable:
+    /// staying quiet on a repeat must *not* clear it, while returning to the preferred device must.
+    struct PreferredMicrophoneFallbackAnnouncer {
+        private(set) var lastAnnouncedFallbackDeviceUID: String?
+
+        /// Returns the device name to announce, or nil to stay quiet, updating the record.
+        mutating func announcementNeeded(
+            mode: SettingsStore.MicrophoneSelectionMode,
+            preferredUID: String?,
+            recording device: AudioDevice.Device?
+        ) -> String? {
+            switch ASRService.preferredMicrophoneFallbackAnnouncement(
+                mode: mode,
+                preferredUID: preferredUID,
+                recording: device,
+                lastAnnouncedFallbackDeviceUID: self.lastAnnouncedFallbackDeviceUID
+            ) {
+            case .none:
+                self.lastAnnouncedFallbackDeviceUID = nil
+                return nil
+            case .alreadyAnnounced:
+                return nil
+            case let .announce(deviceUID, deviceName):
+                self.lastAnnouncedFallbackDeviceUID = deviceUID
+                return deviceName
+            }
+        }
+    }
+
     /// Outcome of the fallback-announcement decision.
     enum PreferredMicrophoneFallbackAnnouncement: Equatable {
         /// Recording the pinned device, or in a mode that pins none. Nothing to announce, and the
@@ -1075,24 +1106,19 @@ final class ASRService: ObservableObject {
     }
 
     private func announcePreferredMicrophoneFallbackIfNeeded(recording device: AudioDevice.Device?) {
-        switch Self.preferredMicrophoneFallbackAnnouncement(
+        guard let deviceName = self.fallbackAnnouncer.announcementNeeded(
             mode: SettingsStore.shared.microphoneSelectionMode,
             preferredUID: SettingsStore.shared.preferredInputDeviceUID,
-            recording: device,
-            lastAnnouncedFallbackDeviceUID: self.lastAnnouncedFallbackDeviceUID
-        ) {
-        case .none:
-            self.lastAnnouncedFallbackDeviceUID = nil
-        case .alreadyAnnounced:
-            break
-        case let .announce(deviceUID, deviceName):
-            self.lastAnnouncedFallbackDeviceUID = deviceUID
-            DebugLogger.shared.info(
-                "Preferred microphone unavailable; recording through fallback '\(deviceName)'",
-                source: "ASRService"
-            )
-            NotificationService.showPreferredMicrophoneFallback(fallbackDeviceName: deviceName)
+            recording: device
+        ) else {
+            return
         }
+
+        DebugLogger.shared.info(
+            "Preferred microphone unavailable; recording through fallback '\(deviceName)'",
+            source: "ASRService"
+        )
+        NotificationService.showPreferredMicrophoneFallback(fallbackDeviceName: deviceName)
     }
 
     private func startAVAudioEngineCapture() async throws {
