@@ -2690,8 +2690,18 @@ private extension SettingsView {
                 isOn: Binding(
                     get: { self.settings.experimentalDirectAudioCaptureEnabled },
                     set: { enabled in
-                        self.settings.experimentalDirectAudioCaptureEnabled = enabled
+                        // Turning this off degrades a stored FluidVoice-only to `.manual`, which
+                        // starts moving the macOS input. The store brackets that so the user's own
+                        // default is handed back when the direct path returns.
+                        let restoredSystemInputUID = SettingsStore.shared.setDirectAudioCaptureEnabled(
+                            enabled,
+                            currentSystemInputUID: AudioDevice.getDefaultInputDevice()?.uid,
+                            availableInputUIDs: Set(self.inputDevices.map(\.uid))
+                        )
                         self.asr.refreshAudioCaptureBackendPreference()
+                        if let restoredSystemInputUID {
+                            AudioDevice.setDefaultInputDevice(uid: restoredSystemInputUID)
+                        }
                         // FluidVoice-only capture exists only on the direct path, so the store
                         // reports `.manual` once this is off. Re-read it: this bound state is
                         // otherwise only refreshed at launch, and a stale `.fluidVoiceOnly` would

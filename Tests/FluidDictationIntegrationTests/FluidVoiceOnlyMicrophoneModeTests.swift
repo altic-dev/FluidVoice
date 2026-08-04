@@ -501,6 +501,56 @@ final class FluidVoiceOnlyMicrophoneModeTests: XCTestCase {
         XCTAssertEqual(restored, self.systemUID)
     }
 
+    // MARK: - Toggling the direct path must not leave the macOS input moved
+
+    /// Pin B while the macOS default is A, turn the direct path off (the mode degrades to `.manual`,
+    /// so recording moves the default onto B), then turn it back on. A has to come back, or every
+    /// other app is left on FluidVoice's microphone — the exact side effect this mode avoids.
+    func testTogglingDirectCaptureOffAndOnHandsTheUsersInputBack() {
+        self.configure(mode: .fluidVoiceOnly, directCapture: true)
+        let available: Set<String> = [self.systemUID, self.preferredUID]
+
+        let onDisable = SettingsStore.shared.setDirectAudioCaptureEnabled(
+            false, currentSystemInputUID: self.systemUID, availableInputUIDs: available
+        )
+        XCTAssertNil(onDisable, "Nothing to restore on the way down")
+
+        // The degraded session has since moved the macOS default onto the pinned mic.
+        let onEnable = SettingsStore.shared.setDirectAudioCaptureEnabled(
+            true, currentSystemInputUID: self.preferredUID, availableInputUIDs: available
+        )
+
+        XCTAssertEqual(onEnable, self.systemUID, "The user's own default must be handed back")
+    }
+
+    func testTogglingDirectCaptureLeavesOtherModesAlone() {
+        self.configure(mode: .manual, directCapture: true)
+        let available: Set<String> = [self.systemUID, self.preferredUID]
+
+        SettingsStore.shared.setDirectAudioCaptureEnabled(
+            false, currentSystemInputUID: self.systemUID, availableInputUIDs: available
+        )
+        let onEnable = SettingsStore.shared.setDirectAudioCaptureEnabled(
+            true, currentSystemInputUID: self.preferredUID, availableInputUIDs: available
+        )
+
+        XCTAssertNil(
+            onEnable,
+            "`.manual` is unaffected by this toggle — it already moves the default, and bracketing it here would fight the mode's own handback"
+        )
+    }
+
+    func testTogglingDirectCaptureStillPersistsThePreference() {
+        self.configure(mode: .fluidVoiceOnly, directCapture: true)
+
+        SettingsStore.shared.setDirectAudioCaptureEnabled(
+            false, currentSystemInputUID: self.systemUID, availableInputUIDs: [self.systemUID]
+        )
+
+        XCTAssertFalse(SettingsStore.shared.experimentalDirectAudioCaptureEnabled)
+        XCTAssertEqual(SettingsStore.shared.storedMicrophoneSelectionMode, .fluidVoiceOnly)
+    }
+
     // MARK: - Direct-capture device selection
 
     /// The direct path picks its device from the mode alone, separately from the coordinator. A mode

@@ -1914,6 +1914,45 @@ final class SettingsStore: ObservableObject {
         return currentSystemInputUID
     }
 
+    /// Toggling direct capture is not a mode change, but for a stored `.fluidVoiceOnly` it changes
+    /// whether FluidVoice takes the macOS default over: with the direct path off the mode degrades
+    /// to `.manual`, and the next recording moves the system input onto the preferred device.
+    ///
+    /// Without bracketing that, the round trip is lossy — pin B while the default is A, turn the
+    /// direct path off, record once (default moves to B), turn it back on, and A is never handed
+    /// back, leaving every other app on FluidVoice's microphone. That is precisely the side effect
+    /// this mode exists to avoid, so capture A on the way down and return it on the way back up.
+    ///
+    /// Returns the input device UID the caller should restore, or nil if there is nothing to hand
+    /// back. Mirrors `setMicrophoneSelectionMode`.
+    @discardableResult
+    func setDirectAudioCaptureEnabled(
+        _ enabled: Bool,
+        currentSystemInputUID: String?,
+        availableInputUIDs: Set<String>
+    ) -> String? {
+        let degradesFluidVoiceOnly = self.storedMicrophoneSelectionMode == .fluidVoiceOnly
+        let wasEnabled = self.experimentalDirectAudioCaptureEnabled
+        self.experimentalDirectAudioCaptureEnabled = enabled
+
+        guard degradesFluidVoiceOnly, wasEnabled != enabled else { return nil }
+
+        if enabled == false {
+            if let currentSystemInputUID, currentSystemInputUID.isEmpty == false {
+                self.defaults.set(currentSystemInputUID, forKey: Keys.systemInputDeviceUIDBeforeManual)
+            }
+            return nil
+        }
+
+        guard let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
+              previousSystemInputUID.isEmpty == false,
+              availableInputUIDs.contains(previousSystemInputUID)
+        else {
+            return nil
+        }
+        return previousSystemInputUID
+    }
+
     var visualizerNoiseThreshold: Double {
         get {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
