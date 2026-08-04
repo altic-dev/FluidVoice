@@ -128,6 +128,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return true
         }
 
+        // LaunchServices restores the bundle's default activation policy on an external reopen.
+        // Re-apply the saved preference before foregrounding the existing app (#753).
+        self.applyDockVisibilityPolicy()
+
         // Ensure dock-icon reopen always foregrounds FluidVoice.
         sender.activate(ignoringOtherApps: true)
 
@@ -179,8 +183,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     /// Apply the user's dock-visibility preference ("Hide from dock", issue #162).
-    /// Re-applied after operations that can reset the process activation policy - notably the
-    /// LaunchServices reopen below, which restores the bundle default (.regular) even when the
+    /// Re-applied after operations that can reset the process activation policy - notably
+    /// LaunchServices reopens, which restore the bundle default (.regular) even when the
     /// app is reopened without activation, so hide-from-dock is honored on login launches (#396).
     private func applyDockVisibilityPolicy() {
         NSApp.setActivationPolicy(SettingsStore.shared.showInDock ? .regular : .accessory)
