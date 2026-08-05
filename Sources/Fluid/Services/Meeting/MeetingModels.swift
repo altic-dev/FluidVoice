@@ -92,6 +92,38 @@ nonisolated enum MeetingMicrophoneRole: String, Codable, CaseIterable, Sendable 
     case unknown
 }
 
+nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
+    var isConfigured: Bool
+    var mode: MeetingCaptureMode
+    var applicationBundleIdentifier: String?
+    var microphoneCaptureDeviceID: String?
+    var microphoneCoreAudioUID: String?
+    var microphoneRole: MeetingMicrophoneRole
+
+    static let unconfigured = Self(
+        isConfigured: false,
+        mode: .onlineCall,
+        applicationBundleIdentifier: nil,
+        microphoneCaptureDeviceID: nil,
+        microphoneCoreAudioUID: nil,
+        microphoneRole: .unknown
+    )
+
+    func savedApplication(in identities: [MeetingApplicationIdentity]) -> MeetingApplicationIdentity? {
+        guard self.isConfigured, let applicationBundleIdentifier else { return nil }
+        return identities.first(where: { $0.bundleIdentifier == applicationBundleIdentifier })
+    }
+
+    func savedMicrophone(in identities: [MeetingMicrophoneIdentity]) -> MeetingMicrophoneIdentity? {
+        guard self.isConfigured else { return nil }
+        return self.microphoneCaptureDeviceID.flatMap { captureDeviceID in
+            identities.first(where: { $0.captureDeviceID == captureDeviceID })
+        } ?? self.microphoneCoreAudioUID.flatMap { coreAudioUID in
+            identities.first(where: { $0.coreAudioUID == coreAudioUID })
+        }
+    }
+}
+
 nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     var bundleIdentifier: String
     var processID: Int32?

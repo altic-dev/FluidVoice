@@ -30,6 +30,15 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var selectedMicrophoneID: String?
     var microphoneRole: MeetingMicrophoneRole = .unknown
 
+    init(settings: SettingsStore = .shared) {
+        let defaults = settings.meetingRecordingDefaults
+        self.mode = defaults.mode
+        self.title = Self.defaultTitle()
+        self.selectedApplicationID = nil
+        self.selectedMicrophoneID = defaults.microphoneCaptureDeviceID
+        self.microphoneRole = defaults.microphoneRole
+    }
+
     static func defaultTitle(now: Date = Date()) -> String {
         "Meeting · \(now.formatted(date: .abbreviated, time: .shortened))"
     }
@@ -74,7 +83,9 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var asrService: ASRService
     let onOpenVoiceEngine: () -> Void
 
-    @State private var setupDraft = MeetingTranscriptionSetupDraft()
+    @State private var setupDraft: MeetingTranscriptionSetupDraft
+    @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
+    @State private var isShowingMeetingSettings: Bool
     @State private var applications: [MeetingApplicationOption] = []
     @State private var microphones: [MeetingMicrophoneOption] = []
     @State private var isRefreshingSources = false
@@ -87,6 +98,21 @@ struct MeetingTranscriptionView: View {
     @State private var cachedModelReady = false
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
+
+    init(
+        coordinator: MeetingSessionCoordinator,
+        asrService: ASRService,
+        onOpenVoiceEngine: @escaping () -> Void
+    ) {
+        self.coordinator = coordinator
+        self.asrService = asrService
+        self.onOpenVoiceEngine = onOpenVoiceEngine
+
+        let initialDraft = MeetingTranscriptionSetupDraft(settings: .shared)
+        self._setupDraft = State(initialValue: initialDraft)
+        self._setupDraftBeforeEditing = State(initialValue: initialDraft)
+        self._isShowingMeetingSettings = State(initialValue: !SettingsStore.shared.meetingRecordingDefaults.isConfigured)
+    }
 
     var body: some View {
         MeetingTranscriptionCanvas(
@@ -103,9 +129,7 @@ struct MeetingTranscriptionView: View {
             onRevealAudio: self.revealCapturedAudio,
             onNewMeeting: self.startNewMeeting,
             onCopyTranscript: self.copyTranscript,
-            onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
-            onOpenScreenRecordingSettings: { Self.openScreenRecordingSettings() },
-            onOpenVoiceEngine: self.onOpenVoiceEngine,
+            onOpenMeetingSettings: self.openMeetingSettings,
             isRetrying: self.isRetrying
         )
         .task {
@@ -122,6 +146,22 @@ struct MeetingTranscriptionView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await self.refreshSources(requestPermissions: false) }
+        }
+        .sheet(isPresented: self.$isShowingMeetingSettings) {
+            MeetingRecordingSettingsSheet(
+                draft: self.$setupDraft,
+                applications: self.applications,
+                microphones: self.microphones,
+                readiness: self.readiness,
+                isFirstSetup: !SettingsStore.shared.meetingRecordingDefaults.isConfigured,
+                onRefreshSources: self.refreshSourcesFromUserAction,
+                onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
+                onOpenScreenRecordingSettings: { Self.openScreenRecordingSettings() },
+                onOpenVoiceEngine: self.onOpenVoiceEngine,
+                onCancel: self.cancelMeetingSettings,
+                onSave: self.saveMeetingSettings
+            )
+            .interactiveDismissDisabled(!SettingsStore.shared.meetingRecordingDefaults.isConfigured)
         }
     }
 
@@ -286,10 +326,16 @@ struct MeetingTranscriptionView: View {
             return
         }
 
-        let preferredCoreAudioUID = SettingsStore.shared.preferredInputDeviceUID
-        let preferred = preferredCoreAudioUID.flatMap { uid in
-            identities.first(where: { $0.coreAudioUID == uid })
-        } ?? (try? MeetingCaptureSourceCatalog.defaultMicrophone(
+        let settings = SettingsStore.shared
+        let defaults = settings.meetingRecordingDefaults
+        let preferredCoreAudioUID = defaults.microphoneCoreAudioUID ?? settings.preferredInputDeviceUID
+        let savedMicrophone = defaults.savedMicrophone(in: identities)
+        if defaults.isConfigured {
+            self.setupDraft.selectedMicrophoneID = savedMicrophone?.captureDeviceID
+            return
+        }
+
+        let preferred = savedMicrophone ?? (try? MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: preferredCoreAudioUID
         ))
         self.setupDraft.selectedMicrophoneID = preferred?.captureDeviceID ?? identities.first?.captureDeviceID
@@ -300,6 +346,13 @@ struct MeetingTranscriptionView: View {
         if let selectedID = setupDraft.selectedApplicationID,
            options.contains(where: { $0.id == selectedID })
         {
+            return
+        }
+
+        let defaults = SettingsStore.shared.meetingRecordingDefaults
+        if defaults.isConfigured {
+            let savedIdentity = defaults.savedApplication(in: identities)
+            self.setupDraft.selectedApplicationID = savedIdentity.map { MeetingApplicationOption(identity: $0).id }
             return
         }
 
@@ -418,6 +471,44 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private func openMeetingSettings() {
+        self.setupDraftBeforeEditing = self.setupDraft
+        self.isShowingMeetingSettings = true
+    }
+
+    private func cancelMeetingSettings() {
+        self.setupDraft = self.setupDraftBeforeEditing
+        self.isShowingMeetingSettings = false
+        Task { await self.refreshSources(requestPermissions: false) }
+    }
+
+    private func saveMeetingSettings() {
+        guard let microphone = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID }) else {
+            self.actionErrorMessage = "Choose an available microphone before saving."
+            return
+        }
+
+        let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
+        if self.setupDraft.mode == .onlineCall, application == nil {
+            self.actionErrorMessage = "Choose an available meeting application before saving."
+            return
+        }
+
+        let settings = SettingsStore.shared
+        settings.meetingRecordingDefaults = MeetingRecordingDefaults(
+            isConfigured: true,
+            mode: self.setupDraft.mode,
+            applicationBundleIdentifier: application?.identity.bundleIdentifier,
+            microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
+            microphoneCoreAudioUID: microphone.identity.coreAudioUID,
+            microphoneRole: self.setupDraft.microphoneRole
+        )
+
+        self.setupDraftBeforeEditing = self.setupDraft
+        self.actionErrorMessage = nil
+        self.isShowingMeetingSettings = false
+    }
+
     private func copyTranscript(_ session: MeetingSession) {
         let speakerNames = Dictionary(uniqueKeysWithValues: session.speakers.map { ($0.id, $0.displayName) })
         let text = session.transcriptSegments.map { segment in
@@ -513,9 +604,7 @@ struct MeetingTranscriptionCanvas: View {
     let onRevealAudio: (MeetingSession) -> Void
     let onNewMeeting: () -> Void
     let onCopyTranscript: (MeetingSession) -> Void
-    let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
-    let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
-    let onOpenVoiceEngine: () -> Void
+    let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
 
     @Environment(\.theme) private var theme
@@ -539,9 +628,7 @@ struct MeetingTranscriptionCanvas: View {
                             recentSession: recentSession,
                             onRefreshSources: self.onRefreshSources,
                             onStart: self.onStart,
-                            onOpenMicrophoneSettings: { self.onOpenMicrophoneSettings() },
-                            onOpenScreenRecordingSettings: { self.onOpenScreenRecordingSettings() },
-                            onOpenVoiceEngine: self.onOpenVoiceEngine
+                            onOpenMeetingSettings: self.onOpenMeetingSettings
                         )
                     case let .recording(session, trackHealth):
                         MeetingRecordingCanvas(
@@ -597,13 +684,227 @@ struct MeetingTranscriptionCanvas: View {
 
             Spacer()
 
-            Label("Stored on this Mac", systemImage: "lock.fill")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .accessibilityLabel("Meeting data is stored on this Mac")
+            Button(action: self.onOpenMeetingSettings) {
+                Label("Meeting Settings", systemImage: "gearshape")
+            }
+            .fluidButton(.compact, size: .small)
+            .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
         }
         .padding(.horizontal, self.theme.metrics.spacing.xxl)
         .padding(.vertical, self.theme.metrics.spacing.lg)
+    }
+}
+
+private struct MeetingRecordingSettingsSheet: View {
+    @Binding var draft: MeetingTranscriptionSetupDraft
+
+    let applications: [MeetingApplicationOption]
+    let microphones: [MeetingMicrophoneOption]
+    let readiness: MeetingSetupReadiness
+    let isFirstSetup: Bool
+    let onRefreshSources: () -> Void
+    let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
+    let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
+    let onOpenVoiceEngine: () -> Void
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    private var canSave: Bool {
+        guard self.draft.selectedMicrophoneID != nil else { return false }
+        return self.draft.mode == .inRoom || self.draft.selectedApplicationID != nil
+    }
+
+    private var separationDescription: String {
+        if !CPUArchitecture.isAppleSilicon {
+            return "Plain transcript on Intel"
+        }
+        return self.readiness.modelReady ? "Automatic after Stop" : "Prepares after Stop"
+    }
+
+    private var saveHelp: String? {
+        guard !self.canSave else { return nil }
+        if let blockingMessage = readiness.blockingMessage {
+            return blockingMessage
+        }
+        if self.draft.selectedMicrophoneID == nil {
+            return "Choose an available microphone to save this setup."
+        }
+        return "Choose an available meeting application to save this setup."
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                Image(systemName: "gearshape.fill")
+                    .font(self.theme.typography.titleIcon)
+                    .foregroundStyle(self.theme.palette.accent)
+
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                    Text(self.isFirstSetup ? "Set up meeting recording" : "Meeting Settings")
+                        .font(self.theme.typography.title)
+                    Text("Saved for future meetings until you change it.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, self.theme.metrics.spacing.xl)
+            .padding(.vertical, self.theme.metrics.spacing.lg)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    ThemedCard(style: .subtle, padding: 0) {
+                        VStack(spacing: 0) {
+                            MeetingAdaptiveSetupRow(
+                                title: "Meeting type",
+                                detail: "Choose the setup you use most often."
+                            ) {
+                                Picker("Meeting type", selection: self.$draft.mode) {
+                                    Text("Online call").tag(MeetingCaptureMode.onlineCall)
+                                    Text("In-room").tag(MeetingCaptureMode.inRoom)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 320, alignment: .trailing)
+                                .accessibilityLabel("Default meeting type")
+                            }
+
+                            if self.draft.mode == .onlineCall {
+                                Divider()
+                                MeetingAdaptiveSetupRow(
+                                    title: "Meeting audio",
+                                    detail: "FluidVoice records audio from this application."
+                                ) {
+                                    Picker("Meeting audio", selection: self.$draft.selectedApplicationID) {
+                                        Text("Choose application…").tag(String?.none)
+                                        ForEach(self.applications) { option in
+                                            Text(option.identity.displayName).tag(Optional(option.id))
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 320, alignment: .trailing)
+                                    .accessibilityLabel("Default meeting application")
+                                }
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(
+                                title: "Microphone",
+                                detail: "Used for your voice and in-room meetings."
+                            ) {
+                                Picker("Microphone", selection: self.$draft.selectedMicrophoneID) {
+                                    Text("Choose microphone…").tag(String?.none)
+                                    ForEach(self.microphones) { option in
+                                        Text(option.identity.displayName).tag(Optional(option.id))
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 320, alignment: .trailing)
+                                .accessibilityLabel("Default meeting microphone")
+                            }
+
+                            if self.draft.mode == .onlineCall {
+                                Divider()
+                                MeetingAdaptiveSetupRow(
+                                    title: "Microphone use",
+                                    detail: "A personal mic can identify clean speech as You."
+                                ) {
+                                    Picker("Microphone use", selection: self.$draft.microphoneRole) {
+                                        Text("Only me").tag(MeetingMicrophoneRole.personal)
+                                        Text("Shared").tag(MeetingMicrophoneRole.shared)
+                                        Text("Not sure").tag(MeetingMicrophoneRole.unknown)
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 320, alignment: .trailing)
+                                    .accessibilityLabel("Default microphone use")
+                                }
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(title: "Language") {
+                                Text("English")
+                                    .font(self.theme.typography.bodyStrong)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(title: "Speaker separation") {
+                                Text(self.separationDescription)
+                                    .font(self.theme.typography.bodyStrong)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: self.theme.metrics.spacing.sm) {
+                            self.repairActions
+                        }
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                            self.repairActions
+                        }
+                    }
+
+                    Label("Recording and transcription stay on this Mac.", systemImage: "lock.fill")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+
+                    if let saveHelp {
+                        Label(saveHelp, systemImage: "exclamationmark.circle")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.warning)
+                    }
+                }
+                .padding(self.theme.metrics.spacing.xl)
+            }
+
+            Divider()
+
+            HStack(spacing: self.theme.metrics.spacing.md) {
+                Button(self.isFirstSetup ? "Not Now" : "Cancel", action: self.onCancel)
+                    .fluidButton(.compact, size: .medium)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(self.readiness.isCheckingSources ? "Refreshing…" : "Refresh Sources", systemImage: "arrow.clockwise") {
+                    self.onRefreshSources()
+                }
+                .fluidButton(.compact, size: .medium)
+                .disabled(self.readiness.isCheckingSources)
+
+                Button(self.isFirstSetup ? "Save Setup" : "Save Changes", action: self.onSave)
+                    .fluidButton(.accent, size: .medium)
+                    .disabled(!self.canSave)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(self.theme.metrics.spacing.lg)
+        }
+        .frame(minWidth: 560, idealWidth: 720, maxWidth: 720)
+        .frame(minHeight: 540, idealHeight: 620)
+        .background(self.theme.palette.windowBackground)
+    }
+
+    @ViewBuilder
+    private var repairActions: some View {
+        if self.readiness.showMicrophoneSettingsAction {
+            Button("Microphone Settings", systemImage: "mic.fill", action: self.onOpenMicrophoneSettings)
+                .fluidButton(.compact, size: .small)
+        }
+        if self.readiness.showScreenRecordingSettingsAction {
+            Button(
+                "Screen Recording Settings",
+                systemImage: "rectangle.inset.filled.and.person.filled",
+                action: self.onOpenScreenRecordingSettings
+            )
+            .fluidButton(.compact, size: .small)
+        }
+        if !self.readiness.modelReady {
+            Button("Voice Engine", systemImage: "waveform", action: self.onOpenVoiceEngine)
+                .fluidButton(.compact, size: .small)
+        }
     }
 }
 
@@ -618,9 +919,7 @@ private struct MeetingSetupCanvas: View {
     let recentSession: MeetingSession?
     let onRefreshSources: () -> Void
     let onStart: () -> Void
-    let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
-    let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
-    let onOpenVoiceEngine: () -> Void
+    let onOpenMeetingSettings: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -658,141 +957,125 @@ private struct MeetingSetupCanvas: View {
         return nil
     }
 
+    private var modeName: String {
+        self.draft.mode == .onlineCall ? "Online call" : "In-room meeting"
+    }
+
+    private var applicationName: String? {
+        guard self.draft.mode == .onlineCall else { return nil }
+        return self.applications.first(where: { $0.id == self.draft.selectedApplicationID })?.identity.displayName
+    }
+
+    private var microphoneName: String {
+        self.microphones.first(where: { $0.id == self.draft.selectedMicrophoneID })?.identity.displayName
+            ?? "Choose microphone"
+    }
+
+    private var microphoneRoleName: String? {
+        guard self.draft.mode == .onlineCall else { return nil }
+        switch self.draft.microphoneRole {
+        case .personal: return "Personal mic"
+        case .shared: return "Shared mic"
+        case .unknown: return "Mic use not set"
+        }
+    }
+
+    private var setupSummary: String {
+        [self.applicationName, self.microphoneName, self.microphoneRoleName]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            Picker("Meeting type", selection: self.$draft.mode) {
-                Text("Online call").tag(MeetingCaptureMode.onlineCall)
-                Text("In-room meeting").tag(MeetingCaptureMode.inRoom)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("Meeting type")
-
-            ThemedCard {
+            ThemedCard(style: .subtle, padding: 0) {
                 VStack(spacing: 0) {
-                    MeetingSetupRow(title: "Title") {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: self.theme.metrics.spacing.lg) {
+                            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                                Text(self.modeName)
+                                    .font(self.theme.typography.sectionTitle)
+                                    .foregroundStyle(self.theme.palette.primaryText)
+                                Text(self.setupSummary)
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: self.theme.metrics.spacing.lg)
+                            Button("Edit setup…", systemImage: "slider.horizontal.3", action: self.onOpenMeetingSettings)
+                                .fluidButton(.compact, size: .small)
+                        }
+
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                                Text(self.modeName)
+                                    .font(self.theme.typography.sectionTitle)
+                                Text(self.setupSummary)
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
+                            }
+                            Button("Edit setup…", systemImage: "slider.horizontal.3", action: self.onOpenMeetingSettings)
+                                .fluidButton(.compact, size: .small)
+                        }
+                    }
+                    .padding(.horizontal, self.theme.metrics.spacing.lg)
+                    .padding(.vertical, self.theme.metrics.spacing.md)
+                    .accessibilityElement(children: .contain)
+
+                    Divider()
+
+                    MeetingAdaptiveSetupRow(title: "Meeting title") {
                         TextField("Meeting title", text: self.$draft.title)
                             .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 340)
-                    }
-
-                    if self.draft.mode == .onlineCall {
-                        Divider()
-                        MeetingSetupRow(title: "Meeting audio") {
-                            Picker("Meeting audio", selection: self.$draft.selectedApplicationID) {
-                                Text("Choose application…").tag(String?.none)
-                                ForEach(self.applications) { option in
-                                    Text(option.identity.displayName).tag(Optional(option.id))
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(maxWidth: 340)
-                        }
+                            .accessibilityLabel("Meeting title")
                     }
 
                     Divider()
-                    MeetingSetupRow(title: "Microphone") {
-                        Picker("Microphone", selection: self.$draft.selectedMicrophoneID) {
-                            Text("Choose microphone…").tag(String?.none)
-                            ForEach(self.microphones) { option in
-                                Text(option.identity.displayName).tag(Optional(option.id))
-                            }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: self.theme.metrics.spacing.md) {
+                            MeetingReadyStatus(
+                                isReady: self.canStart,
+                                title: self.canStart ? "Ready to record" : "Setup needs attention",
+                                detail: self.canStart
+                                    ? "English · \(self.readiness.storageStatus)"
+                                    : (self.startHelp ?? "Check the recording setup.")
+                            )
+                            Spacer(minLength: self.theme.metrics.spacing.md)
+                            Button("Refresh", systemImage: "arrow.clockwise", action: self.onRefreshSources)
+                                .fluidButton(.compact, size: .small)
+                                .disabled(self.readiness.isCheckingSources || self.isStarting)
                         }
-                        .labelsHidden()
-                        .frame(maxWidth: 340)
-                    }
 
-                    if self.draft.mode == .onlineCall {
-                        Divider()
-                        MeetingSetupRow(title: "Microphone use") {
-                            Picker("Microphone use", selection: self.$draft.microphoneRole) {
-                                Text("Only me").tag(MeetingMicrophoneRole.personal)
-                                Text("Shared microphone").tag(MeetingMicrophoneRole.shared)
-                                Text("Not sure").tag(MeetingMicrophoneRole.unknown)
-                            }
-                            .labelsHidden()
-                            .frame(maxWidth: 220)
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                            MeetingReadyStatus(
+                                isReady: self.canStart,
+                                title: self.canStart ? "Ready to record" : "Setup needs attention",
+                                detail: self.canStart
+                                    ? "English · \(self.readiness.storageStatus)"
+                                    : (self.startHelp ?? "Check the recording setup.")
+                            )
+                            Button("Refresh", systemImage: "arrow.clockwise", action: self.onRefreshSources)
+                                .fluidButton(.compact, size: .small)
+                                .disabled(self.readiness.isCheckingSources || self.isStarting)
                         }
                     }
-
-                    Divider()
-                    MeetingSetupValueRow(title: "Language", value: "English")
-                    Divider()
-                    MeetingSetupValueRow(
-                        title: "Speaker separation",
-                        value: CPUArchitecture.isAppleSilicon ? "Automatic · prepares on first use" : "Plain transcript on Intel"
-                    )
+                    .padding(.horizontal, self.theme.metrics.spacing.lg)
+                    .padding(.vertical, self.theme.metrics.spacing.md)
                 }
             }
 
-            ThemedCard(style: .subtle) {
-                VStack(spacing: self.theme.metrics.spacing.md) {
-                    MeetingReadinessRow(
-                        title: "FluidVoice activity",
-                        status: self.readiness.activityStatus,
-                        isReady: self.readiness.activityReady
-                    )
-                    MeetingReadinessRow(
-                        title: "Meeting audio",
-                        status: self.draft.mode == .inRoom ? "Not used" : self.readiness.meetingAudioStatus,
-                        isReady: self.draft.mode == .inRoom ||
-                            (self.draft.selectedApplicationID != nil && self.readiness.meetingAudioReady)
-                    )
-                    MeetingReadinessRow(
-                        title: "Microphone",
-                        status: self.readiness.microphoneStatus,
-                        isReady: self.draft.selectedMicrophoneID != nil && self.readiness.microphoneReady
-                    )
-                    MeetingReadinessRow(
-                        title: "Transcription model",
-                        status: self.readiness.modelStatus,
-                        isReady: self.readiness.modelReady
-                    )
-                    MeetingReadinessRow(
-                        title: "Storage",
-                        status: self.readiness.storageStatus,
-                        isReady: self.readiness.storageReady
-                    )
-                }
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                Label("Recording and transcription stay on this Mac.", systemImage: "lock.fill")
+                Label(
+                    self.draft.mode == .onlineCall
+                        ? "Headphones give the cleanest speaker separation."
+                        : "Place the Mac where every speaker can be heard clearly.",
+                    systemImage: self.draft.mode == .onlineCall ? "headphones" : "mic.fill"
+                )
+                Label("Make sure everyone knows the meeting is being recorded.", systemImage: "person.2")
             }
-
-            if self.readiness.showMicrophoneSettingsAction ||
-                self.readiness.showScreenRecordingSettingsAction ||
-                !self.readiness.modelReady
-            {
-                HStack(spacing: self.theme.metrics.spacing.sm) {
-                    if self.readiness.showMicrophoneSettingsAction {
-                        Button("Microphone Settings", systemImage: "mic.fill", action: self.onOpenMicrophoneSettings)
-                            .fluidButton(.compact, size: .medium)
-                    }
-                    if self.readiness.showScreenRecordingSettingsAction {
-                        Button(
-                            "Screen Recording Settings",
-                            systemImage: "rectangle.inset.filled.and.person.filled",
-                            action: self.onOpenScreenRecordingSettings
-                        )
-                        .fluidButton(.compact, size: .medium)
-                    }
-                    if !self.readiness.modelReady {
-                        Button("Open Voice Engine", systemImage: "waveform", action: self.onOpenVoiceEngine)
-                            .fluidButton(.compact, size: .medium)
-                    }
-                }
-            }
-
-            Label(
-                self.draft.mode == .onlineCall
-                    ? "Headphones are recommended for the cleanest speaker separation."
-                    : "Place the Mac where every speaker can be heard clearly.",
-                systemImage: self.draft.mode == .onlineCall ? "headphones" : "mic.fill"
-            )
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.theme.palette.secondaryText)
-
-            Label(
-                "Make sure everyone knows the meeting is being recorded.",
-                systemImage: "person.2.badge.gearshape"
-            )
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
 
@@ -804,29 +1087,7 @@ private struct MeetingSetupCanvas: View {
             }
 
             HStack {
-                Button(action: self.onRefreshSources) {
-                    if self.readiness.isCheckingSources {
-                        HStack(spacing: self.theme.metrics.spacing.sm) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Refreshing…")
-                        }
-                    } else {
-                        Label("Refresh Sources", systemImage: "arrow.clockwise")
-                    }
-                }
-                .fluidButton(.compact, size: .medium)
-                .disabled(self.readiness.isCheckingSources || self.isStarting)
-
                 Spacer()
-
-                if let startHelp, !self.canStart {
-                    Text(startHelp)
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .multilineTextAlignment(.trailing)
-                }
-
                 Button(action: self.onStart) {
                     if self.isStarting {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -1239,44 +1500,62 @@ private struct MeetingFailureCanvas: View {
     }
 }
 
-private struct MeetingSetupRow<Content: View>: View {
+private struct MeetingAdaptiveSetupRow<Content: View>: View {
     let title: String
+    var detail: String?
     @ViewBuilder let content: Content
 
     @Environment(\.theme) private var theme
 
+    init(
+        title: String,
+        detail: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.detail = detail
+        self.content = content()
+    }
+
     var body: some View {
-        HStack(spacing: self.theme.metrics.spacing.lg) {
-            Text(self.title)
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: 130, alignment: .leading)
-            self.content
-            Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: self.theme.metrics.spacing.lg) {
+                self.label
+                    .frame(width: 164, alignment: .leading)
+                self.content
+                    .frame(width: 320, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                self.label
+                self.content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .padding(.horizontal, self.theme.metrics.spacing.lg)
         .padding(.vertical, self.theme.metrics.spacing.md)
     }
-}
 
-private struct MeetingSetupValueRow: View {
-    let title: String
-    let value: String
-
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        MeetingSetupRow(title: self.title) {
-            Text(self.value)
+    private var label: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Text(self.title)
                 .font(self.theme.typography.bodyStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
+            if let detail {
+                Text(detail)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
 
-private struct MeetingReadinessRow: View {
-    let title: String
-    let status: String
+private struct MeetingReadyStatus: View {
     let isReady: Bool
+    let title: String
+    let detail: String
 
     @Environment(\.theme) private var theme
 
@@ -1285,15 +1564,18 @@ private struct MeetingReadinessRow: View {
             Image(systemName: self.isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                 .foregroundStyle(self.isReady ? self.theme.palette.success : self.theme.palette.warning)
                 .accessibilityHidden(true)
-            Text(self.title)
-                .font(self.theme.typography.body)
-            Spacer()
-            Text(self.status)
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.secondaryText)
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                Text(self.title)
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text(self.detail)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(self.title), \(self.status)")
+        .accessibilityLabel("\(self.title). \(self.detail)")
     }
 }
 

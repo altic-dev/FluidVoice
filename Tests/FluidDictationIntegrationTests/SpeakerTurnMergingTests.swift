@@ -576,6 +576,59 @@ final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
 }
 
 final class MeetingSessionModelTests: XCTestCase {
+    func testMeetingRecordingDefaultsRoundTripStableSourceIdentifiers() throws {
+        let defaults = MeetingRecordingDefaults(
+            isConfigured: true,
+            mode: .onlineCall,
+            applicationBundleIdentifier: "com.google.Chrome",
+            microphoneCaptureDeviceID: "av-device-id",
+            microphoneCoreAudioUID: "core-audio-uid",
+            microphoneRole: .personal
+        )
+
+        let encoded = try JSONEncoder().encode(defaults)
+        let decoded = try JSONDecoder().decode(MeetingRecordingDefaults.self, from: encoded)
+
+        XCTAssertEqual(decoded, defaults)
+        XCTAssertEqual(decoded.applicationBundleIdentifier, "com.google.Chrome")
+        XCTAssertEqual(decoded.microphoneCaptureDeviceID, "av-device-id")
+        XCTAssertEqual(decoded.microphoneCoreAudioUID, "core-audio-uid")
+    }
+
+    func testUnconfiguredMeetingDefaultsRemainConservative() {
+        let defaults = MeetingRecordingDefaults.unconfigured
+
+        XCTAssertFalse(defaults.isConfigured)
+        XCTAssertEqual(defaults.mode, .onlineCall)
+        XCTAssertEqual(defaults.microphoneRole, .unknown)
+        XCTAssertNil(defaults.applicationBundleIdentifier)
+        XCTAssertNil(defaults.microphoneCaptureDeviceID)
+    }
+
+    func testConfiguredMeetingDefaultsResolveOnlySavedSources() {
+        let defaults = MeetingRecordingDefaults(
+            isConfigured: true,
+            mode: .onlineCall,
+            applicationBundleIdentifier: "com.google.Chrome",
+            microphoneCaptureDeviceID: "saved-device",
+            microphoneCoreAudioUID: "saved-core-audio",
+            microphoneRole: .personal
+        )
+        let applications = [
+            MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", displayName: "Zoom"),
+            MeetingApplicationIdentity(bundleIdentifier: "com.google.Chrome", displayName: "Google Chrome"),
+        ]
+        let microphones = [
+            MeetingMicrophoneIdentity(captureDeviceID: "other-device", displayName: "Other"),
+            MeetingMicrophoneIdentity(captureDeviceID: "saved-device", displayName: "Saved"),
+        ]
+
+        XCTAssertEqual(defaults.savedApplication(in: applications)?.bundleIdentifier, "com.google.Chrome")
+        XCTAssertEqual(defaults.savedMicrophone(in: microphones)?.captureDeviceID, "saved-device")
+        XCTAssertNil(defaults.savedApplication(in: [applications[0]]))
+        XCTAssertNil(defaults.savedMicrophone(in: [microphones[0]]))
+    }
+
     func testCodableRoundTripPreservesStableMeetingIdentitiesAndTrackRelationships() throws {
         let session = MeetingModelFixture.makeSession()
 
