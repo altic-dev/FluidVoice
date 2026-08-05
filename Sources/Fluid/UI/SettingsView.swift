@@ -864,9 +864,9 @@ struct SettingsView: View {
                                             Text(SettingsStore.shared.textInsertionMode.description)
                                                 .font(self.theme.typography.bodySmall)
                                                 .foregroundStyle(self.settingsSecondaryText)
+                                                .fixedSize(horizontal: false, vertical: true)
                                         }
-
-                                        Spacer()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
                                         Picker("", selection: Binding(
                                             get: { SettingsStore.shared.textInsertionMode },
