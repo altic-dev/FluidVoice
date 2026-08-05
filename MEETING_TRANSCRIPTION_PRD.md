@@ -25,7 +25,7 @@ Checkboxes should be checked only when the requirement and its acceptance criter
 
 ### Document map
 
-- [Agreed product requirements](#3-agreed-product-requirements--implementation-status)
+- [Confirmed decisions](#3-confirmed-product-decisions)
 - [Goals and non-goals](#4-goals-and-non-goals)
 - [High-level milestones](#5-high-level-milestones)
 - [User experience and canvas states](#7-user-experience-and-canvas-states)
@@ -128,6 +128,15 @@ The direction below is agreed. Its checkboxes remain open until the correspondin
 
 ## 5. High-level milestones
 
+### Milestone delivery policy
+
+Each milestone is implemented on a stacked branch targeting `1.6.8/meeting`; only the integration branch targets `main`. A milestone is not complete when code merely compiles.
+
+- [ ] **[MUST · FOUNDATION] DELIVERY-001** Define the milestone's deterministic tests, real-system proof, performance/resource checks, and regression boundaries before implementation is called complete.
+- [ ] **[MUST · FOUNDATION] DELIVERY-002** Assign independent architecture/reliability and UX/accessibility reviewers who did not own the implementation.
+- [ ] **[MUST · FOUNDATION] DELIVERY-003** Resolve every blocking finding and record deferred non-blockers against a named later milestone.
+- [ ] **[MUST · FOUNDATION] DELIVERY-004** Merge the reviewed milestone PR into `1.6.8/meeting`; open one final integration PR from `1.6.8/meeting` to `main` after the intended milestone set is complete.
+
 ### Milestone 0 — Decisions and durable foundations
 
 - [ ] **[MUST · FOUNDATION] M0-EXIT-001** Resolve FOUNDATION and V1 open decisions in Section 22; M3/M4 decisions remain gated by their own milestones.
@@ -145,6 +154,18 @@ Goal: prove the complete path before polishing secondary automation.
 - [ ] **[MUST · M1] M1-EXIT-004** Apple Silicon output includes remote speaker labels and, for a confirmed personal microphone with clean speech, a **You** track; uncertain microphone speech remains unknown.
 - [ ] **[MUST · M1] M1-EXIT-005** The menu-bar menu shows **Stop Meeting Recording** first while capture is active.
 - [ ] **[MUST · M1] M1-EXIT-006** Window closure and sidebar navigation do not stop the session.
+
+#### Milestone 1 test and review gate
+
+- [ ] **[MUST · M1] M1-TEST-001** Deterministic tests cover legal state transitions, concurrent/repeated Start and Stop, stale-generation callbacks, and exactly one finalization/processing job.
+- [ ] **[MUST · M1] M1-TEST-002** A real online-call capture proves separate non-empty application/system and microphone files with timestamps inside one session manifest.
+- [ ] **[MUST · M1] M1-TEST-003** A real in-room capture proves microphone-only recording does not request Screen/System Audio permission solely for that mode.
+- [ ] **[MUST · M1] M1-TEST-004** Stop proves the complete offline English path: finalized audio → transcription/diarization → timestamped canvas result.
+- [ ] **[MUST · M1] M1-TEST-005** Apple Silicon fixtures cover remote speaker separation, clean confirmed personal-mic **You**, and ambiguous/leaked microphone speech remaining unknown.
+- [ ] **[MUST · M1] M1-TEST-006** UI proof covers menu item order and Stop action, menu-bar recording mark, sidebar navigation, main-window close/reopen, and the four canvas states.
+- [ ] **[MUST · M1] M1-REVIEW-001** An independent audio/architecture reviewer approves capture ownership, track separation, timestamp handling, provider serialization, and no dictation first-PCM regression.
+- [ ] **[MUST · M1] M1-REVIEW-002** An independent UX/accessibility reviewer approves sidebar placement, state clarity, menu-bar behavior, keyboard/VoiceOver labels, and low-resource rendering.
+- [ ] **[MUST · M1] M1-REVIEW-003** Every blocking review finding is fixed or explicitly recorded as a later-milestone item before the M1 stacked PR merges.
 
 ### Milestone 2 — Trustworthy offline V1
 
@@ -719,8 +740,8 @@ flowchart TD
 - [ ] **[MUST · V1] TEST-REPO-002** Validate implementation builds with `sh build_with_FI_incremental.sh` and inspect the installed `/Applications/FluidVoice.app`.
 - [ ] **[MUST · V1] TEST-REPO-003** Do not treat Debug/XCTest-host runs as release proof; use focused logic checks plus installed-app, real-meeting evidence.
 - [ ] **[MUST · V1] TEST-REPO-004** Verify the minimum supported macOS path and low-resource Apple Silicon behavior; describe Intel as reduced capability until separately proven.
-- [ ] **[MUST · V1] TEST-REPO-005** Update the requested release-notes version locally, credit contributors as required, and never commit ignored release notes.
 - [ ] **[MUST · V1] TEST-REPO-006** Run real Intel capture plus plain English transcription before claiming Intel meeting support; universal build slices alone are insufficient.
+- [ ] **[MUST · V1] TEST-REPO-005** Update the requested release-notes version locally, credit contributors as required, and never commit ignored release notes.
 
 ### 21.7 Measurable budgets to set before implementation
 

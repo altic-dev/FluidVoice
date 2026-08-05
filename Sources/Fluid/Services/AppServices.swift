@@ -68,6 +68,16 @@ final class AppServices: ObservableObject {
         return service
     }
 
+    private var _fileTranscriptionService: FileTranscriptionService?
+    var fileTranscriptionService: FileTranscriptionService {
+        if let existing = self._fileTranscriptionService {
+            return existing
+        }
+        let service = FileTranscriptionService(asrService: self.asr)
+        self._fileTranscriptionService = service
+        return service
+    }
+
     private var _microphonePreferenceCoordinator: MicrophonePreferenceCoordinator?
     var microphonePreferenceCoordinator: MicrophonePreferenceCoordinator {
         if let existing = self._microphonePreferenceCoordinator {
@@ -76,6 +86,64 @@ final class AppServices: ObservableObject {
         let coordinator = MicrophonePreferenceCoordinator()
         self._microphonePreferenceCoordinator = coordinator
         return coordinator
+    }
+
+    private var _meetingAudioActivityArbiter: AudioActivityArbiter?
+    var meetingAudioActivityArbiter: AudioActivityArbiter {
+        if let existing = self._meetingAudioActivityArbiter {
+            return existing
+        }
+        let arbiter = AudioActivityArbiter { [weak self] in
+            guard let self else { throw MeetingCoordinatorError.activityInProgress }
+            return self.asr
+        }
+        self._meetingAudioActivityArbiter = arbiter
+        return arbiter
+    }
+
+    private var _meetingSessionCoordinator: MeetingSessionCoordinator?
+    var meetingSessionCoordinator: MeetingSessionCoordinator {
+        if let existing = self._meetingSessionCoordinator {
+            return existing
+        }
+        DebugLogger.shared.info("Lazily creating MeetingSessionCoordinator", source: "AppServices")
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore.shared,
+            capture: MeetingCaptureEngine(),
+            processing: MeetingProcessingPipeline(
+                asrServiceProvider: { AppServices.shared.asr }
+            ),
+            audioArbiter: self.meetingAudioActivityArbiter,
+            preferredMicrophoneUID: { [weak self] in
+                self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
+            }
+        )
+        self._meetingSessionCoordinator = coordinator
+        self.setupMeetingCoordinatorForwarding()
+        Task { @MainActor [weak coordinator] in
+            await coordinator?.restoreRecoverableSessionIfNeeded()
+        }
+        return coordinator
+    }
+
+    /// Read-only meeting check that does not initialize the meeting stack.
+    var hasActiveMeetingSessionActivity: Bool {
+        guard let coordinator = self._meetingSessionCoordinator else { return false }
+        switch coordinator.state {
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing:
+            return true
+        case .idle, .completed, .interrupted, .failed:
+            return false
+        }
+    }
+
+    var hasActiveFileTranscriptionActivity: Bool {
+        self._asr?.activeExclusiveActivity == .fileTranscription
+    }
+
+    /// Legacy UI guard; ASRService is the atomic source of truth for acquisition.
+    var hasActiveMeetingActivity: Bool {
+        self.hasActiveMeetingSessionActivity || self._asr?.activeExclusiveActivity == .meeting
     }
 
     private var cancellables = Set<AnyCancellable>()
@@ -106,6 +174,13 @@ final class AppServices: ObservableObject {
             .store(in: &self.cancellables)
     }
 
+    private func setupMeetingCoordinatorForwarding() {
+        guard let coordinator = self._meetingSessionCoordinator else { return }
+        coordinator.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &self.cancellables)
+    }
+
     // MARK: - Safe Initialization
 
     /// Safely initialize all services after the UI is ready.
@@ -125,6 +200,10 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        if let meetingSessionCoordinator = self._meetingSessionCoordinator {
+            await meetingSessionCoordinator.shutdownForTermination()
+            self._meetingSessionCoordinator = nil
+        }
         if let asr = self._asr {
             await asr.shutdownForTermination()
             self._asr = nil
