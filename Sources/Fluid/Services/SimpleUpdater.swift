@@ -920,7 +920,10 @@ final class SimpleUpdater {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     NSApp.terminate(nil)
                     
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    // Fallback: forcefully terminate if AppKit gets stuck during or after termination.
+                    // The AppDelegate cleanup can take up to 16 seconds (8s for Private AI + 8s for ASR).
+                    // We wait 20 seconds on a background queue to ensure it only fires if truly hung.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 20.0) {
                         exit(0)
                     }
                 }
