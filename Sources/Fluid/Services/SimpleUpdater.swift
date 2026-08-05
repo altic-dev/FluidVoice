@@ -918,7 +918,7 @@ final class SimpleUpdater {
                 DebugLogger.shared.info("SimpleUpdater: Successfully relaunched app, terminating old instance", source: "SimpleUpdater")
                 // Give the new instance time to fully start before terminating
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    NSApp.terminate(nil)
+                    exit(0)
                 }
             }
         }
