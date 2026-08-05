@@ -83,6 +83,9 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var asrService: ASRService
     let onOpenVoiceEngine: () -> Void
 
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
     @State private var setupDraft: MeetingTranscriptionSetupDraft
     @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
     @State private var isShowingMeetingSettings: Bool
@@ -98,6 +101,10 @@ struct MeetingTranscriptionView: View {
     @State private var cachedModelReady = false
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
+    @State private var meetingHistory: [MeetingSession] = []
+    @State private var selectedHistorySessionID: MeetingSessionID?
+    @State private var meetingHistoryError: String?
+    @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -115,25 +122,64 @@ struct MeetingTranscriptionView: View {
     }
 
     var body: some View {
-        MeetingTranscriptionCanvas(
-            setupDraft: self.$setupDraft,
-            state: self.canvasState,
-            applications: self.applications,
-            microphones: self.microphones,
-            readiness: self.readiness,
-            errorMessage: self.actionErrorMessage,
-            onRefreshSources: self.refreshSourcesFromUserAction,
-            onStart: self.startRecording,
-            onStop: self.stopAndTranscribe,
-            onRetry: self.retryProcessing,
-            onRevealAudio: self.revealCapturedAudio,
-            onNewMeeting: self.startNewMeeting,
-            onCopyTranscript: self.copyTranscript,
-            onOpenMeetingSettings: self.openMeetingSettings,
-            isRetrying: self.isRetrying
-        )
+        VStack(spacing: 0) {
+            MeetingTranscriptionHeader(
+                state: self.canvasState,
+                isMeetingHistoryVisible: self.isMeetingHistoryVisible,
+                onNewMeeting: self.startNewMeeting,
+                onOpenMeetingSettings: self.openMeetingSettings,
+                onToggleMeetingHistory: {
+                    let willShowHistory = !self.isMeetingHistoryVisible
+                    withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        self.isMeetingHistoryVisible.toggle()
+                    }
+                    if willShowHistory, self.meetingHistory.isEmpty {
+                        Task { await self.loadMeetingHistory() }
+                    }
+                }
+            )
+
+            Divider()
+
+            HStack(spacing: 0) {
+                MeetingTranscriptionCanvas(
+                    setupDraft: self.$setupDraft,
+                    state: self.canvasState,
+                    applications: self.applications,
+                    microphones: self.microphones,
+                    readiness: self.readiness,
+                    errorMessage: self.actionErrorMessage,
+                    onRefreshSources: self.refreshSourcesFromUserAction,
+                    onStart: self.startRecording,
+                    onStop: self.stopAndTranscribe,
+                    onRetry: self.retryProcessing,
+                    onRevealAudio: self.revealCapturedAudio,
+                    onCopyTranscript: self.copyTranscript,
+                    onOpenMeetingSettings: self.openMeetingSettings,
+                    isRetrying: self.isRetrying
+                )
+
+                if self.isMeetingHistoryVisible {
+                    Divider()
+                    MeetingHistoryInspector(
+                        sessions: self.meetingHistory,
+                        selectedSessionID: self.$selectedHistorySessionID,
+                        errorMessage: self.meetingHistoryError,
+                        onRefresh: { Task { await self.loadMeetingHistory() } }
+                    )
+                    .frame(width: 290)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+        }
+        .background(self.theme.palette.windowBackground)
+        .clipped()
         .task {
-            await self.refreshSources(requestPermissions: false)
+            async let sources: Void = self.refreshSources(requestPermissions: false)
+            if self.isMeetingHistoryVisible {
+                await self.loadMeetingHistory()
+            }
+            await sources
         }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
@@ -144,8 +190,17 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.asrService.modelsExistOnDisk) { _, existsOnDisk in
             self.cachedModelReady = self.asrService.isAsrReady || existsOnDisk
         }
+        .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
+            Task { await self.loadMeetingHistory() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await self.refreshSources(requestPermissions: false) }
+            Task {
+                async let sources: Void = self.refreshSources(requestPermissions: false)
+                if self.isMeetingHistoryVisible {
+                    await self.loadMeetingHistory()
+                }
+                await sources
+            }
         }
         .sheet(isPresented: self.$isShowingMeetingSettings) {
             MeetingRecordingSettingsSheet(
@@ -166,6 +221,10 @@ struct MeetingTranscriptionView: View {
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
+        if let selectedHistorySession, self.canBrowseMeetingHistory {
+            return .result(selectedHistorySession)
+        }
+
         switch self.coordinator.state {
         case .idle:
             return .setup(isStarting: self.isStarting, recentSession: self.coordinator.latestCompletedSession)
@@ -205,6 +264,20 @@ struct MeetingTranscriptionView: View {
             )
         case let .failed(_, failure):
             return .failed(session: self.coordinator.activeSession, message: failure.message)
+        }
+    }
+
+    private var selectedHistorySession: MeetingSession? {
+        guard let selectedHistorySessionID else { return nil }
+        return self.meetingHistory.first(where: { $0.id == selectedHistorySessionID })
+    }
+
+    private var canBrowseMeetingHistory: Bool {
+        switch self.coordinator.state {
+        case .idle, .completed, .interrupted, .failed:
+            return true
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing:
+            return false
         }
     }
 
@@ -464,10 +537,26 @@ struct MeetingTranscriptionView: View {
     private func startNewMeeting() {
         do {
             try self.coordinator.resetForNewMeeting()
+            self.selectedHistorySessionID = nil
             self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle()
             self.actionErrorMessage = nil
         } catch {
             self.actionErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func loadMeetingHistory() async {
+        do {
+            self.meetingHistory = try await MeetingSessionStore.shared.loadAll()
+            self.meetingHistoryError = nil
+            if let selectedHistorySessionID,
+               !self.meetingHistory.contains(where: { $0.id == selectedHistorySessionID })
+            {
+                self.selectedHistorySessionID = nil
+            }
+        } catch {
+            self.meetingHistoryError = "Meeting history could not be loaded."
         }
     }
 
@@ -602,7 +691,6 @@ struct MeetingTranscriptionCanvas: View {
     let onStop: () -> Void
     let onRetry: () -> Void
     let onRevealAudio: (MeetingSession) -> Void
-    let onNewMeeting: () -> Void
     let onCopyTranscript: (MeetingSession) -> Void
     let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
@@ -610,67 +698,72 @@ struct MeetingTranscriptionCanvas: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 0) {
-            self.header
-            Divider()
-
-            ScrollView {
-                Group {
-                    switch self.state {
-                    case let .setup(isStarting, recentSession):
-                        MeetingSetupCanvas(
-                            draft: self.$setupDraft,
-                            applications: self.applications,
-                            microphones: self.microphones,
-                            readiness: self.readiness,
-                            isStarting: isStarting,
-                            errorMessage: self.errorMessage,
-                            recentSession: recentSession,
-                            onRefreshSources: self.onRefreshSources,
-                            onStart: self.onStart,
-                            onOpenMeetingSettings: self.onOpenMeetingSettings
-                        )
-                    case let .recording(session, trackHealth):
-                        MeetingRecordingCanvas(
-                            session: session,
-                            trackHealth: trackHealth,
-                            isStopping: false,
-                            onStop: self.onStop
-                        )
-                    case let .stopping(session, trackHealth):
-                        MeetingRecordingCanvas(
-                            session: session,
-                            trackHealth: trackHealth,
-                            isStopping: true,
-                            onStop: self.onStop
-                        )
-                    case let .processing(session, stage):
-                        MeetingProcessingCanvas(session: session, stage: stage)
-                    case let .result(session):
-                        MeetingResultCanvas(
-                            session: session,
-                            onCopyTranscript: self.onCopyTranscript
-                        )
-                    case let .failed(session, message):
-                        MeetingFailureCanvas(
-                            session: session,
-                            message: self.errorMessage ?? message,
-                            isRetrying: self.isRetrying,
-                            onRetry: self.onRetry,
-                            onRevealAudio: self.onRevealAudio
-                        )
-                    }
+        ScrollView {
+            Group {
+                switch self.state {
+                case let .setup(isStarting, recentSession):
+                    MeetingSetupCanvas(
+                        draft: self.$setupDraft,
+                        applications: self.applications,
+                        microphones: self.microphones,
+                        readiness: self.readiness,
+                        isStarting: isStarting,
+                        errorMessage: self.errorMessage,
+                        recentSession: recentSession,
+                        onRefreshSources: self.onRefreshSources,
+                        onStart: self.onStart,
+                        onOpenMeetingSettings: self.onOpenMeetingSettings
+                    )
+                case let .recording(session, trackHealth):
+                    MeetingRecordingCanvas(
+                        session: session,
+                        trackHealth: trackHealth,
+                        isStopping: false,
+                        onStop: self.onStop
+                    )
+                case let .stopping(session, trackHealth):
+                    MeetingRecordingCanvas(
+                        session: session,
+                        trackHealth: trackHealth,
+                        isStopping: true,
+                        onStop: self.onStop
+                    )
+                case let .processing(session, stage):
+                    MeetingProcessingCanvas(session: session, stage: stage)
+                case let .result(session):
+                    MeetingResultCanvas(
+                        session: session,
+                        onCopyTranscript: self.onCopyTranscript
+                    )
+                case let .failed(session, message):
+                    MeetingFailureCanvas(
+                        session: session,
+                        message: self.errorMessage ?? message,
+                        isRetrying: self.isRetrying,
+                        onRetry: self.onRetry,
+                        onRevealAudio: self.onRevealAudio
+                    )
                 }
-                .frame(maxWidth: 820)
-                .padding(self.theme.metrics.spacing.xxl)
-                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: 820)
+            .padding(self.theme.metrics.spacing.xxl)
+            .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.windowBackground)
     }
+}
 
-    private var header: some View {
+private struct MeetingTranscriptionHeader: View {
+    let state: MeetingTranscriptionCanvasState
+    let isMeetingHistoryVisible: Bool
+    let onNewMeeting: () -> Void
+    let onOpenMeetingSettings: () -> Void
+    let onToggleMeetingHistory: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
         HStack(spacing: self.theme.metrics.spacing.md) {
             Image(systemName: "person.2.wave.2.fill")
                 .font(self.theme.typography.titleIcon)
@@ -682,18 +775,33 @@ struct MeetingTranscriptionCanvas: View {
 
             Spacer()
 
-            if self.canStartNewMeeting {
-                Button("New Meeting", systemImage: "plus", action: self.onNewMeeting)
-                    .fluidButton(.accent, size: .small)
+            HStack(spacing: self.theme.metrics.spacing.xs) {
+                if self.canStartNewMeeting {
+                    MeetingHeaderIconButton(
+                        systemImage: "plus",
+                        label: "New Meeting",
+                        action: self.onNewMeeting
+                    )
                     .keyboardShortcut("n", modifiers: .command)
                     .accessibilityHint("Clear the current meeting and return to recording setup")
-            }
+                }
 
-            Button(action: self.onOpenMeetingSettings) {
-                Label("Meeting Settings", systemImage: "gearshape")
+                MeetingHeaderIconButton(
+                    systemImage: "gearshape",
+                    label: "Meeting Settings",
+                    action: self.onOpenMeetingSettings
+                )
+                .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
+
+                MeetingHeaderIconButton(
+                    systemImage: self.isMeetingHistoryVisible
+                        ? "rectangle.righthalf.inset.filled"
+                        : "sidebar.right",
+                    label: self.isMeetingHistoryVisible ? "Hide meeting history" : "Show meeting history",
+                    isSelected: self.isMeetingHistoryVisible,
+                    action: self.onToggleMeetingHistory
+                )
             }
-            .fluidButton(.compact, size: .small)
-            .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
         }
         .padding(.horizontal, self.theme.metrics.spacing.xxl)
         .padding(.vertical, self.theme.metrics.spacing.lg)
@@ -706,6 +814,206 @@ struct MeetingTranscriptionCanvas: View {
         case .setup, .recording, .stopping, .processing:
             return false
         }
+    }
+}
+
+private struct MeetingHeaderIconButton: View {
+    let systemImage: String
+    let label: String
+    var isSelected = false
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: self.action) {
+            Image(systemName: self.systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
+                .frame(width: 32, height: 30)
+                .background(self.backgroundColor, in: RoundedRectangle(
+                    cornerRadius: self.theme.metrics.corners.md,
+                    style: .continuous
+                ))
+                .overlay {
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
+        .onHover { self.isHovered = $0 }
+        .help(self.label)
+        .accessibilityLabel(self.label)
+    }
+
+    private var backgroundColor: Color {
+        if self.isSelected {
+            return self.theme.palette.accent.opacity(0.14)
+        }
+        if self.isHovered {
+            return self.theme.palette.contentBackground.opacity(0.9)
+        }
+        return self.theme.palette.contentBackground.opacity(0.55)
+    }
+}
+
+private struct MeetingHistoryInspector: View {
+    let sessions: [MeetingSession]
+    @Binding var selectedSessionID: MeetingSessionID?
+    let errorMessage: String?
+    let onRefresh: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var searchText = ""
+
+    private var filteredSessions: [MeetingSession] {
+        let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return self.sessions }
+        return self.sessions.filter { session in
+            session.title.localizedCaseInsensitiveContains(query) ||
+                session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
+                session.speakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Meetings")
+                    .font(self.theme.typography.sectionTitle)
+                Text("\(self.sessions.count)")
+                    .font(self.theme.typography.badge)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Spacer()
+                Button(action: self.onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh meeting history")
+                .accessibilityLabel("Refresh meeting history")
+            }
+            .padding(.horizontal, self.theme.metrics.spacing.lg)
+            .padding(.top, self.theme.metrics.spacing.lg)
+            .padding(.bottom, self.theme.metrics.spacing.md)
+
+            TextField("Search meetings", text: self.$searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, self.theme.metrics.spacing.lg)
+                .padding(.bottom, self.theme.metrics.spacing.md)
+
+            Divider()
+
+            if let errorMessage {
+                ContentUnavailableView(
+                    "History unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(errorMessage)
+                )
+            } else if self.filteredSessions.isEmpty {
+                ContentUnavailableView(
+                    self.searchText.isEmpty ? "No meetings yet" : "No matching meetings",
+                    systemImage: self.searchText.isEmpty ? "person.2.wave.2" : "magnifyingglass",
+                    description: Text(self.searchText.isEmpty
+                        ? "Completed meetings will appear here."
+                        : "Try a different title, app, or speaker.")
+                )
+            } else {
+                List(selection: self.$selectedSessionID) {
+                    ForEach(self.filteredSessions) { session in
+                        MeetingHistoryRow(session: session)
+                            .tag(session.id)
+                    }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .background(self.theme.palette.sidebarBackground)
+    }
+}
+
+private struct MeetingHistoryRow: View {
+    let session: MeetingSession
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Image(systemName: self.statusIcon)
+                    .foregroundStyle(self.statusColor)
+                    .accessibilityHidden(true)
+                Text(self.session.title)
+                    .font(self.theme.typography.bodySmallStrong)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+
+            Text(self.session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .lineLimit(1)
+
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text(Self.durationText(self.session.duration))
+                Text("·")
+                Text(self.sourceName)
+                    .lineLimit(1)
+                if !self.session.speakers.isEmpty {
+                    Text("·")
+                    Text("\(self.session.speakers.count) speakers")
+                }
+            }
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.palette.tertiaryText)
+        }
+        .padding(.vertical, self.theme.metrics.spacing.xs)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
+    }
+
+    private var sourceName: String {
+        self.session.capturedApplication?.displayName ?? "In-room"
+    }
+
+    private var statusText: String {
+        switch self.session.state {
+        case .completed: "Completed"
+        case .failed: "Failed"
+        case .interrupted: "Interrupted"
+        case .processing: "Processing"
+        case .recording, .recordingDegraded, .preparing, .stopping: "Recording"
+        }
+    }
+
+    private var statusIcon: String {
+        switch self.session.state {
+        case .completed: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .interrupted: "exclamationmark.circle.fill"
+        case .processing: "ellipsis.circle.fill"
+        case .recording, .recordingDegraded, .preparing, .stopping: "record.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch self.session.state {
+        case .completed: self.theme.palette.success
+        case .failed: Color(nsColor: .systemRed)
+        case .interrupted: self.theme.palette.warning
+        case .processing: self.theme.palette.accent
+        case .recording, .recordingDegraded, .preparing, .stopping: self.theme.palette.warning
+        }
+    }
+
+    private static func durationText(_ duration: TimeInterval) -> String {
+        let totalMinutes = max(0, Int(duration / 60))
+        if totalMinutes >= 60 {
+            return "\(totalMinutes / 60)h \(totalMinutes % 60)m"
+        }
+        return "\(max(1, totalMinutes))m"
     }
 }
 
@@ -1357,10 +1665,21 @@ private struct MeetingResultCanvas: View {
                 Text(self.session.title)
                     .font(self.theme.typography.title)
                 Spacer()
-                Text(Self.durationText(self.session.duration))
-                    .font(self.theme.typography.codeCaption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                Label(self.statusText, systemImage: self.statusIcon)
+                    .font(self.theme.typography.badge)
+                    .foregroundStyle(self.statusColor)
             }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: self.theme.metrics.spacing.lg) {
+                    self.meetingMetadata
+                }
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                    self.meetingMetadata
+                }
+            }
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.palette.secondaryText)
 
             if !self.session.speakers.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -1415,6 +1734,51 @@ private struct MeetingResultCanvas: View {
             return speaker.displayName
         }
         return "\(speaker.displayName) (You)"
+    }
+
+    @ViewBuilder
+    private var meetingMetadata: some View {
+        Label(
+            self.session.startedAt.formatted(date: .abbreviated, time: .shortened),
+            systemImage: "calendar"
+        )
+        Label(Self.durationText(self.session.duration), systemImage: "clock")
+        Label(self.sourceName, systemImage: self.session.mode == .onlineCall ? "macwindow" : "person.3")
+        Label(self.session.selectedMicrophone.displayName, systemImage: "mic")
+    }
+
+    private var sourceName: String {
+        self.session.capturedApplication?.displayName ?? "In-room meeting"
+    }
+
+    private var statusText: String {
+        switch self.session.state {
+        case .completed: "Completed"
+        case .failed: "Failed"
+        case .interrupted: "Interrupted"
+        case .processing: "Processing"
+        case .recording, .recordingDegraded, .preparing, .stopping: "Recording"
+        }
+    }
+
+    private var statusIcon: String {
+        switch self.session.state {
+        case .completed: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .interrupted: "exclamationmark.circle.fill"
+        case .processing: "ellipsis.circle.fill"
+        case .recording, .recordingDegraded, .preparing, .stopping: "record.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch self.session.state {
+        case .completed: self.theme.palette.success
+        case .failed: Color(nsColor: .systemRed)
+        case .interrupted: self.theme.palette.warning
+        case .processing: self.theme.palette.accent
+        case .recording, .recordingDegraded, .preparing, .stopping: self.theme.palette.warning
+        }
     }
 
     private static func durationText(_ duration: TimeInterval) -> String {
