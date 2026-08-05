@@ -4191,7 +4191,7 @@ final class SettingsStore: ObservableObject {
             case .whisperBase: return 84_962_880
             case .whisperSmall: return 269_751_136
             case .whisperMedium: return 831_538_144
-            case .whisperLargeTurbo: return 886_381_824
+            case .whisperLargeTurbo: return 886_381_760
             case .whisperLarge: return 1_668_741_440
             case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
