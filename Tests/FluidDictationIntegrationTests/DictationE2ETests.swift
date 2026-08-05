@@ -1,5 +1,7 @@
+import AppKit
 @testable import FluidVoice_Debug
 import Foundation
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
@@ -127,6 +129,49 @@ final class DictationE2ETests: XCTestCase {
             XCTAssertNil(defaults.object(forKey: self.enableTranscriptionSoundsKey))
             XCTAssertEqual(defaults.string(forKey: self.transcriptionStartSoundKey), SettingsStore.TranscriptionStartSound.fluidSfx2.rawValue)
         }
+    }
+
+    func testMeetingTranscriptionFileImport_filtersAndDedupesSupportedURLs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoiceImportTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = directory.appendingPathComponent("voice-one.m4a")
+        let duplicate = first
+        let second = directory.appendingPathComponent("voice-two.mp3")
+        let unsupported = directory.appendingPathComponent("notes.txt")
+        try Data([0x00]).write(to: first)
+        try Data([0x00]).write(to: second)
+        try Data([0x00]).write(to: unsupported)
+
+        let urls = MeetingTranscriptionFileImport.supportedURLs(from: [first, unsupported, duplicate, second])
+
+        XCTAssertEqual(urls, [first, second])
+    }
+
+    func testMeetingTranscriptionFileImport_registersFileURLAndPromiseDropTypes() {
+        let dropTypeIDs = Set(MeetingTranscriptionFileImport.dropContentTypes.map(\.identifier))
+        let pasteboardTypeIDs = Set(MeetingTranscriptionFileImport.pasteboardTypes.map(\.rawValue))
+
+        XCTAssertTrue(dropTypeIDs.contains(UTType.fileURL.identifier))
+        XCTAssertTrue(pasteboardTypeIDs.contains(NSPasteboard.PasteboardType.fileURL.rawValue))
+        for promisedType in NSFilePromiseReceiver.readableDraggedTypes {
+            XCTAssertTrue(pasteboardTypeIDs.contains(promisedType))
+        }
+    }
+
+    func testMeetingTranscriptionFileImport_detectsAudioItemProviderRepresentations() throws {
+        let provider = NSItemProvider()
+        let audioType = try XCTUnwrap(UTType(filenameExtension: "m4a")?.identifier)
+        provider.registerDataRepresentation(forTypeIdentifier: audioType, visibility: .all) { completion in
+            completion(Data([0x00]), nil)
+            return nil
+        }
+
+        let candidates = MeetingTranscriptionFileImport.candidateFileRepresentationTypes(for: provider)
+
+        XCTAssertEqual(candidates, [audioType])
     }
 
     func testDictionaryTransferDocument_encodesSimpleUserFormat() throws {
