@@ -649,8 +649,7 @@ struct MeetingTranscriptionCanvas: View {
                     case let .result(session):
                         MeetingResultCanvas(
                             session: session,
-                            onCopyTranscript: self.onCopyTranscript,
-                            onNewMeeting: self.onNewMeeting
+                            onCopyTranscript: self.onCopyTranscript
                         )
                     case let .failed(session, message):
                         MeetingFailureCanvas(
@@ -658,8 +657,7 @@ struct MeetingTranscriptionCanvas: View {
                             message: self.errorMessage ?? message,
                             isRetrying: self.isRetrying,
                             onRetry: self.onRetry,
-                            onRevealAudio: self.onRevealAudio,
-                            onNewMeeting: self.onNewMeeting
+                            onRevealAudio: self.onRevealAudio
                         )
                     }
                 }
@@ -684,6 +682,13 @@ struct MeetingTranscriptionCanvas: View {
 
             Spacer()
 
+            if self.canStartNewMeeting {
+                Button("New Meeting", systemImage: "plus", action: self.onNewMeeting)
+                    .fluidButton(.accent, size: .small)
+                    .keyboardShortcut("n", modifiers: .command)
+                    .accessibilityHint("Clear the current meeting and return to recording setup")
+            }
+
             Button(action: self.onOpenMeetingSettings) {
                 Label("Meeting Settings", systemImage: "gearshape")
             }
@@ -692,6 +697,15 @@ struct MeetingTranscriptionCanvas: View {
         }
         .padding(.horizontal, self.theme.metrics.spacing.xxl)
         .padding(.vertical, self.theme.metrics.spacing.lg)
+    }
+
+    private var canStartNewMeeting: Bool {
+        switch self.state {
+        case .result, .failed:
+            return true
+        case .setup, .recording, .stopping, .processing:
+            return false
+        }
     }
 }
 
@@ -1330,7 +1344,6 @@ private struct MeetingProcessingCanvas: View {
 private struct MeetingResultCanvas: View {
     let session: MeetingSession
     let onCopyTranscript: (MeetingSession) -> Void
-    let onNewMeeting: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -1387,19 +1400,11 @@ private struct MeetingResultCanvas: View {
                 }
             }
 
-            HStack {
-                Button("Copy Transcript", systemImage: "doc.on.doc") {
-                    self.onCopyTranscript(self.session)
-                }
-                .fluidButton(.compact, size: .medium)
-                .disabled(self.session.transcriptSegments.isEmpty)
-
-                Spacer()
-
-                Button("New Meeting", systemImage: "plus", action: self.onNewMeeting)
-                    .fluidButton(.accent, size: .medium)
-                    .keyboardShortcut(.defaultAction)
+            Button("Copy Transcript", systemImage: "doc.on.doc") {
+                self.onCopyTranscript(self.session)
             }
+            .fluidButton(.compact, size: .medium)
+            .disabled(self.session.transcriptSegments.isEmpty)
         }
     }
 
@@ -1430,7 +1435,6 @@ private struct MeetingFailureCanvas: View {
     let isRetrying: Bool
     let onRetry: () -> Void
     let onRevealAudio: (MeetingSession) -> Void
-    let onNewMeeting: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -1491,9 +1495,6 @@ private struct MeetingFailureCanvas: View {
                         .fluidButton(.accent, size: .medium)
                         .disabled(self.isRetrying)
                     }
-                    Spacer()
-                    Button("New Meeting", action: self.onNewMeeting)
-                        .fluidButton(self.hasRecoverableAudio ? .compact : .accent, size: .medium)
                 }
             }
         }
