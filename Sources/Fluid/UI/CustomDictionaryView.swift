@@ -189,9 +189,13 @@ struct CustomDictionaryView: View {
         self.manualTriggers.filter { self.allExistingTriggers().contains($0) }
     }
 
+    private var sanitizedManualReplacement: String {
+        CustomDictionaryManualEntry.sanitizedReplacement(self.manualReplacement)
+    }
+
     private var canAddManualReplacement: Bool {
         !self.manualTriggers.isEmpty &&
-            !self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !self.sanitizedManualReplacement.isEmpty &&
             self.manualDuplicateTriggers.isEmpty
     }
 
@@ -580,7 +584,7 @@ struct CustomDictionaryView: View {
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.tertiaryText)
 
-                    Text(self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines))
+                    Text(CustomDictionaryManualEntry.replacementDisplayText(self.sanitizedManualReplacement))
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(self.theme.palette.accent)
                 }
@@ -1603,7 +1607,7 @@ struct CustomDictionaryView: View {
         guard self.canAddManualReplacement else { return }
         let entry = SettingsStore.CustomDictionaryEntry(
             triggers: self.manualTriggers,
-            replacement: self.manualReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
+            replacement: self.sanitizedManualReplacement
         )
         self.addReplacementEntry(entry)
         self.manualTriggerDraft = ""
@@ -2667,6 +2671,28 @@ enum CustomDictionaryManualEntry {
 
         return self.normalizedTriggers(trimmed.split(separator: ",").map(String.init))
     }
+
+    /// A replacement that is entirely whitespace (e.g. a pasted newline or space)
+    /// is a deliberate payload — keep it verbatim instead of trimming it to empty.
+    static func sanitizedReplacement(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? text : trimmed
+    }
+
+    /// Whitespace-only replacements render as invisible/blank text, so show
+    /// them as symbols (⏎ ␣ ⇥) in previews and entry rows.
+    static func replacementDisplayText(_ replacement: String) -> String {
+        guard !replacement.isEmpty, replacement.allSatisfy(\.isWhitespace) else { return replacement }
+        return replacement.map { character -> String in
+            if character.isNewline {
+                return "⏎"
+            }
+            if character == "\t" {
+                return "⇥"
+            }
+            return "␣"
+        }.joined()
+    }
 }
 
 enum PronunciationProfileEditPolicy {
@@ -3081,7 +3107,7 @@ struct DictionaryEntryRow: View {
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
 
-            Text(self.entry.replacement)
+            Text(CustomDictionaryManualEntry.replacementDisplayText(self.entry.replacement))
                 .font(self.theme.typography.bodySmallStrong)
                 .foregroundStyle(self.theme.palette.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3352,7 +3378,7 @@ struct EditDictionaryEntrySheet: View {
 
     private var canSave: Bool {
         !self.parseTriggers().isEmpty &&
-            !self.replacement.trimmingCharacters(in: .whitespaces).isEmpty &&
+            !CustomDictionaryManualEntry.sanitizedReplacement(self.replacement).isEmpty &&
             self.duplicateTriggers.isEmpty
     }
 
@@ -3434,9 +3460,11 @@ struct EditDictionaryEntrySheet: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
 
-                        Text(self.replacement)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(self.theme.palette.accent)
+                        Text(CustomDictionaryManualEntry.replacementDisplayText(
+                            CustomDictionaryManualEntry.sanitizedReplacement(self.replacement)
+                        ))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(self.theme.palette.accent)
                     }
                 }
                 .padding(10)
@@ -3483,7 +3511,7 @@ struct EditDictionaryEntrySheet: View {
         let updatedEntry = SettingsStore.CustomDictionaryEntry(
             id: self.entry.id,
             triggers: self.parseTriggers(),
-            replacement: self.replacement.trimmingCharacters(in: .whitespaces)
+            replacement: CustomDictionaryManualEntry.sanitizedReplacement(self.replacement)
         )
         self.onSave(updatedEntry)
         self.dismiss()
