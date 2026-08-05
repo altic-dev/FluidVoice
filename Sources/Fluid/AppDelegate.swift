@@ -89,7 +89,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             didFinishShutdown = true
         }
 
-        let deadline = Date().addingTimeInterval(8)
+        // Meeting capture can spend up to three seconds stopping its runtime and
+        // four seconds finalizing audio before the durable session save.
+        let deadline = Date().addingTimeInterval(12)
         while !didFinishShutdown, Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }

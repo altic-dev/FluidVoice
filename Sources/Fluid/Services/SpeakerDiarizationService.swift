@@ -9,7 +9,7 @@ actor SpeakerDiarizationService {
     static let isSupported = true
 
     /// A contiguous stretch of speech attributed to one speaker.
-    struct SpeakerTurn: Sendable, Equatable {
+    nonisolated struct SpeakerTurn: Sendable, Equatable {
         let speakerLabel: String
         let startSeconds: Double
         let endSeconds: Double
@@ -17,6 +17,16 @@ actor SpeakerDiarizationService {
         var durationSeconds: Double {
             self.endSeconds - self.startSeconds
         }
+    }
+
+    nonisolated struct SpeakerProfile: Sendable, Equatable {
+        let embedding: [Float]
+        let averageQuality: Float
+    }
+
+    nonisolated struct DiarizationOutput: Sendable, Equatable {
+        let turns: [SpeakerTurn]
+        let profilesByLabel: [String: SpeakerProfile]
     }
 
     private let manager: OfflineDiarizerManager
@@ -36,11 +46,19 @@ actor SpeakerDiarizationService {
     /// Speaker labels are assigned in order of first appearance ("Speaker 1" spoke first).
     /// Returns an empty array when no speech is detected.
     func diarize(fileURL: URL) async throws -> [SpeakerTurn] {
+        try await self.diarizeWithProfiles(fileURL: fileURL).turns
+    }
+
+    /// Includes one bounded centroid per local cluster so callers can stitch the
+    /// same voice across independently processed files without retaining audio.
+    func diarizeWithProfiles(fileURL: URL) async throws -> DiarizationOutput {
         if !self.modelsReady {
-            DebugLogger.shared.info(
-                "SpeakerDiarizationService: preparing diarizer models",
-                source: "SpeakerDiarizationService"
-            )
+            await MainActor.run {
+                DebugLogger.shared.info(
+                    "SpeakerDiarizationService: preparing diarizer models",
+                    source: "SpeakerDiarizationService"
+                )
+            }
             try await self.manager.prepareModels()
             self.modelsReady = true
         }
@@ -50,7 +68,7 @@ actor SpeakerDiarizationService {
             result = try await self.manager.process(fileURL)
         } catch let error as OfflineDiarizationError {
             if case .noSpeechDetected = error {
-                return []
+                return DiarizationOutput(turns: [], profilesByLabel: [:])
             }
             throw error
         }
@@ -77,7 +95,24 @@ actor SpeakerDiarizationService {
             )
         }
 
-        return Self.mergeAdjacentTurns(turns)
+        var profilesByLabel: [String: SpeakerProfile] = [:]
+        for (clusterID, label) in labelByClusterId {
+            let clusterSegments = chronological.filter { $0.speakerId == clusterID }
+            let embedding = result.speakerDatabase?[clusterID] ?? clusterSegments.first?.embedding ?? []
+            guard !embedding.isEmpty else { continue }
+            let quality = clusterSegments.isEmpty
+                ? 0
+                : clusterSegments.reduce(Float.zero) { $0 + $1.qualityScore } / Float(clusterSegments.count)
+            profilesByLabel[label] = SpeakerProfile(
+                embedding: embedding,
+                averageQuality: quality
+            )
+        }
+
+        return DiarizationOutput(
+            turns: Self.mergeAdjacentTurns(turns),
+            profilesByLabel: profilesByLabel
+        )
     }
 
     /// Merge consecutive turns from the same speaker separated by short gaps.
@@ -120,7 +155,7 @@ actor SpeakerDiarizationService {
 actor SpeakerDiarizationService {
     static let isSupported = false
 
-    struct SpeakerTurn: Sendable, Equatable {
+    nonisolated struct SpeakerTurn: Sendable, Equatable {
         let speakerLabel: String
         let startSeconds: Double
         let endSeconds: Double
@@ -130,9 +165,23 @@ actor SpeakerDiarizationService {
         }
     }
 
+    nonisolated struct SpeakerProfile: Sendable, Equatable {
+        let embedding: [Float]
+        let averageQuality: Float
+    }
+
+    nonisolated struct DiarizationOutput: Sendable, Equatable {
+        let turns: [SpeakerTurn]
+        let profilesByLabel: [String: SpeakerProfile]
+    }
+
     init(expectedSpeakers: Int? = nil) {}
 
     func diarize(fileURL: URL) async throws -> [SpeakerTurn] {
+        try await self.diarizeWithProfiles(fileURL: fileURL).turns
+    }
+
+    func diarizeWithProfiles(fileURL: URL) async throws -> DiarizationOutput {
         throw NSError(
             domain: "SpeakerDiarizationService",
             code: -1,

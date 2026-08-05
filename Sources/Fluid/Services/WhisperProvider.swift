@@ -292,6 +292,10 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        try await self.transcribe(samples, languageCode: nil)
+    }
+
+    func transcribe(_ samples: [Float], languageCode: String?) async throws -> ASRTranscriptionResult {
         let minSamples = 16_000
         guard samples.count >= minSamples else {
             throw NSError(
@@ -311,7 +315,7 @@ final class WhisperProvider: TranscriptionProvider {
 
         let transcript = try await session.run(
             samples,
-            options: RunOptions(timestamps: .segment)
+            options: RunOptions(timestamps: .segment, language: languageCode)
         )
         let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)

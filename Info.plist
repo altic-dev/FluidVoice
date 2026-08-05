@@ -24,6 +24,10 @@
 	<string>FluidVoice needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>FluidVoice needs microphone access to record your voice for speech-to-text transcription. Your audio is processed locally and never sent to external servers.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>FluidVoice needs system audio access to record the meeting application you explicitly select. Meeting audio stays on this Mac.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>FluidVoice needs Screen &amp; System Audio access to record audio from the meeting application you explicitly select.</string>
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>

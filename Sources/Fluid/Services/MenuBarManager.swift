@@ -5,11 +5,30 @@ import SwiftUI
 
 enum MenuBarNavigationDestination: String {
     case customDictionary
+    case meetingTranscription
     case preferences
 }
 
 @MainActor
 final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
+    private enum MeetingMenuActivity: Equatable {
+        case inactive
+        case preparing
+        case recording
+        case stopping
+        case processing
+        case interrupted
+        case failed
+        case completed
+    }
+
+    private struct MeetingMenuPresentation {
+        var activity: MeetingMenuActivity = .inactive
+        var sourceName: String?
+        var startedAt: Date?
+        var attentionStatus: String?
+    }
+
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
     private var isSetup: Bool = false
@@ -21,10 +40,19 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
     private var microphoneSubmenu: NSMenu?
+    private var stopMeetingRecordingMenuItem: NSMenuItem?
+    private var meetingStatusMenuItem: NSMenuItem?
+    private var openMeetingTranscriptionMenuItem: NSMenuItem?
+    private var meetingMenuSeparator: NSMenuItem?
+    private var meetingMenuPresentation = MeetingMenuPresentation()
+    private var meetingStopRequested = false
+    private var stopMeetingRecordingHandler: (() -> Void)?
 
     // References to app state
     private weak var asrService: ASRService?
+    private weak var meetingCoordinator: MeetingSessionCoordinator?
     private var cancellables = Set<AnyCancellable>()
+    private var meetingCancellables = Set<AnyCancellable>()
 
     /// Overlay management (persistent, independent of window lifecycle)
     private var overlayVisible: Bool = false
@@ -108,6 +136,167 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 }
             }
             .store(in: &self.cancellables)
+    }
+
+    func configure(meetingCoordinator: MeetingSessionCoordinator) {
+        guard self.meetingCoordinator !== meetingCoordinator else {
+            self.applyMeetingPresentation(
+                state: meetingCoordinator.state,
+                activeSession: meetingCoordinator.activeSession,
+                latestCompletedSession: meetingCoordinator.latestCompletedSession
+            )
+            return
+        }
+
+        self.meetingCancellables.removeAll()
+        self.meetingCoordinator = meetingCoordinator
+        self.stopMeetingRecordingHandler = { [weak meetingCoordinator] in
+            guard let meetingCoordinator else { return }
+            Task { @MainActor in
+                do {
+                    _ = try await meetingCoordinator.stopAndTranscribe()
+                } catch {
+                    DebugLogger.shared.error(
+                        "Menu action: Stop meeting recording failed: \(error.localizedDescription)",
+                        source: "MenuBarManager"
+                    )
+                }
+            }
+        }
+
+        Publishers.CombineLatest3(
+            meetingCoordinator.$state,
+            meetingCoordinator.$activeSession,
+            meetingCoordinator.$latestCompletedSession
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] state, activeSession, latestCompletedSession in
+            self?.applyMeetingPresentation(
+                state: state,
+                activeSession: activeSession,
+                latestCompletedSession: latestCompletedSession
+            )
+        }
+        .store(in: &self.meetingCancellables)
+    }
+
+    private func applyMeetingPresentation(
+        state: MeetingCoordinatorState,
+        activeSession: MeetingSession?,
+        latestCompletedSession: MeetingSession?
+    ) {
+        let previousActivity = self.meetingMenuPresentation.activity
+        switch state {
+        case .recording, .recordingDegraded:
+            break
+        default:
+            self.meetingStopRequested = false
+        }
+
+        switch state {
+        case .idle:
+            self.meetingMenuPresentation = MeetingMenuPresentation()
+        case .preparing:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .preparing,
+                sourceName: activeSession?.capturedApplication?.displayName,
+                startedAt: activeSession?.startedAt
+            )
+        case .recording, .recordingDegraded:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .recording,
+                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                startedAt: activeSession?.startedAt
+            )
+        case .stopping:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .stopping,
+                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                startedAt: activeSession?.startedAt
+            )
+        case .processing:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .processing,
+                sourceName: activeSession?.capturedApplication?.displayName,
+                startedAt: nil
+            )
+        case .completed:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .completed,
+                sourceName: latestCompletedSession?.capturedApplication?.displayName,
+                startedAt: nil
+            )
+        case .interrupted:
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .interrupted,
+                sourceName: activeSession?.capturedApplication?.displayName,
+                startedAt: activeSession?.startedAt,
+                attentionStatus: Self.interruptionStatus(for: activeSession)
+            )
+        case let .failed(_, failure):
+            self.meetingMenuPresentation = MeetingMenuPresentation(
+                activity: .failed,
+                sourceName: activeSession?.capturedApplication?.displayName,
+                startedAt: activeSession?.startedAt,
+                attentionStatus: Self.failureStatus(for: activeSession, failure: failure)
+            )
+        }
+
+        if self.meetingMenuPresentation.activity != previousActivity {
+            self.announceMeetingActivity(self.meetingMenuPresentation)
+        }
+
+        self.updateMenuBarIcon()
+        self.updateMenu()
+    }
+
+    private func announceMeetingActivity(_ presentation: MeetingMenuPresentation) {
+        let announcement: String?
+        switch presentation.activity {
+        case .inactive:
+            announcement = nil
+        case .preparing:
+            announcement = "Starting meeting recording"
+        case .recording:
+            announcement = "Meeting recording started"
+        case .stopping:
+            announcement = "Stopping meeting recording"
+        case .processing:
+            announcement = "Meeting transcription started"
+        case .interrupted:
+            announcement = presentation.attentionStatus ?? "Meeting recording interrupted"
+        case .failed:
+            announcement = presentation.attentionStatus ?? "Meeting setup failed"
+        case .completed:
+            announcement = "Meeting transcription complete"
+        }
+        guard let announcement else { return }
+        AccessibilityNotification.Announcement(announcement).post()
+    }
+
+    private static func interruptionStatus(for session: MeetingSession?) -> String {
+        guard let session else { return "Meeting setup interrupted" }
+        if session.endedAt != nil, !session.processingAttempts.isEmpty {
+            return "Meeting transcription interrupted"
+        }
+        return "Meeting recording interrupted"
+    }
+
+    private static func failureStatus(
+        for session: MeetingSession?,
+        failure: MeetingSessionFailure
+    ) -> String {
+        if failure.domain == .processing {
+            return "Meeting transcription failed"
+        }
+        let hasRecoverableAudio = session.map { session in
+            session.endedAt != nil && session.audioTracks.contains { track in
+                track.chunks.contains {
+                    $0.finalizationState == .finalized && $0.byteCount > 0
+                }
+            }
+        } ?? false
+        return hasRecoverableAudio ? "Meeting recording failed" : "Meeting setup failed"
     }
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
@@ -462,15 +651,113 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Use MenuBarIcon asset - vectorized from logo
         if let image = NSImage(named: "MenuBarIcon") {
-            image.isTemplate = true // Adapts to light/dark mode and tints red when recording
-            statusItem.button?.image = image
+            switch self.meetingMenuPresentation.activity {
+            case .recording, .stopping:
+                statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .recording)
+                statusItem.button?.setAccessibilityLabel(
+                    self.meetingMenuPresentation.activity == .stopping
+                        ? "FluidVoice, stopping meeting recording"
+                        : "FluidVoice, meeting recording"
+                )
+            case .preparing, .processing:
+                statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .processing)
+                statusItem.button?.setAccessibilityLabel(
+                    self.meetingMenuPresentation.activity == .preparing
+                        ? "FluidVoice, starting meeting recording"
+                        : "FluidVoice, transcribing meeting"
+                )
+            case .interrupted, .failed:
+                statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .interrupted)
+                let status = self.meetingMenuPresentation.attentionStatus ?? "Meeting needs attention"
+                statusItem.button?.setAccessibilityLabel("FluidVoice, \(status.lowercased())")
+            case .inactive:
+                image.isTemplate = true
+                statusItem.button?.image = image
+                statusItem.button?.setAccessibilityLabel("FluidVoice")
+            case .completed:
+                image.isTemplate = true
+                statusItem.button?.image = image
+                statusItem.button?.setAccessibilityLabel("FluidVoice, meeting transcription complete")
+            }
         }
+    }
+
+    private func menuBarActivityImage(baseImage: NSImage, activity: MeetingMenuActivity) -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            baseImage.draw(
+                in: NSRect(x: 0, y: 1, width: 15, height: 15),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+
+            let badgeRect = NSRect(x: 10, y: 0, width: 8, height: 8)
+            let badgePath = NSBezierPath()
+            switch activity {
+            case .recording, .stopping:
+                badgePath.appendOval(in: badgeRect)
+                badgePath.appendRoundedRect(
+                    NSRect(x: 12.25, y: 2.25, width: 3.5, height: 3.5),
+                    xRadius: 0.7,
+                    yRadius: 0.7
+                )
+            case .preparing, .processing:
+                badgePath.move(to: NSPoint(x: badgeRect.midX, y: badgeRect.maxY))
+                badgePath.line(to: NSPoint(x: badgeRect.maxX, y: badgeRect.midY))
+                badgePath.line(to: NSPoint(x: badgeRect.midX, y: badgeRect.minY))
+                badgePath.line(to: NSPoint(x: badgeRect.minX, y: badgeRect.midY))
+                badgePath.close()
+                badgePath.appendOval(in: NSRect(x: 12.5, y: 2.5, width: 3, height: 3))
+            case .interrupted, .failed:
+                badgePath.move(to: NSPoint(x: badgeRect.midX, y: badgeRect.maxY))
+                badgePath.line(to: NSPoint(x: badgeRect.maxX, y: badgeRect.minY))
+                badgePath.line(to: NSPoint(x: badgeRect.minX, y: badgeRect.minY))
+                badgePath.close()
+                badgePath.appendOval(in: NSRect(x: 13, y: 2.2, width: 2, height: 2))
+            case .inactive, .completed:
+                break
+            }
+            badgePath.windingRule = .evenOdd
+            NSColor.black.setFill()
+            badgePath.fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "FluidVoice meeting status"
+        return image
     }
 
     private func buildMenuStructure() {
         guard let menu = menu else { return }
 
         menu.removeAllItems()
+
+        let stopMeetingItem = NSMenuItem(
+            title: "Stop Meeting Recording",
+            action: #selector(stopMeetingRecording),
+            keyEquivalent: ""
+        )
+        stopMeetingItem.target = self
+        menu.addItem(stopMeetingItem)
+        self.stopMeetingRecordingMenuItem = stopMeetingItem
+
+        let meetingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        meetingStatusItem.isEnabled = false
+        menu.addItem(meetingStatusItem)
+        self.meetingStatusMenuItem = meetingStatusItem
+
+        let openMeetingItem = NSMenuItem(
+            title: "Open Meeting Transcription",
+            action: #selector(openMeetingTranscription),
+            keyEquivalent: ""
+        )
+        openMeetingItem.target = self
+        menu.addItem(openMeetingItem)
+        self.openMeetingTranscriptionMenuItem = openMeetingItem
+
+        let meetingSeparator = NSMenuItem.separator()
+        menu.addItem(meetingSeparator)
+        self.meetingMenuSeparator = meetingSeparator
 
         // Status indicator with hotkey info
         self.statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -563,16 +850,87 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func updateMenuItemsText() {
+        self.updateMeetingMenuItemsText()
+
         // Update status text with hotkey info
         let hotkeyDisplay = SettingsStore.shared.primaryDictationShortcutDisplayString
         let hotkeyInfo = hotkeyDisplay.isEmpty ? "" : " (\(hotkeyDisplay))"
-        let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
+        let statusTitle: String = switch self.meetingMenuPresentation.activity {
+        case .preparing:
+            "Starting Meeting Recording…"
+        case .recording:
+            "Meeting Recording in Progress"
+        case .stopping:
+            "Stopping Meeting Recording…"
+        case .processing:
+            "Transcribing Meeting…"
+        case .interrupted, .failed:
+            self.meetingMenuPresentation.attentionStatus ?? "Meeting Needs Attention"
+        case .inactive, .completed:
+            self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
+        }
         self.statusMenuItem?.title = statusTitle
         self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
         self.microphoneMenuItem?.isEnabled = true
 
         // Update rollback availability text
         self.rollbackMenuItem?.isEnabled = SimpleUpdater.shared.hasRollbackBackup()
+    }
+
+    private func updateMeetingMenuItemsText(now: Date = Date()) {
+        let activity = self.meetingMenuPresentation.activity
+        let hasMeetingStatus = activity != .inactive
+        let isRecording = activity == .recording
+        let isStopping = activity == .stopping || self.meetingStopRequested
+
+        self.stopMeetingRecordingMenuItem?.isHidden = !isRecording && !isStopping
+        self.stopMeetingRecordingMenuItem?.isEnabled = isRecording &&
+            !self.meetingStopRequested &&
+            self.stopMeetingRecordingHandler != nil
+        self.stopMeetingRecordingMenuItem?.title = isStopping
+            ? "Stopping Meeting Recording…"
+            : "Stop Meeting Recording"
+        self.meetingStatusMenuItem?.isHidden = !hasMeetingStatus || activity == .completed
+        self.openMeetingTranscriptionMenuItem?.isHidden = !hasMeetingStatus
+        self.meetingMenuSeparator?.isHidden = !hasMeetingStatus
+
+        switch activity {
+        case .inactive:
+            break
+        case .preparing:
+            self.meetingStatusMenuItem?.title = "Starting meeting recording…"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .recording:
+            let source = self.meetingMenuPresentation.sourceName ?? "Meeting"
+            let elapsed = self.meetingMenuPresentation.startedAt.map { Self.elapsedText(now.timeIntervalSince($0)) } ?? "0:00"
+            self.meetingStatusMenuItem?.title = "Recording \(source) · \(elapsed)"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .stopping:
+            self.meetingStatusMenuItem?.title = "Finalizing meeting audio…"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .processing:
+            self.meetingStatusMenuItem?.title = "Transcribing meeting…"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .interrupted:
+            self.meetingStatusMenuItem?.title = self.meetingMenuPresentation.attentionStatus ?? "Recording interrupted"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .failed:
+            self.meetingStatusMenuItem?.title = self.meetingMenuPresentation.attentionStatus ?? "Meeting setup failed"
+            self.openMeetingTranscriptionMenuItem?.title = "Open Meeting Transcription"
+        case .completed:
+            self.openMeetingTranscriptionMenuItem?.title = "Open Latest Meeting Transcript"
+        }
+    }
+
+    private static func elapsedText(_ duration: TimeInterval) -> String {
+        let total = max(0, Int(duration.rounded(.down)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -865,6 +1223,21 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     @objc private func openCustomDictionary() {
         self.openNavigationDestination(.customDictionary)
+    }
+
+    @objc private func openMeetingTranscription() {
+        self.openNavigationDestination(.meetingTranscription)
+    }
+
+    @objc private func stopMeetingRecording() {
+        guard self.meetingMenuPresentation.activity == .recording,
+              !self.meetingStopRequested
+        else {
+            return
+        }
+        self.meetingStopRequested = true
+        self.updateMeetingMenuItemsText()
+        self.stopMeetingRecordingHandler?()
     }
 
     private func openNavigationDestination(_ destination: MenuBarNavigationDestination) {
