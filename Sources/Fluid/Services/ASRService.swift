@@ -212,6 +212,12 @@ final class ASRService: ObservableObject {
     @Published var errorMessage: String = ""
     @Published var showError: Bool = false
 
+    func presentAudioCaptureStartFailure(_ message: String) {
+        self.errorTitle = "Recording Failed"
+        self.errorMessage = message
+        self.showError = true
+    }
+
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
         if self.isAsrReady { return "Model ready" }
@@ -1711,7 +1717,9 @@ final class ASRService: ObservableObject {
                 errorMessage = "Failed to start audio recording: \(error.localizedDescription)"
             }
 
-            // Post notification for UI to display
+            self.presentAudioCaptureStartFailure(errorMessage)
+
+            // Preserve the existing notification for external observers.
             NotificationCenter.default.post(
                 name: NSNotification.Name("ASRServiceStartFailed"),
                 object: nil,

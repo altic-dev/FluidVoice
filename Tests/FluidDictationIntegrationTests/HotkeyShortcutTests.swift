@@ -590,6 +590,17 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testAudioCaptureStartFailureUsesExistingAlertState() {
+        let service = ASRService()
+
+        service.presentAudioCaptureStartFailure("Connect an external microphone.")
+
+        XCTAssertEqual(service.errorTitle, "Recording Failed")
+        XCTAssertEqual(service.errorMessage, "Connect an external microphone.")
+        XCTAssertTrue(service.showError)
+    }
+
+    @MainActor
     func testMicrophoneMigrationChoosesBuiltInOnce() throws {
         try self.withRestoredDefaults(keys: [
             self.microphoneSelectionModeKey,
