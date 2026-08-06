@@ -457,6 +457,139 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testClamshellCaptureKeepsSelectedExternalMicrophone() {
+        self.withRestoredDefaults(keys: [self.preferredInputDeviceUIDKey]) {
+            SettingsStore.shared.preferredInputDeviceUID = "usb"
+            let builtIn = Self.device(
+                uid: "internal",
+                name: "MacBook Pro Microphone",
+                transportType: kAudioDeviceTransportTypeBuiltIn
+            )
+            let usb = Self.device(uid: "usb", name: "USB Microphone")
+            let devices = FakeAudioDeviceManager(
+                inputs: [builtIn, usb],
+                defaultInputUID: "internal"
+            )
+            let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: devices)
+
+            let resolution = coordinator.captureResolution(
+                availableInputs: devices.inputs,
+                defaultInputUID: devices.defaultInputUID,
+                isLidClosed: true
+            )
+
+            XCTAssertEqual(resolution, .clamshellSelectedExternal(usb))
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "usb")
+        }
+    }
+
+    @MainActor
+    func testClamshellCaptureTemporarilyUsesDefaultExternalMicrophone() {
+        self.withRestoredDefaults(keys: [self.preferredInputDeviceUIDKey]) {
+            SettingsStore.shared.preferredInputDeviceUID = "internal"
+            let builtIn = Self.device(
+                uid: "internal",
+                name: "MacBook Pro Microphone",
+                transportType: kAudioDeviceTransportTypeBuiltIn
+            )
+            let display = Self.device(uid: "display", name: "Display Microphone")
+            let usb = Self.device(uid: "usb", name: "USB Microphone")
+            let devices = FakeAudioDeviceManager(
+                inputs: [builtIn, display, usb],
+                defaultInputUID: "usb"
+            )
+            let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: devices)
+
+            let resolution = coordinator.captureResolution(
+                availableInputs: devices.inputs,
+                defaultInputUID: devices.defaultInputUID,
+                isLidClosed: true
+            )
+
+            XCTAssertEqual(resolution, .clamshellFallback(usb))
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "internal")
+        }
+    }
+
+    @MainActor
+    func testClamshellCaptureUsesAvailableExternalWhenDefaultIsBuiltIn() {
+        self.withRestoredDefaults(keys: [self.preferredInputDeviceUIDKey]) {
+            SettingsStore.shared.preferredInputDeviceUID = "internal"
+            let builtIn = Self.device(
+                uid: "internal",
+                name: "MacBook Pro Microphone",
+                transportType: kAudioDeviceTransportTypeBuiltIn
+            )
+            let usb = Self.device(uid: "usb", name: "USB Microphone")
+            let devices = FakeAudioDeviceManager(
+                inputs: [builtIn, usb],
+                defaultInputUID: "internal"
+            )
+            let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: devices)
+
+            let resolution = coordinator.captureResolution(
+                availableInputs: devices.inputs,
+                defaultInputUID: devices.defaultInputUID,
+                isLidClosed: true
+            )
+
+            XCTAssertEqual(resolution, .clamshellFallback(usb))
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "internal")
+        }
+    }
+
+    @MainActor
+    func testClamshellCaptureRejectsBuiltInMicrophoneWithoutExternalInput() {
+        self.withRestoredDefaults(keys: [self.preferredInputDeviceUIDKey]) {
+            SettingsStore.shared.preferredInputDeviceUID = "internal"
+            let builtIn = Self.device(
+                uid: "internal",
+                name: "MacBook Pro Microphone",
+                transportType: kAudioDeviceTransportTypeBuiltIn
+            )
+            let devices = FakeAudioDeviceManager(
+                inputs: [builtIn],
+                defaultInputUID: "internal"
+            )
+            let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: devices)
+
+            let resolution = coordinator.captureResolution(
+                availableInputs: devices.inputs,
+                defaultInputUID: devices.defaultInputUID,
+                isLidClosed: true
+            )
+
+            XCTAssertEqual(resolution, .clamshellRequiresExternalMicrophone)
+        }
+    }
+
+    @MainActor
+    func testOpenLidCaptureKeepsStandardRouting() {
+        self.withRestoredDefaults(keys: [self.preferredInputDeviceUIDKey]) {
+            SettingsStore.shared.preferredInputDeviceUID = "internal"
+            let builtIn = Self.device(
+                uid: "internal",
+                name: "MacBook Pro Microphone",
+                transportType: kAudioDeviceTransportTypeBuiltIn
+            )
+            let usb = Self.device(uid: "usb", name: "USB Microphone")
+            let devices = FakeAudioDeviceManager(
+                inputs: [builtIn, usb],
+                defaultInputUID: "usb"
+            )
+            let coordinator = MicrophonePreferenceCoordinator(settings: .shared, devices: devices)
+
+            let resolution = coordinator.captureResolution(
+                availableInputs: devices.inputs,
+                defaultInputUID: devices.defaultInputUID,
+                isLidClosed: false
+            )
+
+            XCTAssertEqual(resolution, .standard)
+        }
+    }
+
+    @MainActor
     func testMicrophoneMigrationChoosesBuiltInOnce() throws {
         try self.withRestoredDefaults(keys: [
             self.microphoneSelectionModeKey,

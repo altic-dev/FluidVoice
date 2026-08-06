@@ -908,13 +908,41 @@ final class ASRService: ObservableObject {
         AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
     }
 
-    private func directCoreAudioDeviceSelection() -> DirectCoreAudioDeviceSelection {
-        if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
-           preferredUID.isEmpty == false
-        {
-            return .preferredUID(preferredUID)
+    private func directCoreAudioDeviceSelection() throws -> DirectCoreAudioDeviceSelection {
+        switch AppServices.shared.microphonePreferenceCoordinator.captureResolution() {
+        case .standard:
+            if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
+               preferredUID.isEmpty == false
+            {
+                return .preferredUID(preferredUID)
+            }
+            return .systemDefault
+        case let .clamshellSelectedExternal(device):
+            return .preferredUID(device.uid)
+        case let .clamshellFallback(device):
+            DebugLogger.shared.warning(
+                "Built-in microphone is unavailable with the lid closed; " +
+                    "using external input '\(device.name)' for this capture.",
+                source: "ASRService"
+            )
+            return .preferredUID(device.uid)
+        case .clamshellRequiresExternalMicrophone:
+            throw NSError(
+                domain: "ASRService",
+                code: -3,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The built-in microphone is disconnected while your MacBook lid is closed. " +
+                        "Connect and select an external microphone, or open the lid.",
+                ]
+            )
+        case .unavailable:
+            throw NSError(
+                domain: "ASRService",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "No audio input device is available."]
+            )
         }
-        return .systemDefault
     }
 
     /// Prepares the direct device callback without starting hardware IO. This
@@ -1496,7 +1524,11 @@ final class ASRService: ObservableObject {
                 do {
                     try await self.startConfiguredAudioCapture()
                 } catch {
-                    guard startAttempt < maximumStartAttempts,
+                    let nsError = error as NSError
+                    let isNonRetryableInputResolutionError =
+                        nsError.domain == "ASRService" && [-3, -4].contains(nsError.code)
+                    guard isNonRetryableInputResolutionError == false,
+                          startAttempt < maximumStartAttempts,
                           startGeneration == self.audioCaptureStartGeneration,
                           self.isTerminating == false
                     else {
@@ -1673,7 +1705,7 @@ final class ASRService: ObservableObject {
                         errorMessage = "Failed to start audio recording: \(underlyingError.localizedDescription)"
                     }
                 } else {
-                    errorMessage = "Failed to start audio recording after multiple attempts. Please check your audio device and try again."
+                    errorMessage = nsError.localizedDescription
                 }
             } else {
                 errorMessage = "Failed to start audio recording: \(error.localizedDescription)"

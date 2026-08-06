@@ -17,6 +17,14 @@ struct CoreAudioDeviceManager: AudioDeviceManaging {
     }
 }
 
+enum MicrophoneCaptureResolution: Equatable {
+    case standard
+    case clamshellSelectedExternal(AudioDevice.Device)
+    case clamshellFallback(AudioDevice.Device)
+    case clamshellRequiresExternalMicrophone
+    case unavailable
+}
+
 @MainActor
 final class MicrophonePreferenceCoordinator: ObservableObject {
     private static let appOnlyMigrationVersion = 1
@@ -121,6 +129,47 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
             )
         }
         return fallback
+    }
+
+    func captureResolution() -> MicrophoneCaptureResolution {
+        let isLidClosed = MacLidState.isClosed()
+        guard isLidClosed == true else { return .standard }
+
+        let inputs = self.devices.listInputDevices()
+        return self.captureResolution(
+            availableInputs: inputs,
+            defaultInputUID: self.devices.defaultInputDevice()?.uid,
+            isLidClosed: isLidClosed
+        )
+    }
+
+    func captureResolution(
+        availableInputs: [AudioDevice.Device],
+        defaultInputUID: String? = nil,
+        isLidClosed: Bool?
+    ) -> MicrophoneCaptureResolution {
+        guard isLidClosed == true else { return .standard }
+
+        guard let selectedInput = self.inputDeviceForCapture(
+            availableInputs: availableInputs,
+            defaultInputUID: defaultInputUID
+        ) else {
+            return .unavailable
+        }
+        guard selectedInput.isBuiltIn else {
+            return .clamshellSelectedExternal(selectedInput)
+        }
+
+        let externalInputs = availableInputs.filter { $0.isBuiltIn == false }
+        if let defaultInputUID,
+           let defaultExternalInput = externalInputs.first(where: { $0.uid == defaultInputUID })
+        {
+            return .clamshellFallback(defaultExternalInput)
+        }
+        if let externalInput = externalInputs.first {
+            return .clamshellFallback(externalInput)
+        }
+        return .clamshellRequiresExternalMicrophone
     }
 
     private func fallbackInput(
