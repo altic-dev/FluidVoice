@@ -128,4 +128,47 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
             "a non-nil selected range makes the snapshot verifiable"
         )
     }
+
+    func testWaitForFocusedTextVerificationShortCircuitsUnverifiableTargetInBoundedTime() {
+        // Behavioral coverage of the #802 fix: a target whose snapshot has a real pid but all four
+        // verifiable channels nil (a GPU-rendered terminal such as Ghostty) must short-circuit to
+        // `.unavailable` after a bounded pasteboard-consume window — NOT poll the full
+        // `timeoutMicros`. This is an assertion-level guard, not a compile-time one: remove the
+        // short-circuit from `waitForFocusedTextVerification` and this returns `.timeout` after
+        // ~`timeoutMicros`, failing both asserts below. The short-circuit path is deterministic
+        // (it never reads live AX state and does not touch the pasteboard session semaphore), so it
+        // is safe to drive headlessly; the verifiable poll loop is not, so it is not exercised here.
+        let typing = TypingService()
+        let snapshot = TypingService.FocusedTextSnapshot(
+            pid: 1,
+            bundleIdentifier: nil,
+            value: nil,
+            selectedRange: nil,
+            appScriptValue: nil,
+            appScriptSelectedRange: nil
+        )
+        let timeoutMicros: useconds_t = 5_000_000
+
+        let start = Date()
+        let result = typing.waitForFocusedTextVerification(
+            from: snapshot,
+            expectedText: "hello",
+            timeoutMicros: timeoutMicros
+        )
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(
+            result,
+            .unavailable,
+            "an unverifiable target must short-circuit to .unavailable, not poll to .timeout"
+        )
+        // Well under `timeoutMicros` (5 s): proves the short-circuit did NOT poll the full window.
+        // The bound is `timeoutMicros / 2`, so a loaded CI runner still clears it comfortably above
+        // the ~0.5 s consume window, while a full ~5 s poll would blow straight past it.
+        XCTAssertLessThan(
+            elapsed,
+            Double(timeoutMicros) / 1_000_000.0 / 2.0,
+            "short-circuit must return well under timeoutMicros; took \(elapsed) s"
+        )
+    }
 }

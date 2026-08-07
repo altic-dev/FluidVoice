@@ -32,7 +32,12 @@ final class TypingService {
         let items: [PasteboardItemSnapshot]
     }
 
-    private struct FocusedTextSnapshot {
+    /// Captured before a paste so verification can diff the focused target against it.
+    ///
+    /// Internal (not private) only so behavioral tests can construct an unverifiable snapshot — a
+    /// real `pid` with all four verifiable channels `nil`, the terminal case — to exercise the
+    /// short-circuit in `waitForFocusedTextVerification`. It is not part of any public contract.
+    struct FocusedTextSnapshot {
         let pid: pid_t
         let bundleIdentifier: String?
         let value: String?
@@ -41,7 +46,9 @@ final class TypingService {
         let appScriptSelectedRange: CFRange?
     }
 
-    private enum PasteVerificationResult: String {
+    /// Internal (not private) only so behavioral tests can assert the short-circuit result
+    /// (`.unavailable`). It is not part of any public contract.
+    enum PasteVerificationResult: String {
         case appScriptContainsText = "appscript_contains_text"
         case appScriptCaretMovedExpectedDistance = "appscript_caret_moved_expected_distance"
         case fieldContainsText = "field_contains_text"
@@ -55,6 +62,21 @@ final class TypingService {
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
     private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+
+    /// Pasteboard-consume window used when an unverifiable target short-circuits verification.
+    ///
+    /// `action()` only ENQUEUES Cmd+V (via `postToPid`); the target then reads
+    /// `NSPasteboard.general` asynchronously on its own main thread. Under load (a large paste, a
+    /// busy main thread during a build) that read can land hundreds of milliseconds after the event
+    /// was posted, so restoring the prior pasteboard contents too eagerly would clobber the
+    /// transcript before the target consumes it — a silent paste failure with no verification
+    /// backstop, in exactly the case this branch handles. 500 ms is a conservative floor: long
+    /// enough for a busy GPU-rendered terminal to service the posted Cmd+V and read the pasteboard,
+    /// yet ~10x under the 5 s `timeoutMicros`, so the process-global pasteboard session semaphore is
+    /// no longer held across multi-second windows (the #802 stall). Not scaled to paste size: the
+    /// risk window is pasteboard-read latency, not render latency, so text length is a weak
+    /// predictor.
+    private static let pasteConsumeWindowMicros: useconds_t = 500_000
 
     private var textInsertionMode: SettingsStore.TextInsertionMode {
         SettingsStore.shared.textInsertionMode
@@ -1113,8 +1135,8 @@ final class TypingService {
     /// terminal such as Ghostty that exposes neither an accessibility text value nor a text-field
     /// selected range — cannot be verified, so `waitForFocusedTextVerification` short-circuits to
     /// `.unavailable` instead of polling the full `timeoutMicros` while holding the pasteboard
-    /// session semaphore. The four channels are passed as primitive optionals so the private
-    /// `FocusedTextSnapshot` struct stays private.
+    /// session semaphore. The four channels are passed as primitive optionals so this stays a pure
+    /// function of a snapshot's verifiable fields, decoupled from `FocusedTextSnapshot`.
     static func focusedTextSnapshotSupportsVerification(
         value: String?,
         selectedRange: CFRange?,
@@ -1127,7 +1149,14 @@ final class TypingService {
             || appScriptSelectedRange != nil
     }
 
-    private func waitForFocusedTextVerification(
+    /// Waits for the focused target to reflect the pasted `expectedText`, or short-circuits when
+    /// the target exposes no verifiable channel.
+    ///
+    /// Internal (not private) so the unverifiable-target short-circuit has behavioral coverage:
+    /// that path is deterministic (it returns `.unavailable` after a bounded consume window without
+    /// ever reading live AX state), so it can be exercised headlessly. The verifiable poll loop
+    /// reads live accessibility state and is not driven from tests.
+    func waitForFocusedTextVerification(
         from snapshot: FocusedTextSnapshot?,
         expectedText: String,
         timeoutMicros: useconds_t
@@ -1137,17 +1166,23 @@ final class TypingService {
             return .unavailable
         }
 
-        // Unverifiable target (e.g. a GPU-rendered terminal): no verifiable AX text value and no
-        // text-field selected range. The paste was already dispatched synchronously by `action()`
-        // before this restore task runs, so give it a single poll interval to be read, then release
-        // the pasteboard session without polling the full `timeoutMicros`.
+        // Unverifiable target (e.g. a GPU-rendered terminal such as Ghostty): no AX text value and
+        // no text-field selected range, so the poll loop below could never confirm the paste.
+        // `action()` only ENQUEUES Cmd+V into the target's event queue; the target then reads
+        // `NSPasteboard.general` asynchronously on its own main thread. Under load (a large paste,
+        // a busy main thread during a build) that read can land hundreds of milliseconds later, so
+        // restoring the prior pasteboard contents too eagerly would clobber the transcript before
+        // the target consumes it — a silent paste failure with no verification backstop, in exactly
+        // the case this branch handles. Give the target a real pasteboard-consume window (see
+        // `pasteConsumeWindowMicros`), then release the pasteboard session without polling the full
+        // `timeoutMicros`.
         if !Self.focusedTextSnapshotSupportsVerification(
             value: snapshot.value,
             selectedRange: snapshot.selectedRange,
             appScriptValue: snapshot.appScriptValue,
             appScriptSelectedRange: snapshot.appScriptSelectedRange
         ) {
-            usleep(min(timeoutMicros, 50_000))
+            usleep(min(timeoutMicros, Self.pasteConsumeWindowMicros))
             return .unavailable
         }
 
