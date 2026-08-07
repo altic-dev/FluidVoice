@@ -85,8 +85,7 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
         )
         return self.inputDeviceForCapture(
             availableInputs: availableInputs,
-            defaultInputUID: defaultInputUID,
-            persistFallback: true
+            defaultInputUID: defaultInputUID
         )
     }
 
@@ -97,10 +96,14 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
         )
     }
 
+    /// Resolves the device to capture from without mutating the stored
+    /// preference. When the preferred device is unavailable the fallback is
+    /// transient: `preferredInputDeviceUID` only changes through an explicit
+    /// user selection or the one-time app-only migration, so the preferred
+    /// device is re-selected as soon as it reconnects.
     func inputDeviceForCapture(
         availableInputs: [AudioDevice.Device],
-        defaultInputUID: String? = nil,
-        persistFallback: Bool = false
+        defaultInputUID: String? = nil
     ) -> AudioDevice.Device? {
         if let preferredUID = self.settings.preferredInputDeviceUID,
            preferredUID.isEmpty == false,
@@ -109,18 +112,10 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
             return preferredDevice
         }
 
-        guard let fallback = self.fallbackInput(
+        return self.fallbackInput(
             from: availableInputs,
             defaultInputUID: defaultInputUID
-        ) else { return nil }
-        if persistFallback {
-            self.settings.preferredInputDeviceUID = fallback.uid
-            DebugLogger.shared.info(
-                "Selected fallback FluidVoice microphone '\(fallback.name)'",
-                source: "MicrophonePreferenceCoordinator"
-            )
-        }
-        return fallback
+        )
     }
 
     private func fallbackInput(

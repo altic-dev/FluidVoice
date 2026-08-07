@@ -909,10 +909,11 @@ final class ASRService: ObservableObject {
     }
 
     private func directCoreAudioDeviceSelection() -> DirectCoreAudioDeviceSelection {
-        if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
-           preferredUID.isEmpty == false
-        {
-            return .preferredUID(preferredUID)
+        // Resolve through the coordinator so capture falls back to a live
+        // device while the preferred one is disconnected, without rewriting
+        // the stored preference.
+        if let device = self.resolvedInputDeviceForCapture() {
+            return .preferredUID(device.uid)
         }
         return .systemDefault
     }

@@ -568,7 +568,7 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
-    func testCompletedMigrationReconcilesMissingSavedInputAtLaunch() throws {
+    func testCompletedMigrationKeepsMissingSavedInputAtLaunch() throws {
         try self.withRestoredDefaults(keys: [
             self.preferredInputDeviceUIDKey,
             self.appOnlyMicMigrationVersionKey,
@@ -592,7 +592,7 @@ final class HotkeyShortcutTests: XCTestCase {
             )
 
             XCTAssertEqual(reconciled, builtIn)
-            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "internal")
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "disconnected-usb")
             XCTAssertEqual(devices.defaultInputUID, "usb")
         }
     }
@@ -625,16 +625,19 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
-    func testMicrophoneCoordinatorFallsBackToBuiltInWhenSelectionDisappears() throws {
+    func testMicrophoneCoordinatorRestoresSelectionAfterReconnect() throws {
         try self.withRestoredDefaults(keys: [
             self.preferredInputDeviceUIDKey,
+            self.appOnlyMicMigrationVersionKey,
         ]) {
             SettingsStore.shared.preferredInputDeviceUID = "airpods"
+            SettingsStore.shared.appMicSelectionMigrationVersion = 1
             let builtIn = Self.device(
                 uid: "internal",
                 name: "MacBook Pro Microphone",
                 transportType: kAudioDeviceTransportTypeBuiltIn
             )
+            let airpods = Self.device(uid: "airpods", name: "AirPods")
             let devices = FakeAudioDeviceManager(
                 inputs: [builtIn, Self.device(uid: "usb", name: "USB Mic")],
                 defaultInputUID: "usb"
@@ -647,21 +650,20 @@ final class HotkeyShortcutTests: XCTestCase {
             XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "airpods")
             XCTAssertEqual(devices.defaultInputUID, "usb")
 
-            let settledFallback = coordinator.inputDeviceForCapture(
+            let settledFallback = coordinator.reconcileAppOnlySelection(
                 availableInputs: devices.inputs,
-                defaultInputUID: devices.defaultInputUID,
-                persistFallback: true
+                defaultInputUID: devices.defaultInputUID
             )
             XCTAssertEqual(settledFallback, builtIn)
-            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "internal")
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "airpods")
             XCTAssertEqual(devices.defaultInputUID, "usb")
 
-            let afterReconnect = coordinator.inputDeviceForCapture(availableInputs: [
-                builtIn,
-                Self.device(uid: "airpods", name: "AirPods"),
-            ])
-            XCTAssertEqual(afterReconnect, builtIn)
-            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "internal")
+            let afterReconnect = coordinator.reconcileAppOnlySelection(
+                availableInputs: [builtIn, airpods],
+                defaultInputUID: "usb"
+            )
+            XCTAssertEqual(afterReconnect, airpods)
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "airpods")
         }
     }
 
@@ -683,11 +685,10 @@ final class HotkeyShortcutTests: XCTestCase {
 
             let settledFallback = coordinator.inputDeviceForCapture(
                 availableInputs: devices.inputs,
-                defaultInputUID: devices.defaultInputUID,
-                persistFallback: true
+                defaultInputUID: devices.defaultInputUID
             )
             XCTAssertEqual(settledFallback, currentInput)
-            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "usb")
+            XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "disconnected")
         }
     }
 
