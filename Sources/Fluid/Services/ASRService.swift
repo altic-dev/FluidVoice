@@ -908,11 +908,23 @@ final class ASRService: ObservableObject {
         AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
     }
 
-    private func directCoreAudioDeviceSelection() -> DirectCoreAudioDeviceSelection {
+    private func directCoreAudioDeviceSelection() async -> DirectCoreAudioDeviceSelection {
         // Resolve through the coordinator so capture falls back to a live
         // device while the preferred one is disconnected, without rewriting
-        // the stored preference.
-        if let device = self.resolvedInputDeviceForCapture() {
+        // the stored preference. The CoreAudio snapshot is taken off-main:
+        // during a device topology change the HAL may still be settling, and
+        // synchronous queries on main can deadlock.
+        let snapshot = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let devices = AudioDevice.listInputDevices()
+                let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
+                continuation.resume(returning: (devices, defaultInputUID))
+            }
+        }
+        if let device = AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture(
+            availableInputs: snapshot.0,
+            defaultInputUID: snapshot.1
+        ) {
             return .preferredUID(device.uid)
         }
         return .systemDefault
@@ -932,7 +944,7 @@ final class ASRService: ObservableObject {
             )
         }
         let device = try await self.directAudioLifecycleController.resolveDevice(
-            selection: self.directCoreAudioDeviceSelection(),
+            selection: await self.directCoreAudioDeviceSelection(),
             reason: "prepare:\(reason)"
         )
         let snapshot = try await self.directAudioLifecycleController.prepare(
@@ -958,7 +970,7 @@ final class ASRService: ObservableObject {
             await self.audioEngineRetirementDrain.waitForScheduledReleases()
             do {
                 let device = try await self.directAudioLifecycleController.resolveDevice(
-                    selection: self.directCoreAudioDeviceSelection(),
+                    selection: await self.directCoreAudioDeviceSelection(),
                     reason: "recording_start"
                 )
                 let snapshot = try await self.directAudioLifecycleController.start(
