@@ -1107,6 +1107,26 @@ final class TypingService {
         let selectedRange: CFRange?
     }
 
+    /// Returns `true` iff at least one of the four verifiable focused-text channels is present.
+    ///
+    /// A snapshot with a real `pid` but every verifiable channel `nil` — e.g. a GPU-rendered
+    /// terminal such as Ghostty that exposes neither an accessibility text value nor a text-field
+    /// selected range — cannot be verified, so `waitForFocusedTextVerification` short-circuits to
+    /// `.unavailable` instead of polling the full `timeoutMicros` while holding the pasteboard
+    /// session semaphore. The four channels are passed as primitive optionals so the private
+    /// `FocusedTextSnapshot` struct stays private.
+    static func focusedTextSnapshotSupportsVerification(
+        value: String?,
+        selectedRange: CFRange?,
+        appScriptValue: String?,
+        appScriptSelectedRange: CFRange?
+    ) -> Bool {
+        value != nil
+            || selectedRange != nil
+            || appScriptValue != nil
+            || appScriptSelectedRange != nil
+    }
+
     private func waitForFocusedTextVerification(
         from snapshot: FocusedTextSnapshot?,
         expectedText: String,
@@ -1114,6 +1134,20 @@ final class TypingService {
     ) -> PasteVerificationResult {
         guard let snapshot else {
             usleep(timeoutMicros)
+            return .unavailable
+        }
+
+        // Unverifiable target (e.g. a GPU-rendered terminal): no verifiable AX text value and no
+        // text-field selected range. The paste was already dispatched synchronously by `action()`
+        // before this restore task runs, so give it a single poll interval to be read, then release
+        // the pasteboard session without polling the full `timeoutMicros`.
+        if !Self.focusedTextSnapshotSupportsVerification(
+            value: snapshot.value,
+            selectedRange: snapshot.selectedRange,
+            appScriptValue: snapshot.appScriptValue,
+            appScriptSelectedRange: snapshot.appScriptSelectedRange
+        ) {
+            usleep(min(timeoutMicros, 50_000))
             return .unavailable
         }
 

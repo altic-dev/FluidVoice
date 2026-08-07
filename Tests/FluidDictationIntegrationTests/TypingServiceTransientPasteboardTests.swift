@@ -79,4 +79,53 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
             "Restoring focus must not raise every window of the target app (issue #748)"
         )
     }
+
+    func testFocusedTextSnapshotWithoutVerifiableChannelShortCircuitsVerification() {
+        // A GPU-rendered / terminal target (e.g. Ghostty) exposes no verifiable accessibility
+        // text value and no text-field selected range: all four channels are nil, so the
+        // snapshot cannot be verified and `waitForFocusedTextVerification` must short-circuit to
+        // `.unavailable` instead of polling the full 5 s `timeoutMicros` while the process-global
+        // pasteboard session semaphore is held.
+        XCTAssertFalse(
+            TypingService.focusedTextSnapshotSupportsVerification(
+                value: nil,
+                selectedRange: nil,
+                appScriptValue: nil,
+                appScriptSelectedRange: nil
+            ),
+            "a snapshot whose four verifiable channels are all nil must be unverifiable"
+        )
+
+        // Any single non-nil channel is enough to make the snapshot verifiable, so a verifiable
+        // target (e.g. CotEditor, Notes, Xcode) keeps its current fast-path behaviour.
+        XCTAssertTrue(
+            TypingService.focusedTextSnapshotSupportsVerification(
+                value: "hello",
+                selectedRange: nil,
+                appScriptValue: nil,
+                appScriptSelectedRange: nil
+            ),
+            "a non-nil accessibility text value makes the snapshot verifiable"
+        )
+
+        XCTAssertTrue(
+            TypingService.focusedTextSnapshotSupportsVerification(
+                value: nil,
+                selectedRange: nil,
+                appScriptValue: "hello",
+                appScriptSelectedRange: nil
+            ),
+            "a non-nil AppleScript text value makes the snapshot verifiable"
+        )
+
+        XCTAssertTrue(
+            TypingService.focusedTextSnapshotSupportsVerification(
+                value: nil,
+                selectedRange: CFRange(location: 0, length: 0),
+                appScriptValue: nil,
+                appScriptSelectedRange: nil
+            ),
+            "a non-nil selected range makes the snapshot verifiable"
+        )
+    }
 }
