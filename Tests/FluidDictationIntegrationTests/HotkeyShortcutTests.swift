@@ -335,6 +335,137 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertFalse(unmodifiedSideButton.conflictsWith(optionOnly))
     }
 
+    /// Regression for #688: a single-modifier dictation hotkey (Left Option) must not falsely
+    /// start recording when an unrelated Shift+key combo is typed while the configured modifier
+    /// is held. The release of the extra Shift used to re-enter the modifier-only start block and
+    /// erase the "another key was pressed" flag, so the subsequent Option release read as a clean
+    /// tap and started recording.
+    func testModifierOnlyShortcutDoesNotFireOnUnrelatedShiftKeyCombo() {
+        let replay = ModifierOnlyFlagsReplay(
+            shortcut: HotkeyShortcut(keyCode: 58, modifierFlags: .option, modifierKeyCodes: [58])
+        )
+
+        // Genuine Left-Option press arms the modifier-only press (toggle: no recording yet).
+        replay.flagsChanged(keyCode: 58, modifiers: .option, nextPressed: [58])
+        XCTAssertEqual(replay.activeModifierOnlyType, .transcription)
+        XCTAssertEqual(replay.cleanFinishCount, 0)
+
+        // Shift held during the Option press records an interruption.
+        replay.flagsChanged(keyCode: 56, modifiers: [.option, .shift], nextPressed: [56, 58])
+        XCTAssertTrue(replay.otherKeyPressedDuringModifier)
+
+        // An unrelated key (Return) is typed while the Option press is active.
+        replay.keyDown()
+        XCTAssertTrue(replay.otherKeyPressedDuringModifier)
+
+        // The unrelated Shift is released while Option is still held. This must NOT re-arm the
+        // press or erase the recorded interruption.
+        replay.flagsChanged(keyCode: 56, modifiers: .option, nextPressed: [58])
+
+        // The configured Option is released; the press must be treated as interrupted (not a clean
+        // tap), so recording is NOT started.
+        replay.flagsChanged(keyCode: 58, modifiers: [], nextPressed: [])
+
+        XCTAssertEqual(
+            replay.cleanFinishCount,
+            0,
+            "An unrelated Shift+key combo must not falsely start recording for a Left-Option modifier-only hotkey"
+        )
+        XCTAssertNil(replay.activeModifierOnlyType)
+    }
+
+    /// Companion guard: a genuine clean Left-Option tap must still start recording after the fix.
+    func testModifierOnlyShortcutFiresOnGenuineModifierTap() {
+        let replay = ModifierOnlyFlagsReplay(
+            shortcut: HotkeyShortcut(keyCode: 58, modifierFlags: .option, modifierKeyCodes: [58])
+        )
+
+        replay.flagsChanged(keyCode: 58, modifiers: .option, nextPressed: [58])
+        XCTAssertEqual(replay.activeModifierOnlyType, .transcription)
+
+        replay.flagsChanged(keyCode: 58, modifiers: [], nextPressed: [])
+
+        XCTAssertEqual(replay.cleanFinishCount, 1, "A genuine clean Left-Option tap must still start recording")
+        XCTAssertNil(replay.activeModifierOnlyType)
+    }
+
+    /// From idle (no configured modifier pressed), a bare Shift+Enter must never arm the
+    /// modifier-only hotkey, so `activeModifierOnlyType` stays nil.
+    func testModifierOnlyShortcutIgnoresShiftComboFromIdle() {
+        let replay = ModifierOnlyFlagsReplay(
+            shortcut: HotkeyShortcut(keyCode: 58, modifierFlags: .option, modifierKeyCodes: [58])
+        )
+
+        replay.flagsChanged(keyCode: 56, modifiers: .shift, nextPressed: [56])
+        replay.keyDown()
+
+        XCTAssertNil(replay.activeModifierOnlyType, "Shift+Enter from idle must not arm a Left-Option modifier-only hotkey")
+        XCTAssertEqual(replay.cleanFinishCount, 0)
+    }
+
+    /// Branch-2 (flag-only) modifier-only shortcut coverage. The original start matched on modifier
+    /// flags (side-agnostic), so a Left-Option-stored shortcut must still arm on the sibling Right
+    /// Option, and the #688 re-arm on releasing an extra Shift must stay blocked.
+    func testBranch2ModifierOnlyShortcutArmsOnSiblingAndIgnoresShiftCombo() {
+        // Flag-only form: keyCode 58 with an .option flag and no modifierKeyCodes -> branch 2.
+        let shortcut = HotkeyShortcut(keyCode: 58, modifierFlags: .option)
+        XCTAssertTrue(shortcut.normalizedModifierKeyCodes.isEmpty, "precondition: flag-only shortcut takes branch 2")
+
+        // Sibling side: Right Option (keyCode 61, same .option flag) arms the press.
+        let siblingReplay = ModifierOnlyFlagsReplay(shortcut: shortcut)
+        siblingReplay.flagsChanged(keyCode: 61, modifiers: .option, nextPressed: [61])
+        XCTAssertEqual(
+            siblingReplay.activeModifierOnlyType,
+            .transcription,
+            "Branch-2 Left-Option shortcut must arm on the sibling Right Option (side-agnostic flags)"
+        )
+
+        // #688 analog for branch 2: releasing an extra Shift while Option is held must not re-arm.
+        let comboReplay = ModifierOnlyFlagsReplay(shortcut: shortcut)
+        comboReplay.flagsChanged(keyCode: 58, modifiers: .option, nextPressed: [58])
+        comboReplay.flagsChanged(keyCode: 56, modifiers: [.option, .shift], nextPressed: [56, 58])
+        comboReplay.keyDown()
+        comboReplay.flagsChanged(keyCode: 56, modifiers: .option, nextPressed: [58])
+        comboReplay.flagsChanged(keyCode: 58, modifiers: [], nextPressed: [])
+
+        XCTAssertEqual(comboReplay.cleanFinishCount, 0, "Branch-2 shortcut must not falsely start on an unrelated Shift+key combo")
+    }
+
+    /// Regression for the sibling-side re-arm: while a modifier-only press is active, pressing the
+    /// sibling modifier of the same family (Right Option while Left Option is armed) must NOT
+    /// re-enter `.start` and erase the "another key was pressed" flag. Without the active-press
+    /// guard the sibling's flag is in the expected set so `.start` fires again, the interrupt flag
+    /// is wiped, and the configured modifier's later release reads as a clean tap (#688 class).
+    func testBranch2ModifierOnlyShortcutSiblingPressDoesNotEraseInterrupt() {
+        // Branch-2 (flag-only) Left-Option shortcut.
+        let replay = ModifierOnlyFlagsReplay(shortcut: HotkeyShortcut(keyCode: 58, modifierFlags: .option))
+        XCTAssertTrue(replay.shortcut.normalizedModifierKeyCodes.isEmpty, "precondition: flag-only shortcut takes branch 2")
+
+        // Arm with Left Option, type a key, then press the sibling Right Option mid-press.
+        replay.flagsChanged(keyCode: 58, modifiers: .option, nextPressed: [58])
+        XCTAssertEqual(replay.activeModifierOnlyType, .transcription)
+        replay.keyDown()
+        XCTAssertTrue(replay.otherKeyPressedDuringModifier)
+        replay.flagsChanged(keyCode: 61, modifiers: .option, nextPressed: [58, 61])
+
+        // The sibling press must not re-arm the press or erase the recorded interrupt.
+        XCTAssertTrue(
+            replay.otherKeyPressedDuringModifier,
+            "Sibling-side modifier press must not erase the recorded interrupt flag"
+        )
+        XCTAssertEqual(replay.activeModifierOnlyType, .transcription)
+
+        // Release the sibling, then release the configured Left Option last.
+        replay.flagsChanged(keyCode: 61, modifiers: .option, nextPressed: [58])
+        replay.flagsChanged(keyCode: 58, modifiers: [], nextPressed: [])
+
+        XCTAssertEqual(
+            replay.cleanFinishCount,
+            0,
+            "Sibling press during an active press must not lead to a false clean-tap start"
+        )
+    }
+
     func testPrimaryDictationShortcutsFallbackToLegacyShortcut() throws {
         try self.withRestoredDefaults(keys: [self.legacyHotkeyShortcutKey, self.primaryDictationShortcutsKey]) {
             let legacyShortcut = HotkeyShortcut(keyCode: 12, modifierFlags: [.option])
@@ -746,5 +877,52 @@ private final class FakeAudioDeviceManager: AudioDeviceManaging {
     func defaultInputDevice() -> AudioDevice.Device? {
         guard let defaultInputUID else { return nil }
         return self.inputs.first { $0.uid == defaultInputUID }
+    }
+}
+
+/// Minimal driver that replays a `flagsChanged` / `keyDown` sequence through the pure
+/// `ModifierOnlyShortcutFlagsDecision` state machine. `nextPressed` is the
+/// `synchronizedPressedModifierKeyCodes` output for each event (the sync function is provably
+/// correct for these inputs, so it is driven directly to focus the test on the decision logic).
+private final class ModifierOnlyFlagsReplay {
+    let shortcut: HotkeyShortcut
+    private(set) var pressedModifierKeyCodes: Set<UInt16> = []
+    private(set) var activeModifierOnlyType: HotkeyHoldModeType?
+    private(set) var otherKeyPressedDuringModifier = false
+    /// Number of `.finish(wasCleanPress: true)` outcomes — the toggle-mode "start recording" path.
+    private(set) var cleanFinishCount = 0
+
+    init(shortcut: HotkeyShortcut) {
+        self.shortcut = shortcut
+    }
+
+    func flagsChanged(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, nextPressed: Set<UInt16>) {
+        pressedModifierKeyCodes = nextPressed
+        let decision = ModifierOnlyShortcutFlagsDecision.evaluate(
+            shortcut: shortcut,
+            holdModeType: .transcription,
+            isEnabled: true,
+            keyCode: keyCode,
+            modifiers: modifiers,
+            state: ModifierOnlyShortcutTrackingState(
+                pressedModifierKeyCodes: pressedModifierKeyCodes,
+                activeModifierOnlyType: activeModifierOnlyType,
+                otherKeyPressedDuringModifier: otherKeyPressedDuringModifier,
+                isModeKeyPressed: false
+            )
+        )
+        activeModifierOnlyType = decision.activeModifierOnlyType
+        otherKeyPressedDuringModifier = decision.otherKeyPressedDuringModifier
+        if case .finish(let wasCleanPress) = decision.outcome, wasCleanPress {
+            cleanFinishCount += 1
+        }
+    }
+
+    /// Simulates a non-modifier keyDown during an active modifier-only press
+    /// (GlobalHotkeyManager.markOtherInputDuringModifierOnly).
+    func keyDown() {
+        if activeModifierOnlyType != nil {
+            otherKeyPressedDuringModifier = true
+        }
     }
 }
