@@ -17,7 +17,7 @@ final class CommandModeService: ObservableObject {
     private let maxTurns = 20
     private var didRequireConfirmationThisRun: Bool = false
 
-    // Flag to enable notch output display
+    /// Flag to enable notch output display
     var enableNotchOutput: Bool = true
 
     // Streaming UI update throttling - adaptive rate based on content length
@@ -68,6 +68,7 @@ final class CommandModeService: ObservableObject {
         let content: String
         let thinking: String? // Display-only: AI reasoning tokens (NOT sent to API)
         let toolCall: ToolCall?
+        let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
         let stepType: StepType
         let timestamp: Date
 
@@ -94,11 +95,19 @@ final class CommandModeService: ObservableObject {
             let purpose: String? // Why this command is being run
         }
 
-        init(role: Role, content: String, thinking: String? = nil, toolCall: ToolCall? = nil, stepType: StepType = .normal) {
+        init(
+            role: Role,
+            content: String,
+            thinking: String? = nil,
+            toolCall: ToolCall? = nil,
+            responsesContinuationItems: [LLMClient.ResponsesContinuationItem] = [],
+            stepType: StepType = .normal
+        ) {
             self.role = role
             self.content = content
             self.thinking = thinking
             self.toolCall = toolCall
+            self.responsesContinuationItems = responsesContinuationItems
             self.stepType = stepType
             self.timestamp = Date()
         }
@@ -297,7 +306,9 @@ final class CommandModeService: ObservableObject {
             }
 
             // Skip tool outputs in notch (they're verbose)
-            if msg.role == .tool { continue }
+            if msg.role == .tool {
+                continue
+            }
 
             NotchContentState.shared.addCommandMessage(role: role, content: msg.content)
         }
@@ -422,6 +433,7 @@ final class CommandModeService: ObservableObject {
                             .workingDirectory,
                         purpose: tc.purpose
                     ),
+                    responsesContinuationItems: response.responsesContinuationItems,
                     stepType: stepType
                 ))
 
@@ -704,6 +716,7 @@ final class CommandModeService: ObservableObject {
         let content: String
         let thinking: String? // Display-only, NOT sent back to API
         let toolCall: ToolCallData?
+        let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
 
         struct ToolCallData {
             let id: String
@@ -839,7 +852,7 @@ final class CommandModeService: ObservableObject {
                         DebugLogger.shared.error("Failed to encode tool call args: \(error)", source: "CommandModeService")
                         argsJSON = "{}"
                     }
-                    messages.append([
+                    var assistantMessage: [String: Any] = [
                         "role": "assistant",
                         "content": msg.content,
                         "tool_calls": [[
@@ -850,7 +863,11 @@ final class CommandModeService: ObservableObject {
                                 "arguments": argsJSON,
                             ],
                         ]],
-                    ])
+                    ]
+                    if !msg.responsesContinuationItems.isEmpty {
+                        assistantMessage["responses_continuation_items"] = msg.responsesContinuationItems.map(\.inputItem)
+                    }
+                    messages.append(assistantMessage)
                 } else {
                     messages.append(["role": "assistant", "content": msg.content])
                 }
@@ -998,7 +1015,8 @@ final class CommandModeService: ObservableObject {
                     command: command,
                     workingDirectory: workDir,
                     purpose: purpose
-                )
+                ),
+                responsesContinuationItems: response.responsesContinuationItems
             )
         }
 
@@ -1014,7 +1032,8 @@ final class CommandModeService: ObservableObject {
         return LLMResponse(
             content: response.content,
             thinking: finalThinking, // Display-only
-            toolCall: nil
+            toolCall: nil,
+            responsesContinuationItems: response.responsesContinuationItems
         )
     }
 }

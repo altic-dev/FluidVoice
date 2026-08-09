@@ -412,10 +412,14 @@ final class LLMClientRequestBodyTests: XCTestCase {
         let refreshed = try GrokSubscriptionAuth.decodeOAuthSession(
             from: refreshData,
             previousRefreshToken: initial.refreshToken,
+            previousUserID: initial.userID,
+            previousEmail: initial.email,
             now: now
         )
         XCTAssertEqual(refreshed.accessToken, "rotated-access")
         XCTAssertEqual(refreshed.refreshToken, "fluidvoice-grok-refresh")
+        XCTAssertEqual(refreshed.userID, "grok-user-2")
+        XCTAssertEqual(refreshed.accountLabel, "signed-in@example.com")
     }
 
     func testOfficialLoginFingerprintDoesNotContainOrDependOnRotatingAccessToken() {
@@ -615,6 +619,52 @@ final class LLMClientRequestBodyTests: XCTestCase {
 
         let loginBody = LLMClient.shared.buildResponsesBody(loginConfig)
         XCTAssertNil(loginBody["max_output_tokens"])
+    }
+
+    func testCodexLoginReplaysEncryptedReasoningBeforeToolContinuation() throws {
+        let reasoningItem = try XCTUnwrap(LLMClient.shared.responsesContinuationItem(from: [
+            "type": "reasoning",
+            "id": "rs_123",
+            "encrypted_content": "opaque-reasoning-state",
+        ]))
+        let config = LLMClient.Config(
+            providerID: OfficialProviderAuth.codexProviderID,
+            messages: [
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "responses_continuation_items": [reasoningItem.inputItem],
+                    "tool_calls": [[
+                        "id": "call-1",
+                        "type": "function",
+                        "function": [
+                            "name": "execute_terminal_command",
+                            "arguments": "{\"command\":\"pwd\"}",
+                        ],
+                    ]],
+                ],
+                ["role": "tool", "tool_call_id": "call-1", "content": "/tmp"],
+            ],
+            model: "gpt-5.6-sol",
+            baseURL: "https://chatgpt.com/backend-api/codex",
+            apiKey: "",
+            streaming: true
+        )
+
+        let body = LLMClient.shared.buildResponsesBody(config)
+        let input = try XCTUnwrap(body["input"] as? [[String: Any]])
+        XCTAssertEqual(input.map { $0["type"] as? String }, ["reasoning", "function_call", "function_call_output"])
+        XCTAssertEqual(input[0]["id"] as? String, "rs_123")
+        XCTAssertEqual(input[0]["encrypted_content"] as? String, "opaque-reasoning-state")
+        XCTAssertEqual(input[1]["call_id"] as? String, "call-1")
+        XCTAssertEqual(input[2]["call_id"] as? String, "call-1")
+    }
+
+    func testOfficialProviderGuideLabelsUseGuideIconContract() throws {
+        for providerID in OfficialProviderAuth.providerIDs {
+            let info = try XCTUnwrap(OfficialProviderAuth.info(for: providerID))
+            XCTAssertTrue(info.setupLabel.contains("Guide"))
+        }
     }
 
     private static let basePromptMarker = "You are a voice-to-text dictation cleaner"

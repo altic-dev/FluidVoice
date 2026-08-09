@@ -348,6 +348,8 @@ enum GrokSubscriptionAuth {
     static func decodeOAuthSession(
         from data: Data,
         previousRefreshToken: String? = nil,
+        previousUserID: String? = nil,
+        previousEmail: String? = nil,
         now: Date = Date()
     ) throws -> OAuthSession {
         guard let response = try? JSONDecoder().decode(OAuthTokenResponse.self, from: data) else {
@@ -358,10 +360,13 @@ enum GrokSubscriptionAuth {
             throw AuthError.invalidOAuthResponse
         }
 
-        let claims = response.idToken.flatMap(self.jwtClaims)
-            ?? self.jwtClaims(from: accessToken)
-        let userID = (claims?["sub"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let email = (claims?["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let idClaims = response.idToken.map(self.jwtClaims) ?? [:]
+        let accessClaims = self.jwtClaims(from: accessToken)
+        let claims = idClaims.isEmpty ? accessClaims : idClaims
+        let claimedUserID = (claims["sub"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let userID = claimedUserID.isEmpty ? (previousUserID ?? "") : claimedUserID
+        let claimedEmail = (claims["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let email = claimedEmail.isEmpty ? previousEmail : claimedEmail
         let responseRefreshToken = response.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines)
         let refreshToken = responseRefreshToken?.isEmpty == false ? responseRefreshToken : previousRefreshToken
         let lifetime = min(max(response.expiresIn ?? 3600, 60), 24 * 60 * 60)
@@ -569,6 +574,8 @@ enum GrokSubscriptionAuth {
         return try self.decodeOAuthSession(
             from: data,
             previousRefreshToken: refreshToken,
+            previousUserID: oauthSession.userID,
+            previousEmail: oauthSession.email,
             now: now
         )
     }
@@ -580,7 +587,9 @@ enum GrokSubscriptionAuth {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
+        if status == errSecItemNotFound {
+            return nil
+        }
         guard status == errSecSuccess, let data = item as? Data else {
             throw AuthError.keychainFailure(status)
         }
@@ -602,7 +611,9 @@ enum GrokSubscriptionAuth {
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        if status == errSecSuccess { return }
+        if status == errSecSuccess {
+            return
+        }
         if status == errSecDuplicateItem {
             let updateStatus = SecItemUpdate(
                 self.oauthKeychainQuery() as CFDictionary,
@@ -650,16 +661,16 @@ enum GrokSubscriptionAuth {
         return host == "x.ai" || host.hasSuffix(".x.ai")
     }
 
-    nonisolated private static func jwtClaims(from token: String) -> [String: Any]? {
+    private nonisolated static func jwtClaims(from token: String) -> [String: Any] {
         let segments = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard segments.count >= 2 else { return nil }
+        guard segments.count >= 2 else { return [:] }
 
         var payload = String(segments[1])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         payload.append(String(repeating: "=", count: (4 - payload.count % 4) % 4))
-        guard let data = Data(base64Encoded: payload) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let data = Data(base64Encoded: payload) else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     private static func formEncoded(_ values: [String: String]) -> Data? {
@@ -675,7 +686,7 @@ enum GrokSubscriptionAuth {
         return body.data(using: .utf8)
     }
 
-    nonisolated private static func parseRFC3339(_ value: String) -> Date? {
+    private nonisolated static func parseRFC3339(_ value: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: value) {

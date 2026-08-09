@@ -84,6 +84,34 @@ final class LLMClient {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Opaque reasoning state required to continue stateless Responses API tool loops.
+        let responsesContinuationItems: [ResponsesContinuationItem]
+
+        init(
+            thinking: String?,
+            content: String,
+            toolCalls: [ToolCall],
+            responsesContinuationItems: [ResponsesContinuationItem] = []
+        ) {
+            self.thinking = thinking
+            self.content = content
+            self.toolCalls = toolCalls
+            self.responsesContinuationItems = responsesContinuationItems
+        }
+    }
+
+    struct ResponsesContinuationItem: Equatable {
+        let id: String
+        let encryptedContent: String
+
+        var inputItem: [String: Any] {
+            [
+                "type": "reasoning",
+                "id": self.id,
+                "summary": [],
+                "encrypted_content": self.encryptedContent,
+            ]
+        }
     }
 
     struct ToolCall {
@@ -444,7 +472,9 @@ final class LLMClient {
         ]
 
         if usesCodexSubscription {
-            if !systemInstructions.isEmpty { body["instructions"] = systemInstructions }
+            if !systemInstructions.isEmpty {
+                body["instructions"] = systemInstructions
+            }
             body["tool_choice"] = "auto"
             body["parallel_tool_calls"] = false
             body["include"] = ["reasoning.encrypted_content"]
@@ -501,7 +531,9 @@ final class LLMClient {
             let role = message["role"] as? String ?? "user"
             let content = message["content"] as? String ?? ""
             if role == "system" {
-                if !content.isEmpty { systemParts.append(content) }
+                if !content.isEmpty {
+                    systemParts.append(content)
+                }
                 continue
             }
             if role == "tool" {
@@ -549,18 +581,20 @@ final class LLMClient {
             body["temperature"] = temperature
         }
         if !config.tools.isEmpty {
-            body["tools"] = config.tools.compactMap { tool -> [String: Any]? in
+            var convertedTools: [[String: Any]] = []
+            for tool in config.tools {
                 guard tool["type"] as? String == "function",
                       let function = tool["function"] as? [String: Any],
                       let name = function["name"] as? String,
                       let parameters = function["parameters"] as? [String: Any]
-                else { return nil }
+                else { continue }
                 var converted: [String: Any] = ["name": name, "input_schema": parameters]
                 if let description = function["description"] as? String {
                     converted["description"] = description
                 }
-                return converted
+                convertedTools.append(converted)
             }
+            body["tools"] = convertedTools
         }
         for (name, value) in config.extraParameters where name != "reasoning_effort" {
             body[name] = value
@@ -601,7 +635,9 @@ final class LLMClient {
             let role = message["role"] as? String ?? "user"
             let content = message["content"] as? String ?? ""
             if role == "system" {
-                if !content.isEmpty { systemParts.append(content) }
+                if !content.isEmpty {
+                    systemParts.append(content)
+                }
                 continue
             }
             if role == "tool" {
@@ -616,7 +652,9 @@ final class LLMClient {
             }
 
             var parts: [[String: Any]] = []
-            if !content.isEmpty { parts.append(["text": content]) }
+            if !content.isEmpty {
+                parts.append(["text": content])
+            }
             if let toolCalls = message["tool_calls"] as? [[String: Any]] {
                 for toolCall in toolCalls {
                     guard let function = toolCall["function"] as? [String: Any],
@@ -640,27 +678,36 @@ final class LLMClient {
         }
 
         var generationConfig: [String: Any] = [:]
-        if let temperature = config.temperature { generationConfig["temperature"] = temperature }
-        if let maxTokens = config.maxTokens { generationConfig["maxOutputTokens"] = maxTokens }
+        if let temperature = config.temperature {
+            generationConfig["temperature"] = temperature
+        }
+        if let maxTokens = config.maxTokens {
+            generationConfig["maxOutputTokens"] = maxTokens
+        }
         for (name, value) in config.extraParameters where name != "reasoning_effort" {
             generationConfig[name] = value
         }
-        if !generationConfig.isEmpty { request["generationConfig"] = generationConfig }
+        if !generationConfig.isEmpty {
+            request["generationConfig"] = generationConfig
+        }
 
         if !config.tools.isEmpty {
-            let declarations = config.tools.compactMap { tool -> [String: Any]? in
+            var declarations: [[String: Any]] = []
+            for tool in config.tools {
                 guard tool["type"] as? String == "function",
                       let function = tool["function"] as? [String: Any],
                       let name = function["name"] as? String,
                       let parameters = function["parameters"] as? [String: Any]
-                else { return nil }
+                else { continue }
                 var declaration: [String: Any] = ["name": name, "parameters": parameters]
                 if let description = function["description"] as? String {
                     declaration["description"] = description
                 }
-                return declaration
+                declarations.append(declaration)
             }
-            if !declarations.isEmpty { request["tools"] = [["functionDeclarations": declarations]] }
+            if !declarations.isEmpty {
+                request["tools"] = [["functionDeclarations": declarations]]
+            }
         }
 
         return [
@@ -712,7 +759,13 @@ final class LLMClient {
 
         for message in messages {
             let role = message["role"] as? String ?? "user"
-            if excludingSystemMessages, role == "system" { continue }
+            if excludingSystemMessages, role == "system" {
+                continue
+            }
+
+            if let continuationItems = message["responses_continuation_items"] as? [[String: Any]] {
+                input.append(contentsOf: continuationItems)
+            }
 
             if role == "tool" {
                 input.append([
@@ -792,7 +845,9 @@ final class LLMClient {
         let (bytes, response) = try await self.session.bytes(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             var errorData = Data()
-            for try await byte in bytes { errorData.append(byte) }
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
             throw LLMError.httpError(http.statusCode, String(data: errorData, encoding: .utf8) ?? "Unknown error")
         }
 
@@ -826,9 +881,13 @@ final class LLMClient {
                         call.arguments = inputString
                     }
                     toolCalls[index] = call
-                    if let name = call.name { config.onToolCallStart?(name) }
+                    if let name = call.name {
+                        config.onToolCallStart?(name)
+                    }
                 case "thinking":
-                    if !isThinking { config.onThinkingStart?() }
+                    if !isThinking {
+                        config.onThinkingStart?()
+                    }
                     isThinking = true
                 default:
                     break
@@ -846,7 +905,9 @@ final class LLMClient {
                         config.onContentChunk?(text)
                     }
                 case "thinking_delta":
-                    if !isThinking { config.onThinkingStart?() }
+                    if !isThinking {
+                        config.onThinkingStart?()
+                    }
                     isThinking = true
                     if let text = delta["thinking"] as? String {
                         thinking.append(text)
@@ -863,7 +924,9 @@ final class LLMClient {
                 continue
             }
         }
-        if isThinking { config.onThinkingEnd?() }
+        if isThinking {
+            config.onThinkingEnd?()
+        }
 
         let parsedTools = toolCalls.keys.sorted().compactMap { index -> ToolCall? in
             guard let call = toolCalls[index], let name = call.name else { return nil }
@@ -889,7 +952,9 @@ final class LLMClient {
         let (bytes, response) = try await self.session.bytes(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             var errorData = Data()
-            for try await byte in bytes { errorData.append(byte) }
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
             throw LLMError.httpError(http.statusCode, String(data: errorData, encoding: .utf8) ?? "Unknown error")
         }
 
@@ -912,7 +977,9 @@ final class LLMClient {
                 config.onContentChunk?(text)
             }
             for text in parsed.thinking {
-                if !reportedThinking { config.onThinkingStart?() }
+                if !reportedThinking {
+                    config.onThinkingStart?()
+                }
                 reportedThinking = true
                 thinking.append(text)
                 config.onThinkingChunk?(text)
@@ -922,7 +989,9 @@ final class LLMClient {
                 config.onToolCallStart?(tool.name)
             }
         }
-        if reportedThinking { config.onThinkingEnd?() }
+        if reportedThinking {
+            config.onThinkingEnd?()
+        }
         let thinkingText = thinking.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         return Response(
             thinking: thinkingText.isEmpty ? nil : thinkingText,
@@ -947,6 +1016,7 @@ final class LLMClient {
 
         var contentBuffer: [String] = []
         var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
+        var continuationItemsByIndex: [Int: ResponsesContinuationItem] = [:]
 
         for try await rawLine in bytes.lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -974,10 +1044,15 @@ final class LLMClient {
                     config.onContentChunk?(delta)
                 }
             case "response.output_item.added", "response.output_item.done":
-                guard let item = event["item"] as? [String: Any],
-                      item["type"] as? String == "function_call"
-                else { continue }
+                guard let item = event["item"] as? [String: Any] else { continue }
                 let index = event["output_index"] as? Int ?? 0
+                if type == "response.output_item.done",
+                   let continuationItem = self.responsesContinuationItem(from: item)
+                {
+                    continuationItemsByIndex[index] = continuationItem
+                    continue
+                }
+                guard item["type"] as? String == "function_call" else { continue }
                 var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
                 call.id = item["id"] as? String ?? call.id
                 call.callID = item["call_id"] as? String ?? call.callID
@@ -1030,7 +1105,10 @@ final class LLMClient {
         return Response(
             thinking: nil,
             content: contentBuffer.joined().trimmingCharacters(in: .whitespacesAndNewlines),
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            responsesContinuationItems: continuationItemsByIndex.keys.sorted().compactMap {
+                continuationItemsByIndex[$0]
+            }
         )
     }
 
@@ -1242,9 +1320,13 @@ final class LLMClient {
         for block in blocks {
             switch block["type"] as? String {
             case "text":
-                if let text = block["text"] as? String { content.append(text) }
+                if let text = block["text"] as? String {
+                    content.append(text)
+                }
             case "thinking":
-                if let text = block["thinking"] as? String { thinking.append(text) }
+                if let text = block["thinking"] as? String {
+                    thinking.append(text)
+                }
             case "tool_use":
                 guard let name = block["name"] as? String,
                       let input = block["input"] as? [String: Any]
@@ -1323,6 +1405,7 @@ final class LLMClient {
 
         var contentParts: [String] = []
         var parsedToolCalls: [ToolCall] = []
+        var continuationItems: [ResponsesContinuationItem] = []
 
         for item in output {
             switch item["type"] as? String {
@@ -1349,6 +1432,10 @@ final class LLMClient {
                         arguments: args
                     )
                 )
+            case "reasoning":
+                if let continuationItem = self.responsesContinuationItem(from: item) {
+                    continuationItems.append(continuationItem)
+                }
             default:
                 continue
             }
@@ -1360,8 +1447,20 @@ final class LLMClient {
         return Response(
             thinking: thinking.isEmpty ? nil : thinking,
             content: cleanedContent.isEmpty ? rawContent.trimmingCharacters(in: .whitespacesAndNewlines) : cleanedContent,
-            toolCalls: parsedToolCalls
+            toolCalls: parsedToolCalls,
+            responsesContinuationItems: continuationItems
         )
+    }
+
+    func responsesContinuationItem(from item: [String: Any]) -> ResponsesContinuationItem? {
+        guard item["type"] as? String == "reasoning",
+              let id = item["id"] as? String,
+              !id.isEmpty,
+              let encryptedContent = item["encrypted_content"] as? String,
+              !encryptedContent.isEmpty
+        else { return nil }
+
+        return ResponsesContinuationItem(id: id, encryptedContent: encryptedContent)
     }
 
     private func parseMessageResponse(_ message: [String: Any]) -> Response {

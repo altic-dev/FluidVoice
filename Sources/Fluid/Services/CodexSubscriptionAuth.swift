@@ -35,7 +35,9 @@ enum CodexSubscriptionAuth {
 
         var accountLabel: String {
             let trimmedEmail = self.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmedEmail.isEmpty { return trimmedEmail }
+            if !trimmedEmail.isEmpty {
+                return trimmedEmail
+            }
             let trimmedAccount = self.accountID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return trimmedAccount.isEmpty ? "ChatGPT account" : trimmedAccount
         }
@@ -192,7 +194,9 @@ enum CodexSubscriptionAuth {
                   !deviceToken.authorizationCode.isEmpty,
                   !deviceToken.codeVerifier.isEmpty
             else {
-                if http.statusCode == 401 { throw AuthError.authorizationDenied }
+                if http.statusCode == 401 {
+                    throw AuthError.authorizationDenied
+                }
                 throw AuthError.requestFailed(http.statusCode)
             }
 
@@ -225,13 +229,13 @@ enum CodexSubscriptionAuth {
             throw AuthError.invalidOAuthResponse
         }
 
-        let idClaims = response.idToken.flatMap { self.jwtClaims(from: $0) }
+        let idClaims = response.idToken.map { self.jwtClaims(from: $0) } ?? [:]
         let accessClaims = self.jwtClaims(from: accessToken)
         let accountID = self.accountID(in: idClaims)
             ?? self.accountID(in: accessClaims)
             ?? previousAccountID
-        let email = (idClaims?["email"] as? String)
-            ?? (accessClaims?["email"] as? String)
+        let email = (idClaims["email"] as? String)
+            ?? (accessClaims["email"] as? String)
             ?? previousEmail
         let lifetime = min(max(response.expiresIn ?? 3600, 60), 24 * 60 * 60)
 
@@ -344,7 +348,9 @@ enum CodexSubscriptionAuth {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
+        if status == errSecItemNotFound {
+            return nil
+        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let oauthSession = try? JSONDecoder().decode(OAuthSession.self, from: data)
@@ -362,7 +368,9 @@ enum CodexSubscriptionAuth {
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        if status == errSecSuccess { return }
+        if status == errSecSuccess {
+            return
+        }
         if status == errSecDuplicateItem {
             let updateStatus = SecItemUpdate(
                 self.keychainQuery() as CFDictionary,
@@ -384,17 +392,17 @@ enum CodexSubscriptionAuth {
         ]
     }
 
-    private static func accountID(in claims: [String: Any]?) -> String? {
-        if let direct = claims?["chatgpt_account_id"] as? String, !direct.isEmpty {
+    private static func accountID(in claims: [String: Any]) -> String? {
+        if let direct = claims["chatgpt_account_id"] as? String, !direct.isEmpty {
             return direct
         }
-        if let auth = claims?["https://api.openai.com/auth"] as? [String: Any],
+        if let auth = claims["https://api.openai.com/auth"] as? [String: Any],
            let nested = auth["chatgpt_account_id"] as? String,
            !nested.isEmpty
         {
             return nested
         }
-        if let organizations = claims?["organizations"] as? [[String: Any]],
+        if let organizations = claims["organizations"] as? [[String: Any]],
            let first = organizations.first?["id"] as? String,
            !first.isEmpty
         {
@@ -403,15 +411,15 @@ enum CodexSubscriptionAuth {
         return nil
     }
 
-    private static func jwtClaims(from token: String) -> [String: Any]? {
+    private static func jwtClaims(from token: String) -> [String: Any] {
         let segments = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard segments.count >= 2 else { return nil }
+        guard segments.count >= 2 else { return [:] }
         var payload = String(segments[1])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         payload.append(String(repeating: "=", count: (4 - payload.count % 4) % 4))
-        guard let data = Data(base64Encoded: payload) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let data = Data(base64Encoded: payload) else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     private static func formEncoded(_ values: [String: String]) -> Data? {

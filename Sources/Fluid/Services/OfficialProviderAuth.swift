@@ -118,7 +118,7 @@ enum OfficialProviderAuth {
             return ProviderInfo(
                 displayName: "ChatGPT (Codex Login)",
                 setupURL: "https://developers.openai.com/codex/auth/",
-                setupLabel: "Codex login guide",
+                setupLabel: "Codex Login Guide",
                 setupCommand: "codex login",
                 detail: "Sign in directly with ChatGPT, or reuse a session owned by the official Codex client."
             )
@@ -126,7 +126,7 @@ enum OfficialProviderAuth {
             return ProviderInfo(
                 displayName: "Claude Subscription",
                 setupURL: "https://code.claude.com/docs/en/authentication",
-                setupLabel: "Claude login guide",
+                setupLabel: "Claude Login Guide",
                 setupCommand: "claude",
                 detail: "Uses the subscription session owned by the official Claude client."
             )
@@ -134,7 +134,7 @@ enum OfficialProviderAuth {
             return ProviderInfo(
                 displayName: "Gemini Subscription",
                 setupURL: "https://github.com/google-gemini/gemini-cli#authentication-options",
-                setupLabel: "Gemini login guide",
+                setupLabel: "Gemini Login Guide",
                 setupCommand: "gemini",
                 detail: "Uses the Google session owned by the official Gemini CLI."
             )
@@ -142,7 +142,7 @@ enum OfficialProviderAuth {
             return ProviderInfo(
                 displayName: "Grok Subscription",
                 setupURL: "https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md",
-                setupLabel: "Grok login guide",
+                setupLabel: "Grok Login Guide",
                 setupCommand: "grok login --oauth",
                 detail: "Sign in directly with xAI, or reuse a session owned by the official Grok client."
             )
@@ -280,7 +280,7 @@ enum OfficialProviderAuth {
 
         let idToken = tokens["id_token"] as? String
         let accessClaims = self.jwtClaims(from: accessToken)
-        let idClaims = idToken.flatMap(self.jwtClaims)
+        let idClaims = idToken.map(self.jwtClaims) ?? [:]
         let accountID = (tokens["account_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let email = self.firstString(in: [idClaims, accessClaims], keys: ["email"])
         let subject = self.firstString(in: [idClaims, accessClaims], keys: ["sub"])
@@ -331,11 +331,12 @@ enum OfficialProviderAuth {
         }
 
         let label = (oauth["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedLabel = label.flatMap { $0.isEmpty ? nil : $0 } ?? accountLabel
         let expiresAt = self.dateFromMillisecondsOrSeconds(oauth["expiresAt"] ?? oauth["expires_at"])
             ?? self.jwtExpiry(from: self.jwtClaims(from: accessToken))
         return ClaudeCredential(
             accessToken: accessToken,
-            accountLabel: (label?.isEmpty == false ? label! : accountLabel),
+            accountLabel: resolvedLabel,
             expiresAt: expiresAt
         )
     }
@@ -536,7 +537,9 @@ enum OfficialProviderAuth {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
+        if status == errSecItemNotFound {
+            return nil
+        }
         guard status == errSecSuccess,
               let dictionary = item as? [String: Any],
               let data = dictionary[kSecValueData as String] as? Data
@@ -563,26 +566,26 @@ enum OfficialProviderAuth {
         return data
     }
 
-    private static func jwtClaims(from token: String) -> [String: Any]? {
+    private nonisolated static func jwtClaims(from token: String) -> [String: Any] {
         let segments = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard segments.count >= 2 else { return nil }
+        guard segments.count >= 2 else { return [:] }
         var payload = String(segments[1])
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         payload.append(String(repeating: "=", count: (4 - payload.count % 4) % 4))
-        guard let data = Data(base64Encoded: payload) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let data = Data(base64Encoded: payload) else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
-    private static func jwtExpiry(from claims: [String: Any]?) -> Date? {
-        guard let timestamp = (claims?["exp"] as? NSNumber)?.doubleValue else { return nil }
+    private nonisolated static func jwtExpiry(from claims: [String: Any]) -> Date? {
+        guard let timestamp = (claims["exp"] as? NSNumber)?.doubleValue else { return nil }
         return Date(timeIntervalSince1970: timestamp)
     }
 
-    private static func firstString(in objects: [[String: Any]?], keys: [String]) -> String? {
+    private nonisolated static func firstString(in objects: [[String: Any]], keys: [String]) -> String? {
         for object in objects {
             for key in keys {
-                if let value = object?[key] as? String,
+                if let value = object[key] as? String,
                    !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 {
                     return value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -602,7 +605,9 @@ enum OfficialProviderAuth {
             number = nil
         }
         guard var timestamp = number, timestamp > 0 else { return nil }
-        if timestamp > 10_000_000_000 { timestamp /= 1000 }
+        if timestamp > 10_000_000_000 {
+            timestamp /= 1000
+        }
         return Date(timeIntervalSince1970: timestamp)
     }
 
