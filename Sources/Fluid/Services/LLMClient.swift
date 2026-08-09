@@ -100,7 +100,7 @@ final class LLMClient {
         }
     }
 
-    struct ResponsesContinuationItem: Equatable {
+    struct ResponsesContinuationItem: Codable, Equatable {
         let id: String
         let encryptedContent: String
 
@@ -118,6 +118,19 @@ final class LLMClient {
         let id: String
         let name: String
         let arguments: [String: Any]
+        let thoughtSignature: String?
+
+        init(
+            id: String,
+            name: String,
+            arguments: [String: Any],
+            thoughtSignature: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+            self.thoughtSignature = thoughtSignature
+        }
 
         /// Get a string argument by key
         func getString(_ key: String) -> String? {
@@ -663,7 +676,11 @@ final class LLMClient {
                     let argumentsString = function["arguments"] as? String ?? "{}"
                     let arguments = argumentsString.data(using: .utf8)
                         .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-                    parts.append(["functionCall": ["name": name, "args": arguments]])
+                    var part: [String: Any] = ["functionCall": ["name": name, "args": arguments]]
+                    if let thoughtSignature = toolCall["thought_signature"] as? String {
+                        part["thoughtSignature"] = thoughtSignature
+                    }
+                    parts.append(part)
                 }
             }
             appendContent(role: role == "assistant" ? "model" : "user", parts: parts)
@@ -1361,7 +1378,7 @@ final class LLMClient {
         )
     }
 
-    private func geminiParts(from root: [String: Any]) -> (
+    func geminiParts(from root: [String: Any]) -> (
         content: [String],
         thinking: [String],
         toolCalls: [ToolCall]
@@ -1390,7 +1407,8 @@ final class LLMClient {
                     tools.append(ToolCall(
                         id: call["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
                         name: name,
-                        arguments: call["args"] as? [String: Any] ?? [:]
+                        arguments: call["args"] as? [String: Any] ?? [:],
+                        thoughtSignature: part["thoughtSignature"] as? String
                     ))
                 }
             }

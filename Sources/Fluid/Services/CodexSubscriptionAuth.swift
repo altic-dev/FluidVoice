@@ -1,6 +1,38 @@
 import Foundation
 import Security
 
+@MainActor
+final class InFlightTaskCoalescer<Value> {
+    private var flight: (id: UUID, task: Task<Value, Error>)?
+
+    func value(operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        let activeFlight: (id: UUID, task: Task<Value, Error>)
+        if let flight {
+            activeFlight = flight
+        } else {
+            let newFlight = (
+                id: UUID(),
+                task: Task { try await operation() }
+            )
+            self.flight = newFlight
+            activeFlight = newFlight
+        }
+
+        do {
+            let value = try await activeFlight.task.value
+            if self.flight?.id == activeFlight.id {
+                self.flight = nil
+            }
+            return value
+        } catch {
+            if self.flight?.id == activeFlight.id {
+                self.flight = nil
+            }
+            throw error
+        }
+    }
+}
+
 /// ChatGPT subscription authentication compatible with the public Codex device flow.
 ///
 /// FluidVoice stores its own access/refresh pair in a dedicated Keychain item.
@@ -14,6 +46,7 @@ enum CodexSubscriptionAuth {
     private static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     private static let keychainService = "com.fluidvoice.provider-oauth"
     private static let expirySafetyWindow: TimeInterval = 120
+    private static let refreshCoalescer = InFlightTaskCoalescer<OAuthSession>()
 
     struct DeviceAuthorization: Equatable {
         let deviceAuthID: String
@@ -254,8 +287,12 @@ enum CodexSubscriptionAuth {
     ) async throws -> ResolvedCredential? {
         guard var oauthSession = try self.loadOAuthSession() else { return nil }
         if oauthSession.expiresAt.timeIntervalSince(now) <= self.expirySafetyWindow {
-            oauthSession = try await self.refreshOAuthSession(oauthSession, now: now, session: session)
-            try self.storeOAuthSession(oauthSession)
+            let sessionToRefresh = oauthSession
+            oauthSession = try await self.refreshCoalescer.value {
+                let refreshed = try await self.refreshOAuthSession(sessionToRefresh, now: now, session: session)
+                try self.storeOAuthSession(refreshed)
+                return refreshed
+            }
         }
         return ResolvedCredential(
             accessToken: oauthSession.accessToken,

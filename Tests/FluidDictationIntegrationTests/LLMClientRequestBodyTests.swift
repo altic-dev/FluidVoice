@@ -243,6 +243,32 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(refreshed.accountLabel, "chatgpt@example.com")
     }
 
+    func testCodexRefreshCoalescerSharesOneInFlightOperation() async throws {
+        let coalescer = InFlightTaskCoalescer<String>()
+        var refreshCount = 0
+
+        let first = Task { @MainActor in
+            try await coalescer.value {
+                refreshCount += 1
+                try await Task.sleep(nanoseconds: 25_000_000)
+                return "rotated-access-token"
+            }
+        }
+        await Task.yield()
+        let second = Task { @MainActor in
+            try await coalescer.value {
+                refreshCount += 1
+                return "unexpected-second-refresh"
+            }
+        }
+
+        let firstValue = try await first.value
+        let secondValue = try await second.value
+        XCTAssertEqual(firstValue, "rotated-access-token")
+        XCTAssertEqual(secondValue, "rotated-access-token")
+        XCTAssertEqual(refreshCount, 1)
+    }
+
     func testClaudeCredentialDecoderImportsOfficialCredentialShape() throws {
         let data = try JSONSerialization.data(withJSONObject: [
             "claudeAiOauth": [
@@ -510,6 +536,98 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(contents.map { $0["role"] as? String }, ["user", "model"])
         let generation = try XCTUnwrap(request["generationConfig"] as? [String: Any])
         XCTAssertEqual(generation["maxOutputTokens"] as? Int, 64)
+    }
+
+    func testGeminiThoughtSignatureIsParsedAndReplayedWithFunctionCall() throws {
+        let parsed = LLMClient.shared.geminiParts(from: [
+            "response": [
+                "candidates": [[
+                    "content": [
+                        "parts": [[
+                            "functionCall": [
+                                "id": "call-gemini",
+                                "name": "execute_terminal_command",
+                                "args": ["command": "pwd"],
+                            ],
+                            "thoughtSignature": "opaque-gemini-thought",
+                        ]],
+                    ],
+                ]],
+            ],
+        ])
+        let toolCall = try XCTUnwrap(parsed.toolCalls.first)
+        XCTAssertEqual(toolCall.thoughtSignature, "opaque-gemini-thought")
+
+        let config = LLMClient.Config(
+            providerID: OfficialProviderAuth.geminiProviderID,
+            messages: [
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [[
+                        "id": toolCall.id,
+                        "type": "function",
+                        "thought_signature": toolCall.thoughtSignature as Any,
+                        "function": [
+                            "name": toolCall.name,
+                            "arguments": "{\"command\":\"pwd\"}",
+                        ],
+                    ]],
+                ],
+                ["role": "tool", "tool_call_id": toolCall.id, "content": "/tmp"],
+            ],
+            model: "gemini-2.5-flash",
+            baseURL: "https://cloudcode-pa.googleapis.com/v1internal",
+            apiKey: "",
+            streaming: true
+        )
+
+        let body = LLMClient.shared.buildGeminiCodeAssistBody(config, project: "projects/example")
+        let request = try XCTUnwrap(body["request"] as? [String: Any])
+        let contents = try XCTUnwrap(request["contents"] as? [[String: Any]])
+        let modelParts = try XCTUnwrap(contents.first?["parts"] as? [[String: Any]])
+        XCTAssertEqual(modelParts.first?["thoughtSignature"] as? String, "opaque-gemini-thought")
+    }
+
+    func testCommandHistoryPersistsOpaqueProviderContinuationState() throws {
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let message = ChatMessage(
+            role: .assistant,
+            content: "Running a command",
+            toolCall: ChatMessage.ToolCall(
+                id: "call-1",
+                command: "pwd",
+                workingDirectory: "/tmp",
+                purpose: "Inspect the working directory",
+                thoughtSignature: "opaque-gemini-thought"
+            ),
+            responsesContinuationItems: [
+                LLMClient.ResponsesContinuationItem(
+                    id: "reasoning-1",
+                    encryptedContent: "opaque-codex-reasoning"
+                ),
+            ],
+            timestamp: timestamp
+        )
+
+        let decoded = try JSONDecoder().decode(
+            ChatMessage.self,
+            from: JSONEncoder().encode(message)
+        )
+        XCTAssertEqual(decoded, message)
+    }
+
+    func testCommandHistoryDecodesBeforeContinuationStateWasPersisted() throws {
+        let message = ChatMessage(role: .assistant, content: "Legacy history")
+        let encoded = try JSONEncoder().encode(message)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "responsesContinuationItems")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(ChatMessage.self, from: legacyData)
+        XCTAssertEqual(decoded.responsesContinuationItems, [])
     }
 
     func testOfficialProvidersHaveBundledModelsAndBaseURLs() {

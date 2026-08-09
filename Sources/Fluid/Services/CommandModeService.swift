@@ -93,6 +93,21 @@ final class CommandModeService: ObservableObject {
             let command: String
             let workingDirectory: String?
             let purpose: String? // Why this command is being run
+            let thoughtSignature: String?
+
+            init(
+                id: String,
+                command: String,
+                workingDirectory: String?,
+                purpose: String?,
+                thoughtSignature: String? = nil
+            ) {
+                self.id = id
+                self.command = command
+                self.workingDirectory = workingDirectory
+                self.purpose = purpose
+                self.thoughtSignature = thoughtSignature
+            }
         }
 
         init(
@@ -238,7 +253,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                thoughtSignature: tc.thoughtSignature
             )
         }
 
@@ -247,6 +263,7 @@ final class CommandModeService: ObservableObject {
             role: role,
             content: msg.content,
             toolCall: toolCall,
+            responsesContinuationItems: msg.responsesContinuationItems,
             stepType: stepType,
             timestamp: msg.timestamp
         )
@@ -277,7 +294,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                thoughtSignature: tc.thoughtSignature
             )
         }
 
@@ -285,6 +303,7 @@ final class CommandModeService: ObservableObject {
             role: role,
             content: chatMsg.content,
             toolCall: toolCall,
+            responsesContinuationItems: chatMsg.responsesContinuationItems,
             stepType: stepType
         )
     }
@@ -431,7 +450,8 @@ final class CommandModeService: ObservableObject {
                         command: tc.command,
                         workingDirectory: tc
                             .workingDirectory,
-                        purpose: tc.purpose
+                        purpose: tc.purpose,
+                        thoughtSignature: tc.thoughtSignature
                     ),
                     responsesContinuationItems: response.responsesContinuationItems,
                     stepType: stepType
@@ -723,6 +743,7 @@ final class CommandModeService: ObservableObject {
             let command: String
             let workingDirectory: String?
             let purpose: String?
+            let thoughtSignature: String?
         }
     }
 
@@ -852,17 +873,21 @@ final class CommandModeService: ObservableObject {
                         DebugLogger.shared.error("Failed to encode tool call args: \(error)", source: "CommandModeService")
                         argsJSON = "{}"
                     }
+                    var toolCallMessage: [String: Any] = [
+                        "id": tc.id,
+                        "type": "function",
+                        "function": [
+                            "name": "execute_terminal_command",
+                            "arguments": argsJSON,
+                        ],
+                    ]
+                    if let thoughtSignature = tc.thoughtSignature {
+                        toolCallMessage["thought_signature"] = thoughtSignature
+                    }
                     var assistantMessage: [String: Any] = [
                         "role": "assistant",
                         "content": msg.content,
-                        "tool_calls": [[
-                            "id": tc.id,
-                            "type": "function",
-                            "function": [
-                                "name": "execute_terminal_command",
-                                "arguments": argsJSON,
-                            ],
-                        ]],
+                        "tool_calls": [toolCallMessage],
                     ]
                     if !msg.responsesContinuationItems.isEmpty {
                         assistantMessage["responses_continuation_items"] = msg.responsesContinuationItems.map(\.inputItem)
@@ -1014,7 +1039,8 @@ final class CommandModeService: ObservableObject {
                     id: tc.id,
                     command: command,
                     workingDirectory: workDir,
-                    purpose: purpose
+                    purpose: purpose,
+                    thoughtSignature: tc.thoughtSignature
                 ),
                 responsesContinuationItems: response.responsesContinuationItems
             )

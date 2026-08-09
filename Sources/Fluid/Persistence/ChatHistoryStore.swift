@@ -15,6 +15,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     let role: Role
     let content: String
     let toolCall: ToolCall?
+    let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
     let stepType: StepType
     let timestamp: Date
 
@@ -39,15 +40,63 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         let command: String
         let workingDirectory: String?
         let purpose: String?
+        let thoughtSignature: String?
+
+        init(
+            id: String,
+            command: String,
+            workingDirectory: String?,
+            purpose: String?,
+            thoughtSignature: String? = nil
+        ) {
+            self.id = id
+            self.command = command
+            self.workingDirectory = workingDirectory
+            self.purpose = purpose
+            self.thoughtSignature = thoughtSignature
+        }
     }
 
-    init(id: UUID = UUID(), role: Role, content: String, toolCall: ToolCall? = nil, stepType: StepType = .normal, timestamp: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        toolCall: ToolCall? = nil,
+        responsesContinuationItems: [LLMClient.ResponsesContinuationItem] = [],
+        stepType: StepType = .normal,
+        timestamp: Date = Date()
+    ) {
         self.id = id
         self.role = role
         self.content = content
         self.toolCall = toolCall
+        self.responsesContinuationItems = responsesContinuationItems
         self.stepType = stepType
         self.timestamp = timestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case content
+        case toolCall
+        case responsesContinuationItems
+        case stepType
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.role = try container.decode(Role.self, forKey: .role)
+        self.content = try container.decode(String.self, forKey: .content)
+        self.toolCall = try container.decodeIfPresent(ToolCall.self, forKey: .toolCall)
+        self.responsesContinuationItems = try container.decodeIfPresent(
+            [LLMClient.ResponsesContinuationItem].self,
+            forKey: .responsesContinuationItems
+        ) ?? []
+        self.stepType = try container.decode(StepType.self, forKey: .stepType)
+        self.timestamp = try container.decode(Date.self, forKey: .timestamp)
     }
 }
 
