@@ -5,6 +5,47 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
+final class OfficialProviderSignInTaskCoordinator {
+    private var task: Task<Void, Never>?
+    private(set) var providerID: String?
+
+    @discardableResult
+    func start(
+        providerID: String,
+        operation: @escaping @MainActor () async -> Void
+    ) -> Bool {
+        guard self.task == nil else { return false }
+
+        self.providerID = providerID
+        self.task = Task { [weak self] in
+            await operation()
+            self?.finish(providerID: providerID)
+        }
+        return true
+    }
+
+    func cancel(providerID: String) {
+        guard self.providerID == providerID else { return }
+        self.task?.cancel()
+    }
+
+    @discardableResult
+    func cancelAndWait(providerID: String) async -> Bool {
+        guard self.providerID == providerID, let task = self.task else { return false }
+
+        task.cancel()
+        await task.value
+        return true
+    }
+
+    private func finish(providerID: String) {
+        guard self.providerID == providerID else { return }
+        self.task = nil
+        self.providerID = nil
+    }
+}
+
+@MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
     let settings: SettingsStore
     let menuBarManager: MenuBarManager
@@ -62,7 +103,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var signingInProviderID: String? = nil
     @Published var oauthSignInMessageByProvider: [String: String] = [:]
     @Published var oauthSignInURLByProvider: [String: URL] = [:]
-    private var officialProviderSignInTask: Task<Void, Never>?
+    private let officialProviderSignInTasks = OfficialProviderSignInTaskCoordinator()
 
     // UI State
     @Published var showHelp: Bool = false
@@ -762,15 +803,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     // MARK: - API Connection Testing
 
     func beginOfficialProviderSignIn(_ providerID: String) {
-        guard self.officialProviderSignInTask == nil else { return }
-        self.officialProviderSignInTask = Task { [weak self] in
+        self.officialProviderSignInTasks.start(providerID: providerID) { [weak self] in
             await self?.signInWithOfficialProvider(providerID)
         }
     }
 
     func cancelOfficialProviderSignIn(_ providerID: String) {
-        guard self.signingInProviderID == providerID else { return }
-        self.officialProviderSignInTask?.cancel()
+        self.officialProviderSignInTasks.cancel(providerID: providerID)
     }
 
     private func signInWithOfficialProvider(_ providerID: String) async {
@@ -806,7 +845,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
             self.oauthSignInURLByProvider.removeValue(forKey: providerID)
             self.signingInProviderID = nil
-            self.officialProviderSignInTask = nil
             self.isTestingConnection = false
 
             await self.testAPIConnection(providerID: providerID)
@@ -814,7 +852,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
             self.oauthSignInURLByProvider.removeValue(forKey: providerID)
             self.signingInProviderID = nil
-            self.officialProviderSignInTask = nil
             self.isTestingConnection = false
             self.updateConnectionStatus(.unknown, for: providerID)
         } catch {
@@ -822,14 +859,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
             self.oauthSignInURLByProvider.removeValue(forKey: providerID)
             self.signingInProviderID = nil
-            self.officialProviderSignInTask = nil
             self.isTestingConnection = false
             self.updateConnectionStatus(.failed, for: providerID)
             self.setConnectionError(message, for: providerID)
         }
     }
 
-    func disconnectOfficialProvider(_ providerID: String) {
+    func disconnectOfficialProvider(_ providerID: String) async {
+        await self.officialProviderSignInTasks.cancelAndWait(providerID: providerID)
+
         do {
             switch providerID {
             case GrokSubscriptionAuth.providerID:

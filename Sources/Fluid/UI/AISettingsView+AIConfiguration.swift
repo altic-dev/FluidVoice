@@ -2536,8 +2536,10 @@ extension AIEnhancementSettingsView {
                     .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
                     if OfficialProviderAuth.supportsInAppSignIn(item.id) {
                         Button("Remove FluidVoice Login") {
-                            self.viewModel.disconnectOfficialProvider(item.id)
-                            self.viewModel.clearEditProviderDraft()
+                            Task {
+                                await self.viewModel.disconnectOfficialProvider(item.id)
+                                self.viewModel.clearEditProviderDraft()
+                            }
                         }
                         .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
                     }

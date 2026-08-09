@@ -667,6 +667,24 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
     }
 
+    func testOfficialProviderSignInTaskCoordinatorCancelsAndAwaitsMatchingTask() async {
+        let coordinator = OfficialProviderSignInTaskCoordinator()
+        var observedCancellation = false
+
+        XCTAssertTrue(coordinator.start(providerID: CodexSubscriptionAuth.providerID) {
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            observedCancellation = true
+        })
+        XCTAssertEqual(coordinator.providerID, CodexSubscriptionAuth.providerID)
+
+        let didCancel = await coordinator.cancelAndWait(providerID: CodexSubscriptionAuth.providerID)
+        XCTAssertTrue(didCancel)
+        XCTAssertTrue(observedCancellation)
+        XCTAssertNil(coordinator.providerID)
+    }
+
     private static let basePromptMarker = "You are a voice-to-text dictation cleaner"
 
     private func resetPromptSettings(_ settings: SettingsStore) {
