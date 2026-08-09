@@ -161,6 +161,7 @@ enum CodexSubscriptionAuth {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            try OfficialProviderAuth.rethrowCancellation(error)
             throw AuthError.requestFailed(0)
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -214,6 +215,7 @@ enum CodexSubscriptionAuth {
             do {
                 (data, response) = try await session.data(for: request)
             } catch {
+                try OfficialProviderAuth.rethrowCancellation(error)
                 throw AuthError.requestFailed(0)
             }
             guard let http = response as? HTTPURLResponse else {
@@ -365,6 +367,7 @@ enum CodexSubscriptionAuth {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            try OfficialProviderAuth.rethrowCancellation(error)
             throw AuthError.requestFailed(0)
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

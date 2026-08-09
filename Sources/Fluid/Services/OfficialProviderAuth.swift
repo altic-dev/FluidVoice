@@ -2,6 +2,23 @@ import CryptoKit
 import Foundation
 import Security
 
+@MainActor
+final class CredentialScopedValueCache<Value> {
+    private var values: [String: Value] = [:]
+
+    func value(
+        for credentialKey: String,
+        load: @MainActor () async throws -> Value
+    ) async throws -> Value {
+        if let cached = values[credentialKey] {
+            return cached
+        }
+        let loaded = try await load()
+        self.values[credentialKey] = loaded
+        return loaded
+    }
+}
+
 /// Adapters for subscription sessions created by first-party AI clients.
 ///
 /// Grok and ChatGPT additionally support public device authorization flows and
@@ -67,6 +84,7 @@ enum OfficialProviderAuth {
 
     private static let expirySafetyWindow: TimeInterval = 60
     private static let maximumCredentialFileSize = 1_048_576
+    private static let geminiProjectCache = CredentialScopedValueCache<String>()
     struct CodexCredential: Equatable {
         let accessToken: String
         let accountID: String?
@@ -231,7 +249,13 @@ enum OfficialProviderAuth {
         case self.geminiProviderID:
             let stored = try self.loadGeminiCredential()
             let credential = try self.validGeminiCredential(stored, now: now)
-            let project = try await self.loadGeminiProject(accessToken: credential.accessToken, session: session)
+            let cacheKey = self.geminiProjectCacheKey(
+                accountLabel: credential.accountLabel,
+                accessToken: credential.accessToken
+            )
+            let project = try await self.geminiProjectCache.value(for: cacheKey) {
+                try await self.loadGeminiProject(accessToken: credential.accessToken, session: session)
+            }
             return Session(
                 providerID: providerID,
                 accessToken: credential.accessToken,
@@ -467,6 +491,7 @@ enum OfficialProviderAuth {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            try self.rethrowCancellation(error)
             throw AuthError.refreshFailed("Gemini Code Assist setup check failed: \(error.localizedDescription)")
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
@@ -502,6 +527,16 @@ enum OfficialProviderAuth {
             )
         }
         return project
+    }
+
+    static func geminiProjectCacheKey(accountLabel: String, accessToken: String) -> String {
+        self.sha256("gemini-project|\(accountLabel)|\(accessToken)")
+    }
+
+    static func rethrowCancellation(_ error: Error) throws {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled {
+            throw CancellationError()
+        }
     }
 
     private static func geminiAccountLabel() -> String {

@@ -243,7 +243,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(refreshed.accountLabel, "chatgpt@example.com")
     }
 
-    func testCodexRefreshCoalescerSharesOneInFlightOperation() async throws {
+    func testOAuthRefreshCoalescerSharesOneInFlightOperation() async throws {
         let coalescer = InFlightTaskCoalescer<String>()
         var refreshCount = 0
 
@@ -267,6 +267,61 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(firstValue, "rotated-access-token")
         XCTAssertEqual(secondValue, "rotated-access-token")
         XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testOAuthTransportCancellationRemainsCancellation() {
+        XCTAssertThrowsError(
+            try OfficialProviderAuth.rethrowCancellation(URLError(.cancelled))
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertNoThrow(
+            try OfficialProviderAuth.rethrowCancellation(URLError(.notConnectedToInternet))
+        )
+    }
+
+    func testCodexAndGrokPollingPreserveTransportCancellation() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CancellingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let codexAuthorization = CodexSubscriptionAuth.DeviceAuthorization(
+            deviceAuthID: "device-auth",
+            userCode: "ABCD-1234",
+            pollingInterval: 0,
+            expiresAt: now.addingTimeInterval(60)
+        )
+        do {
+            _ = try await CodexSubscriptionAuth.completeDeviceAuthorization(
+                codexAuthorization,
+                session: session,
+                now: { now }
+            )
+            XCTFail("Codex polling should preserve cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        let grokAuthorization = try GrokSubscriptionAuth.DeviceAuthorization(
+            deviceCode: "device-code",
+            userCode: "ABCD-1234",
+            verificationURL: XCTUnwrap(URL(string: "https://auth.x.ai/device")),
+            verificationCompleteURL: nil,
+            pollingInterval: 0,
+            expiresAt: now.addingTimeInterval(60)
+        )
+        do {
+            _ = try await GrokSubscriptionAuth.completeDeviceAuthorization(
+                grokAuthorization,
+                session: session,
+                now: { now }
+            )
+            XCTFail("Grok polling should preserve cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
     }
 
     func testClaudeCredentialDecoderImportsOfficialCredentialShape() throws {
@@ -314,6 +369,39 @@ final class LLMClientRequestBodyTests: XCTestCase {
                 "GOOGLE_CLOUD_PROJECT": "1234567890",
             ])
         )
+    }
+
+    func testGeminiProjectCacheIsScopedToCredentialAndAvoidsRepeatedSetup() async throws {
+        let cache = CredentialScopedValueCache<String>()
+        let firstKey = OfficialProviderAuth.geminiProjectCacheKey(
+            accountLabel: "first@example.com",
+            accessToken: "first-access-token"
+        )
+        let secondKey = OfficialProviderAuth.geminiProjectCacheKey(
+            accountLabel: "second@example.com",
+            accessToken: "second-access-token"
+        )
+        var loadCount = 0
+
+        let first = try await cache.value(for: firstKey) {
+            loadCount += 1
+            return "projects/first"
+        }
+        let cached = try await cache.value(for: firstKey) {
+            loadCount += 1
+            return "unexpected-reload"
+        }
+        let second = try await cache.value(for: secondKey) {
+            loadCount += 1
+            return "projects/second"
+        }
+
+        XCTAssertEqual(first, "projects/first")
+        XCTAssertEqual(cached, "projects/first")
+        XCTAssertEqual(second, "projects/second")
+        XCTAssertEqual(loadCount, 2)
+        XCTAssertNotEqual(firstKey, secondKey)
+        XCTAssertFalse(firstKey.contains("first-access-token"))
     }
 
     func testGrokCredentialDecoderSelectsOAuthSessionAndIgnoresAPIKey() throws {
@@ -853,4 +941,20 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
         return "\(base64URL(header)).\(base64URL(payload)).signature"
     }
+}
+
+private class CancellingURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with _: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        self.client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+    }
+
+    override func stopLoading() {}
 }

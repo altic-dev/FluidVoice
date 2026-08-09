@@ -32,6 +32,7 @@ enum GrokSubscriptionAuth {
     private static let fallbackCredentialLifetime: TimeInterval = 30 * 24 * 60 * 60
     private static let expirySafetyWindow: TimeInterval = 60
     private static let fallbackClientVersion = "1.0.0"
+    private static let refreshCoalescer = InFlightTaskCoalescer<OAuthSession>()
 
     struct DeviceAuthorization: Equatable {
         let deviceCode: String
@@ -241,6 +242,7 @@ enum GrokSubscriptionAuth {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            try OfficialProviderAuth.rethrowCancellation(error)
             throw AuthError.oauthRequestFailed(0)
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -315,6 +317,7 @@ enum GrokSubscriptionAuth {
             do {
                 (data, response) = try await session.data(for: request)
             } catch {
+                try OfficialProviderAuth.rethrowCancellation(error)
                 throw AuthError.oauthRequestFailed(0)
             }
 
@@ -387,8 +390,12 @@ enum GrokSubscriptionAuth {
     ) async throws -> ResolvedCredential {
         if var ownedSession = try self.loadOAuthSession() {
             if ownedSession.expiresAt.timeIntervalSince(now) <= self.expirySafetyWindow {
-                ownedSession = try await self.refreshOAuthSession(ownedSession, now: now, session: session)
-                try self.storeOAuthSession(ownedSession)
+                let sessionToRefresh = ownedSession
+                ownedSession = try await self.refreshCoalescer.value {
+                    let refreshed = try await self.refreshOAuthSession(sessionToRefresh, now: now, session: session)
+                    try self.storeOAuthSession(refreshed)
+                    return refreshed
+                }
             }
             return ResolvedCredential(
                 accessToken: ownedSession.accessToken,
@@ -566,6 +573,7 @@ enum GrokSubscriptionAuth {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            try OfficialProviderAuth.rethrowCancellation(error)
             throw AuthError.oauthRequestFailed(0)
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
