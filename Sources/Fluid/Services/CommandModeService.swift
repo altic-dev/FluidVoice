@@ -892,6 +892,7 @@ final class CommandModeService: ObservableObject {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: providerID,
             messages: messages,
             model: model,
             baseURL: baseURL,

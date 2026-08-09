@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import CryptoKit
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
@@ -60,6 +59,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var connectionErrorMessageByProvider: [String: String] = [:]
     @Published var fetchedModelsProviders: Set<String> = []
     @Published var editingAPIKeyProviders: Set<String> = []
+    @Published var signingInProviderID: String? = nil
+    @Published var oauthSignInMessageByProvider: [String: String] = [:]
+    @Published var oauthSignInURLByProvider: [String: URL] = [:]
+    private var officialProviderSignInTask: Task<Void, Never>?
 
     // UI State
     @Published var showHelp: Bool = false
@@ -275,6 +278,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return ModelRepository.shared.displayName(for: providerID)
         }
 
+        if ModelRepository.shared.isBuiltIn(providerID) {
+            return ModelRepository.shared.displayName(for: providerID)
+        }
+
         switch providerID {
         case "": return "No Provider"
         case "openai": return "OpenAI"
@@ -305,6 +312,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func connectionErrorMessage(for providerID: String) -> String {
         self.connectionErrorMessageByProvider[providerID] ?? ""
+    }
+
+    func oauthSignInMessage(for providerID: String) -> String {
+        self.oauthSignInMessageByProvider[providerID] ?? ""
+    }
+
+    func oauthSignInURL(for providerID: String) -> URL? {
+        self.oauthSignInURLByProvider[providerID]
     }
 
     // MARK: - Provider Items Cache (for scroll performance)
@@ -734,6 +749,96 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     // MARK: - API Connection Testing
 
+    func beginOfficialProviderSignIn(_ providerID: String) {
+        guard self.officialProviderSignInTask == nil else { return }
+        self.officialProviderSignInTask = Task { [weak self] in
+            await self?.signInWithOfficialProvider(providerID)
+        }
+    }
+
+    func cancelOfficialProviderSignIn(_ providerID: String) {
+        guard self.signingInProviderID == providerID else { return }
+        self.officialProviderSignInTask?.cancel()
+    }
+
+    private func signInWithOfficialProvider(_ providerID: String) async {
+        guard OfficialProviderAuth.supportsInAppSignIn(providerID),
+              self.signingInProviderID == nil
+        else { return }
+
+        self.signingInProviderID = providerID
+        self.isTestingConnection = true
+        self.updateConnectionStatus(.testing, for: providerID)
+
+        do {
+            switch providerID {
+            case GrokSubscriptionAuth.providerID:
+                let authorization = try await GrokSubscriptionAuth.requestDeviceAuthorization()
+                self.oauthSignInMessageByProvider[providerID] =
+                    "Confirm code \(authorization.userCode) in your browser. FluidVoice will finish automatically after you approve."
+                self.oauthSignInURLByProvider[providerID] = authorization.browserURL
+                _ = NSWorkspace.shared.open(authorization.browserURL)
+                _ = try await GrokSubscriptionAuth.completeDeviceAuthorization(authorization)
+
+            case CodexSubscriptionAuth.providerID:
+                let authorization = try await CodexSubscriptionAuth.requestDeviceAuthorization()
+                self.oauthSignInMessageByProvider[providerID] =
+                    "Enter code \(authorization.userCode) on the ChatGPT sign-in page. FluidVoice will finish automatically after you approve."
+                self.oauthSignInURLByProvider[providerID] = authorization.browserURL
+                _ = NSWorkspace.shared.open(authorization.browserURL)
+                _ = try await CodexSubscriptionAuth.completeDeviceAuthorization(authorization)
+
+            default:
+                return
+            }
+            self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
+            self.oauthSignInURLByProvider.removeValue(forKey: providerID)
+            self.signingInProviderID = nil
+            self.officialProviderSignInTask = nil
+            self.isTestingConnection = false
+
+            await self.testAPIConnection()
+        } catch is CancellationError {
+            self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
+            self.oauthSignInURLByProvider.removeValue(forKey: providerID)
+            self.signingInProviderID = nil
+            self.officialProviderSignInTask = nil
+            self.isTestingConnection = false
+            self.updateConnectionStatus(.unknown, for: providerID)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
+            self.oauthSignInURLByProvider.removeValue(forKey: providerID)
+            self.signingInProviderID = nil
+            self.officialProviderSignInTask = nil
+            self.isTestingConnection = false
+            self.updateConnectionStatus(.failed, for: providerID)
+            self.setConnectionError(message, for: providerID)
+        }
+    }
+
+    func disconnectOfficialProvider(_ providerID: String) {
+        do {
+            switch providerID {
+            case GrokSubscriptionAuth.providerID:
+                try GrokSubscriptionAuth.disconnectFluidVoiceSession()
+            case CodexSubscriptionAuth.providerID:
+                try CodexSubscriptionAuth.disconnectFluidVoiceSession()
+            default:
+                return
+            }
+            self.oauthSignInMessageByProvider.removeValue(forKey: providerID)
+            self.oauthSignInURLByProvider.removeValue(forKey: providerID)
+            self.resetVerification(for: providerID)
+        } catch {
+            self.updateConnectionStatus(.failed, for: providerID)
+            self.setConnectionError(
+                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription,
+                for: providerID
+            )
+        }
+    }
+
     func testAPIConnection() async {
         guard !self.isTestingConnection else { return }
 
@@ -758,7 +863,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
 
-        if !isLocal && apiKey.isEmpty {
+        if !isLocal && !OfficialProviderAuth.isOfficialProvider(providerID) && apiKey.isEmpty {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("API key is required for \(providerName). Enter your API key above.", for: providerID)
@@ -779,6 +884,41 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         await MainActor.run {
             self.isTestingConnection = true
             self.updateConnectionStatus(.testing, for: providerID)
+        }
+
+        if OfficialProviderAuth.isOfficialProvider(providerID) {
+            do {
+                var config = LLMClient.Config(
+                    providerID: providerID,
+                    messages: [["role": "user", "content": "Reply with OK."]],
+                    model: trimmedModel,
+                    baseURL: baseURL,
+                    apiKey: "",
+                    streaming: false,
+                    temperature: nil,
+                    maxTokens: 16
+                )
+                config.timeoutSeconds = 30
+                config.maxRetries = 1
+                _ = try await LLMClient.shared.call(config)
+                await MainActor.run {
+                    self.setEditingAPIKey(false, for: providerID)
+                    self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: "")
+                    self.isTestingConnection = false
+                }
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                DebugLogger.shared.error(
+                    "Official login verification failed for \(providerID): \(message)",
+                    source: "AISettingsView"
+                )
+                await MainActor.run {
+                    self.updateConnectionStatus(.failed, for: providerID)
+                    self.setConnectionError(message, for: providerID)
+                    self.isTestingConnection = false
+                }
+            }
+            return
         }
 
         // Build the endpoint URL
@@ -1344,14 +1484,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return ""
     }
 
-    private func fingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only require baseURL - API key can be empty for local providers (Ollama, LM Studio, etc.)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func fingerprint(providerID: String, baseURL: String, apiKey: String) -> String? {
+        OfficialProviderAuth.configurationFingerprint(
+            providerID: providerID,
+            baseURL: baseURL,
+            apiKey: apiKey
+        )
     }
 
     private func privateAIFingerprint(for modelID: String) -> String {
@@ -1368,7 +1506,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func storeVerificationFingerprint(for providerID: String, baseURL: String, apiKey: String) {
-        guard let fingerprint = self.fingerprint(baseURL: baseURL, apiKey: apiKey) else { return }
+        guard let fingerprint = self.fingerprint(providerID: providerID, baseURL: baseURL, apiKey: apiKey) else { return }
         let key = self.providerKey(for: providerID)
         var fingerprints = self.settings.verifiedProviderFingerprints
         fingerprints[key] = fingerprint
@@ -1382,7 +1520,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard let stored = self.settings.verifiedProviderFingerprints[key] else { return }
         let baseURL = self.providerBaseURL(for: providerID)
         let apiKey = self.providerAPIKey(for: providerID)
-        let current = self.fingerprint(baseURL: baseURL, apiKey: apiKey)
+        let current = self.fingerprint(providerID: providerID, baseURL: baseURL, apiKey: apiKey)
         if current != stored {
             self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
             self.connectionStatusByProvider[providerID] = .unknown
@@ -1416,7 +1554,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
             let baseURL = self.providerBaseURL(for: providerID)
             let apiKey = self.providerAPIKey(for: providerID)
-            let current = self.fingerprint(baseURL: baseURL, apiKey: apiKey)
+            let current = self.fingerprint(providerID: providerID, baseURL: baseURL, apiKey: apiKey)
             if current == stored {
                 statuses[providerID] = .success
             } else if statuses[providerID] == .success {

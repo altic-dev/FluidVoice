@@ -1321,13 +1321,14 @@ extension AIEnhancementSettingsView {
         let isCustom = !ModelRepository.shared.isBuiltIn(item.id)
         let baseURL = self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
+        let isOfficialLogin = OfficialProviderAuth.isOfficialProvider(item.id)
         let apiKeyValue = self.viewModel.providerAPIKey(for: item.id)
         let hasAPIKey = !apiKeyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let models = self.viewModel.availableModelsByProvider[providerKey] ?? []
         let hasModels = !models.isEmpty
         let isRefreshing = self.viewModel.isFetchingModels && self.viewModel.selectedProviderID == item.id
         let hasName = isCustom ? !(self.viewModel.savedProviders.first { $0.id == item.id }?.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : true
-        let canFetchModels = hasName && (isLocal ? !baseURL.isEmpty : (hasAPIKey && !baseURL.isEmpty))
+        let canFetchModels = hasName && !baseURL.isEmpty && (isLocal || isOfficialLogin || hasAPIKey)
         let canVerify = hasModels && !self.viewModel.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && canFetchModels
         let apiKeyBinding = Binding(
             get: { self.viewModel.providerAPIKey(for: item.id) },
@@ -1378,37 +1379,133 @@ extension AIEnhancementSettingsView {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("API Key")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    HStack(alignment: .center, spacing: 8) {
-                        SecureField("Enter API key", text: apiKeyBinding)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13))
-                            .frame(maxWidth: 200)
-                            .onTapGesture {
-                                self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                if isOfficialLogin, let loginInfo = OfficialProviderAuth.info(for: item.id) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 7) {
+                            Image(systemName: "person.badge.key.fill")
+                                .foregroundStyle(self.theme.palette.accent)
+                            Text("Official client login")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Text(loginInfo.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if OfficialProviderAuth.supportsInAppSignIn(item.id) {
+                            Button(action: {
+                                if self.viewModel.signingInProviderID == item.id {
+                                    self.viewModel.cancelOfficialProviderSignIn(item.id)
+                                } else {
+                                    self.activateProvider(item.id)
+                                    self.viewModel.beginOfficialProviderSignIn(item.id)
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    if self.viewModel.signingInProviderID == item.id {
+                                        Image(systemName: "xmark.circle.fill")
+                                    } else {
+                                        Image(systemName: "person.badge.key.fill")
+                                    }
+                                    Text(
+                                        self.viewModel.signingInProviderID == item.id
+                                            ? "Cancel Sign-In"
+                                            : (OfficialProviderAuth.inAppSignInLabel(for: item.id) ?? "Sign In")
+                                    )
+                                }
                             }
-                        if let websiteInfo = ModelRepository.shared.providerWebsiteURL(for: item.id),
-                           let url = URL(string: websiteInfo.url)
-                        {
-                            Button(action: { NSWorkspace.shared.open(url) }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
-                                        .font(.system(size: 10))
-                                    Text(websiteInfo.label)
+                            .fluidButton(.accent, size: .small)
+                            .disabled(
+                                (self.viewModel.signingInProviderID != nil && self.viewModel.signingInProviderID != item.id) ||
+                                    (self.viewModel.isTestingConnection && self.viewModel.signingInProviderID != item.id)
+                            )
+
+                            let signInMessage = self.viewModel.oauthSignInMessage(for: item.id)
+                            if !signInMessage.isEmpty {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(signInMessage)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                    if let signInURL = self.viewModel.oauthSignInURL(for: item.id) {
+                                        Button("Open Sign-In Page") { NSWorkspace.shared.open(signInURL) }
+                                            .buttonStyle(.link)
+                                    }
+                                }
+                            }
+
+                            HStack(spacing: 8) {
+                                Text("CLI fallback: \(loginInfo.setupCommand)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                if let url = URL(string: loginInfo.setupURL) {
+                                    Button(loginInfo.setupLabel) { NSWorkspace.shared.open(url) }
+                                        .buttonStyle(.link)
                                         .font(.system(size: 11, weight: .medium))
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .fill(self.theme.palette.accent)
-                                )
-                                .foregroundStyle(.white)
                             }
-                            .buttonStyle(.plain)
+                        } else {
+                            Text("FluidVoice reads the current access session on demand and does not copy refresh tokens. Sign in with:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                Text(loginInfo.setupCommand)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(self.theme.palette.contentBackground)
+                                    )
+                                if let url = URL(string: loginInfo.setupURL) {
+                                    Button(action: { NSWorkspace.shared.open(url) }) {
+                                        Label(loginInfo.setupLabel, systemImage: "book.fill")
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .buttonStyle(.link)
+                                }
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(self.theme.palette.accent.opacity(0.07))
+                    )
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("API Key")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        HStack(alignment: .center, spacing: 8) {
+                            SecureField("Enter API key", text: apiKeyBinding)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 13))
+                                .frame(maxWidth: 200)
+                                .onTapGesture {
+                                    self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                                }
+                            if let websiteInfo = ModelRepository.shared.providerWebsiteURL(for: item.id),
+                               let url = URL(string: websiteInfo.url)
+                            {
+                                Button(action: { NSWorkspace.shared.open(url) }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
+                                            .font(.system(size: 10))
+                                        Text(websiteInfo.label)
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(self.theme.palette.accent)
+                                    )
+                                    .foregroundStyle(.white)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
                 }
@@ -1628,7 +1725,8 @@ extension AIEnhancementSettingsView {
         let isLocal = self.viewModel.isLocalEndpoint(baseURL)
         let apiKeyValue = self.viewModel.providerAPIKey(for: item.id)
         let hasAPIKey = !apiKeyValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let canFetchModels = isLocal ? !baseURL.isEmpty : (hasAPIKey && !baseURL.isEmpty)
+        let canFetchModels = !baseURL.isEmpty &&
+            (isLocal || OfficialProviderAuth.isOfficialProvider(item.id) || hasAPIKey)
         let hasModels = !models.isEmpty
         let isEditing = self.viewModel.showingEditProvider && self.viewModel.selectedProviderID == item.id
         let iconColumnWidth = AISettingsLayout.providerRowControlHeight
@@ -1766,7 +1864,11 @@ extension AIEnhancementSettingsView {
                     .background(self.theme.palette.separator.opacity(0.5))
                     .padding(.vertical, 10)
 
-                self.editProviderSection
+                if OfficialProviderAuth.isOfficialProvider(item.id) {
+                    self.officialLoginEditSection(item)
+                } else {
+                    self.editProviderSection
+                }
             }
 
             if !isPrivateAIProvider,
@@ -2354,6 +2456,103 @@ extension AIEnhancementSettingsView {
         )
         .padding(.vertical, 4)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
+    }
+
+    @ViewBuilder
+    private func officialLoginEditSection(_ item: ProviderItem) -> some View {
+        if let info = OfficialProviderAuth.info(for: item.id) {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Official client login", systemImage: "person.badge.key.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.accent)
+                Text(info.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if OfficialProviderAuth.supportsInAppSignIn(item.id) {
+                    Button(action: {
+                        if self.viewModel.signingInProviderID == item.id {
+                            self.viewModel.cancelOfficialProviderSignIn(item.id)
+                        } else {
+                            self.activateProvider(item.id)
+                            self.viewModel.beginOfficialProviderSignIn(item.id)
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            if self.viewModel.signingInProviderID == item.id {
+                                Image(systemName: "xmark.circle.fill")
+                            } else {
+                                Image(systemName: "person.badge.key.fill")
+                            }
+                            Text(
+                                self.viewModel.signingInProviderID == item.id
+                                    ? "Cancel Sign-In"
+                                    : (OfficialProviderAuth.inAppSignInLabel(for: item.id) ?? "Sign In")
+                            )
+                        }
+                    }
+                    .fluidButton(.accent, size: .small)
+                    .disabled(
+                        (self.viewModel.signingInProviderID != nil && self.viewModel.signingInProviderID != item.id) ||
+                            (self.viewModel.isTestingConnection && self.viewModel.signingInProviderID != item.id)
+                    )
+
+                    let signInMessage = self.viewModel.oauthSignInMessage(for: item.id)
+                    if !signInMessage.isEmpty {
+                        Text(signInMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Text("CLI fallback: \(info.setupCommand)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } else {
+                    Text(info.setupCommand)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(self.theme.palette.contentBackground)
+                        )
+                }
+                HStack(spacing: 10) {
+                    if let url = URL(string: info.setupURL) {
+                        Button(info.setupLabel) { NSWorkspace.shared.open(url) }
+                            .fluidButton(.glass, size: .compact)
+                    }
+                    Button("Verify Again") {
+                        self.activateProvider(item.id)
+                        Task { await self.viewModel.testAPIConnection() }
+                    }
+                    .fluidButton(.accent, size: .small)
+                    .disabled(self.viewModel.isTestingConnection)
+                    Button("Reset Verification") {
+                        self.viewModel.resetVerification(for: item.id)
+                        self.viewModel.clearEditProviderDraft()
+                    }
+                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    if OfficialProviderAuth.supportsInAppSignIn(item.id) {
+                        Button("Remove FluidVoice Login") {
+                            self.viewModel.disconnectOfficialProvider(item.id)
+                            self.viewModel.clearEditProviderDraft()
+                        }
+                        .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    }
+                    Spacer()
+                    Button("Done") { self.viewModel.clearEditProviderDraft() }
+                        .fluidButton(.compact, size: .compact)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(self.theme.palette.accent.opacity(0.06))
+            )
+        }
     }
 
     var appleIntelligenceBadge: some View {

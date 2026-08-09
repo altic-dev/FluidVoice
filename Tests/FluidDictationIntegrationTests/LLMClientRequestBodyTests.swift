@@ -53,6 +53,23 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(body["stream"] as? Bool, true)
     }
 
+    func testCodexSubscriptionForcesStreamingWithoutChangingOtherProviders() {
+        XCTAssertTrue(
+            LLMClient.effectiveStreaming(
+                providerID: OfficialProviderAuth.codexProviderID,
+                requested: false
+            )
+        )
+        XCTAssertFalse(LLMClient.effectiveStreaming(providerID: "openai", requested: false))
+        XCTAssertFalse(
+            LLMClient.effectiveStreaming(
+                providerID: GrokSubscriptionAuth.providerID,
+                requested: false
+            )
+        )
+        XCTAssertTrue(LLMClient.effectiveStreaming(providerID: "openai", requested: true))
+    }
+
     // MARK: - Dictation custom prompt resolution
 
     func testCustomPromptOnly_omitsBasePromptFromEffectivePromptAndRequestBody() {
@@ -157,6 +174,449 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
     }
 
+    // MARK: - Official provider OAuth adapters (#819)
+
+    func testCodexCredentialDecoderImportsChatGPTSessionWithoutRefreshTokenExposure() throws {
+        let token = self.jwt(["sub": "user-123", "email": "person@example.com", "exp": 2_000_000_000])
+        let data = try JSONSerialization.data(withJSONObject: [
+            "auth_mode": "chatgpt",
+            "tokens": [
+                "access_token": token,
+                "refresh_token": "owned-by-codex",
+                "account_id": "account-456",
+            ],
+        ])
+
+        let credential = try OfficialProviderAuth.decodeCodexCredential(from: data)
+        XCTAssertEqual(credential.accessToken, token)
+        XCTAssertEqual(credential.accountID, "account-456")
+        XCTAssertEqual(credential.accountLabel, "person@example.com")
+    }
+
+    func testCodexDeviceAuthorizationDecodesPublicBrowserFlow() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "device_auth_id": "device-auth-secret",
+            "user_code": "WXYZ-9876",
+            "interval": "5",
+        ])
+
+        let authorization = try CodexSubscriptionAuth.decodeDeviceAuthorization(from: data, now: now)
+        XCTAssertEqual(authorization.userCode, "WXYZ-9876")
+        XCTAssertEqual(authorization.pollingInterval, 5)
+        XCTAssertEqual(authorization.expiresAt, now.addingTimeInterval(15 * 60))
+        XCTAssertEqual(authorization.browserURL.absoluteString, "https://auth.openai.com/codex/device")
+    }
+
+    func testCodexOAuthTokenDecoderPreservesRotatingSessionIdentity() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let idToken = self.jwt([
+            "email": "chatgpt@example.com",
+            "https://api.openai.com/auth": ["chatgpt_account_id": "account-123"],
+        ])
+        let initialData = try JSONSerialization.data(withJSONObject: [
+            "id_token": idToken,
+            "access_token": "codex-access",
+            "refresh_token": "codex-refresh",
+            "expires_in": 3600,
+        ])
+
+        let initial = try CodexSubscriptionAuth.decodeOAuthSession(from: initialData, now: now)
+        XCTAssertEqual(initial.accountID, "account-123")
+        XCTAssertEqual(initial.accountLabel, "chatgpt@example.com")
+        XCTAssertEqual(initial.refreshToken, "codex-refresh")
+
+        let refreshedData = try JSONSerialization.data(withJSONObject: [
+            "access_token": "codex-access-rotated",
+            "expires_in": 1800,
+        ])
+        let refreshed = try CodexSubscriptionAuth.decodeOAuthSession(
+            from: refreshedData,
+            previousRefreshToken: initial.refreshToken,
+            previousAccountID: initial.accountID,
+            previousEmail: initial.email,
+            now: now
+        )
+        XCTAssertEqual(refreshed.accessToken, "codex-access-rotated")
+        XCTAssertEqual(refreshed.refreshToken, "codex-refresh")
+        XCTAssertEqual(refreshed.accountID, "account-123")
+        XCTAssertEqual(refreshed.accountLabel, "chatgpt@example.com")
+    }
+
+    func testClaudeCredentialDecoderImportsOfficialCredentialShape() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "claudeAiOauth": [
+                "accessToken": "claude-oauth-access",
+                "refreshToken": "owned-by-claude",
+                "expiresAt": 2_000_000_000_000,
+                "email": "claude@example.com",
+            ],
+        ])
+
+        let credential = try OfficialProviderAuth.decodeClaudeCredential(from: data)
+        XCTAssertEqual(credential.accessToken, "claude-oauth-access")
+        XCTAssertEqual(credential.accountLabel, "claude@example.com")
+        XCTAssertEqual(credential.expiresAt, Date(timeIntervalSince1970: 2_000_000_000))
+    }
+
+    func testGeminiCredentialDecoderSupportsLegacyCLIFile() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "access_token": "google-access",
+            "refresh_token": "owned-by-gemini",
+            "expiry_date": 2_000_000_000_000,
+        ])
+
+        let credential = try OfficialProviderAuth.decodeGeminiCredential(
+            from: data,
+            accountLabel: "google@example.com"
+        )
+        XCTAssertEqual(credential.accessToken, "google-access")
+        XCTAssertEqual(credential.accountLabel, "google@example.com")
+        XCTAssertEqual(credential.expiresAt, Date(timeIntervalSince1970: 2_000_000_000))
+    }
+
+    func testGeminiProjectUsesOfficialCLIEnvironmentContract() throws {
+        XCTAssertEqual(
+            try OfficialProviderAuth.configuredGeminiProject(environment: [
+                "GOOGLE_CLOUD_PROJECT": "workspace-project",
+                "GOOGLE_CLOUD_PROJECT_ID": "fallback-project",
+            ]),
+            "workspace-project"
+        )
+        XCTAssertThrowsError(
+            try OfficialProviderAuth.configuredGeminiProject(environment: [
+                "GOOGLE_CLOUD_PROJECT": "1234567890",
+            ])
+        )
+    }
+
+    func testGrokCredentialDecoderSelectsOAuthSessionAndIgnoresAPIKey() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "https://api.x.ai::legacy": [
+                "key": "xai-api-key",
+                "auth_mode": "api_key",
+                "create_time": "2027-01-01T00:00:00Z",
+            ],
+            "https://auth.x.ai::openid profile offline_access": [
+                "key": "grok-oauth-access",
+                "auth_mode": "oidc",
+                "create_time": "2027-01-02T00:00:00Z",
+                "expires_at": "2027-02-02T00:00:00Z",
+                "oidc_issuer": "https://auth.x.ai",
+                "user_id": "grok-user-1",
+                "email": "grok@example.com",
+            ],
+        ])
+
+        let credential = try GrokSubscriptionAuth.decodeCredential(
+            from: data,
+            grokHome: URL(fileURLWithPath: "/tmp/test-grok-home", isDirectory: true),
+            now: now
+        )
+        XCTAssertEqual(credential.accessToken, "grok-oauth-access")
+        XCTAssertEqual(credential.userID, "grok-user-1")
+        XCTAssertEqual(credential.accountLabel, "grok@example.com")
+        XCTAssertEqual(credential.requestHeaders["X-XAI-Token-Auth"], "xai-grok-cli")
+        XCTAssertEqual(credential.requestHeaders["x-grok-user-id"], "grok-user-1")
+        XCTAssertEqual(credential.requestHeaders["x-grok-client-identifier"], "fluidvoice")
+        XCTAssertEqual(ModelRepository.shared.defaultBaseURL(for: GrokSubscriptionAuth.providerID), GrokSubscriptionAuth.proxyBaseURL)
+    }
+
+    func testGrokDeviceLoginKeepsTheOfficialSubscriptionRoutingContract() {
+        XCTAssertEqual(
+            GrokSubscriptionAuth.deviceAuthorizationScopes,
+            [
+                "openid",
+                "profile",
+                "email",
+                "offline_access",
+                "grok-cli:access",
+                "api:access",
+                "conversations:read",
+                "conversations:write",
+                "workspaces:read",
+                "workspaces:write",
+            ]
+        )
+        XCTAssertEqual(GrokSubscriptionAuth.deviceAuthorizationReferrer, "grok-build")
+
+        let headers = GrokSubscriptionAuth.proxyRequestHeaders(
+            userID: "grok-user-2",
+            grokHome: URL(fileURLWithPath: "/tmp/no-grok-install", isDirectory: true)
+        )
+        XCTAssertEqual(headers["X-XAI-Token-Auth"], "xai-grok-cli")
+        XCTAssertEqual(headers["x-authenticateresponse"], "authenticate-response")
+        XCTAssertEqual(headers["x-grok-client-mode"], "interactive")
+        XCTAssertEqual(headers["x-grok-client-identifier"], "fluidvoice")
+        XCTAssertEqual(headers["x-grok-user-id"], "grok-user-2")
+        XCTAssertEqual(headers["x-userid"], "grok-user-2")
+    }
+
+    func testGrokDeviceAuthorizationBuildsSafeBrowserChallenge() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "device_code": "device-secret",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://auth.x.ai/device",
+            "expires_in": 600,
+            "interval": 5,
+        ])
+
+        let authorization = try GrokSubscriptionAuth.decodeDeviceAuthorization(from: data, now: now)
+        XCTAssertEqual(authorization.userCode, "ABCD-1234")
+        XCTAssertEqual(authorization.pollingInterval, 5)
+        XCTAssertEqual(authorization.expiresAt, now.addingTimeInterval(600))
+        XCTAssertEqual(
+            authorization.browserURL.absoluteString,
+            "https://auth.x.ai/device?user_code=ABCD-1234"
+        )
+    }
+
+    func testGrokDeviceAuthorizationRejectsUntrustedVerificationURL() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "device_code": "device-secret",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://phishing.invalid/device",
+            "expires_in": 600,
+        ])
+
+        XCTAssertThrowsError(try GrokSubscriptionAuth.decodeDeviceAuthorization(from: data))
+    }
+
+    func testGrokOAuthTokenDecoderRetainsRefreshTokenAndAccountIdentity() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let idToken = self.jwt([
+            "sub": "grok-user-2",
+            "email": "signed-in@example.com",
+        ])
+        let initialData = try JSONSerialization.data(withJSONObject: [
+            "access_token": "fluidvoice-grok-access",
+            "refresh_token": "fluidvoice-grok-refresh",
+            "expires_in": 3600,
+            "scope": "openid offline_access api:access",
+            "id_token": idToken,
+        ])
+
+        let initial = try GrokSubscriptionAuth.decodeOAuthSession(from: initialData, now: now)
+        XCTAssertEqual(initial.accessToken, "fluidvoice-grok-access")
+        XCTAssertEqual(initial.refreshToken, "fluidvoice-grok-refresh")
+        XCTAssertEqual(initial.expiresAt, now.addingTimeInterval(3600))
+        XCTAssertEqual(initial.userID, "grok-user-2")
+        XCTAssertEqual(initial.accountLabel, "signed-in@example.com")
+
+        let refreshData = try JSONSerialization.data(withJSONObject: [
+            "access_token": "rotated-access",
+            "expires_in": 1800,
+        ])
+        let refreshed = try GrokSubscriptionAuth.decodeOAuthSession(
+            from: refreshData,
+            previousRefreshToken: initial.refreshToken,
+            now: now
+        )
+        XCTAssertEqual(refreshed.accessToken, "rotated-access")
+        XCTAssertEqual(refreshed.refreshToken, "fluidvoice-grok-refresh")
+    }
+
+    func testOfficialLoginFingerprintDoesNotContainOrDependOnRotatingAccessToken() {
+        let first = OfficialProviderAuth.configurationFingerprint(
+            providerID: GrokSubscriptionAuth.providerID,
+            baseURL: "https://one.invalid",
+            apiKey: "access-one"
+        )
+        let second = OfficialProviderAuth.configurationFingerprint(
+            providerID: GrokSubscriptionAuth.providerID,
+            baseURL: "https://two.invalid",
+            apiKey: "access-two"
+        )
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first, OfficialProviderAuth.verificationFingerprint(for: GrokSubscriptionAuth.providerID))
+    }
+
+    func testAnthropicMessagesBodyConvertsSystemToolsAndToolResults() throws {
+        let config = LLMClient.Config(
+            providerID: OfficialProviderAuth.claudeProviderID,
+            messages: [
+                ["role": "system", "content": "Be concise."],
+                ["role": "user", "content": "List files"],
+                [
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [[
+                        "id": "call-1",
+                        "type": "function",
+                        "function": ["name": "shell", "arguments": "{\"command\":\"ls\"}"],
+                    ]],
+                ],
+                ["role": "tool", "tool_call_id": "call-1", "content": "file.txt"],
+            ],
+            model: "claude-sonnet-4-6",
+            baseURL: "https://api.anthropic.com/v1",
+            apiKey: "",
+            streaming: false,
+            tools: [[
+                "type": "function",
+                "function": [
+                    "name": "shell",
+                    "description": "Run a command",
+                    "parameters": ["type": "object"],
+                ],
+            ]],
+            maxTokens: 128
+        )
+
+        let body = LLMClient.shared.buildAnthropicMessagesBody(config)
+        XCTAssertEqual(body["system"] as? String, "Be concise.")
+        XCTAssertEqual(body["max_tokens"] as? Int, 128)
+        XCTAssertEqual(body["stream"] as? Bool, false)
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.count, 3)
+        let assistantBlocks = try XCTUnwrap(messages[1]["content"] as? [[String: Any]])
+        XCTAssertEqual(assistantBlocks.first?["type"] as? String, "tool_use")
+        let resultBlocks = try XCTUnwrap(messages[2]["content"] as? [[String: Any]])
+        XCTAssertEqual(resultBlocks.first?["type"] as? String, "tool_result")
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.first?["name"] as? String, "shell")
+    }
+
+    func testGeminiCodeAssistBodyWrapsProjectAndConvertsRoles() throws {
+        let config = LLMClient.Config(
+            providerID: OfficialProviderAuth.geminiProviderID,
+            messages: [
+                ["role": "system", "content": "Be concise."],
+                ["role": "user", "content": "Hello"],
+                ["role": "assistant", "content": "Hi"],
+            ],
+            model: "gemini-2.5-flash",
+            baseURL: "https://cloudcode-pa.googleapis.com/v1internal",
+            apiKey: "",
+            streaming: true,
+            temperature: 0.2,
+            maxTokens: 64
+        )
+
+        let body = LLMClient.shared.buildGeminiCodeAssistBody(config, project: "projects/example")
+        XCTAssertEqual(body["model"] as? String, "gemini-2.5-flash")
+        XCTAssertEqual(body["project"] as? String, "projects/example")
+        let request = try XCTUnwrap(body["request"] as? [String: Any])
+        let system = try XCTUnwrap(request["systemInstruction"] as? [String: Any])
+        let systemParts = try XCTUnwrap(system["parts"] as? [[String: Any]])
+        XCTAssertEqual(systemParts.first?["text"] as? String, "Be concise.")
+        let contents = try XCTUnwrap(request["contents"] as? [[String: Any]])
+        XCTAssertEqual(contents.map { $0["role"] as? String }, ["user", "model"])
+        let generation = try XCTUnwrap(request["generationConfig"] as? [String: Any])
+        XCTAssertEqual(generation["maxOutputTokens"] as? Int, 64)
+    }
+
+    func testOfficialProvidersHaveBundledModelsAndBaseURLs() {
+        for providerID in OfficialProviderAuth.providerIDs {
+            XCTAssertTrue(ModelRepository.shared.isBuiltIn(providerID))
+            XCTAssertFalse(ModelRepository.shared.defaultModels(for: providerID).isEmpty)
+            XCTAssertFalse(ModelRepository.shared.defaultBaseURL(for: providerID).isEmpty)
+        }
+    }
+
+    func testAPIKeyProvidersRemainAvailableBesideOfficialLoginProviders() {
+        let providerPairs = [
+            (apiKey: "openai", login: OfficialProviderAuth.codexProviderID),
+            (apiKey: "anthropic", login: OfficialProviderAuth.claudeProviderID),
+            (apiKey: "google", login: OfficialProviderAuth.geminiProviderID),
+            (apiKey: "xai", login: GrokSubscriptionAuth.providerID),
+        ]
+        let providerIDs = Set(ModelRepository.shared.builtInProvidersList().map(\.id))
+
+        for pair in providerPairs {
+            XCTAssertNotEqual(pair.apiKey, pair.login)
+            XCTAssertTrue(providerIDs.contains(pair.apiKey))
+            XCTAssertTrue(providerIDs.contains(pair.login))
+            XCTAssertEqual(ModelRepository.shared.providerWebsiteURL(for: pair.apiKey)?.label, "Get API Key")
+        }
+    }
+
+    func testAPIKeyFingerprintStillTracksTheConfiguredKeyAndBaseURL() {
+        let original = OfficialProviderAuth.configurationFingerprint(
+            providerID: "openai",
+            baseURL: "https://api.openai.com/v1",
+            apiKey: "sk-test-one"
+        )
+        let changedKey = OfficialProviderAuth.configurationFingerprint(
+            providerID: "openai",
+            baseURL: "https://api.openai.com/v1",
+            apiKey: "sk-test-two"
+        )
+        let changedBaseURL = OfficialProviderAuth.configurationFingerprint(
+            providerID: "openai",
+            baseURL: "https://gateway.example/v1",
+            apiKey: "sk-test-one"
+        )
+
+        XCTAssertNotNil(original)
+        XCTAssertNotEqual(original, changedKey)
+        XCTAssertNotEqual(original, changedBaseURL)
+    }
+
+    func testCodexLoginUsesInstructionsWithoutChangingOpenAIAPIKeyResponsesBody() throws {
+        let messages: [[String: Any]] = [
+            ["role": "system", "content": "Be concise."],
+            ["role": "user", "content": "Hello"],
+        ]
+        let apiKeyConfig = LLMClient.Config(
+            providerID: "openai",
+            messages: messages,
+            model: "gpt-4.1",
+            baseURL: "https://api.openai.com/v1",
+            apiKey: "sk-test",
+            streaming: false
+        )
+        let loginConfig = LLMClient.Config(
+            providerID: OfficialProviderAuth.codexProviderID,
+            messages: messages,
+            model: "gpt-5.6-sol",
+            baseURL: "https://chatgpt.com/backend-api/codex",
+            apiKey: "",
+            streaming: false
+        )
+
+        let apiKeyBody = LLMClient.shared.buildResponsesBody(apiKeyConfig)
+        XCTAssertNil(apiKeyBody["instructions"])
+        let apiKeyInput = try XCTUnwrap(apiKeyBody["input"] as? [[String: Any]])
+        XCTAssertEqual(apiKeyInput.first?["role"] as? String, "system")
+
+        let loginBody = LLMClient.shared.buildResponsesBody(loginConfig)
+        XCTAssertEqual(loginBody["instructions"] as? String, "Be concise.")
+        let loginInput = try XCTUnwrap(loginBody["input"] as? [[String: Any]])
+        XCTAssertEqual(loginInput.count, 1)
+        XCTAssertEqual(loginInput.first?["role"] as? String, "user")
+    }
+
+    func testCodexLoginOmitsUnsupportedOutputTokenLimitWithoutChangingAPIKeyResponsesBody() {
+        let messages: [[String: Any]] = [["role": "user", "content": "Reply with OK."]]
+        let apiKeyConfig = LLMClient.Config(
+            providerID: "openai",
+            messages: messages,
+            model: "gpt-5",
+            baseURL: "https://api.openai.com/v1",
+            apiKey: "sk-test",
+            streaming: true,
+            maxTokens: 16
+        )
+        let loginConfig = LLMClient.Config(
+            providerID: OfficialProviderAuth.codexProviderID,
+            messages: messages,
+            model: "gpt-5.6-luna",
+            baseURL: "https://chatgpt.com/backend-api/codex",
+            apiKey: "",
+            streaming: true,
+            maxTokens: 16
+        )
+
+        let apiKeyBody = LLMClient.shared.buildResponsesBody(apiKeyConfig)
+        XCTAssertEqual(apiKeyBody["max_output_tokens"] as? Int, 16)
+
+        let loginBody = LLMClient.shared.buildResponsesBody(loginConfig)
+        XCTAssertNil(loginBody["max_output_tokens"])
+    }
+
     private static let basePromptMarker = "You are a voice-to-text dictation cleaner"
 
     private func resetPromptSettings(_ settings: SettingsStore) {
@@ -195,5 +655,16 @@ final class LLMClientRequestBodyTests: XCTestCase {
     private func chatMessageContents(from body: [String: Any]) -> [String] {
         guard let messages = body["messages"] as? [[String: Any]] else { return [] }
         return messages.compactMap { $0["content"] as? String }
+    }
+
+    private func jwt(_ claims: [String: Any]) -> String {
+        let header = Data("{\"alg\":\"none\"}".utf8).base64EncodedString()
+        let payload = (try? JSONSerialization.data(withJSONObject: claims).base64EncodedString()) ?? ""
+        func base64URL(_ value: String) -> String {
+            value.replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        return "\(base64URL(header)).\(base64URL(payload)).signature"
     }
 }

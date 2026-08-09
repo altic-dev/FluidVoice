@@ -1571,10 +1571,13 @@ final class DictationE2ETests: XCTestCase {
             let settings = SettingsStore.shared
             settings.selectedProviderID = "openai"
             settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "test-local-model"]
+            // Host-app tests can inherit an existing Keychain entry. Match the
+            // route's active configuration without changing or exposing the key.
+            let ollamaAPIKey = settings.getAPIKey(for: "ollama") ?? ""
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
                     baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
-                    apiKey: ""
+                    apiKey: ollamaAPIKey
                 ) ?? "",
             ]
             settings.setDictationPromptSelection(.default, for: .primary)
@@ -1647,10 +1650,13 @@ final class DictationE2ETests: XCTestCase {
             settings.dictationPromptRoutingScope = .allApps
             settings.selectedProviderID = "openai"
             settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "editor-model"]
+            // Host-app tests can inherit an existing Keychain entry. Match the
+            // route's active configuration without changing or exposing the key.
+            let ollamaAPIKey = settings.getAPIKey(for: "ollama") ?? ""
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
                     baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
-                    apiKey: ""
+                    apiKey: ollamaAPIKey
                 ) ?? "",
             ]
             settings.setDictationPromptSelection(.default, for: .primary)
