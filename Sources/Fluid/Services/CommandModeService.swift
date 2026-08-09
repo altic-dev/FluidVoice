@@ -896,6 +896,9 @@ final class CommandModeService: ObservableObject {
                         "content": msg.content,
                         "tool_calls": [toolCallMessage],
                     ]
+                    if let continuationScope = msg.responsesContinuationScope {
+                        assistantMessage["tool_continuation_scope"] = continuationScope
+                    }
                     if !msg.responsesContinuationItems.isEmpty,
                        let continuationScope = msg.responsesContinuationScope
                     {

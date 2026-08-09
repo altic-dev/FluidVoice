@@ -683,6 +683,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
                 [
                     "role": "assistant",
                     "content": "",
+                    "tool_continuation_scope": "gemini-account-scope",
                     "tool_calls": [[
                         "id": toolCall.id,
                         "type": "function",
@@ -698,7 +699,8 @@ final class LLMClientRequestBodyTests: XCTestCase {
             model: "gemini-2.5-flash",
             baseURL: "https://cloudcode-pa.googleapis.com/v1internal",
             apiKey: "",
-            streaming: true
+            streaming: true,
+            responsesContinuationScope: "gemini-account-scope"
         )
 
         let body = LLMClient.shared.buildGeminiCodeAssistBody(config, project: "projects/example")
@@ -706,6 +708,22 @@ final class LLMClientRequestBodyTests: XCTestCase {
         let contents = try XCTUnwrap(request["contents"] as? [[String: Any]])
         let modelParts = try XCTUnwrap(contents.first?["parts"] as? [[String: Any]])
         XCTAssertEqual(modelParts.first?["thoughtSignature"] as? String, "opaque-gemini-thought")
+
+        let switchedAccountConfig = LLMClient.Config(
+            providerID: OfficialProviderAuth.geminiProviderID,
+            messages: config.messages,
+            model: "gemini-2.5-flash",
+            baseURL: "https://cloudcode-pa.googleapis.com/v1internal",
+            apiKey: "",
+            streaming: true,
+            responsesContinuationScope: "different-account-scope"
+        )
+        let switchedBody = LLMClient.shared.buildGeminiCodeAssistBody(
+            switchedAccountConfig,
+            project: "projects/other"
+        )
+        let switchedRequest = try XCTUnwrap(switchedBody["request"] as? [String: Any])
+        XCTAssertTrue(((switchedRequest["contents"] as? [[String: Any]]) ?? []).isEmpty)
     }
 
     func testCommandHistoryPersistsOpaqueProviderContinuationState() throws {
@@ -1022,6 +1040,21 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
         XCTAssertEqual(message, "Anthropic stream failed: Provider overloaded")
         XCTAssertNil(LLMClient.anthropicStreamingError(from: ["type": "message_stop"]))
+    }
+
+    func testGeminiStreamingRejectsProviderErrorPayloads() throws {
+        let error = try XCTUnwrap(LLMClient.geminiStreamingError(from: [
+            "error": [
+                "code": 429,
+                "message": "Resource exhausted",
+                "status": "RESOURCE_EXHAUSTED",
+            ],
+        ]))
+        guard case let .invalidRequest(message) = error else {
+            return XCTFail("Expected a Gemini streaming error")
+        }
+        XCTAssertEqual(message, "Gemini stream failed: Resource exhausted")
+        XCTAssertNil(LLMClient.geminiStreamingError(from: ["response": ["candidates": []]]))
     }
 
     func testOfficialProviderGuideLabelsUseGuideIconContract() throws {

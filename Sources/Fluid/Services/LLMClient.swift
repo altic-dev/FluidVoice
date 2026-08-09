@@ -275,7 +275,7 @@ final class LLMClient {
             config: effectiveConfig,
             wireProtocol: wireProtocol
         )
-        guard !response.responsesContinuationItems.isEmpty else { return response }
+        guard !response.responsesContinuationItems.isEmpty || !response.toolCalls.isEmpty else { return response }
         return Response(
             thinking: response.thinking,
             content: response.content,
@@ -319,6 +319,17 @@ final class LLMClient {
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .first { !$0.isEmpty } ?? "unknown Anthropic streaming error"
         return .invalidRequest("Anthropic stream failed: \(detail)")
+    }
+
+    static func geminiStreamingError(from root: [String: Any]) -> LLMError? {
+        guard let providerError = root["error"] as? [String: Any] else { return nil }
+        let detail = [
+            providerError["message"] as? String,
+            providerError["status"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Gemini streaming error"
+        return .invalidRequest("Gemini stream failed: \(detail)")
     }
 
     /// Execute request with retry logic (extracted for timeout wrapper)
@@ -681,8 +692,12 @@ final class LLMClient {
         var systemParts: [String] = []
         var contents: [[String: Any]] = []
         var toolNamesByCallID: [String: String] = [:]
+        var scopedToolCallIDs: Set<String> = []
 
         for message in config.messages {
+            guard let expectedScope = config.responsesContinuationScope,
+                  message["tool_continuation_scope"] as? String == expectedScope
+            else { continue }
             guard let toolCalls = message["tool_calls"] as? [[String: Any]] else { continue }
             for toolCall in toolCalls {
                 guard let callID = toolCall["id"] as? String,
@@ -690,6 +705,7 @@ final class LLMClient {
                       let name = function["name"] as? String
                 else { continue }
                 toolNamesByCallID[callID] = name
+                scopedToolCallIDs.insert(callID)
             }
         }
 
@@ -717,6 +733,7 @@ final class LLMClient {
             }
             if role == "tool" {
                 let callID = message["tool_call_id"] as? String ?? "call_unknown"
+                guard scopedToolCallIDs.contains(callID) else { continue }
                 appendContent(role: "user", parts: [[
                     "functionResponse": [
                         "name": toolNamesByCallID[callID] ?? "tool",
@@ -732,7 +749,9 @@ final class LLMClient {
             }
             if let toolCalls = message["tool_calls"] as? [[String: Any]] {
                 for toolCall in toolCalls {
-                    guard let function = toolCall["function"] as? [String: Any],
+                    guard let callID = toolCall["id"] as? String,
+                          scopedToolCallIDs.contains(callID),
+                          let function = toolCall["function"] as? [String: Any],
                           let name = function["name"] as? String
                     else { continue }
                     let argumentsString = function["arguments"] as? String ?? "{}"
@@ -1057,6 +1076,10 @@ final class LLMClient {
             guard let data = jsonString.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
+
+            if let streamError = Self.geminiStreamingError(from: root) {
+                throw streamError
+            }
 
             let parsed = self.geminiParts(from: root)
             for text in parsed.content {
