@@ -250,6 +250,7 @@ enum CodexSubscriptionAuth {
                 now: now(),
                 session: session
             )
+            await self.refreshCoalescer.cancelAndWait()
             try self.storeOAuthSession(oauthSession)
             return oauthSession
         }

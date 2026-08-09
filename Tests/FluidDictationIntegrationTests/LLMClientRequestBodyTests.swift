@@ -269,13 +269,15 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(refreshCount, 1)
     }
 
-    func testOAuthRefreshCoalescerCancelsAndAwaitsActiveRefresh() async {
+    func testOAuthRefreshCoalescerCancelsBeforeCredentialReplacement() async {
         let coalescer = InFlightTaskCoalescer<String>()
         var observedCancellation = false
+        var storedCredential: String?
         let refresh = Task { @MainActor in
             try await coalescer.value {
                 do {
                     try await Task.sleep(nanoseconds: 30_000_000_000)
+                    storedCredential = "stale-rotated-token"
                     return "stale-rotated-token"
                 } catch is CancellationError {
                     observedCancellation = true
@@ -286,6 +288,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
         await Task.yield()
 
         await coalescer.cancelAndWait()
+        storedCredential = "new-login-token"
 
         XCTAssertTrue(observedCancellation)
         do {
@@ -294,6 +297,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError)
         }
+        XCTAssertEqual(storedCredential, "new-login-token")
     }
 
     func testOAuthTransportCancellationRemainsCancellation() {
@@ -911,6 +915,21 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(switchedInput.map { $0["type"] as? String }, ["function_call", "function_call_output"])
     }
 
+    func testGrokResponsesToolsDisableParallelCallsForSingleCallConsumer() {
+        let config = LLMClient.Config(
+            providerID: GrokSubscriptionAuth.providerID,
+            messages: [["role": "user", "content": "Run pwd"]],
+            model: "grok-code-fast-1",
+            baseURL: GrokSubscriptionAuth.proxyBaseURL,
+            apiKey: "",
+            streaming: true,
+            tools: [TerminalService.toolDefinition]
+        )
+
+        let body = LLMClient.shared.buildResponsesBody(config)
+        XCTAssertEqual(body["parallel_tool_calls"] as? Bool, false)
+    }
+
     func testResponsesContinuationScopeChangesAcrossAccountsAndProviders() {
         let firstSession = OfficialProviderAuth.Session(
             providerID: OfficialProviderAuth.codexProviderID,
@@ -988,6 +1007,21 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertNil(LLMClient.responsesStreamingTerminalError(from: ["type": "response.completed"]))
         XCTAssertFalse(LLMClient.Response(thinking: nil, content: "", toolCalls: []).hasUsableVerificationOutput)
         XCTAssertTrue(LLMClient.Response(thinking: nil, content: "OK", toolCalls: []).hasUsableVerificationOutput)
+    }
+
+    func testAnthropicStreamingRejectsProviderErrorEvents() throws {
+        let error = try XCTUnwrap(LLMClient.anthropicStreamingError(from: [
+            "type": "error",
+            "error": [
+                "type": "overloaded_error",
+                "message": "Provider overloaded",
+            ],
+        ]))
+        guard case let .invalidRequest(message) = error else {
+            return XCTFail("Expected an Anthropic streaming error")
+        }
+        XCTAssertEqual(message, "Anthropic stream failed: Provider overloaded")
+        XCTAssertNil(LLMClient.anthropicStreamingError(from: ["type": "message_stop"]))
     }
 
     func testOfficialProviderGuideLabelsUseGuideIconContract() throws {

@@ -326,6 +326,7 @@ enum GrokSubscriptionAuth {
             }
             if (200..<300).contains(http.statusCode) {
                 let oauthSession = try self.decodeOAuthSession(from: data, now: now())
+                await self.refreshCoalescer.cancelAndWait()
                 try self.storeOAuthSession(oauthSession)
                 return oauthSession
             }

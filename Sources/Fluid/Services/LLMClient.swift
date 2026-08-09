@@ -308,6 +308,19 @@ final class LLMClient {
         return .invalidRequest("Responses API stream failed: \(detail)")
     }
 
+    static func anthropicStreamingError(from event: [String: Any]) -> LLMError? {
+        guard event["type"] as? String == "error" else { return nil }
+        let providerError = event["error"] as? [String: Any]
+        let detail = [
+            providerError?["message"] as? String,
+            event["message"] as? String,
+            providerError?["type"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Anthropic streaming error"
+        return .invalidRequest("Anthropic stream failed: \(detail)")
+    }
+
     /// Execute request with retry logic (extracted for timeout wrapper)
     private func executeWithRetry(
         request: URLRequest,
@@ -547,6 +560,7 @@ final class LLMClient {
         if !config.tools.isEmpty {
             body["tools"] = self.responsesTools(from: config.tools)
             body["tool_choice"] = "auto"
+            body["parallel_tool_calls"] = false
         }
 
         // The ChatGPT Codex subscription backend follows the official Codex
@@ -933,6 +947,10 @@ final class LLMClient {
                   let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = event["type"] as? String
             else { continue }
+
+            if let streamError = Self.anthropicStreamingError(from: event) {
+                throw streamError
+            }
 
             let index = event["index"] as? Int ?? 0
             switch type {
