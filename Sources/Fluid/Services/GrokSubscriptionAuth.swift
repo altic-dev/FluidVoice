@@ -417,7 +417,8 @@ enum GrokSubscriptionAuth {
         )
     }
 
-    static func disconnectFluidVoiceSession() throws {
+    static func disconnectFluidVoiceSession() async throws {
+        await self.refreshCoalescer.cancelAndWait()
         let status = SecItemDelete(self.oauthKeychainQuery() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AuthError.keychainFailure(status)

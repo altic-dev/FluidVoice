@@ -31,6 +31,15 @@ final class InFlightTaskCoalescer<Value> {
             throw error
         }
     }
+
+    func cancelAndWait() async {
+        guard let activeFlight = self.flight else { return }
+        activeFlight.task.cancel()
+        _ = try? await activeFlight.task.value
+        if self.flight?.id == activeFlight.id {
+            self.flight = nil
+        }
+    }
 }
 
 /// ChatGPT subscription authentication compatible with the public Codex device flow.
@@ -303,7 +312,8 @@ enum CodexSubscriptionAuth {
         )
     }
 
-    static func disconnectFluidVoiceSession() throws {
+    static func disconnectFluidVoiceSession() async throws {
+        await self.refreshCoalescer.cancelAndWait()
         let status = SecItemDelete(self.keychainQuery() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AuthError.keychainFailure(status)

@@ -871,9 +871,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         do {
             switch providerID {
             case GrokSubscriptionAuth.providerID:
-                try GrokSubscriptionAuth.disconnectFluidVoiceSession()
+                try await GrokSubscriptionAuth.disconnectFluidVoiceSession()
             case CodexSubscriptionAuth.providerID:
-                try CodexSubscriptionAuth.disconnectFluidVoiceSession()
+                try await CodexSubscriptionAuth.disconnectFluidVoiceSession()
             default:
                 return
             }
@@ -953,7 +953,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 )
                 config.timeoutSeconds = 30
                 config.maxRetries = 1
-                _ = try await LLMClient.shared.call(config)
+                let response = try await LLMClient.shared.call(config)
+                guard response.hasUsableVerificationOutput else {
+                    throw LLMError.invalidResponse
+                }
                 await MainActor.run {
                     self.setEditingAPIKey(false, for: providerID)
                     self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: "")

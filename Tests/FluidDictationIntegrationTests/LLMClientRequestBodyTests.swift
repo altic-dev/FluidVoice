@@ -269,6 +269,33 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(refreshCount, 1)
     }
 
+    func testOAuthRefreshCoalescerCancelsAndAwaitsActiveRefresh() async {
+        let coalescer = InFlightTaskCoalescer<String>()
+        var observedCancellation = false
+        let refresh = Task { @MainActor in
+            try await coalescer.value {
+                do {
+                    try await Task.sleep(nanoseconds: 30_000_000_000)
+                    return "stale-rotated-token"
+                } catch is CancellationError {
+                    observedCancellation = true
+                    throw CancellationError()
+                }
+            }
+        }
+        await Task.yield()
+
+        await coalescer.cancelAndWait()
+
+        XCTAssertTrue(observedCancellation)
+        do {
+            _ = try await refresh.value
+            XCTFail("The refresh should be cancelled before disconnect can delete its credential")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testOAuthTransportCancellationRemainsCancellation() {
         XCTAssertThrowsError(
             try OfficialProviderAuth.rethrowCancellation(URLError(.cancelled))
@@ -695,6 +722,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
                     encryptedContent: "opaque-codex-reasoning"
                 ),
             ],
+            responsesContinuationScope: "credential-scope",
             timestamp: timestamp
         )
 
@@ -712,10 +740,12 @@ final class LLMClientRequestBodyTests: XCTestCase {
             JSONSerialization.jsonObject(with: encoded) as? [String: Any]
         )
         object.removeValue(forKey: "responsesContinuationItems")
+        object.removeValue(forKey: "responsesContinuationScope")
 
         let legacyData = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(ChatMessage.self, from: legacyData)
         XCTAssertEqual(decoded.responsesContinuationItems, [])
+        XCTAssertNil(decoded.responsesContinuationScope)
     }
 
     func testOfficialProvidersHaveBundledModelsAndBaseURLs() {
@@ -840,6 +870,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
                     "role": "assistant",
                     "content": "",
                     "responses_continuation_items": [reasoningItem.inputItem],
+                    "responses_continuation_scope": "codex-account-scope",
                     "tool_calls": [[
                         "id": "call-1",
                         "type": "function",
@@ -854,7 +885,8 @@ final class LLMClientRequestBodyTests: XCTestCase {
             model: "gpt-5.6-sol",
             baseURL: "https://chatgpt.com/backend-api/codex",
             apiKey: "",
-            streaming: true
+            streaming: true,
+            responsesContinuationScope: "codex-account-scope"
         )
 
         let body = LLMClient.shared.buildResponsesBody(config)
@@ -864,6 +896,98 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(input[0]["encrypted_content"] as? String, "opaque-reasoning-state")
         XCTAssertEqual(input[1]["call_id"] as? String, "call-1")
         XCTAssertEqual(input[2]["call_id"] as? String, "call-1")
+
+        let switchedConfig = LLMClient.Config(
+            providerID: GrokSubscriptionAuth.providerID,
+            messages: config.messages,
+            model: "grok-code-fast-1",
+            baseURL: GrokSubscriptionAuth.proxyBaseURL,
+            apiKey: "",
+            streaming: true,
+            responsesContinuationScope: "different-provider-scope"
+        )
+        let switchedBody = LLMClient.shared.buildResponsesBody(switchedConfig)
+        let switchedInput = try XCTUnwrap(switchedBody["input"] as? [[String: Any]])
+        XCTAssertEqual(switchedInput.map { $0["type"] as? String }, ["function_call", "function_call_output"])
+    }
+
+    func testResponsesContinuationScopeChangesAcrossAccountsAndProviders() {
+        let firstSession = OfficialProviderAuth.Session(
+            providerID: OfficialProviderAuth.codexProviderID,
+            accessToken: "rotating-access-token",
+            baseURL: CodexSubscriptionAuth.baseURL,
+            wireProtocol: .responses,
+            headers: ["ChatGPT-Account-ID": "account-1"],
+            accountLabel: "first@example.com",
+            project: nil
+        )
+        let rotatedSession = OfficialProviderAuth.Session(
+            providerID: OfficialProviderAuth.codexProviderID,
+            accessToken: "new-access-token",
+            baseURL: CodexSubscriptionAuth.baseURL,
+            wireProtocol: .responses,
+            headers: ["ChatGPT-Account-ID": "account-1"],
+            accountLabel: "first@example.com",
+            project: nil
+        )
+        let secondSession = OfficialProviderAuth.Session(
+            providerID: OfficialProviderAuth.codexProviderID,
+            accessToken: "other-access-token",
+            baseURL: CodexSubscriptionAuth.baseURL,
+            wireProtocol: .responses,
+            headers: ["ChatGPT-Account-ID": "account-2"],
+            accountLabel: "second@example.com",
+            project: nil
+        )
+
+        let firstScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: OfficialProviderAuth.codexProviderID,
+            baseURL: CodexSubscriptionAuth.baseURL,
+            apiKey: "",
+            session: firstSession
+        )
+        let rotatedScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: OfficialProviderAuth.codexProviderID,
+            baseURL: CodexSubscriptionAuth.baseURL,
+            apiKey: "",
+            session: rotatedSession
+        )
+        let secondScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: OfficialProviderAuth.codexProviderID,
+            baseURL: CodexSubscriptionAuth.baseURL,
+            apiKey: "",
+            session: secondSession
+        )
+        let apiKeyScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: "openai",
+            baseURL: "https://api.openai.com/v1",
+            apiKey: "api-key",
+            session: nil
+        )
+
+        XCTAssertEqual(firstScope, rotatedScope)
+        XCTAssertNotEqual(firstScope, secondScope)
+        XCTAssertNotEqual(firstScope, apiKeyScope)
+        XCTAssertFalse(firstScope.contains("rotating-access-token"))
+    }
+
+    func testResponsesStreamingRejectsTerminalFailuresAndVerificationRequiresOutput() throws {
+        let events: [[String: Any]] = [
+            ["type": "error", "message": "quota exhausted"],
+            ["type": "response.failed", "response": ["error": ["message": "model unavailable"]]],
+            ["type": "response.incomplete", "response": ["incomplete_details": ["reason": "max_output_tokens"]]],
+        ]
+
+        for event in events {
+            let error = try XCTUnwrap(LLMClient.responsesStreamingTerminalError(from: event))
+            guard case let .invalidRequest(message) = error else {
+                return XCTFail("Expected a Responses terminal failure")
+            }
+            XCTAssertTrue(message.contains("Responses API stream failed"))
+        }
+        XCTAssertNil(LLMClient.responsesStreamingTerminalError(from: ["type": "response.completed"]))
+        XCTAssertFalse(LLMClient.Response(thinking: nil, content: "", toolCalls: []).hasUsableVerificationOutput)
+        XCTAssertTrue(LLMClient.Response(thinking: nil, content: "OK", toolCalls: []).hasUsableVerificationOutput)
     }
 
     func testOfficialProviderGuideLabelsUseGuideIconContract() throws {

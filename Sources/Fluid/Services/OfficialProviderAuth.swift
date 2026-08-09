@@ -187,6 +187,35 @@ enum OfficialProviderAuth {
         return self.sha256("\(trimmedBase)|\(trimmedKey)")
     }
 
+    static func responsesContinuationScope(
+        providerID: String,
+        baseURL: String,
+        apiKey: String,
+        session: Session?
+    ) -> String {
+        let identity: String
+        if let session {
+            let identityHeaders = session.headers
+                .filter { $0.key.caseInsensitiveCompare("authorization") != .orderedSame }
+                .sorted { $0.key.lowercased() < $1.key.lowercased() }
+                .map { "\($0.key.lowercased())=\($0.value)" }
+                .joined(separator: "&")
+            identity = [
+                providerID,
+                session.accountLabel,
+                session.project ?? "",
+                identityHeaders,
+            ].joined(separator: "|")
+        } else {
+            identity = [
+                providerID,
+                baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            ].joined(separator: "|")
+        }
+        return self.sha256("responses-continuation|\(identity)")
+    }
+
     static func resolve(
         providerID: String,
         now: Date = Date(),

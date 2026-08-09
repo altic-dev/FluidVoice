@@ -86,17 +86,25 @@ final class LLMClient {
         let toolCalls: [ToolCall]
         /// Opaque reasoning state required to continue stateless Responses API tool loops.
         let responsesContinuationItems: [ResponsesContinuationItem]
+        /// Credential scope that produced opaque continuation state.
+        let responsesContinuationScope: String?
 
         init(
             thinking: String?,
             content: String,
             toolCalls: [ToolCall],
-            responsesContinuationItems: [ResponsesContinuationItem] = []
+            responsesContinuationItems: [ResponsesContinuationItem] = [],
+            responsesContinuationScope: String? = nil
         ) {
             self.thinking = thinking
             self.content = content
             self.toolCalls = toolCalls
             self.responsesContinuationItems = responsesContinuationItems
+            self.responsesContinuationScope = responsesContinuationScope
+        }
+
+        var hasUsableVerificationOutput: Bool {
+            !self.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !self.toolCalls.isEmpty
         }
     }
 
@@ -178,6 +186,9 @@ final class LLMClient {
         /// These are model-specific and come from user settings
         var extraParameters: [String: Any]
 
+        /// Only continuation items from this credential scope may be replayed.
+        var responsesContinuationScope: String?
+
         // Retry configuration
         var maxRetries: Int = 3
         var retryDelayMs: Int = 200
@@ -202,7 +213,8 @@ final class LLMClient {
             tools: [[String: Any]] = [],
             temperature: Double? = nil,
             maxTokens: Int? = nil,
-            extraParameters: [String: Any] = [:]
+            extraParameters: [String: Any] = [:],
+            responsesContinuationScope: String? = nil
         ) {
             self.providerID = providerID
             self.messages = messages
@@ -214,6 +226,7 @@ final class LLMClient {
             self.temperature = temperature
             self.maxTokens = maxTokens
             self.extraParameters = extraParameters
+            self.responsesContinuationScope = responsesContinuationScope
         }
     }
 
@@ -237,6 +250,13 @@ final class LLMClient {
             providerID: config.providerID,
             requested: config.streaming
         )
+        let continuationScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: config.providerID,
+            baseURL: config.baseURL,
+            apiKey: config.apiKey,
+            session: officialSession
+        )
+        effectiveConfig.responsesContinuationScope = continuationScope
         var request = try self.buildRequest(effectiveConfig, officialSession: officialSession)
         let wireProtocol = officialSession?.wireProtocol
 
@@ -250,15 +270,42 @@ final class LLMClient {
         // than racing a separate "timeout task". A task-group timeout wrapper can accidentally
         // keep the caller suspended until the full timeout elapses, which is the exact stall
         // we want to eliminate for overlay responsiveness.
-        return try await self.executeWithRetry(
+        let response = try await self.executeWithRetry(
             request: request,
             config: effectiveConfig,
             wireProtocol: wireProtocol
+        )
+        guard !response.responsesContinuationItems.isEmpty else { return response }
+        return Response(
+            thinking: response.thinking,
+            content: response.content,
+            toolCalls: response.toolCalls,
+            responsesContinuationItems: response.responsesContinuationItems,
+            responsesContinuationScope: continuationScope
         )
     }
 
     static func effectiveStreaming(providerID: String, requested: Bool) -> Bool {
         requested || OfficialProviderAuth.requiresStreamingRequests(providerID)
+    }
+
+    static func responsesStreamingTerminalError(from event: [String: Any]) -> LLMError? {
+        guard let type = event["type"] as? String,
+              ["error", "response.failed", "response.incomplete"].contains(type)
+        else { return nil }
+
+        let response = event["response"] as? [String: Any]
+        let responseError = response?["error"] as? [String: Any]
+        let incompleteDetails = response?["incomplete_details"] as? [String: Any]
+        let detail = [
+            event["message"] as? String,
+            responseError?["message"] as? String,
+            incompleteDetails?["reason"] as? String,
+            response?["status"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? type
+        return .invalidRequest("Responses API stream failed: \(detail)")
     }
 
     /// Execute request with retry logic (extracted for timeout wrapper)
@@ -479,7 +526,8 @@ final class LLMClient {
             "model": config.model,
             "input": self.responsesInput(
                 from: config.messages,
-                excludingSystemMessages: usesCodexSubscription
+                excludingSystemMessages: usesCodexSubscription,
+                expectedContinuationScope: config.responsesContinuationScope
             ),
             "store": false,
         ]
@@ -770,7 +818,8 @@ final class LLMClient {
 
     private func responsesInput(
         from messages: [[String: Any]],
-        excludingSystemMessages: Bool = false
+        excludingSystemMessages: Bool = false,
+        expectedContinuationScope: String? = nil
     ) -> [[String: Any]] {
         var input: [[String: Any]] = []
 
@@ -780,7 +829,10 @@ final class LLMClient {
                 continue
             }
 
-            if let continuationItems = message["responses_continuation_items"] as? [[String: Any]] {
+            if let expectedContinuationScope,
+               message["responses_continuation_scope"] as? String == expectedContinuationScope,
+               let continuationItems = message["responses_continuation_items"] as? [[String: Any]]
+            {
                 input.append(contentsOf: continuationItems)
             }
 
@@ -1052,6 +1104,10 @@ final class LLMClient {
                   let type = event["type"] as? String
             else {
                 continue
+            }
+
+            if let terminalError = Self.responsesStreamingTerminalError(from: event) {
+                throw terminalError
             }
 
             switch type {

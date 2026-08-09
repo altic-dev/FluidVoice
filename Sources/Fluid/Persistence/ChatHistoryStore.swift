@@ -16,6 +16,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     let content: String
     let toolCall: ToolCall?
     let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
+    let responsesContinuationScope: String?
     let stepType: StepType
     let timestamp: Date
 
@@ -63,6 +64,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         content: String,
         toolCall: ToolCall? = nil,
         responsesContinuationItems: [LLMClient.ResponsesContinuationItem] = [],
+        responsesContinuationScope: String? = nil,
         stepType: StepType = .normal,
         timestamp: Date = Date()
     ) {
@@ -71,6 +73,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.content = content
         self.toolCall = toolCall
         self.responsesContinuationItems = responsesContinuationItems
+        self.responsesContinuationScope = responsesContinuationScope
         self.stepType = stepType
         self.timestamp = timestamp
     }
@@ -81,6 +84,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case content
         case toolCall
         case responsesContinuationItems
+        case responsesContinuationScope
         case stepType
         case timestamp
     }
@@ -95,6 +99,10 @@ struct ChatMessage: Codable, Identifiable, Equatable {
             [LLMClient.ResponsesContinuationItem].self,
             forKey: .responsesContinuationItems
         ) ?? []
+        self.responsesContinuationScope = try container.decodeIfPresent(
+            String.self,
+            forKey: .responsesContinuationScope
+        )
         self.stepType = try container.decode(StepType.self, forKey: .stepType)
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
     }

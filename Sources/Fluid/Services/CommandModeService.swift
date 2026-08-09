@@ -69,6 +69,7 @@ final class CommandModeService: ObservableObject {
         let thinking: String? // Display-only: AI reasoning tokens (NOT sent to API)
         let toolCall: ToolCall?
         let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
+        let responsesContinuationScope: String?
         let stepType: StepType
         let timestamp: Date
 
@@ -116,6 +117,7 @@ final class CommandModeService: ObservableObject {
             thinking: String? = nil,
             toolCall: ToolCall? = nil,
             responsesContinuationItems: [LLMClient.ResponsesContinuationItem] = [],
+            responsesContinuationScope: String? = nil,
             stepType: StepType = .normal
         ) {
             self.role = role
@@ -123,6 +125,7 @@ final class CommandModeService: ObservableObject {
             self.thinking = thinking
             self.toolCall = toolCall
             self.responsesContinuationItems = responsesContinuationItems
+            self.responsesContinuationScope = responsesContinuationScope
             self.stepType = stepType
             self.timestamp = Date()
         }
@@ -264,6 +267,7 @@ final class CommandModeService: ObservableObject {
             content: msg.content,
             toolCall: toolCall,
             responsesContinuationItems: msg.responsesContinuationItems,
+            responsesContinuationScope: msg.responsesContinuationScope,
             stepType: stepType,
             timestamp: msg.timestamp
         )
@@ -304,6 +308,7 @@ final class CommandModeService: ObservableObject {
             content: chatMsg.content,
             toolCall: toolCall,
             responsesContinuationItems: chatMsg.responsesContinuationItems,
+            responsesContinuationScope: chatMsg.responsesContinuationScope,
             stepType: stepType
         )
     }
@@ -454,6 +459,7 @@ final class CommandModeService: ObservableObject {
                         thoughtSignature: tc.thoughtSignature
                     ),
                     responsesContinuationItems: response.responsesContinuationItems,
+                    responsesContinuationScope: response.responsesContinuationScope,
                     stepType: stepType
                 ))
 
@@ -737,6 +743,7 @@ final class CommandModeService: ObservableObject {
         let thinking: String? // Display-only, NOT sent back to API
         let toolCall: ToolCallData?
         let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
+        let responsesContinuationScope: String?
 
         struct ToolCallData {
             let id: String
@@ -889,8 +896,11 @@ final class CommandModeService: ObservableObject {
                         "content": msg.content,
                         "tool_calls": [toolCallMessage],
                     ]
-                    if !msg.responsesContinuationItems.isEmpty {
+                    if !msg.responsesContinuationItems.isEmpty,
+                       let continuationScope = msg.responsesContinuationScope
+                    {
                         assistantMessage["responses_continuation_items"] = msg.responsesContinuationItems.map(\.inputItem)
+                        assistantMessage["responses_continuation_scope"] = continuationScope
                     }
                     messages.append(assistantMessage)
                 } else {
@@ -1042,7 +1052,8 @@ final class CommandModeService: ObservableObject {
                     purpose: purpose,
                     thoughtSignature: tc.thoughtSignature
                 ),
-                responsesContinuationItems: response.responsesContinuationItems
+                responsesContinuationItems: response.responsesContinuationItems,
+                responsesContinuationScope: response.responsesContinuationScope
             )
         }
 
@@ -1059,7 +1070,8 @@ final class CommandModeService: ObservableObject {
             content: response.content,
             thinking: finalThinking, // Display-only
             toolCall: nil,
-            responsesContinuationItems: response.responsesContinuationItems
+            responsesContinuationItems: response.responsesContinuationItems,
+            responsesContinuationScope: response.responsesContinuationScope
         )
     }
 }
