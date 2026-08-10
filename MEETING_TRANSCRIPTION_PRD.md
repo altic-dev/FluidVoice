@@ -177,6 +177,24 @@ Goal: make the working slice safe to ship.
 - [ ] **[MUST · V1] M2-EXIT-004** Zoom, Meet, Teams, generic-source, headphone, speaker, device-change, and one-hour capture matrices pass at their claimed tiers.
 - [ ] **[MUST · V1] M2-EXIT-005** Apple Silicon and Intel capabilities are accurately gated and described.
 
+#### Milestone 2 test and review gate
+
+Written 2026-08-10 per DELIVERY-001, before M2 implementation. Numeric budgets referenced here are set in §21.7.
+
+- [ ] **[MUST · M2] M2-TEST-001 — Relaunch recovery, deterministic.** Sessions left in `recording`, `stopping`, or `processing` are detected on launch; finalized chunks are salvaged; exactly one recovery offer appears per session; Resume produces a transcript from the salvaged chunks; Delete removes chunks, manifests, and checkpoints. Covered by tests that construct the on-disk states directly.
+- [ ] **[MUST · M2] M2-TEST-002 — Real crash proof.** `kill -9` the app during a real recording at three points (first minute, mid-session, during processing). After relaunch, recovery succeeds and audio loss is bounded by the active chunk (≤ one chunk duration). Repeated for force-quit.
+- [ ] **[MUST · M2] M2-TEST-003 — Transcript correction, deterministic.** On a fixture transcript: global rename updates every segment of that speaker without changing segment IDs; single-segment reassignment; merge of two speakers; undo restores the exact prior state after each operation; export reflects corrections.
+- [ ] **[MUST · M2] M2-TEST-004 — History, export, deletion, retention.** Text and JSON exports exclude embeddings, model fingerprints, and internal confidence data (UX-RESULT-010). Delete Audio preserves the transcript; Delete Meeting removes chunks, manifests, checkpoints, and recovery remnants (PRIV-015). The chosen retention policy demonstrably deletes on schedule.
+- [ ] **[MUST · M2] M2-TEST-005 — Permission lifecycle.** For microphone and Screen/System Audio independently: first grant, denial, return from System Settings, revocation mid-recording (typed interruption per REL-017 with all finalized audio preserved), regrant, relaunch.
+- [ ] **[MUST · M2] M2-TEST-006 — Platform matrix at claimed tiers.** Real Zoom desktop, Google Meet in Chrome, and Teams desktop each: join, record ≥10 minutes, switch audio device mid-call (AirPods connect), stop, and produce a transcript with remote speakers separated. Run once with headphones and once with laptop speakers; the speaker run must show leaked speech labeled Unknown, never You.
+- [ ] **[MUST · M2] M2-TEST-007 — One-hour capture through the app.** A 60-minute recording through the app's own writer meets the §21.7 budgets: no unexplained gap, drift within budget, all chunk files playable, capture CPU and memory within budget, and both track manifests consistent with the audio on disk.
+- [ ] **[MUST · M2] M2-TEST-008 — Display and window failure family.** TEST-FAIL-007 (display sleep, screen lock, monitor switch) and TEST-FAIL-008 (capture-window loss) executed through the app runtime, verified by continued buffer delivery — Appendix A results re-confirmed on the release build.
+- [ ] **[MUST · M2] M2-TEST-009 — Dictation coexistence.** Dictation hotkey during meeting recording shows the REL-009 message and does not open a competing session; meeting processing serializes model access (REL-010); with meeting idle, dictation first-PCM latency is unchanged from baseline (REL-011).
+- [ ] **[MUST · M2] M2-TEST-010 — Intel honesty.** On real Intel hardware (TEST-REPO-006): recording and plain transcription work; no speaker labels are produced or promised; the capability difference is visible in the UI before recording starts (UX-SETUP-008).
+- [ ] **[MUST · M2] M2-REVIEW-001** Independent architecture/reliability reviewer approves the recovery design, deletion coverage, permission-lapse handling, and the processing checkpoint/resume path.
+- [ ] **[MUST · M2] M2-REVIEW-002** Independent UX/accessibility reviewer approves the recovery UX, correction flows (keyboard and VoiceOver complete), menu-bar lifecycle states, and capability copy.
+- [ ] **[MUST · M2] M2-REVIEW-003** Every blocking finding fixed or explicitly recorded against a later milestone before the M2 stacked PR merges.
+
 ### Milestone 3 — Remembered speaker identities
 
 - [ ] **[MUST · M3] M3-EXIT-001** Explicit opt-in voice profiles store only confirmed clean samples.
@@ -768,11 +786,11 @@ Decided 2026-08-10 from measured evidence on macOS 26.5.1; see Appendix A.
 
 ### 21.7 Measurable budgets to set before implementation
 
-- [ ] **[MUST · FOUNDATION] TEST-BUDGET-001** Set maximum supported meeting duration and the long-session validation duration; one hour alone is not the product limit unless explicitly chosen.
-- [ ] **[MUST · FOUNDATION] TEST-BUDGET-002** Set numeric limits for accumulated track drift, unexplained audio gap, source-loss alert latency, and maximum recoverable loss from the active chunk.
-- [ ] **[MUST · FOUNDATION] TEST-BUDGET-003** Set disk reserve and warning/safe-stop thresholds.
-- [ ] **[MUST · FOUNDATION] TEST-BUDGET-004** Set CPU, RAM, buffer depth, and disk-write budgets for recording on the lowest supported Apple Silicon class.
-- [ ] **[MUST · FOUNDATION] TEST-BUDGET-005** Set diarization quality and cross-chunk speaker-continuity targets before calling speaker separation trustworthy.
+- [x] **[MUST · FOUNDATION] TEST-BUDGET-001** Maximum supported meeting duration: **3 hours**. Long-session validation duration: **60 minutes** (M2-TEST-007); one 3-hour run before claiming the maximum.
+- [x] **[MUST · FOUNDATION] TEST-BUDGET-002** Accumulated track drift: **≤ 1 s/hour** (measured ~0.05 s/hour, Appendix A; budget leaves 20× headroom). Unexplained audio gap: **≤ 1 s total per session** (discontinuity-marked gaps from recovered interruptions excluded). Source-loss alert latency: **≤ 10 s** from last delivered sample to visible degraded state. Maximum recoverable loss from the active chunk: **≤ the configured chunk duration** (60 s floor in code).
+- [x] **[MUST · FOUNDATION] TEST-BUDGET-003** Disk reserve: **512 MB** preflight minimum (matches the existing `preflightStorage` check); warn at **1 GB** free during recording; safe-stop and finalize at **256 MB**.
+- [x] **[MUST · FOUNDATION] TEST-BUDGET-004** On the lowest supported Apple Silicon (M1, 8 GB): capture-only CPU **≤ 10% average**, app memory during capture **≤ 400 MB**, no unbounded buffer growth across the 60-minute run, disk writes **≤ 100 MB/hour** per track at the chosen AAC bitrate.
+- [x] **[MUST · FOUNDATION] TEST-BUDGET-005** Diarization: **≤ 30% DER** on speaker-playback (far-field/leakage) fixtures, **≤ 20% DER** on headphone-clean fixtures — set from published far-field meeting-corpus results (AMI ≈ 21% for strong systems); tighter targets are aspiration, not gate. Cross-chunk continuity: in a 10-minute two-speaker fixture spanning ≥ 3 chunks, the same voice keeps one session speaker ID in **≥ 90%** of its speech time.
 - [ ] **[MUST · M3] TEST-BUDGET-006** Set identity-candidate precision, unknown rejection, and false-enrollment targets before M3 beta.
 - [ ] **[CONDITIONAL MUST · M4] TEST-BUDGET-007** Set visual sampling rate, CPU budget, candidate agreement window, and false-name target before visual assistance ships.
 
