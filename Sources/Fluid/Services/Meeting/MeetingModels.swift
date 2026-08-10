@@ -288,6 +288,9 @@ nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
     var level: Float
     var droppedSampleCount: Int
     var detail: String?
+    /// Seconds of continuous below-threshold audio, derived from PTS durations. Optional so
+    /// pre-Phase-1c persisted manifests still decode.
+    var silentForSeconds: Double? = nil
 
     static let waiting = Self(
         status: .waiting,
@@ -645,9 +648,17 @@ nonisolated enum MeetingCaptureEvent: Sendable {
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
 }
 
+/// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
+/// ScreenCaptureKit stream at all (in-room microphone-only capture).
+nonisolated enum MeetingCaptureScope: Sendable {
+    case display
+    case window
+}
+
 nonisolated struct MeetingCaptureStartResult: Sendable {
     var tracks: [MeetingAudioTrack]
     var firstPresentationTime: MeetingMediaTime?
+    var captureScope: MeetingCaptureScope? = nil
 }
 
 nonisolated struct MeetingCaptureStopResult: Sendable {

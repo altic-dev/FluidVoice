@@ -158,7 +158,7 @@ Goal: prove the complete path before polishing secondary automation.
 #### Milestone 1 test and review gate
 
 - [ ] **[MUST · M1] M1-TEST-001** Deterministic tests cover legal state transitions, concurrent/repeated Start and Stop, stale-generation callbacks, and exactly one finalization/processing job.
-- [ ] **[MUST · M1] M1-TEST-002** A real online-call capture proves separate non-empty application/system and microphone files with timestamps inside one session manifest.
+- [ ] **[MUST · M1] M1-TEST-002** A real online-call capture proves separate non-empty application/system and microphone files with timestamps inside one session manifest. Dual-track separation, gap, drift, and skew figures are measured in Appendix A; this item still needs the same proof through the app's own writer and manifest, not only the harness.
 - [ ] **[MUST · M1] M1-TEST-003** A real in-room capture proves microphone-only recording does not request Screen/System Audio permission solely for that mode.
 - [ ] **[MUST · M1] M1-TEST-004** Stop proves the complete offline English path: finalized audio → transcription/diarization → timestamped canvas result.
 - [ ] **[MUST · M1] M1-TEST-005** Apple Silicon fixtures cover remote speaker separation, clean confirmed personal-mic **You**, and ambiguous/leaked microphone speech remaining unknown.
@@ -458,6 +458,17 @@ flowchart TD
 - [ ] **[OPTIONAL · V1] CAP-023** Add timestamp/acoustic duplicate suppression only after evaluation proves it does not remove real overlapping speech.
 - [ ] **[MUST · V1] CAP-026** Ask whether the selected online-call microphone is personal or shared. Only a confirmed personal mic may support the default **You** attribution.
 
+### 11.5 Capture API and filter scope
+
+Decided 2026-08-10 from measured evidence on macOS 26.5.1; see Appendix A.
+
+- [ ] **[MUST · FOUNDATION] CAP-027 — ScreenCaptureKit is the V1 capture API.** A one-hour dual-track soak recorded zero gaps, zero backwards timestamps, zero format changes, ~14 ppm clock drift, and a constant 87.6 ms inter-track skew. FB13847291 (`EXC_BAD_ACCESS` on long audio-only capture) did not reproduce. Reliability does not justify migrating to Core Audio process taps.
+- [ ] **[MUST · FOUNDATION] CAP-028 — Scope the content filter to a window, never a display.** `SCContentFilter(display:...)` terminates with `SCStreamErrorDomain -3815` on any display power transition, including a one-second blackout, and never recovers. `SCContentFilter(desktopIndependentWindow:)` survives the same event with audio delivery uninterrupted, and still scopes audio to the owning application.
+- [ ] **[MUST · V1] CAP-029 — Pin the capture window at Start.** Resolve the selected meeting application's main window once when recording begins and hold it for the session. Never follow keyboard focus; the user will switch apps mid-meeting.
+- [ ] **[MUST · V1] CAP-030 — Filter the window candidate list.** `SCShareableContent.windows` includes WindowServer backstops, Dock wallpaper surfaces, menubar strips, and untitled entries. Require an owning application, a non-empty title, a minimum size, and `isOnScreen`. Selecting an unowned system window aborts the process.
+- [ ] **[MUST · V1] CAP-031 — Hold a display-sleep power assertion while recording.** Take `kIOPMAssertionTypePreventUserIdleDisplaySleep` for the capture duration and release it on stop and on termination. Do not rely on the implicit assertion Core Audio takes; the system revokes it mid-session.
+- [ ] **[MUST · V1] CAP-032 — Treat window loss as a first-class capture risk.** Window scoping trades a display dependency for a window dependency. A browser-hosted meeting binds to the browser window, which the user may close or recreate mid-call. This is why REL-015 is mandatory.
+
 ---
 
 ## 12. Offline English transcription pipeline
@@ -579,6 +590,12 @@ flowchart TD
   - First use: the same context with **Set up** and **Not now**.
   - Include the detected app icon without implying FluidVoice has already begun capture.
 - [ ] **[MUST · M4] DETECT-015** Provide a keyboard-complete alternative through the FluidVoice menu-bar menu or Meeting tab. The nonactivating HUD may expose pointer and VoiceOver actions without pretending it accepts normal keyboard focus.
+- [ ] **[MUST · M4] DETECT-016 — Primary signal is bidirectional per-process audio, and it costs no permission.** Poll `kAudioHardwarePropertyProcessObjectList` for `kAudioProcessPropertyIsRunningInput` and `IsRunningOutput`. A known meeting application holding both concurrently for 10–15 s is a call. Input alone is dictation; output alone is media. Verified permission-free on macOS 26.5.1. Poll rather than listen: the change listeners for these properties are reported not to fire.
+- [ ] **[MUST · M4] DETECT-017 — Exclude `com.apple.replayd` and FluidVoice's own bundles from detection.** ScreenCaptureKit microphone capture is attributed to `replayd`, not to the requesting process, so an unguarded detector fires on FluidVoice's own meeting recording.
+- [ ] **[MUST · M4] DETECT-018 — Gate the audio signal on process identity.** FluidVoice ships dictation, so an audio-activity signal without an application allowlist will fire on the user's own voice notes. Bidirectionality already excludes that case; do not loosen it without a replacement guard.
+- [ ] **[MUST · M4] DETECT-019 — Do not require a calendar match.** Calendar-only detection structurally misses Slack huddles, unscheduled calls, and meetings that start late. A current event with a parsed conferencing URL raises confidence and supplies a default title, but its absence must never veto detection.
+- [ ] **[OPTIONAL · M4] DETECT-020 — Handle the muted-mic case as lower confidence.** Participants who join muted produce no input signal. Fall back to a known meeting application with output audio plus a matching window title, camera in use, or an active calendar event, and label the match as weaker rather than folding it into the primary path.
+- [ ] **[MUST · M4] DETECT-021 — Prefer Accessibility over Screen Recording for window titles.** `CGWindowListCopyWindowInfo` omits `kCGWindowName` without the Screen Recording grant. `AXUIElement` returns the same information for a cheaper permission.
 
 ---
 
@@ -641,7 +658,7 @@ flowchart TD
 - [ ] **[MUST · V1] REL-001** On launch, scan sessions left in recording/stopping/processing states.
 - [ ] **[MUST · V1] REL-002** Salvage finalized chunks, mark unexpected capture termination as interrupted, and never auto-delete evidence.
 - [ ] **[MUST · V1] REL-003** Offer **Resume Processing**, **Reveal/Export Audio**, and **Delete** for recoverable sessions.
-- [ ] **[MUST · V1] REL-004** Handle force quit, power loss, sleep/wake, selected-app exit/relaunch, permission revocation, and disk exhaustion.
+- [ ] **[MUST · V1] REL-004** Handle force quit, power loss, sleep/wake, selected-app exit/relaunch, permission revocation, and disk exhaustion. **Display power transitions are a separate and far more frequent event than system sleep** and must be handled explicitly: idle display sleep, lid close, screen lock, monitor input switch, display unplug, and resolution change, each occurring mid-capture.
 - [ ] **[MUST · V1] REL-005** Handle microphone unplug/reconnect, Bluetooth route changes, and sample-rate changes without corrupting prior chunks.
 - [ ] **[MUST · V1] REL-006** Handle waiting room → meeting, breakout room/window, browser refresh, and source subprocess changes without silent loss.
 - [ ] **[MUST · V1] REL-007** Surface independent last-sample time, level, discontinuity, and failure for each track.
@@ -652,6 +669,9 @@ flowchart TD
 - [ ] **[MUST · V1] REL-012** Start, Stop, menu Stop, Quit, and late ScreenCaptureKit/writer callbacks are idempotent and generation-checked; repeated Stop enters disabled **Stopping…** and creates exactly one finalization/processing job.
 - [ ] **[MUST · V1] REL-013** Critical-low-disk behavior safely stops and finalizes capture before exhausting the reserve, then notifies the user without deleting audio.
 - [ ] **[MUST · V1] REL-014** Processing settings/provider changes cannot mutate an in-flight attempt; a deliberate retry creates a new pinned attempt while preserving prior checkpoints/results.
+- [ ] **[MUST · V1] REL-015 — Capture interruption is recoverable, not terminal.** `SCStreamDelegate.stream(_:didStopWithError:)` currently ends the session. It must instead rebuild the stream and resume on a new chunk boundary, with bounded retries and honest degraded state. A transient loss costs a chunk boundary, never a meeting.
+- [ ] **[MUST · V1] REL-016 — Do not trust the stop callback alone.** Run a buffer-silence watchdog per track and restart proactively on stall. The delegate callback is not guaranteed to fire, and is reported to arrive with an invalid error object in some teardown races.
+- [ ] **[MUST · V1] REL-017 — Screen Recording consent can lapse mid-recording.** macOS re-confirms the grant on a roughly monthly cadence, so revocation during an active capture will eventually happen. Treat it as a typed interruption that preserves all finalized audio and explains what to do, not as a generic failure.
 
 ---
 
@@ -717,6 +737,9 @@ flowchart TD
 - [ ] **[MUST · V1] TEST-FAIL-004** Window close, tab navigation, and menu-bar-only use do not stop recording.
 - [ ] **[MUST · V1] TEST-FAIL-005** Permission lifecycle covers first grant, denial, return from System Settings, revocation, regrant, and relaunch for microphone and Screen/System Audio independently.
 - [ ] **[MUST · V1] TEST-FAIL-006** Duplicate Start/Stop/menu/Quit actions and stale callbacks produce exactly one session, one finalized manifest, and one queued processing job.
+- [ ] **[MUST · V1] TEST-FAIL-007 — Display power transitions during capture.** Capture must survive a forced `pmset displaysleepnow`, an idle display sleep, a screen lock, and a monitor input switch. Each is verified by continued buffer delivery on both tracks, not merely by the absence of an error.
+- [ ] **[MUST · V1] TEST-FAIL-008 — Capture-window loss during capture.** Close and recreate the captured application's window mid-session. Recording either continues or resumes on a new chunk boundary; all finalized chunks survive.
+- [ ] **[MUST · V1] TEST-FAIL-009 — One-hour stability run.** A full-hour dual-track capture reports zero gaps, zero backwards timestamps, zero format changes, and drift within the TEST-BUDGET-002 limits.
 
 ### 21.4 Speaker and identity matrix
 
@@ -811,6 +834,24 @@ These do not block writing the PRD. They must be resolved before their associate
 - [ ] **[MUST · V1] RISK-010** Meeting recovery cannot depend on the existing graceful shutdown timeout.
 - [ ] **[MUST · M4] RISK-011** Active-speaker visuals are brittle across layout changes, sharing, overlap, and minimized windows.
 - [ ] **[MUST · M3] RISK-012** Incorrect profile enrollment compounds future errors; only confirmed clean speech may update a profile.
+- [ ] **[MUST · V1] RISK-013 — A display-scoped ScreenCaptureKit filter dies on any display power transition.** Measured, not theoretical: a one-second display blackout terminates the stream with `-3815` and it never recovers. The user sees the display return and the meeting continue while the transcript has silently stopped. Mitigated by CAP-028 and REL-015.
+- [ ] **[MUST · V1] RISK-014 — The two SCK audio outputs are not on one clock.** `.audio` and `.microphone` arrive with different format descriptions (measured 48 kHz stereo versus 48 kHz mono) and independent presentation-timestamp epochs, offset by a per-session constant (measured 87–98 ms). Feeding both into one writer corrupts the container. Use one writer per track and take each track's own first-buffer timestamp as its origin.
+- [ ] **[OPTIONAL · SECURITY] RISK-015 — Screen Recording is a heavy consent ask for an audio feature.** The system dialog says FluidVoice can record screen contents, and macOS re-confirms roughly monthly. Core Audio process taps use `NSAudioCaptureUsageDescription` instead, with no periodic re-consent, but require solving per-process audio attribution for multi-process apps such as Chrome, Zoom, and Electron clients. Revisit after the capture layer is stable; not a V1 blocker.
+
+---
+
+## Appendix A — Capture reliability measurements (2026-08-10)
+
+Host: macOS 26.5.1 (25F80), Apple Silicon. Harness mirrored the `1.6.8/meeting-m1` `SCStreamConfiguration` exactly.
+
+| Experiment | Configuration | Result |
+|---|---|---|
+| 60-minute soak | Display-scoped filter | Terminated at 20:18 with `-3815` when the display slept. Screen lock excluded: lock delay was 300 s and the session stayed unlocked. |
+| 60-minute soak | Display-scoped filter, display held awake | Ran the full 3600 s. Zero gaps, zero backwards timestamps, zero format changes, ~14 ppm drift, 30 ms track differential over the hour, constant 87.6 ms skew. FB13847291 did not reproduce. |
+| Trigger isolation | Display-scoped filter, forced `displaysleepnow` | Died within one second of display-off and did not recover when the display returned one second later. |
+| Filter comparison | Window-scoped filter, forced `displaysleepnow`, three runs | Survived every time. Audio delivery continuous through the blackout. App-track silence 2.8% against an emitting app, 100% against a silent app, confirming audio remains scoped to the owning application. |
+
+Untested, and worth closing before shipping: whether a window-scoped filter survives a deliberate screen lock, and its behavior when the captured window is closed and recreated mid-session.
 
 ---
 

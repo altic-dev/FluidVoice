@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
+import IOKit.pwr_mgt
 import ScreenCaptureKit
 
 nonisolated protocol MeetingCaptureControlling: Sendable {
@@ -26,6 +27,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
     private var activeCapture: ActiveCapture?
     private var startingSessionID: MeetingSessionID?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
+    private var displaySleepAssertionID: IOPMAssertionID?
+    private var terminating = false
 
     func start(
         session: MeetingSession,
@@ -86,12 +89,23 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             throw error
         }
 
+        // The actor is reentrant across the awaits above; termination may have arrived meanwhile.
+        if self.terminating {
+            try? await runtime.stop()
+            _ = await Self.stopWriters(writers)
+            throw MeetingCaptureError.captureStartFailed("The app is shutting down.")
+        }
+        self.displaySleepAssertionID = Self.acquireDisplaySleepAssertion()
         self.activeCapture = ActiveCapture(
             sessionID: session.id,
             runtime: runtime,
             writers: writers
         )
-        return MeetingCaptureStartResult(tracks: tracks, firstPresentationTime: nil)
+        return MeetingCaptureStartResult(
+            tracks: tracks,
+            firstPresentationTime: nil,
+            captureScope: runtime.captureScope
+        )
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
@@ -128,17 +142,40 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             let result = try await task.value
             self.activeCapture = nil
             self.stopTask = nil
+            self.releaseDisplaySleepAssertion()
             return result
         } catch {
             self.activeCapture = nil
             self.stopTask = nil
+            self.releaseDisplaySleepAssertion()
             throw error
         }
     }
 
     func shutdownForTermination() async {
-        guard let sessionID = self.activeCapture?.sessionID else { return }
+        self.terminating = true
+        guard let sessionID = self.activeCapture?.sessionID else {
+            self.releaseDisplaySleepAssertion()
+            return
+        }
         _ = try? await self.stop(sessionID: sessionID)
+    }
+
+    private func releaseDisplaySleepAssertion() {
+        guard let assertionID = self.displaySleepAssertionID else { return }
+        self.displaySleepAssertionID = nil
+        IOPMAssertionRelease(assertionID)
+    }
+
+    private nonisolated static func acquireDisplaySleepAssertion() -> IOPMAssertionID? {
+        var assertionID: IOPMAssertionID = 0
+        let result = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            "FluidVoice meeting recording" as CFString,
+            &assertionID
+        )
+        return result == kIOReturnSuccess ? assertionID : nil
     }
 
     private nonisolated static func stopWriters(_ writers: [MeetingAudioChunkWriter]) async -> [MeetingAudioTrack] {
@@ -209,29 +246,93 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
 }
 
 private nonisolated protocol MeetingCaptureRuntime: AnyObject, Sendable {
+    /// The ScreenCaptureKit scope actually in effect. `nil` for runtimes with no SCK stream.
+    var captureScope: MeetingCaptureScope? { get }
     func start() async throws
     func stop() async throws
+}
+
+/// A candidate window for `.window`-scoped capture, in a shape independent of ScreenCaptureKit
+/// so the selection logic can be unit tested with plain values.
+nonisolated struct MeetingWindowCandidate: Sendable, Equatable {
+    var windowID: UInt32
+    var title: String?
+    var frame: CGRect
+    var layer: Int
+    /// Index within `SCShareableContent.windows`, which is ordered front-to-back.
+    var zOrderIndex: Int
+}
+
+/// Pure selection logic for Phase 1c window-scoped capture: excludes panels/menubar items
+/// (non-zero layer) and slivers (sub-200x100), then ranks titled-frontmost-largest-stablest.
+nonisolated enum MeetingWindowSelector {
+    static let minimumWidth: CGFloat = 200
+    static let minimumHeight: CGFloat = 100
+
+    static func selectWindow(from candidates: [MeetingWindowCandidate]) -> MeetingWindowCandidate? {
+        candidates
+            .filter { $0.layer == 0 && $0.frame.width >= self.minimumWidth && $0.frame.height >= self.minimumHeight }
+            .sorted(by: self.isRanked)
+            .first
+    }
+
+    /// True when `lhs` should be preferred over `rhs`: non-empty title, then frontmost
+    /// (lower z-order), then larger area, then windowID ascending as the stable tiebreak.
+    private static func isRanked(_ lhs: MeetingWindowCandidate, _ rhs: MeetingWindowCandidate) -> Bool {
+        let lhsHasTitle = lhs.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let rhsHasTitle = rhs.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        if lhsHasTitle != rhsHasTitle { return lhsHasTitle }
+        if lhs.zOrderIndex != rhs.zOrderIndex { return lhs.zOrderIndex < rhs.zOrderIndex }
+        let lhsArea = lhs.frame.width * lhs.frame.height
+        let rhsArea = rhs.frame.width * rhs.frame.height
+        if lhsArea != rhsArea { return lhsArea > rhsArea }
+        return lhs.windowID < rhs.windowID
+    }
 }
 
 private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCaptureRuntime, SCStreamOutput, SCStreamDelegate,
     @unchecked Sendable
 {
-    private let stream: SCStream
+    private struct BuiltStream {
+        let stream: SCStream
+        let delegateProxy: ScreenCaptureRuntimeDelegateProxy
+        let scope: MeetingCaptureScope
+    }
+
+    /// Delays before each of the (up to 3) rebuild attempts following an unexpected stream stop.
+    private static let rebuildDelays: [TimeInterval] = [0.5, 1.0, 2.0]
+
+    private let application: MeetingApplicationIdentity
+    private let microphone: MeetingMicrophoneIdentity
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
     private let stateLock = NSLock()
+    private var stream: SCStream
+    private var scope: MeetingCaptureScope
     private var delegateProxy: ScreenCaptureRuntimeDelegateProxy?
     private var stopping = false
-    private var unexpectedStopReported = false
+    private var rebuilding = false
+    private var pendingStream: SCStream?
+    private var pendingStreamFailed = false
+
+    var captureScope: MeetingCaptureScope? {
+        self.stateLock.withLock { self.scope }
+    }
 
     private init(
         stream: SCStream,
+        scope: MeetingCaptureScope,
+        application: MeetingApplicationIdentity,
+        microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
     ) {
         self.stream = stream
+        self.scope = scope
+        self.application = application
+        self.microphone = microphone
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
@@ -245,30 +346,58 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
     ) async throws -> ScreenCaptureMeetingRuntime {
+        let built = try await Self.buildStream(application: application, microphone: microphone)
+        let runtime = ScreenCaptureMeetingRuntime(
+            stream: built.stream,
+            scope: built.scope,
+            application: application,
+            microphone: microphone,
+            applicationWriter: applicationWriter,
+            microphoneWriter: microphoneWriter,
+            eventHandler: eventHandler
+        )
+        built.delegateProxy.owner = runtime
+        runtime.delegateProxy = built.delegateProxy
+        try runtime.attachOutputs(to: built.stream)
+        return runtime
+    }
+
+    /// Resolves the shareable content, filter, configuration and stream. Re-invoked both for the
+    /// initial `make` and for every rebuild attempt after an unexpected stream stop.
+    private static func buildStream(
+        application: MeetingApplicationIdentity,
+        microphone: MeetingMicrophoneIdentity
+    ) async throws -> BuiltStream {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.current
         } catch {
             throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
         }
-        guard let runningApplication = content.applications.first(where: { candidate in
-            if let processID = application.processID {
-                return candidate.processID == processID
-            }
-            return candidate.bundleIdentifier == application.bundleIdentifier
+        let byProcessID = application.processID.flatMap { processID in
+            content.applications.first(where: { $0.processID == processID })
+        }
+        // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
+        guard let runningApplication = byProcessID ?? content.applications.first(where: {
+            $0.bundleIdentifier == application.bundleIdentifier
         }) else {
             throw MeetingCaptureError.applicationUnavailable(application.displayName)
         }
-        let display = application.displayID.flatMap { displayID in
-            content.displays.first(where: { $0.displayID == displayID })
-        } ?? content.displays.first
-        guard let display else { throw MeetingCaptureError.noCaptureDisplay }
 
-        let filter = SCContentFilter(
-            display: display,
-            including: [runningApplication],
-            exceptingWindows: []
-        )
+        let filter: SCContentFilter
+        let scope: MeetingCaptureScope
+        if let window = Self.selectWindow(for: runningApplication, in: content) {
+            filter = SCContentFilter(desktopIndependentWindow: window)
+            scope = .window
+        } else {
+            let display = application.displayID.flatMap { displayID in
+                content.displays.first(where: { $0.displayID == displayID })
+            } ?? content.displays.first
+            guard let display else { throw MeetingCaptureError.noCaptureDisplay }
+            filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+            scope = .display
+        }
+
         let configuration = SCStreamConfiguration()
         configuration.width = 2
         configuration.height = 2
@@ -282,18 +411,37 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         configuration.captureMicrophone = true
         configuration.microphoneCaptureDeviceID = microphone.captureDeviceID
 
-        let placeholder = ScreenCaptureRuntimeDelegateProxy()
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: placeholder)
-        let runtime = ScreenCaptureMeetingRuntime(
-            stream: stream,
-            applicationWriter: applicationWriter,
-            microphoneWriter: microphoneWriter,
-            eventHandler: eventHandler
-        )
-        placeholder.owner = runtime
-        runtime.delegateProxy = placeholder
+        let delegateProxy = ScreenCaptureRuntimeDelegateProxy()
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: delegateProxy)
+        return BuiltStream(stream: stream, delegateProxy: delegateProxy, scope: scope)
+    }
+
+    /// Maps the app's own windows to selection candidates and picks one via `MeetingWindowSelector`.
+    /// Deliberately does not require `isOnScreen` (unreliable for other-Space/hidden windows).
+    /// Window titles are PII and must never be logged or persisted.
+    private static func selectWindow(
+        for runningApplication: SCRunningApplication,
+        in content: SCShareableContent
+    ) -> SCWindow? {
+        let ownedWindows = content.windows.enumerated().filter { _, window in
+            window.owningApplication?.processID == runningApplication.processID
+        }
+        let candidates = ownedWindows.map { index, window in
+            MeetingWindowCandidate(
+                windowID: window.windowID,
+                title: window.title,
+                frame: window.frame,
+                layer: window.windowLayer,
+                zOrderIndex: index
+            )
+        }
+        guard let winner = MeetingWindowSelector.selectWindow(from: candidates) else { return nil }
+        return ownedWindows.first(where: { _, window in window.windowID == winner.windowID })?.element
+    }
+
+    private func attachOutputs(to stream: SCStream) throws {
         try stream.addStreamOutput(
-            runtime,
+            self,
             type: .audio,
             sampleHandlerQueue: DispatchQueue(
                 label: "com.fluidvoice.meeting.screencapture.application",
@@ -301,19 +449,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             )
         )
         try stream.addStreamOutput(
-            runtime,
+            self,
             type: .microphone,
             sampleHandlerQueue: DispatchQueue(
                 label: "com.fluidvoice.meeting.screencapture.microphone",
                 qos: .userInteractive
             )
         )
-        return runtime
     }
 
     func start() async throws {
+        let currentStream = self.stateLock.withLock { self.stream }
         do {
-            try await self.stream.startCapture()
+            try await currentStream.startCapture()
         } catch {
             throw MeetingCaptureError.captureStartFailed(error.localizedDescription)
         }
@@ -321,9 +469,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
     func stop() async throws {
         self.markStopping()
+        let (currentStream, streamAlreadyDead) = self.stateLock.withLock { (self.stream, self.rebuilding) }
+        // Mid-rebuild the current stream already stopped on its own; stopCapture would only time out.
+        guard !streamAlreadyDead else { return }
         let result = await withCheckedContinuation { continuation in
             let completion = MeetingOneShotCompletion(continuation)
-            self.stream.stopCapture { error in
+            currentStream.stopCapture { error in
                 if let error {
                     completion.resume(.failure(error.localizedDescription))
                 } else {
@@ -340,9 +491,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func markStopping() {
-        self.stateLock.lock()
-        self.stopping = true
-        self.stateLock.unlock()
+        self.stateLock.withLock { self.stopping = true }
     }
 
     func stream(
@@ -350,9 +499,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
-        self.stateLock.lock()
-        let shouldAccept = !self.stopping
-        self.stateLock.unlock()
+        let shouldAccept = self.stateLock.withLock { !self.stopping && stream === self.stream }
         guard shouldAccept else { return }
         switch outputType {
         case .audio:
@@ -366,20 +513,91 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
     }
 
-    func handleStreamStop(error: Error) {
-        self.stateLock.lock()
-        let wasStopping = self.stopping
-        let shouldReport = !wasStopping && !self.unexpectedStopReported
-        if shouldReport {
-            self.unexpectedStopReported = true
-            self.stopping = true
+    func handleStreamStop(_ stoppedStream: SCStream, error: Error) {
+        let shouldRebuild = self.stateLock.withLock { () -> Bool in
+            if stoppedStream === self.pendingStream {
+                self.pendingStreamFailed = true
+                return false
+            }
+            guard !self.stopping, !self.rebuilding, stoppedStream === self.stream else { return false }
+            self.rebuilding = true
+            return true
         }
-        self.stateLock.unlock()
+        guard shouldRebuild else { return }
+        self.eventHandler(.interrupted(kind: .sourceLost, trackID: nil, detail: error.localizedDescription))
+        self.runRebuildLoop(triggeringError: error)
+    }
+
+    /// Attempts up to `rebuildDelays.count` rebuilds of the stream, checking `stopping` before and
+    /// after each delay so a concurrent user-initiated `stop()` aborts the loop promptly. On success
+    /// the stream reference is swapped under the lock and writers keep running untouched (they rotate
+    /// chunks on the PTS gap on their own). On exhaustion this reports the terminal failure exactly as
+    /// the non-recoverable path did before this change.
+    private func runRebuildLoop(triggeringError: Error) {
+        Task { [weak self] in
+            guard let self else { return }
+            var lastError = triggeringError
+            for delay in Self.rebuildDelays {
+                if self.stateLock.withLock({ self.stopping }) { self.finishRebuilding(); return }
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if self.stateLock.withLock({ self.stopping }) { self.finishRebuilding(); return }
+
+                do {
+                    let built = try await Self.buildStream(application: self.application, microphone: self.microphone)
+                    if self.stateLock.withLock({ self.stopping }) { self.finishRebuilding(); return }
+                    built.delegateProxy.owner = self
+                    try self.attachOutputs(to: built.stream)
+                    self.stateLock.withLock {
+                        self.pendingStream = built.stream
+                        self.pendingStreamFailed = false
+                    }
+                    try await built.stream.startCapture()
+
+                    let swapped = self.stateLock.withLock { () -> Bool in
+                        defer { self.pendingStream = nil }
+                        guard !self.stopping, !self.pendingStreamFailed else { return false }
+                        self.stream = built.stream
+                        self.scope = built.scope
+                        self.delegateProxy = built.delegateProxy
+                        self.rebuilding = false
+                        return true
+                    }
+                    guard swapped else {
+                        try? await built.stream.stopCapture()
+                        if self.stateLock.withLock({ self.stopping }) {
+                            self.finishRebuilding()
+                            return
+                        }
+                        continue
+                    }
+                    self.eventHandler(.interrupted(kind: .sourceRecovered, trackID: nil, detail: nil))
+                    return
+                } catch {
+                    self.stateLock.withLock { self.pendingStream = nil }
+                    lastError = error
+                    continue
+                }
+            }
+            self.reportRebuildExhausted(triggeringError: lastError)
+        }
+    }
+
+    private func finishRebuilding() {
+        self.stateLock.withLock { self.rebuilding = false }
+    }
+
+    private func reportRebuildExhausted(triggeringError: Error) {
+        let shouldReport = self.stateLock.withLock { () -> Bool in
+            self.rebuilding = false
+            guard !self.stopping else { return false }
+            self.stopping = true
+            return true
+        }
         guard shouldReport else { return }
         self.eventHandler(.interrupted(
             kind: .captureStoppedUnexpectedly,
             trackID: nil,
-            detail: error.localizedDescription
+            detail: triggeringError.localizedDescription
         ))
     }
 }
@@ -388,13 +606,15 @@ private final nonisolated class ScreenCaptureRuntimeDelegateProxy: NSObject, SCS
     weak var owner: ScreenCaptureMeetingRuntime?
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        self.owner?.handleStreamStop(error: error)
+        self.owner?.handleStreamStop(stream, error: error)
     }
 }
 
 private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, MeetingCaptureRuntime,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
+    var captureScope: MeetingCaptureScope? { nil }
+
     private let session = AVCaptureSession()
     private let output = AVCaptureAudioDataOutput()
     private let writer: MeetingAudioChunkWriter

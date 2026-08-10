@@ -64,12 +64,21 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
 
+    /// Sustained application-audio silence, in seconds, before the silence watchdog degrades the session.
+    private static let silenceWatchdogThresholdSeconds: TimeInterval = 90
+    /// How recently the microphone track must have had activity for the watchdog to treat it as "the
+    /// user is talking into a silent meeting" rather than "nobody is in the meeting".
+    private static let microphoneRecentActivityThresholdSeconds: TimeInterval = 15
+
     private let store: any MeetingSessionStoring
     private let capture: any MeetingCaptureControlling
     private let processing: any MeetingProcessingControlling
     private let audioArbiter: any MeetingAudioActivityArbitrating
     private let preferredMicrophoneUID: @MainActor () -> String?
 
+    private enum DegradeReason { case silence, sourceLoss, sticky }
+
+    private var degradeReason: DegradeReason?
     private var activityLease: MeetingAudioActivityLease?
     private var captureGeneration: UUID?
     private var operationGeneration: UUID?
@@ -169,6 +178,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activityLease = lease
         let generation = UUID()
         self.captureGeneration = generation
+        self.degradeReason = nil
         self.operationGeneration = generation
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
@@ -243,6 +253,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 ? Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
                 : [:]
             self.captureGeneration = nil
+            self.degradeReason = nil
             self.operationGeneration = nil
             self.state = .failed(session.id, failure)
             self.releaseActivityLease()
@@ -397,6 +408,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func performShutdownForTermination() async {
         self.captureGeneration = nil
+        self.degradeReason = nil
         self.operationGeneration = nil
         self.stopTask?.cancel()
         self.interruptionTask?.cancel()
@@ -472,6 +484,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw CancellationError()
         }
         self.captureGeneration = nil
+        self.degradeReason = nil
         Self.apply(stopResult, to: &session)
         session.state = .processing
         session.processingAttempts.append(Self.pendingProcessingAttempt())
@@ -565,11 +578,32 @@ final class MeetingSessionCoordinator: ObservableObject {
         switch event {
         case let .trackHealth(trackID, health):
             guard let index = session.audioTracks.firstIndex(where: { $0.id == trackID }) else { return }
+            var health = health
+            let kind = session.audioTracks[index].kind
+            let watchdogTripped = kind == .applicationAudio && health.status != .degraded
+                && (health.silentForSeconds ?? 0) >= Self.silenceWatchdogThresholdSeconds
+                && (self.trackHealth[.microphone]?.silentForSeconds).map {
+                    $0 < Self.microphoneRecentActivityThresholdSeconds
+                } == true
+            if watchdogTripped {
+                health.status = .degraded
+                health.detail = "No meeting audio is being captured while your microphone is active."
+            }
             session.audioTracks[index].health = health
-            self.trackHealth[session.audioTracks[index].kind] = health
+            self.trackHealth[kind] = health
             if health.status == .degraded {
                 session.state = .recordingDegraded
                 self.state = .recordingDegraded(session.id)
+                // Writer-reported degrades stay sticky; only watchdog degrades may self-restore.
+                self.degradeReason = watchdogTripped ? (self.degradeReason ?? .silence) : .sticky
+            } else if kind == .applicationAudio, session.state == .recordingDegraded,
+                      self.degradeReason == .silence,
+                      (health.silentForSeconds ?? 0) < Self.silenceWatchdogThresholdSeconds,
+                      !session.audioTracks.contains(where: { $0.id != trackID && $0.health.status == .degraded })
+            {
+                session.state = .recording
+                self.state = .recording(session.id)
+                self.degradeReason = nil
             }
         case let .chunkFinalized(trackID, chunk, format):
             guard let index = session.audioTracks.firstIndex(where: { $0.id == trackID }) else { return }
@@ -596,13 +630,22 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.updatedAt = Date()
                 self.activeSession = session
                 self.captureGeneration = nil
+                self.degradeReason = nil
                 self.operationGeneration = nil
                 self.enqueuePersistence(session)
                 self.beginUnexpectedStop(sessionID: session.id)
                 return
-            } else if session.state == .recording {
+            } else if kind == .sourceRecovered, session.state == .recordingDegraded,
+                      self.degradeReason == .sourceLoss,
+                      !session.audioTracks.contains(where: { $0.health.status == .degraded })
+            {
+                session.state = .recording
+                self.state = .recording(session.id)
+                self.degradeReason = nil
+            } else if kind != .sourceRecovered, session.state == .recording {
                 session.state = .recordingDegraded
                 self.state = .recordingDegraded(session.id)
+                self.degradeReason = kind == .sourceLost ? (self.degradeReason ?? .sourceLoss) : .sticky
             }
         }
         session.updatedAt = Date()
@@ -660,6 +703,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.operationGeneration == generation else { return }
         var session = inputSession
         self.captureGeneration = nil
+        self.degradeReason = nil
         self.operationGeneration = nil
         if let partialResult = Self.partialStopResult(from: error) {
             Self.apply(partialResult, to: &session)

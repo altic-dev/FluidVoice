@@ -61,6 +61,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private var dropReportScheduled = false
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
+    private var silenceAccumulatedSeconds: Double = 0
+
+    /// Peak amplitude (0...1) below which a buffer counts as silent for watchdog purposes.
+    private static let silenceAmplitudeThreshold: Float = 0.0001
 
     init(
         track: MeetingAudioTrack,
@@ -176,6 +180,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             let gap = CMTimeGetSeconds(presentationTime - activeChunk.end)
             if elapsed >= self.chunkDuration || backwards || gap > 0.5 {
                 if backwards || gap > 0.5 {
+                    self.silenceAccumulatedSeconds = 0
                     let kind: MeetingInterruptionKind = backwards ? .clockDiscontinuity : .sourceLost
                     self.activeChunk?.discontinuities.append(MeetingAudioDiscontinuity(
                         kind: kind,
@@ -210,9 +215,18 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             self.track.health.lastPresentationTime = Self.mediaTime(presentationTime)
             let now = Date()
             self.track.health.lastSampleAt = now
+
+            let peak = Self.peakAmplitude(sampleBuffer)
+            if let peak {
+                self.silenceAccumulatedSeconds = peak < Self.silenceAmplitudeThreshold
+                    ? self.silenceAccumulatedSeconds + max(0, CMTimeGetSeconds(duration))
+                    : 0
+            }
+            self.track.health.silentForSeconds = self.silenceAccumulatedSeconds
+
             if now.timeIntervalSince(self.lastLevelMeasurement) >= 0.1 {
                 self.lastLevelMeasurement = now
-                self.track.health.level = Self.normalizedLevel(sampleBuffer)
+                self.track.health.level = Self.normalizedLevel(fromPeak: peak ?? 0)
             }
             self.track.health.detail = nil
             self.emitHealthIfNeeded()
@@ -476,13 +490,19 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func normalizedLevel(_ sampleBuffer: CMSampleBuffer) -> Float {
+    private static func normalizedLevel(fromPeak peak: Float) -> Float {
+        guard peak > 0 else { return 0 }
+        let decibels = 20 * log10f(min(1, peak))
+        return max(0, min(1, (decibels + 60) / 60))
+    }
+
+    private static func peakAmplitude(_ sampleBuffer: CMSampleBuffer) -> Float? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee,
               asbd.mFormatID == kAudioFormatLinearPCM,
               asbd.mBitsPerChannel == 32,
               asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
-        else { return 0 }
+        else { return nil }
 
         var requiredSize = 0
         let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -495,7 +515,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             flags: 0,
             blockBufferOut: nil
         )
-        guard sizeStatus == noErr, requiredSize > 0 else { return 0 }
+        guard sizeStatus == noErr, requiredSize > 0 else { return nil }
 
         let rawBuffer = UnsafeMutableRawPointer.allocate(
             byteCount: requiredSize,
@@ -514,7 +534,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
             blockBufferOut: &retainedBlockBuffer
         )
-        guard status == noErr else { return 0 }
+        guard status == noErr else { return nil }
 
         var peak: Float = 0
         for buffer in UnsafeMutableAudioBufferListPointer(audioBufferList) {
@@ -529,8 +549,6 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 index += stride
             }
         }
-        guard peak > 0 else { return 0 }
-        let decibels = 20 * log10f(min(1, peak))
-        return max(0, min(1, (decibels + 60) / 60))
+        return peak
     }
 }
