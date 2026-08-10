@@ -20,6 +20,8 @@ struct ModifierOnlyShortcutTrackingState: Equatable {
     let pressedModifierKeyCodes: Set<UInt16>
     /// The currently-active modifier-only mode, if any.
     let activeModifierOnlyType: HotkeyHoldModeType?
+    /// The exact shortcut that owns the active modifier-only press.
+    let activeModifierOnlyShortcut: HotkeyShortcut?
     /// Whether a non-configured key was pressed during the active modifier-only press.
     let otherKeyPressedDuringModifier: Bool
     /// Snapshot of the behavior's mode-key-pressed flag.
@@ -46,6 +48,8 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
     let markInterrupted: Bool
     /// Value `activeModifierOnlyType` should hold after this event.
     let activeModifierOnlyType: HotkeyHoldModeType?
+    /// Shortcut that should own the active modifier-only press after this event.
+    let activeModifierOnlyShortcut: HotkeyShortcut?
     /// Value `otherKeyPressedDuringModifier` should hold after this event.
     let otherKeyPressedDuringModifier: Bool
 
@@ -62,6 +66,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
     ) -> ModifierOnlyShortcutFlagsDecision {
         let pressedModifierKeyCodes = state.pressedModifierKeyCodes
         let activeModifierOnlyType = state.activeModifierOnlyType
+        let activeModifierOnlyShortcut = state.activeModifierOnlyShortcut
         let otherKeyPressedDuringModifier = state.otherKeyPressedDuringModifier
         let isModeKeyPressed = state.isModeKeyPressed
 
@@ -70,6 +75,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
                 outcome: .ignore,
                 markInterrupted: false,
                 activeModifierOnlyType: activeModifierOnlyType,
+                activeModifierOnlyShortcut: activeModifierOnlyShortcut,
                 otherKeyPressedDuringModifier: otherKeyPressedDuringModifier
             )
         }
@@ -86,23 +92,26 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
             // subsequent release reads as a clean tap and falsely starts recording (#688).
             if activeModifierOnlyType == nil,
                pressedKeyCodes == expectedModifierKeyCodes,
-               expectedModifierKeyCodes.contains(keyCode) {
+               expectedModifierKeyCodes.contains(keyCode)
+            {
                 return .init(
                     outcome: .start,
                     markInterrupted: false,
                     activeModifierOnlyType: holdModeType,
+                    activeModifierOnlyShortcut: shortcut,
                     otherKeyPressedDuringModifier: false
                 )
             }
 
-            let isActiveModifierOnlyPress = activeModifierOnlyType == holdModeType
+            let isActiveModifierOnlyPress = activeModifierOnlyType == holdModeType && activeModifierOnlyShortcut == shortcut
+            let isLegacyModePress = activeModifierOnlyShortcut == nil && isModeKeyPressed
             var markInterrupted = false
-            if isActiveModifierOnlyPress || isModeKeyPressed {
+            if isActiveModifierOnlyPress || isLegacyModePress {
                 let extraModifierKeyCodes = pressedKeyCodes.filter { !expectedModifierKeyCodes.contains($0) }
                 markInterrupted = !extraModifierKeyCodes.isEmpty
             }
 
-            guard isActiveModifierOnlyPress || isModeKeyPressed,
+            guard isActiveModifierOnlyPress || isLegacyModePress,
                   expectedModifierKeyCodes.contains(keyCode),
                   !pressedKeyCodes.contains(keyCode)
             else {
@@ -110,6 +119,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
                     outcome: .ignore,
                     markInterrupted: markInterrupted,
                     activeModifierOnlyType: activeModifierOnlyType,
+                    activeModifierOnlyShortcut: activeModifierOnlyShortcut,
                     otherKeyPressedDuringModifier: markInterrupted ? true : otherKeyPressedDuringModifier
                 )
             }
@@ -119,6 +129,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
                 outcome: .finish(wasCleanPress: wasCleanPress),
                 markInterrupted: markInterrupted,
                 activeModifierOnlyType: nil,
+                activeModifierOnlyShortcut: nil,
                 otherKeyPressedDuringModifier: false
             )
         }
@@ -130,6 +141,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
                 outcome: .ignore,
                 markInterrupted: false,
                 activeModifierOnlyType: activeModifierOnlyType,
+                activeModifierOnlyShortcut: activeModifierOnlyShortcut,
                 otherKeyPressedDuringModifier: otherKeyPressedDuringModifier
             )
         }
@@ -143,23 +155,26 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
         if activeModifierOnlyType == nil,
            relevantModifiers == expectedPressedModifiers,
            let changedModifierFlag = HotkeyShortcut.modifierFlag(forKeyCode: keyCode),
-           expectedPressedModifiers.contains(changedModifierFlag) {
+           expectedPressedModifiers.contains(changedModifierFlag)
+        {
             return .init(
                 outcome: .start,
                 markInterrupted: false,
                 activeModifierOnlyType: holdModeType,
+                activeModifierOnlyShortcut: shortcut,
                 otherKeyPressedDuringModifier: false
             )
         }
 
-        let isActiveModifierOnlyPress = activeModifierOnlyType == holdModeType
+        let isActiveModifierOnlyPress = activeModifierOnlyType == holdModeType && activeModifierOnlyShortcut == shortcut
+        let isLegacyModePress = activeModifierOnlyShortcut == nil && isModeKeyPressed
         var markInterrupted = false
-        if isActiveModifierOnlyPress || isModeKeyPressed {
+        if isActiveModifierOnlyPress || isLegacyModePress {
             let unexpectedModifiers = relevantModifiers.subtracting(expectedPressedModifiers)
             markInterrupted = !unexpectedModifiers.isEmpty
         }
 
-        guard isActiveModifierOnlyPress || isModeKeyPressed,
+        guard isActiveModifierOnlyPress || isLegacyModePress,
               keyCode == shortcut.keyCode,
               !relevantModifiers.contains(triggerFlag)
         else {
@@ -167,6 +182,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
                 outcome: .ignore,
                 markInterrupted: markInterrupted,
                 activeModifierOnlyType: activeModifierOnlyType,
+                activeModifierOnlyShortcut: activeModifierOnlyShortcut,
                 otherKeyPressedDuringModifier: markInterrupted ? true : otherKeyPressedDuringModifier
             )
         }
@@ -176,6 +192,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
             outcome: .finish(wasCleanPress: wasCleanPress),
             markInterrupted: markInterrupted,
             activeModifierOnlyType: nil,
+            activeModifierOnlyShortcut: nil,
             otherKeyPressedDuringModifier: false
         )
     }
@@ -191,6 +208,7 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
     var pressedModifierKeyCodes: Set<UInt16> = []
     var modifierOnlyKeyDown = false
     var activeModifierOnlyType: HotkeyHoldModeType?
+    var activeModifierOnlyShortcut: HotkeyShortcut?
     var otherKeyPressedDuringModifier = false
     var modifierPressStartTime: Date?
     var holdModeStartTriggeredTypes: Set<HotkeyHoldModeType> = []
@@ -303,6 +321,11 @@ final class GlobalHotkeyManager: NSObject {
     private nonisolated var activeModifierOnlyType: HotkeyHoldModeType? {
         get { self.state.withLock { self.state.activeModifierOnlyType } }
         set { self.state.withLock { self.state.activeModifierOnlyType = newValue } }
+    }
+
+    private nonisolated var activeModifierOnlyShortcut: HotkeyShortcut? {
+        get { self.state.withLock { self.state.activeModifierOnlyShortcut } }
+        set { self.state.withLock { self.state.activeModifierOnlyShortcut = newValue } }
     }
 
     private nonisolated var otherKeyPressedDuringModifier: Bool {
@@ -1680,12 +1703,14 @@ final class GlobalHotkeyManager: NSObject {
             state: ModifierOnlyShortcutTrackingState(
                 pressedModifierKeyCodes: self.pressedModifierKeyCodes,
                 activeModifierOnlyType: self.activeModifierOnlyType,
+                activeModifierOnlyShortcut: self.activeModifierOnlyShortcut,
                 otherKeyPressedDuringModifier: self.otherKeyPressedDuringModifier,
                 isModeKeyPressed: behavior.isModeKeyPressed()
             )
         )
 
         self.activeModifierOnlyType = decision.activeModifierOnlyType
+        self.activeModifierOnlyShortcut = decision.activeModifierOnlyShortcut
         if decision.markInterrupted {
             self.markModifierOnlyPressInterrupted(
                 message: "\(self.label(for: behavior.holdModeType)) modifier-only press interrupted - extra modifier pressed"
@@ -1702,7 +1727,7 @@ final class GlobalHotkeyManager: NSObject {
 
             self.scheduleModifierOnlyStart(for: behavior)
             return true
-        case .finish(let wasCleanPress):
+        case let .finish(wasCleanPress):
             self.modifierOnlyKeyDown = false
             self.modifierPressStartTime = nil
 

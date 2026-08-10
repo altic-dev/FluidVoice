@@ -466,6 +466,30 @@ final class HotkeyShortcutTests: XCTestCase {
         )
     }
 
+    func testReleasingSecondPrimaryModifierDoesNotFinishActiveShortcut() {
+        let leftOption = HotkeyShortcut(keyCode: 58, modifierFlags: .option, modifierKeyCodes: [58])
+        let rightOption = HotkeyShortcut(keyCode: 61, modifierFlags: .option, modifierKeyCodes: [61])
+
+        let decision = ModifierOnlyShortcutFlagsDecision.evaluate(
+            shortcut: rightOption,
+            holdModeType: .transcription,
+            isEnabled: true,
+            keyCode: 61,
+            modifiers: .option,
+            state: ModifierOnlyShortcutTrackingState(
+                pressedModifierKeyCodes: [58],
+                activeModifierOnlyType: .transcription,
+                activeModifierOnlyShortcut: leftOption,
+                otherKeyPressedDuringModifier: true,
+                isModeKeyPressed: true
+            )
+        )
+
+        XCTAssertEqual(decision.outcome, .ignore)
+        XCTAssertEqual(decision.activeModifierOnlyType, .transcription)
+        XCTAssertEqual(decision.activeModifierOnlyShortcut, leftOption)
+    }
+
     func testPrimaryDictationShortcutsFallbackToLegacyShortcut() throws {
         try self.withRestoredDefaults(keys: [self.legacyHotkeyShortcutKey, self.primaryDictationShortcutsKey]) {
             let legacyShortcut = HotkeyShortcut(keyCode: 12, modifierFlags: [.option])
@@ -888,6 +912,7 @@ private final class ModifierOnlyFlagsReplay {
     let shortcut: HotkeyShortcut
     private(set) var pressedModifierKeyCodes: Set<UInt16> = []
     private(set) var activeModifierOnlyType: HotkeyHoldModeType?
+    private(set) var activeModifierOnlyShortcut: HotkeyShortcut?
     private(set) var otherKeyPressedDuringModifier = false
     /// Number of `.finish(wasCleanPress: true)` outcomes — the toggle-mode "start recording" path.
     private(set) var cleanFinishCount = 0
@@ -897,32 +922,34 @@ private final class ModifierOnlyFlagsReplay {
     }
 
     func flagsChanged(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, nextPressed: Set<UInt16>) {
-        pressedModifierKeyCodes = nextPressed
+        self.pressedModifierKeyCodes = nextPressed
         let decision = ModifierOnlyShortcutFlagsDecision.evaluate(
-            shortcut: shortcut,
+            shortcut: self.shortcut,
             holdModeType: .transcription,
             isEnabled: true,
             keyCode: keyCode,
             modifiers: modifiers,
             state: ModifierOnlyShortcutTrackingState(
-                pressedModifierKeyCodes: pressedModifierKeyCodes,
-                activeModifierOnlyType: activeModifierOnlyType,
-                otherKeyPressedDuringModifier: otherKeyPressedDuringModifier,
+                pressedModifierKeyCodes: self.pressedModifierKeyCodes,
+                activeModifierOnlyType: self.activeModifierOnlyType,
+                activeModifierOnlyShortcut: self.activeModifierOnlyShortcut,
+                otherKeyPressedDuringModifier: self.otherKeyPressedDuringModifier,
                 isModeKeyPressed: false
             )
         )
-        activeModifierOnlyType = decision.activeModifierOnlyType
-        otherKeyPressedDuringModifier = decision.otherKeyPressedDuringModifier
-        if case .finish(let wasCleanPress) = decision.outcome, wasCleanPress {
-            cleanFinishCount += 1
+        self.activeModifierOnlyType = decision.activeModifierOnlyType
+        self.activeModifierOnlyShortcut = decision.activeModifierOnlyShortcut
+        self.otherKeyPressedDuringModifier = decision.otherKeyPressedDuringModifier
+        if case let .finish(wasCleanPress) = decision.outcome, wasCleanPress {
+            self.cleanFinishCount += 1
         }
     }
 
     /// Simulates a non-modifier keyDown during an active modifier-only press
     /// (GlobalHotkeyManager.markOtherInputDuringModifierOnly).
     func keyDown() {
-        if activeModifierOnlyType != nil {
-            otherKeyPressedDuringModifier = true
+        if self.activeModifierOnlyType != nil {
+            self.otherKeyPressedDuringModifier = true
         }
     }
 }
