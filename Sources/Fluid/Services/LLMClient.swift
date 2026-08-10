@@ -308,6 +308,22 @@ final class LLMClient {
         return .invalidRequest("Responses API stream failed: \(detail)")
     }
 
+    static func responsesNonStreamingTerminalError(from response: [String: Any]) -> LLMError? {
+        let status = response["status"] as? String
+        let providerError = response["error"] as? [String: Any]
+        guard providerError != nil || (status != nil && status != "completed") else { return nil }
+
+        let incompleteDetails = response["incomplete_details"] as? [String: Any]
+        let detail = [
+            providerError?["message"] as? String,
+            incompleteDetails?["reason"] as? String,
+            status,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Responses API error"
+        return .invalidRequest("Responses API request failed: \(detail)")
+    }
+
     static func anthropicStreamingError(from event: [String: Any]) -> LLMError? {
         guard event["type"] as? String == "error" else { return nil }
         let providerError = event["error"] as? [String: Any]
@@ -932,6 +948,9 @@ final class LLMClient {
             return try self.parseGeminiResponse(json)
         }
         if wireProtocol == .responses || self.isResponsesRequest(request) {
+            if let terminalError = Self.responsesNonStreamingTerminalError(from: json) {
+                throw terminalError
+            }
             return try self.parseResponsesResponse(json)
         }
 

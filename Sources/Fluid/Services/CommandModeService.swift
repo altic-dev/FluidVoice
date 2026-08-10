@@ -754,6 +754,22 @@ final class CommandModeService: ObservableObject {
         }
     }
 
+    static func terminalToolArguments(
+        command: String,
+        workingDirectory: String?,
+        purpose: String?
+    ) throws -> String {
+        var arguments: [String: Any] = ["command": command]
+        if let workingDirectory {
+            arguments["workingDirectory"] = workingDirectory
+        }
+        if let purpose {
+            arguments["purpose"] = purpose
+        }
+        let data = try JSONSerialization.data(withJSONObject: arguments)
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
     private func callLLM() async throws -> LLMResponse {
         let settings = SettingsStore.shared
         if let issue = settings.commandModeReadinessIssue {
@@ -871,11 +887,11 @@ final class CommandModeService: ObservableObject {
                     lastToolCallId = tc.id
                     let argsJSON: String
                     do {
-                        let data = try JSONSerialization.data(withJSONObject: [
-                            "command": tc.command,
-                            "workingDirectory": tc.workingDirectory ?? "",
-                        ])
-                        argsJSON = String(data: data, encoding: .utf8) ?? "{}"
+                        argsJSON = try Self.terminalToolArguments(
+                            command: tc.command,
+                            workingDirectory: tc.workingDirectory,
+                            purpose: tc.purpose
+                        )
                     } catch {
                         DebugLogger.shared.error("Failed to encode tool call args: \(error)", source: "CommandModeService")
                         argsJSON = "{}"

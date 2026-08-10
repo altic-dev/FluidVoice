@@ -1027,6 +1027,50 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertTrue(LLMClient.Response(thinking: nil, content: "OK", toolCalls: []).hasUsableVerificationOutput)
     }
 
+    func testResponsesNonStreamingRejectsIncompleteAndFailedResults() throws {
+        let responses: [[String: Any]] = [
+            [
+                "status": "incomplete",
+                "incomplete_details": ["reason": "max_output_tokens"],
+                "output": [["type": "message"]],
+            ],
+            [
+                "status": "failed",
+                "error": ["message": "model unavailable"],
+                "output": [],
+            ],
+        ]
+
+        for response in responses {
+            let error = try XCTUnwrap(LLMClient.responsesNonStreamingTerminalError(from: response))
+            guard case let .invalidRequest(message) = error else {
+                return XCTFail("Expected a non-streaming Responses terminal failure")
+            }
+            XCTAssertTrue(message.contains("Responses API request failed"))
+        }
+        XCTAssertNil(LLMClient.responsesNonStreamingTerminalError(from: [
+            "status": "completed",
+            "output": [],
+        ]))
+        XCTAssertNil(LLMClient.responsesNonStreamingTerminalError(from: ["output": []]))
+    }
+
+    func testTerminalContinuationReplaysPurposeWithoutSynthesizingOptionalDirectory() throws {
+        let argumentsJSON = try CommandModeService.terminalToolArguments(
+            command: "pwd",
+            workingDirectory: nil,
+            purpose: "Inspect the working directory"
+        )
+        let data = try XCTUnwrap(argumentsJSON.data(using: .utf8))
+        let arguments = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(arguments["command"] as? String, "pwd")
+        XCTAssertEqual(arguments["purpose"] as? String, "Inspect the working directory")
+        XCTAssertNil(arguments["workingDirectory"])
+    }
+
     func testAnthropicStreamingRejectsProviderErrorEvents() throws {
         let error = try XCTUnwrap(LLMClient.anthropicStreamingError(from: [
             "type": "error",
