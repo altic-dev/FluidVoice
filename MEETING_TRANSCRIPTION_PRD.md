@@ -851,7 +851,12 @@ Host: macOS 26.5.1 (25F80), Apple Silicon. Harness mirrored the `1.6.8/meeting-m
 | Trigger isolation | Display-scoped filter, forced `displaysleepnow` | Died within one second of display-off and did not recover when the display returned one second later. |
 | Filter comparison | Window-scoped filter, forced `displaysleepnow`, three runs | Survived every time. Audio delivery continuous through the blackout. App-track silence 2.8% against an emitting app, 100% against a silent app, confirming audio remains scoped to the owning application. |
 
-Untested, and worth closing before shipping: whether a window-scoped filter survives a deliberate screen lock, and its behavior when the captured window is closed and recreated mid-session.
+Both follow-ups closed 2026-08-10 on the implemented branch:
+
+| Follow-up | Result |
+|---|---|
+| Screen lock during window-scoped capture | Survived. 92 s run with the session locked mid-capture: zero gaps, continuous app-audio delivery through lock and unlock. |
+| Captured window closed, replacement opened 2 s later | No interruption through the app runtime: no `sourceLost`, app audio kept flowing, and a subsequent forced display sleep produced zero events — confirming the stream remained window-scoped. A standalone harness had shown stream death ~17 s after window close, so both outcomes exist in the wild; the death path is covered by REL-015's rebuild (verified live: `sourceLost` → `sourceRecovered` in 1 s). |
 
 ---
 
