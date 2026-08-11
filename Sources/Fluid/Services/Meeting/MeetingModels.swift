@@ -96,6 +96,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     var isConfigured: Bool
     var mode: MeetingCaptureMode
     var applicationBundleIdentifier: String?
+    var applicationDisplayName: String? = nil
     var microphoneCaptureDeviceID: String?
     var microphoneCoreAudioUID: String?
     var microphoneRole: MeetingMicrophoneRole

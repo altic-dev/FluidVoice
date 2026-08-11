@@ -216,6 +216,8 @@ struct MeetingTranscriptionView: View {
                 microphones: self.microphones,
                 readiness: self.readiness,
                 isFirstSetup: !SettingsStore.shared.meetingRecordingDefaults.isConfigured,
+                savedApplicationName: Self.savedApplicationName,
+                savedApplicationBundleIdentifier: SettingsStore.shared.meetingRecordingDefaults.applicationBundleIdentifier,
                 onRefreshSources: self.refreshSourcesFromUserAction,
                 onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
                 onOpenScreenRecordingSettings: { Self.openScreenRecordingSettings() },
@@ -740,6 +742,12 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private static var savedApplicationName: String? {
+        let defaults = SettingsStore.shared.meetingRecordingDefaults
+        guard defaults.isConfigured, let bundleIdentifier = defaults.applicationBundleIdentifier else { return nil }
+        return defaults.applicationDisplayName ?? bundleIdentifier
+    }
+
     private func openMeetingSettings() {
         self.setupDraftBeforeEditing = self.setupDraft
         self.isShowingMeetingSettings = true
@@ -757,17 +765,34 @@ struct MeetingTranscriptionView: View {
             return
         }
 
+        // A settings-only change must not require the meeting app to be running:
+        // fall back to the previously saved app; recording re-validates availability anyway.
+        // The fallback never applies while the saved app IS running — a nil selection then
+        // means the user deliberately deselected it.
+        let settings = SettingsStore.shared
+        let previousDefaults = settings.meetingRecordingDefaults
         let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        if self.setupDraft.mode == .onlineCall, application == nil {
-            self.actionErrorMessage = "Choose an available meeting application before saving."
-            return
+        var applicationBundleIdentifier = application?.identity.bundleIdentifier
+        var applicationDisplayName = application?.identity.displayName
+        if application == nil {
+            let savedIsRunning = previousDefaults.applicationBundleIdentifier.map { saved in
+                self.applications.contains { $0.identity.bundleIdentifier == saved }
+            } ?? false
+            if self.setupDraft.mode == .onlineCall,
+               savedIsRunning || previousDefaults.applicationBundleIdentifier == nil
+            {
+                self.actionErrorMessage = "Choose an available meeting application before saving."
+                return
+            }
+            applicationBundleIdentifier = previousDefaults.applicationBundleIdentifier
+            applicationDisplayName = previousDefaults.applicationDisplayName
         }
 
-        let settings = SettingsStore.shared
         settings.meetingRecordingDefaults = MeetingRecordingDefaults(
             isConfigured: true,
             mode: self.setupDraft.mode,
-            applicationBundleIdentifier: application?.identity.bundleIdentifier,
+            applicationBundleIdentifier: applicationBundleIdentifier,
+            applicationDisplayName: applicationDisplayName,
             microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
             microphoneCoreAudioUID: microphone.identity.coreAudioUID,
             microphoneRole: self.setupDraft.microphoneRole
@@ -1235,6 +1260,8 @@ private struct MeetingRecordingSettingsSheet: View {
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
     let isFirstSetup: Bool
+    let savedApplicationName: String?
+    let savedApplicationBundleIdentifier: String?
     let onRefreshSources: () -> Void
     let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
     let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
@@ -1244,9 +1271,23 @@ private struct MeetingRecordingSettingsSheet: View {
 
     @Environment(\.theme) private var theme
 
+    private var savedApplicationIsRunning: Bool {
+        guard let savedApplicationBundleIdentifier else { return false }
+        return self.applications.contains { $0.identity.bundleIdentifier == savedApplicationBundleIdentifier }
+    }
+
+    private var usesSavedApplicationFallback: Bool {
+        self.draft.mode == .onlineCall
+            && self.draft.selectedApplicationID == nil
+            && self.savedApplicationName != nil
+            && !self.savedApplicationIsRunning
+    }
+
     private var canSave: Bool {
         guard self.draft.selectedMicrophoneID != nil else { return false }
-        return self.draft.mode == .inRoom || self.draft.selectedApplicationID != nil
+        return self.draft.mode == .inRoom
+            || self.draft.selectedApplicationID != nil
+            || self.usesSavedApplicationFallback
     }
 
     private var separationDescription: String {
@@ -1310,10 +1351,14 @@ private struct MeetingRecordingSettingsSheet: View {
                                 Divider()
                                 MeetingAdaptiveSetupRow(
                                     title: "Meeting audio",
-                                    detail: "FluidVoice records audio from this application."
+                                    detail: self.usesSavedApplicationFallback
+                                        ? "\(self.savedApplicationName ?? "Your saved app") is saved but not running — it will be captured next time it's open."
+                                        : "FluidVoice records audio from this application."
                                 ) {
                                     Picker("Meeting audio", selection: self.$draft.selectedApplicationID) {
-                                        Text("Choose application…").tag(String?.none)
+                                        Text(self.usesSavedApplicationFallback
+                                            ? "\(self.savedApplicationName ?? "Saved app") (not running)"
+                                            : "Choose application…").tag(String?.none)
                                         ForEach(self.applications) { option in
                                             Text(option.identity.displayName).tag(Optional(option.id))
                                         }
@@ -1909,25 +1954,27 @@ private struct MeetingResultCanvas: View {
                 }
             }
 
-            ThemedCard {
-                if self.session.transcriptSegments.isEmpty {
-                    ContentUnavailableView(
-                        "No transcript text",
-                        systemImage: "waveform.slash",
-                        description: Text("The recording is preserved if you need to retry processing.")
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 180)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                        ForEach(self.session.transcriptSegments) { segment in
-                            MeetingTranscriptSegmentRow(
-                                segment: segment,
-                                speakerName: segment.speakerID.flatMap { self.speakerNames[$0] } ?? "Unknown speaker"
-                            )
-                        }
+            if self.session.transcriptSegments.isEmpty {
+                ContentUnavailableView(
+                    "No transcript text",
+                    systemImage: "waveform.slash",
+                    description: Text("The recording is preserved if you need to retry processing.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 180)
+            } else {
+                VStack(alignment: .leading, spacing: 28) {
+                    ForEach(Array(self.session.transcriptSegments.enumerated()), id: \.element.id) { index, segment in
+                        MeetingTranscriptSegmentRow(
+                            segment: segment,
+                            speakerName: segment.speakerID.flatMap { self.speakerNames[$0] } ?? "Unknown speaker",
+                            isLocalUser: self.isLocalSegment(segment),
+                            showsSpeakerLabel: self.showsSpeakerLabel(at: index)
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, self.theme.metrics.spacing.lg)
             }
 
             Button("Copy Transcript", systemImage: "doc.on.doc") {
@@ -1945,6 +1992,20 @@ private struct MeetingResultCanvas: View {
             return speaker.displayName
         }
         return "\(speaker.displayName) (You)"
+    }
+
+    // The whole mic feed reads as "my side" of the chat, not just segments attributed to You.
+    private func isLocalSegment(_ segment: MeetingTranscriptSegment) -> Bool {
+        guard let speakerID = segment.speakerID,
+              let speaker = self.session.speakers.first(where: { $0.id == speakerID })
+        else { return false }
+        return speaker.isLocalUser || speaker.trackKind == .microphone
+    }
+
+    private func showsSpeakerLabel(at index: Int) -> Bool {
+        let segments = self.session.transcriptSegments
+        guard index > 0 else { return true }
+        return segments[index].speakerID != segments[index - 1].speakerID
     }
 
     @ViewBuilder
@@ -2211,31 +2272,63 @@ private struct MeetingTrackHealthRow: View {
 private struct MeetingTranscriptSegmentRow: View {
     let segment: MeetingTranscriptSegment
     let speakerName: String
+    let isLocalUser: Bool
+    let showsSpeakerLabel: Bool
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: self.theme.metrics.spacing.lg) {
-            GridRow {
-                Text(Self.timestampText(self.segment.start.seconds))
-                    .font(self.theme.typography.codeCaption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
-
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                    Text(self.speakerName)
-                        .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.accent)
-                    Text(self.segment.text)
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .textSelection(.enabled)
-                }
+        Group {
+            if self.isLocalUser {
+                self.localBubble
+            } else {
+                self.remoteMessage
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(Self.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
         )
+    }
+
+    private var localBubble: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            if self.showsSpeakerLabel {
+                Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
+                    .font(.custom("American Typewriter", size: 12))
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
+            Text(self.segment.text)
+                .font(.custom("American Typewriter", size: 15))
+                .lineSpacing(5)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .textSelection(.enabled)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(
+                    self.theme.palette.contentBackground,
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 96)
+    }
+
+    private var remoteMessage: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if self.showsSpeakerLabel {
+                Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
+                    .font(.custom("American Typewriter", size: 12))
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
+            Text(self.segment.text)
+                .font(.custom("American Typewriter", size: 15))
+                .lineSpacing(5)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, 48)
     }
 
     private static func timestampText(_ seconds: TimeInterval) -> String {
