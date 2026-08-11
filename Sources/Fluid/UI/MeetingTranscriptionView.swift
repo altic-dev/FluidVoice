@@ -2295,11 +2295,11 @@ private struct MeetingTranscriptSegmentRow: View {
         VStack(alignment: .trailing, spacing: 6) {
             if self.showsSpeakerLabel {
                 Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
-                    .font(.custom("American Typewriter", size: 12))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
             Text(self.segment.text)
-                .font(.custom("American Typewriter", size: 15))
+                .font(.system(size: 15, design: .monospaced))
                 .lineSpacing(5)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
@@ -2318,11 +2318,11 @@ private struct MeetingTranscriptSegmentRow: View {
         VStack(alignment: .leading, spacing: 6) {
             if self.showsSpeakerLabel {
                 Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
-                    .font(.custom("American Typewriter", size: 12))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
             Text(self.segment.text)
-                .font(.custom("American Typewriter", size: 15))
+                .font(.system(size: 15, design: .monospaced))
                 .lineSpacing(5)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
