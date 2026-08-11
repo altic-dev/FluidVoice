@@ -434,6 +434,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             .min() ?? 0
         var accumulator = Accumulator()
         var remoteSpeech: [TimelineInterval] = []
+        let expectedFingerprints = MeetingProcessingCheckpoint.fingerprints(for: session.audioTracks)
 
         let context = ProcessingContext(
             origin: origin,
@@ -443,26 +444,90 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             asrService: asrService,
             languagePin: languagePin
         )
+
+        var applicationSkippedChunkIDs: [MeetingAudioChunkID] = []
+        var resumedFromCheckpoint = false
         if let applicationTrack = session.audioTracks.first(where: { $0.kind == .applicationAudio }) {
-            try await self.processApplicationTrack(
-                applicationTrack,
-                context: context,
-                accumulator: &accumulator,
-                remoteSpeech: &remoteSpeech
-            )
-            attempt.lastCompletedTrackID = applicationTrack.id
+            if let checkpoint = Self.loadCheckpoint(sessionDirectory: sessionDirectory),
+               checkpoint.isValid(
+                   session: session,
+                   pipelineVersion: Self.pipelineVersion,
+                   provider: provider.name,
+                   model: selectedModel.rawValue,
+                   language: languagePin.languageCode,
+                   completedTrackID: applicationTrack.id,
+                   expectedFingerprints: expectedFingerprints
+               )
+            {
+                accumulator.speakers = checkpoint.speakers
+                accumulator.segments = checkpoint.segments
+                accumulator.speakerIDByKey = checkpoint.speakerIDByKey
+                accumulator.nextRemoteSpeaker = checkpoint.nextRemoteSpeaker
+                accumulator.nextMicrophoneSpeaker = checkpoint.nextMicrophoneSpeaker
+                remoteSpeech = checkpoint.remoteSpeech.map { TimelineInterval(start: $0.start, end: $0.end) }
+                attempt.lastCompletedTrackID = checkpoint.completedTrackID
+                resumedFromCheckpoint = true
+                DebugLogger.shared.log(
+                    "Meeting processing resuming from checkpoint after application track",
+                    source: "MeetingProcessingPipeline"
+                )
+            } else {
+                Self.deleteCheckpoint(sessionDirectory: sessionDirectory)
+            }
+
+            if !resumedFromCheckpoint {
+                try await self.processApplicationTrack(
+                    applicationTrack,
+                    context: context,
+                    accumulator: &accumulator,
+                    remoteSpeech: &remoteSpeech,
+                    skippedChunkIDs: &applicationSkippedChunkIDs
+                )
+                attempt.lastCompletedTrackID = applicationTrack.id
+                if applicationSkippedChunkIDs.isEmpty {
+                    Self.writeCheckpoint(
+                        MeetingProcessingCheckpoint(
+                            version: MeetingProcessingCheckpoint.currentVersion,
+                            sessionID: session.id,
+                            pipelineVersion: Self.pipelineVersion,
+                            asrProvider: provider.name,
+                            asrModel: selectedModel.rawValue,
+                            languageCode: languagePin.languageCode,
+                            completedTrackID: applicationTrack.id,
+                            trackFingerprints: expectedFingerprints,
+                            speakers: accumulator.speakers,
+                            segments: accumulator.segments,
+                            remoteSpeech: remoteSpeech.map { MeetingProcessingCheckpoint.SpeechInterval(start: $0.start, end: $0.end) },
+                            speakerIDByKey: accumulator.speakerIDByKey,
+                            nextRemoteSpeaker: accumulator.nextRemoteSpeaker,
+                            nextMicrophoneSpeaker: accumulator.nextMicrophoneSpeaker
+                        ),
+                        sessionDirectory: sessionDirectory
+                    )
+                }
+            }
         }
 
         progress(.transcribing)
+        var microphoneSkippedChunkIDs: [MeetingAudioChunkID] = []
         if let microphoneTrack = session.audioTracks.first(where: { $0.kind == .microphone }) {
             try await self.processMicrophoneTrack(
                 microphoneTrack,
                 session: session,
                 context: context,
                 remoteSpeech: remoteSpeech,
-                accumulator: &accumulator
+                accumulator: &accumulator,
+                skippedChunkIDs: &microphoneSkippedChunkIDs
             )
             attempt.lastCompletedTrackID = microphoneTrack.id
+        }
+
+        let skippedChunkIDs = applicationSkippedChunkIDs + microphoneSkippedChunkIDs
+        let totalFinalizedChunkCount = session.audioTracks.reduce(0) {
+            $0 + $1.chunks.filter { $0.finalizationState == .finalized }.count
+        }
+        guard skippedChunkIDs.count < totalFinalizedChunkCount else {
+            throw MeetingProcessingError.noRecoverableAudio
         }
 
         progress(.finalizing)
@@ -477,123 +542,198 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         return MeetingProcessingResult(
             speakers: accumulator.speakers,
             segments: accumulator.segments,
-            attempt: attempt
+            attempt: attempt,
+            skippedChunkIDs: skippedChunkIDs
         )
+    }
+
+    private static let checkpointEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static let checkpointDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    private static func checkpointURL(sessionDirectory: URL) -> URL {
+        sessionDirectory.appendingPathComponent("checkpoint.json", isDirectory: false)
+    }
+
+    private static func loadCheckpoint(sessionDirectory: URL) -> MeetingProcessingCheckpoint? {
+        guard let data = try? Data(contentsOf: Self.checkpointURL(sessionDirectory: sessionDirectory)) else { return nil }
+        return try? Self.checkpointDecoder.decode(MeetingProcessingCheckpoint.self, from: data)
+    }
+
+    private static func writeCheckpoint(_ checkpoint: MeetingProcessingCheckpoint, sessionDirectory: URL) {
+        let url = Self.checkpointURL(sessionDirectory: sessionDirectory)
+        do {
+            let data = try Self.checkpointEncoder.encode(checkpoint)
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: url.path
+            )
+        } catch {
+            DebugLogger.shared.warning("Meeting checkpoint write failed: \(error)", source: "MeetingProcessingPipeline")
+        }
+    }
+
+    private static func deleteCheckpoint(sessionDirectory: URL) {
+        try? FileManager.default.removeItem(at: Self.checkpointURL(sessionDirectory: sessionDirectory))
     }
 
     private func processApplicationTrack(
         _ track: MeetingAudioTrack,
         context: ProcessingContext,
         accumulator: inout Accumulator,
-        remoteSpeech: inout [TimelineInterval]
+        remoteSpeech: inout [TimelineInterval],
+        skippedChunkIDs: inout [MeetingAudioChunkID]
     ) async throws {
         let diarizer = SpeakerDiarizationService()
         for chunk in track.chunks where chunk.finalizationState == .finalized {
-            let url = chunk.fileURL(relativeTo: context.sessionDirectory)
-            let chunkOffset = chunk.presentationStart.seconds - context.origin
-            if SpeakerDiarizationService.isSupported {
-                do {
-                    let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
-                    let turns = diarization.turns
-                    if !turns.isEmpty {
-                        remoteSpeech.append(contentsOf: turns.map { turn in
-                            TimelineInterval(
-                                start: chunkOffset + turn.startSeconds,
-                                end: chunkOffset + turn.endSeconds
-                            )
-                        })
-                        var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
-                        for (index, turn) in turns.enumerated() {
-                            let text = try await self.transcribeTurn(
-                                turn,
-                                fileURL: url,
-                                provider: context.provider,
-                                languageCode: context.languageCode,
-                                asrService: context.asrService,
-                                languagePin: context.languagePin
-                            )
-                            guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
-                            transcribedTurns.append((index, turn, text))
-                        }
-                        var speakerIDByLabel: [String: SessionSpeakerID] = [:]
-                        var usedSpeakerIDs = Set<SessionSpeakerID>()
-                        for (_, turn, _) in transcribedTurns where speakerIDByLabel[turn.speakerLabel] == nil {
-                            let resolved = accumulator.resolveCluster(
-                                trackKind: .applicationAudio,
-                                newClusterKey: "remote:\(chunk.id.uuidString):\(turn.speakerLabel)",
-                                profile: diarization.profilesByLabel[turn.speakerLabel],
-                                excluding: usedSpeakerIDs
-                            )
-                            let displayName: String
-                            if resolved.matchedExisting {
-                                displayName = "Speaker"
-                            } else {
-                                displayName = "Speaker \(accumulator.nextRemoteSpeaker)"
-                                accumulator.nextRemoteSpeaker += 1
-                            }
-                            accumulator.addResolvedSpeaker(
-                                id: resolved.speakerID,
-                                key: "remote-cluster:\(resolved.speakerID.uuidString)",
-                                displayName: displayName,
-                                clusterID: turn.speakerLabel,
-                                trackKind: .applicationAudio,
-                                isLocalUser: false
-                            )
-                            speakerIDByLabel[turn.speakerLabel] = resolved.speakerID
-                            usedSpeakerIDs.insert(resolved.speakerID)
-                        }
-                        for (index, turn, text) in transcribedTurns {
-                            let absoluteStart = chunkOffset + turn.startSeconds
-                            let absoluteEnd = chunkOffset + turn.endSeconds
-                            guard let speakerID = speakerIDByLabel[turn.speakerLabel] else { continue }
-                            accumulator.segments.append(Self.segment(
-                                key: "remote:\(chunk.id.uuidString):\(index)",
-                                trackID: track.id,
-                                speakerID: speakerID,
-                                start: absoluteStart,
-                                end: absoluteEnd,
-                                text: text,
-                                overlap: .none
-                            ))
-                        }
-                        continue
-                    }
-                } catch {
-                    DebugLogger.shared.warning(
-                        "Meeting remote diarization failed; preserving an unlabeled track transcript",
-                        source: "MeetingProcessingPipeline"
-                    )
-                }
-            }
-            if let fallback = try await self.transcribeWholeChunk(
-                url,
-                provider: context.provider,
-                languageCode: context.languageCode,
-                asrService: context.asrService,
-                languagePin: context.languagePin
-            ) {
-                let duration = try await Task.detached(priority: .userInitiated) {
-                    try Self.audioDuration(url)
-                }.value
-                let key = "meeting-audio"
-                let speakerID = accumulator.speaker(
-                    key: key,
-                    displayName: "Meeting audio",
-                    trackKind: .applicationAudio,
-                    isLocalUser: false,
-                    clusterID: nil
+            // Snapshot so a mid-chunk partial mutation (e.g. some turns transcribed before an
+            // unreadable read) never leaks into the accumulated result for a skipped chunk.
+            let accumulatorSnapshot = accumulator
+            let remoteSpeechSnapshot = remoteSpeech
+            do {
+                try await self.processApplicationChunk(
+                    chunk,
+                    track: track,
+                    diarizer: diarizer,
+                    context: context,
+                    accumulator: &accumulator,
+                    remoteSpeech: &remoteSpeech
                 )
-                remoteSpeech.append(TimelineInterval(start: chunkOffset, end: chunkOffset + duration))
-                accumulator.segments.append(Self.segment(
-                    key: "remote-fallback:\(chunk.id.uuidString)",
-                    trackID: track.id,
-                    speakerID: speakerID,
-                    start: chunkOffset,
-                    end: chunkOffset + duration,
-                    text: fallback,
-                    overlap: .none
-                ))
+            } catch {
+                if error is CancellationError { throw error }
+                guard case MeetingProcessingError.audioUnreadable = error else { throw error }
+                accumulator = accumulatorSnapshot
+                remoteSpeech = remoteSpeechSnapshot
+                skippedChunkIDs.append(chunk.id)
             }
+        }
+    }
+
+    private func processApplicationChunk(
+        _ chunk: MeetingAudioChunk,
+        track: MeetingAudioTrack,
+        diarizer: SpeakerDiarizationService,
+        context: ProcessingContext,
+        accumulator: inout Accumulator,
+        remoteSpeech: inout [TimelineInterval]
+    ) async throws {
+        let url = chunk.fileURL(relativeTo: context.sessionDirectory)
+        let chunkOffset = chunk.presentationStart.seconds - context.origin
+        // Preflight readability once, provider-independent, so a garbage file is skipped
+        // uniformly instead of only surfacing via a post-transcription duration read.
+        let chunkDuration = try await Task.detached(priority: .userInitiated) {
+            try Self.audioDuration(url)
+        }.value
+        if SpeakerDiarizationService.isSupported {
+            do {
+                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
+                let turns = diarization.turns
+                if !turns.isEmpty {
+                    remoteSpeech.append(contentsOf: turns.map { turn in
+                        TimelineInterval(
+                            start: chunkOffset + turn.startSeconds,
+                            end: chunkOffset + turn.endSeconds
+                        )
+                    })
+                    var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
+                    for (index, turn) in turns.enumerated() {
+                        let text = try await self.transcribeTurn(
+                            turn,
+                            fileURL: url,
+                            provider: context.provider,
+                            languageCode: context.languageCode,
+                            asrService: context.asrService,
+                            languagePin: context.languagePin
+                        )
+                        guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
+                        transcribedTurns.append((index, turn, text))
+                    }
+                    var speakerIDByLabel: [String: SessionSpeakerID] = [:]
+                    var usedSpeakerIDs = Set<SessionSpeakerID>()
+                    for (_, turn, _) in transcribedTurns where speakerIDByLabel[turn.speakerLabel] == nil {
+                        let resolved = accumulator.resolveCluster(
+                            trackKind: .applicationAudio,
+                            newClusterKey: "remote:\(chunk.id.uuidString):\(turn.speakerLabel)",
+                            profile: diarization.profilesByLabel[turn.speakerLabel],
+                            excluding: usedSpeakerIDs
+                        )
+                        let displayName: String
+                        if resolved.matchedExisting {
+                            displayName = "Speaker"
+                        } else {
+                            displayName = "Speaker \(accumulator.nextRemoteSpeaker)"
+                            accumulator.nextRemoteSpeaker += 1
+                        }
+                        accumulator.addResolvedSpeaker(
+                            id: resolved.speakerID,
+                            key: "remote-cluster:\(resolved.speakerID.uuidString)",
+                            displayName: displayName,
+                            clusterID: turn.speakerLabel,
+                            trackKind: .applicationAudio,
+                            isLocalUser: false
+                        )
+                        speakerIDByLabel[turn.speakerLabel] = resolved.speakerID
+                        usedSpeakerIDs.insert(resolved.speakerID)
+                    }
+                    for (index, turn, text) in transcribedTurns {
+                        let absoluteStart = chunkOffset + turn.startSeconds
+                        let absoluteEnd = chunkOffset + turn.endSeconds
+                        guard let speakerID = speakerIDByLabel[turn.speakerLabel] else { continue }
+                        accumulator.segments.append(Self.segment(
+                            key: "remote:\(chunk.id.uuidString):\(index)",
+                            trackID: track.id,
+                            speakerID: speakerID,
+                            start: absoluteStart,
+                            end: absoluteEnd,
+                            text: text,
+                            overlap: .none
+                        ))
+                    }
+                    return
+                }
+            } catch {
+                if error is CancellationError { throw error }
+                if case MeetingProcessingError.audioUnreadable = error { throw error }
+                DebugLogger.shared.warning(
+                    "Meeting remote diarization failed; preserving an unlabeled track transcript",
+                    source: "MeetingProcessingPipeline"
+                )
+            }
+        }
+        if let fallback = try await self.transcribeWholeChunk(
+            url,
+            provider: context.provider,
+            languageCode: context.languageCode,
+            asrService: context.asrService,
+            languagePin: context.languagePin
+        ) {
+            let key = "meeting-audio"
+            let speakerID = accumulator.speaker(
+                key: key,
+                displayName: "Meeting audio",
+                trackKind: .applicationAudio,
+                isLocalUser: false,
+                clusterID: nil
+            )
+            remoteSpeech.append(TimelineInterval(start: chunkOffset, end: chunkOffset + chunkDuration))
+            accumulator.segments.append(Self.segment(
+                key: "remote-fallback:\(chunk.id.uuidString)",
+                trackID: track.id,
+                speakerID: speakerID,
+                start: chunkOffset,
+                end: chunkOffset + chunkDuration,
+                text: fallback,
+                overlap: .none
+            ))
         }
     }
 
@@ -602,103 +742,157 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         session: MeetingSession,
         context: ProcessingContext,
         remoteSpeech: [TimelineInterval],
-        accumulator: inout Accumulator
+        accumulator: inout Accumulator,
+        skippedChunkIDs: inout [MeetingAudioChunkID]
     ) async throws {
         let diarizer = SpeakerDiarizationService()
         var stagedTurns: [StagedMicrophoneTurn] = []
         var cleanDurationByCluster: [SessionSpeakerID: TimeInterval] = [:]
         for chunk in track.chunks where chunk.finalizationState == .finalized {
-            let url = chunk.fileURL(relativeTo: context.sessionDirectory)
-            let chunkOffset = chunk.presentationStart.seconds - context.origin
-            if SpeakerDiarizationService.isSupported {
-                do {
-                    let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
-                    let turns = diarization.turns
-                    if !turns.isEmpty {
-                        var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
-                        for (index, turn) in turns.enumerated() {
-                            let text = try await self.transcribeTurn(
-                                turn,
-                                fileURL: url,
-                                provider: context.provider,
-                                languageCode: context.languageCode,
-                                asrService: context.asrService,
-                                languagePin: context.languagePin
-                            )
-                            guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
-                            transcribedTurns.append((index, turn, text))
-                        }
-                        var clusterIDByLabel: [String: SessionSpeakerID] = [:]
-                        var usedClusterIDs = Set<SessionSpeakerID>()
-                        for (_, turn, _) in transcribedTurns where clusterIDByLabel[turn.speakerLabel] == nil {
-                            let resolved = accumulator.resolveCluster(
-                                trackKind: .microphone,
-                                newClusterKey: "microphone:\(chunk.id.uuidString):\(turn.speakerLabel)",
-                                profile: diarization.profilesByLabel[turn.speakerLabel],
-                                excluding: usedClusterIDs
-                            )
-                            clusterIDByLabel[turn.speakerLabel] = resolved.speakerID
-                            usedClusterIDs.insert(resolved.speakerID)
-                        }
-                        for (index, turn, text) in transcribedTurns {
-                            let start = chunkOffset + turn.startSeconds
-                            let end = chunkOffset + turn.endSeconds
-                            let overlapsRemote = remoteSpeech.contains {
-                                min(end, $0.end) - max(start, $0.start) > 0.15
-                            }
-                            guard let clusterID = clusterIDByLabel[turn.speakerLabel] else { continue }
-                            stagedTurns.append(StagedMicrophoneTurn(
-                                chunkID: chunk.id,
-                                index: index,
-                                clusterID: clusterID,
-                                clusterLabel: turn.speakerLabel,
-                                start: start,
-                                end: end,
-                                text: text,
-                                overlapsRemote: overlapsRemote
-                            ))
-                            if !overlapsRemote {
-                                cleanDurationByCluster[clusterID, default: 0] += max(0, end - start)
-                            }
-                        }
-                        continue
-                    }
-                } catch {
-                    DebugLogger.shared.warning(
-                        "Meeting microphone speech detection failed; preserving an unlabeled track transcript",
-                        source: "MeetingProcessingPipeline"
-                    )
-                }
-            }
-            if let fallback = try await self.transcribeWholeChunk(
-                url,
-                provider: context.provider,
-                languageCode: context.languageCode,
-                asrService: context.asrService,
-                languagePin: context.languagePin
-            ) {
-                let duration = try await Task.detached(priority: .userInitiated) {
-                    try Self.audioDuration(url)
-                }.value
-                let speakerID = accumulator.speaker(
-                    key: "microphone-unknown",
-                    displayName: "Microphone / Unknown",
-                    trackKind: .microphone,
-                    isLocalUser: false,
-                    clusterID: nil
+            let accumulatorSnapshot = accumulator
+            let stagedTurnsSnapshot = stagedTurns
+            let cleanDurationByClusterSnapshot = cleanDurationByCluster
+            do {
+                try await self.processMicrophoneChunk(
+                    chunk,
+                    track: track,
+                    diarizer: diarizer,
+                    context: context,
+                    remoteSpeech: remoteSpeech,
+                    accumulator: &accumulator,
+                    stagedTurns: &stagedTurns,
+                    cleanDurationByCluster: &cleanDurationByCluster
                 )
-                accumulator.segments.append(Self.segment(
-                    key: "microphone-fallback:\(chunk.id.uuidString)",
-                    trackID: track.id,
-                    speakerID: speakerID,
-                    start: chunkOffset,
-                    end: chunkOffset + duration,
-                    text: fallback,
-                    overlap: .ambiguous
-                ))
+            } catch {
+                if error is CancellationError { throw error }
+                guard case MeetingProcessingError.audioUnreadable = error else { throw error }
+                accumulator = accumulatorSnapshot
+                stagedTurns = stagedTurnsSnapshot
+                cleanDurationByCluster = cleanDurationByClusterSnapshot
+                skippedChunkIDs.append(chunk.id)
             }
         }
 
+        self.finishMicrophoneTrack(
+            track,
+            session: session,
+            stagedTurns: stagedTurns,
+            cleanDurationByCluster: cleanDurationByCluster,
+            accumulator: &accumulator
+        )
+    }
+
+    private func processMicrophoneChunk(
+        _ chunk: MeetingAudioChunk,
+        track: MeetingAudioTrack,
+        diarizer: SpeakerDiarizationService,
+        context: ProcessingContext,
+        remoteSpeech: [TimelineInterval],
+        accumulator: inout Accumulator,
+        stagedTurns: inout [StagedMicrophoneTurn],
+        cleanDurationByCluster: inout [SessionSpeakerID: TimeInterval]
+    ) async throws {
+        let url = chunk.fileURL(relativeTo: context.sessionDirectory)
+        let chunkOffset = chunk.presentationStart.seconds - context.origin
+        let chunkDuration = try await Task.detached(priority: .userInitiated) {
+            try Self.audioDuration(url)
+        }.value
+        if SpeakerDiarizationService.isSupported {
+            do {
+                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
+                let turns = diarization.turns
+                if !turns.isEmpty {
+                    var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
+                    for (index, turn) in turns.enumerated() {
+                        let text = try await self.transcribeTurn(
+                            turn,
+                            fileURL: url,
+                            provider: context.provider,
+                            languageCode: context.languageCode,
+                            asrService: context.asrService,
+                            languagePin: context.languagePin
+                        )
+                        guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
+                        transcribedTurns.append((index, turn, text))
+                    }
+                    var clusterIDByLabel: [String: SessionSpeakerID] = [:]
+                    var usedClusterIDs = Set<SessionSpeakerID>()
+                    for (_, turn, _) in transcribedTurns where clusterIDByLabel[turn.speakerLabel] == nil {
+                        let resolved = accumulator.resolveCluster(
+                            trackKind: .microphone,
+                            newClusterKey: "microphone:\(chunk.id.uuidString):\(turn.speakerLabel)",
+                            profile: diarization.profilesByLabel[turn.speakerLabel],
+                            excluding: usedClusterIDs
+                        )
+                        clusterIDByLabel[turn.speakerLabel] = resolved.speakerID
+                        usedClusterIDs.insert(resolved.speakerID)
+                    }
+                    for (index, turn, text) in transcribedTurns {
+                        let start = chunkOffset + turn.startSeconds
+                        let end = chunkOffset + turn.endSeconds
+                        let overlapsRemote = remoteSpeech.contains {
+                            min(end, $0.end) - max(start, $0.start) > 0.15
+                        }
+                        guard let clusterID = clusterIDByLabel[turn.speakerLabel] else { continue }
+                        stagedTurns.append(StagedMicrophoneTurn(
+                            chunkID: chunk.id,
+                            index: index,
+                            clusterID: clusterID,
+                            clusterLabel: turn.speakerLabel,
+                            start: start,
+                            end: end,
+                            text: text,
+                            overlapsRemote: overlapsRemote
+                        ))
+                        if !overlapsRemote {
+                            cleanDurationByCluster[clusterID, default: 0] += max(0, end - start)
+                        }
+                    }
+                    return
+                }
+            } catch {
+                if error is CancellationError { throw error }
+                if case MeetingProcessingError.audioUnreadable = error { throw error }
+                DebugLogger.shared.warning(
+                    "Meeting microphone speech detection failed; preserving an unlabeled track transcript",
+                    source: "MeetingProcessingPipeline"
+                )
+            }
+        }
+        if let fallback = try await self.transcribeWholeChunk(
+            url,
+            provider: context.provider,
+            languageCode: context.languageCode,
+            asrService: context.asrService,
+            languagePin: context.languagePin
+        ) {
+            let duration = chunkDuration
+            let speakerID = accumulator.speaker(
+                key: "microphone-unknown",
+                displayName: "Microphone / Unknown",
+                trackKind: .microphone,
+                isLocalUser: false,
+                clusterID: nil
+            )
+            accumulator.segments.append(Self.segment(
+                key: "microphone-fallback:\(chunk.id.uuidString)",
+                trackID: track.id,
+                speakerID: speakerID,
+                start: chunkOffset,
+                end: chunkOffset + duration,
+                text: fallback,
+                overlap: .ambiguous
+            ))
+        }
+    }
+
+    private func finishMicrophoneTrack(
+        _ track: MeetingAudioTrack,
+        session: MeetingSession,
+        stagedTurns: [StagedMicrophoneTurn],
+        cleanDurationByCluster: [SessionSpeakerID: TimeInterval],
+        accumulator: inout Accumulator
+    ) {
         if session.mode == .inRoom {
             for turn in stagedTurns {
                 let isNewSpeaker = !accumulator.speakers.contains { $0.id == turn.clusterID }
@@ -847,12 +1041,18 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
     }
 
-    private nonisolated static func readSamples(
+    /// Internal (not private) so tests can exercise unreadable-file classification directly.
+    nonisolated static func readSamples(
         fileURL: URL,
         startSeconds: TimeInterval,
         endSeconds: TimeInterval?
     ) throws -> [Float] {
-        let audioFile = try AVAudioFile(forReading: fileURL)
+        let audioFile: AVAudioFile
+        do {
+            audioFile = try AVAudioFile(forReading: fileURL)
+        } catch {
+            throw MeetingProcessingError.audioUnreadable
+        }
         let sampleRate = audioFile.processingFormat.sampleRate
         guard sampleRate > 0 else { throw MeetingProcessingError.audioUnreadable }
         let fileDuration = Double(audioFile.length) / sampleRate
@@ -867,12 +1067,21 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
               )
         else { return [] }
         audioFile.framePosition = startFrame
-        try audioFile.read(into: buffer, frameCount: frameCount)
+        do {
+            try audioFile.read(into: buffer, frameCount: frameCount)
+        } catch {
+            throw MeetingProcessingError.audioUnreadable
+        }
         return try AudioBufferConverter.monoSamples(from: buffer, targetSampleRate: 16_000)
     }
 
     private nonisolated static func audioDuration(_ url: URL) throws -> TimeInterval {
-        let file = try AVAudioFile(forReading: url)
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(forReading: url)
+        } catch {
+            throw MeetingProcessingError.audioUnreadable
+        }
         guard file.processingFormat.sampleRate > 0 else { throw MeetingProcessingError.audioUnreadable }
         return Double(file.length) / file.processingFormat.sampleRate
     }

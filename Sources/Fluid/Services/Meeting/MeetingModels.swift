@@ -586,6 +586,15 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+extension MeetingSession {
+    /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
+    var hasRetryableAudio: Bool {
+        self.endedAt != nil && self.audioTracks.contains { track in
+            track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
+        }
+    }
+}
+
 nonisolated enum MeetingDomainError: LocalizedError, Equatable {
     case emptySpeakerName
     case speakerNotFound
@@ -673,4 +682,67 @@ nonisolated struct MeetingProcessingResult: Sendable {
     var speakers: [MeetingSessionSpeaker]
     var segments: [MeetingTranscriptSegment]
     var attempt: MeetingProcessingAttempt
+    var skippedChunkIDs: [MeetingAudioChunkID] = []
+}
+
+/// Resume point written after the application-audio pass so a retry can skip re-diarizing and
+/// re-transcribing that track. `trackFingerprints` cover every track's finalized, byteCount>0
+/// chunks (origin depends on all chunks), but deliberately NOT `embeddingIndexByTrack`: only the
+/// microphone pass reads `embeddingIndexByTrack[.microphone]`, so a resumed run keeps the
+/// embeddings already stored on `MeetingSessionSpeaker` instead of rebuilding that index.
+nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
+    static let currentVersion = 1
+
+    nonisolated struct ChunkFingerprint: Codable, Equatable, Sendable {
+        var id: MeetingAudioChunkID
+        var byteCount: Int64
+        var sha256: String
+    }
+
+    nonisolated struct SpeechInterval: Codable, Equatable, Sendable {
+        var start: TimeInterval
+        var end: TimeInterval
+    }
+
+    var version: Int
+    var sessionID: MeetingSessionID
+    var pipelineVersion: Int
+    var asrProvider: String
+    var asrModel: String
+    var languageCode: String
+    var completedTrackID: MeetingAudioTrackID
+    var trackFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
+    var speakers: [MeetingSessionSpeaker]
+    var segments: [MeetingTranscriptSegment]
+    var remoteSpeech: [SpeechInterval]
+    var speakerIDByKey: [String: SessionSpeakerID]
+    var nextRemoteSpeaker: Int
+    var nextMicrophoneSpeaker: Int
+
+    static func fingerprints(for tracks: [MeetingAudioTrack]) -> [MeetingAudioTrackID: [ChunkFingerprint]] {
+        Dictionary(uniqueKeysWithValues: tracks.map { track in
+            (track.id, track.chunks
+                .filter { $0.finalizationState == .finalized && $0.byteCount > 0 }
+                .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256) })
+        })
+    }
+
+    func isValid(
+        session: MeetingSession,
+        pipelineVersion: Int,
+        provider: String,
+        model: String,
+        language: String,
+        completedTrackID: MeetingAudioTrackID,
+        expectedFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
+    ) -> Bool {
+        self.version == Self.currentVersion
+            && self.sessionID == session.id
+            && self.pipelineVersion == pipelineVersion
+            && self.asrProvider == provider
+            && self.asrModel == model
+            && self.languageCode == language
+            && self.completedTrackID == completedTrackID
+            && self.trackFingerprints == expectedFingerprints
+    }
 }

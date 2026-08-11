@@ -85,8 +85,11 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var stopTask: Task<MeetingSession, Error>?
     private var interruptionTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
+    private var retryTask: Task<MeetingSession, Error>?
     private var persistenceTail: Task<Void, Never>?
+    private var persistenceGeneration = 0
     private var restoreTask: Task<Void, Never>?
+    private var isDeleting = false
 
     init(
         store: any MeetingSessionStoring,
@@ -118,6 +121,25 @@ final class MeetingSessionCoordinator: ObservableObject {
     var isProcessing: Bool {
         if case .processing = self.state { return true }
         return false
+    }
+
+    /// True when no capture/stop/interruption/termination/retry activity is in flight and the
+    /// session isn't mid-transition — safe for the UI to offer delete/retry/record-again actions.
+    var isQuiescent: Bool {
+        guard self.stopTask == nil,
+              self.interruptionTask == nil,
+              self.terminationTask == nil,
+              self.retryTask == nil,
+              !self.isRecording,
+              !self.isProcessing,
+              !self.isDeleting
+        else { return false }
+        switch self.state {
+        case .preparing, .stopping:
+            return false
+        default:
+            return true
+        }
     }
 
     var elapsedTime: TimeInterval {
@@ -171,7 +193,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.activeSession == nil,
               self.stopTask == nil,
               self.interruptionTask == nil,
-              self.terminationTask == nil
+              self.terminationTask == nil,
+              self.retryTask == nil
         else {
             throw MeetingCoordinatorError.recordingAlreadyActive
         }
@@ -291,14 +314,90 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func retryProcessing() async throws -> MeetingSession {
-        if case .processing = self.state { throw MeetingCoordinatorError.activityInProgress }
-        guard self.stopTask == nil else { throw MeetingCoordinatorError.activityInProgress }
-        guard var session = self.activeSession,
+        guard let activeSession else { throw MeetingCoordinatorError.noRecoverableAudio }
+        return try await self.retryProcessing(sessionID: activeSession.id)
+    }
+
+    @discardableResult
+    func retryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+        guard self.retryTask == nil else { throw MeetingCoordinatorError.activityInProgress }
+        let task = Task { @MainActor [weak self] () throws -> MeetingSession in
+            guard let self else { throw MeetingCoordinatorError.noActiveMeeting }
+            return try await self.performRetryProcessing(sessionID: sessionID)
+        }
+        self.retryTask = task
+        do {
+            let session = try await task.value
+            self.retryTask = nil
+            return session
+        } catch {
+            self.retryTask = nil
+            throw error
+        }
+    }
+
+    private func performRetryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+        await self.ensureRestored()
+        guard self.stopTask == nil,
               self.interruptionTask == nil,
               self.terminationTask == nil,
-              session.endedAt != nil,
-              session.audioTracks.contains(where: { !$0.chunks.isEmpty })
-        else { throw MeetingCoordinatorError.noRecoverableAudio }
+              !self.isProcessing,
+              !self.isRecording,
+              !self.isDeleting
+        else { throw MeetingCoordinatorError.activityInProgress }
+
+        if self.activeSession?.id == sessionID {
+            guard let session = self.activeSession, session.hasRetryableAudio else {
+                throw MeetingCoordinatorError.noRecoverableAudio
+            }
+            return try await self.beginProcessingRetry(session)
+        }
+
+        if let offer = self.activeSession {
+            guard offer.state == .interrupted || offer.state == .failed else {
+                throw MeetingCoordinatorError.activityInProgress
+            }
+        }
+
+        guard let session = try await self.store.load(id: sessionID) else {
+            throw MeetingCoordinatorError.noActiveMeeting
+        }
+        // Re-validate: another operation may have started while we awaited the load above.
+        guard self.stopTask == nil,
+              self.interruptionTask == nil,
+              self.terminationTask == nil,
+              !self.isProcessing,
+              !self.isRecording,
+              !self.isDeleting
+        else { throw MeetingCoordinatorError.activityInProgress }
+        guard session.hasRetryableAudio else { throw MeetingCoordinatorError.noRecoverableAudio }
+
+        // Acquire before displacing/adopting so a throw here never strands activeSession mid-transition.
+        if self.activityLease == nil {
+            self.activityLease = try self.audioArbiter.acquireMeetingCapture()
+        }
+
+        // Target is valid — only now displace the passive recovery offer it replaces.
+        if var offer = self.activeSession {
+            guard offer.state == .interrupted || offer.state == .failed else {
+                throw MeetingCoordinatorError.activityInProgress
+            }
+            offer.recoveryResolvedAt = Date()
+            offer.updatedAt = Date()
+            try? await self.store.save(offer)
+            guard self.terminationTask == nil else { throw MeetingCoordinatorError.activityInProgress }
+            self.activeSession = nil
+            self.trackHealth = [:]
+            self.state = .idle
+        }
+
+        self.activeSession = session
+        self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
+        return try await self.beginProcessingRetry(session)
+    }
+
+    private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
+        var session = inputSession
         if self.activityLease == nil {
             self.activityLease = try self.audioArbiter.acquireMeetingCapture()
         }
@@ -318,6 +417,98 @@ final class MeetingSessionCoordinator: ObservableObject {
         return try await self.process(session, generation: generation)
     }
 
+    func deleteSession(id: MeetingSessionID) async throws {
+        await self.ensureRestored()
+        guard self.isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
+        self.isDeleting = true
+        defer { self.isDeleting = false }
+        await self.flushQueuedPersistence()
+        // Re-check: the flush await gives a racing operation a window to start.
+        guard self.stopTask == nil,
+              self.interruptionTask == nil,
+              self.terminationTask == nil,
+              self.retryTask == nil
+        else { throw MeetingCoordinatorError.activityInProgress }
+        try await self.store.delete(id: id)
+        if self.activeSession?.id == id {
+            self.activeSession = nil
+            self.trackHealth = [:]
+            self.state = .idle
+        }
+        if self.latestCompletedSession?.id == id {
+            self.latestCompletedSession = nil
+            if self.state == .completed(id) {
+                self.state = .idle
+            }
+        }
+    }
+
+    @discardableResult
+    func recordAgain(
+        from sourceID: MeetingSessionID,
+        configuration: MeetingCaptureConfiguration
+    ) async throws -> MeetingSession {
+        await self.ensureRestored()
+        guard self.stopTask == nil,
+              self.interruptionTask == nil,
+              self.terminationTask == nil,
+              self.retryTask == nil,
+              !self.isProcessing,
+              !self.isRecording,
+              !self.isDeleting
+        else { throw MeetingCoordinatorError.activityInProgress }
+        if let snapshot = self.activeSession, snapshot.id == sourceID {
+            guard snapshot.state == .interrupted || snapshot.state == .failed else {
+                throw MeetingCoordinatorError.activityInProgress
+            }
+            return try await self.recordAgainFromActiveOffer(snapshot, configuration: configuration)
+        }
+        return try await self.recordAgainFromHistory(sourceID: sourceID, configuration: configuration)
+    }
+
+    private func recordAgainFromActiveOffer(
+        _ snapshot: MeetingSession,
+        configuration: MeetingCaptureConfiguration
+    ) async throws -> MeetingSession {
+        self.activeSession = nil
+        self.trackHealth = [:]
+        self.state = .idle
+        do {
+            let newSession = try await self.startRecording(configuration: configuration)
+            var resolved = snapshot
+            resolved.recoveryResolvedAt = Date()
+            resolved.updatedAt = Date()
+            try? await self.store.save(resolved)
+            return newSession
+        } catch {
+            if self.activeSession == nil {
+                self.activeSession = snapshot
+                self.trackHealth = Dictionary(uniqueKeysWithValues: snapshot.audioTracks.map { ($0.kind, $0.health) })
+                self.state = snapshot.state == .interrupted
+                    ? .interrupted(snapshot.id)
+                    : .failed(snapshot.id, snapshot.failures.last ?? Self.failure(from: error, domain: .capture, recoverable: true))
+            }
+            throw error
+        }
+    }
+
+    private func recordAgainFromHistory(
+        sourceID: MeetingSessionID,
+        configuration: MeetingCaptureConfiguration
+    ) async throws -> MeetingSession {
+        let newSession = try await self.startRecording(configuration: configuration)
+        if var source = try? await self.store.load(id: sourceID) {
+            source.recoveryResolvedAt = Date()
+            source.updatedAt = Date()
+            do {
+                try await self.store.save(source)
+            } catch {
+                DebugLogger.shared.log("recordAgain: could not stamp recoveryResolvedAt for \(sourceID): \(error)")
+            }
+        }
+        return newSession
+    }
+
     func renameSpeaker(id: SessionSpeakerID, to displayName: String) async throws {
         guard var session = self.currentSession else { throw MeetingCoordinatorError.noActiveMeeting }
         try session.renameSpeaker(id: id, to: displayName)
@@ -334,7 +525,9 @@ final class MeetingSessionCoordinator: ObservableObject {
               !self.isProcessing,
               self.stopTask == nil,
               self.interruptionTask == nil,
-              self.terminationTask == nil
+              self.terminationTask == nil,
+              self.retryTask == nil,
+              !self.isDeleting
         else {
             throw MeetingCoordinatorError.activityInProgress
         }
@@ -470,6 +663,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.operationGeneration = nil
         self.stopTask?.cancel()
         self.interruptionTask?.cancel()
+        self.retryTask?.cancel()
 
         guard var session = self.activeSession else {
             await self.flushQueuedPersistence()
@@ -514,7 +708,18 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         session.updatedAt = Date()
         await self.flushQueuedPersistence()
-        try? await self.store.save(session)
+        do {
+            try await self.store.save(session)
+        } catch MeetingSessionStoreError.sessionDeleted {
+            // Deleted mid-shutdown: don't resurrect it as an interrupted offer.
+            self.activeSession = nil
+            self.trackHealth = [:]
+            self.state = .idle
+            self.releaseActivityLease()
+            return
+        } catch {
+            // Preserve today's behavior: reinstall as interrupted despite the save failure.
+        }
         self.activeSession = session
         self.state = .interrupted(session.id)
         self.releaseActivityLease()
@@ -575,10 +780,28 @@ final class MeetingSessionCoordinator: ObservableObject {
             } else {
                 session.processingAttempts.append(result.attempt)
             }
+            if !result.skippedChunkIDs.isEmpty {
+                session.events.append(MeetingSessionEvent(
+                    id: UUID(),
+                    occurredAt: Date(),
+                    kind: .writerFailure,
+                    trackID: nil,
+                    detail: "\(result.skippedChunkIDs.count) audio chunk(s) could not be read and were skipped."
+                ))
+                let skipped = Set(result.skippedChunkIDs)
+                for trackIndex in session.audioTracks.indices {
+                    for chunkIndex in session.audioTracks[trackIndex].chunks.indices
+                        where skipped.contains(session.audioTracks[trackIndex].chunks[chunkIndex].id)
+                    {
+                        session.audioTracks[trackIndex].chunks[chunkIndex].finalizationState = .failed
+                    }
+                }
+            }
             session.state = .completed
             session.updatedAt = Date()
             await self.flushQueuedPersistence()
             try await self.store.save(session)
+            self.removeCheckpoint(sessionDirectory: sessionDirectory)
             self.activeSession = nil
             self.latestCompletedSession = session
             self.state = .completed(session.id)
@@ -789,6 +1012,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func enqueuePersistence(_ session: MeetingSession) {
+        self.persistenceGeneration += 1
         let previous = self.persistenceTail
         let store = self.store
         self.persistenceTail = Task {
@@ -798,14 +1022,35 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func flushQueuedPersistence() async {
-        _ = await self.persistenceTail?.value
-        self.persistenceTail = nil
+        while let tail = self.persistenceTail {
+            let generation = self.persistenceGeneration
+            _ = await tail.value
+            if self.persistenceGeneration == generation {
+                self.persistenceTail = nil
+                return
+            }
+        }
     }
 
     private func releaseActivityLease() {
         guard let lease = self.activityLease else { return }
         self.audioArbiter.release(lease)
         self.activityLease = nil
+    }
+
+    /// Only called after the completed session save succeeds; on failure the checkpoint stays so a
+    /// retry can resume from it.
+    private func removeCheckpoint(sessionDirectory: URL) {
+        let url = sessionDirectory.appendingPathComponent("checkpoint.json", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            DebugLogger.shared.warning(
+                "Failed to remove meeting checkpoint after completion: \(error)",
+                source: "MeetingSessionCoordinator"
+            )
+        }
     }
 
     private static func makeTimebase() -> MeetingTimebaseMetadata {

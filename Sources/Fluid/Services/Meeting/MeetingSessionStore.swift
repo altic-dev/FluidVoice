@@ -7,6 +7,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func loadAll() async throws -> [MeetingSession]
     func loadRecoverable() async throws -> [MeetingSession]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
+    func delete(id: MeetingSessionID) async throws
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -32,6 +34,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private let rootDirectory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var tombstonedIDs: Set<MeetingSessionID> = []
 
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
@@ -59,6 +62,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func create(_ session: MeetingSession) throws {
+        guard !self.tombstonedIDs.contains(session.id) else {
+            throw MeetingSessionStoreError.sessionDeleted
+        }
         try session.validateForPersistence()
         try self.prepareRootDirectory()
         let directory = self.sessionDirectoryURL(for: session.id)
@@ -72,6 +78,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func save(_ session: MeetingSession) throws {
+        guard !self.tombstonedIDs.contains(session.id) else {
+            throw MeetingSessionStoreError.sessionDeleted
+        }
         try session.validateForPersistence()
         try self.prepareRootDirectory()
         let directory = self.sessionDirectoryURL(for: session.id)
@@ -84,6 +93,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func load(id: MeetingSessionID) throws -> MeetingSession? {
+        guard !self.tombstonedIDs.contains(id) else { return nil }
         let url = self.sessionManifestURL(for: id)
         guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
         let session = try self.decodeSession(at: url)
@@ -138,6 +148,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func sessionDirectory(for id: MeetingSessionID) throws -> URL {
+        guard !self.tombstonedIDs.contains(id) else {
+            throw MeetingSessionStoreError.sessionDeleted
+        }
         try self.prepareRootDirectory()
         let directory = self.sessionDirectoryURL(for: id)
         if !self.fileSystem.manager.fileExists(atPath: directory.path) {
@@ -145,6 +158,20 @@ actor MeetingSessionStore: MeetingSessionStoring {
             try self.createPrivateDirectory(directory.appendingPathComponent("tracks", isDirectory: true))
         }
         return directory
+    }
+
+    func existingSessionDirectory(for id: MeetingSessionID) throws -> URL? {
+        let directory = self.sessionDirectoryURL(for: id)
+        return self.fileSystem.manager.fileExists(atPath: directory.path) ? directory : nil
+    }
+
+    func delete(id: MeetingSessionID) throws {
+        self.tombstonedIDs.insert(id)
+        let directory = self.sessionDirectoryURL(for: id)
+        if self.fileSystem.manager.fileExists(atPath: directory.path) {
+            try self.fileSystem.manager.removeItem(at: directory)
+        }
+        try self.removeFromIndex(id)
     }
 
     private func writeSession(_ session: MeetingSession) throws {
@@ -281,6 +308,21 @@ actor MeetingSessionStore: MeetingSessionStoring {
         )
     }
 
+    private func removeFromIndex(_ id: MeetingSessionID) throws {
+        var index = (try? self.readIndex()) ?? SessionIndex(
+            schemaVersion: SessionIndex.currentSchemaVersion,
+            sessionIDs: [],
+            updatedAt: Date()
+        )
+        index.sessionIDs.removeAll { $0 == id }
+        index.updatedAt = Date()
+        let data = try self.encoder.encode(index)
+        try self.atomicPrivateWrite(
+            data,
+            to: self.rootDirectory.appendingPathComponent("index.json", isDirectory: false)
+        )
+    }
+
     private func discoverSessionIDs() throws -> [MeetingSessionID] {
         let urls = try self.fileSystem.manager.contentsOfDirectory(
             at: self.rootDirectory,
@@ -308,6 +350,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
 enum MeetingSessionStoreError: LocalizedError {
     case sessionAlreadyExists
     case unsupportedSchema(Int)
+    case sessionDeleted
 
     var errorDescription: String? {
         switch self {
@@ -315,6 +358,8 @@ enum MeetingSessionStoreError: LocalizedError {
             return "A meeting session with this identifier already exists."
         case let .unsupportedSchema(version):
             return "This meeting was created with unsupported schema version \(version)."
+        case .sessionDeleted:
+            return "This meeting has been deleted."
         }
     }
 }

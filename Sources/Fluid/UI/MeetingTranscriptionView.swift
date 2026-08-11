@@ -104,6 +104,7 @@ struct MeetingTranscriptionView: View {
     @State private var meetingHistory: [MeetingSession] = []
     @State private var selectedHistorySessionID: MeetingSessionID?
     @State private var meetingHistoryError: String?
+    @State private var pendingDeleteSessionID: MeetingSessionID?
     @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
 
     init(
@@ -152,8 +153,9 @@ struct MeetingTranscriptionView: View {
                     onRefreshSources: self.refreshSourcesFromUserAction,
                     onStart: self.startRecording,
                     onStop: self.stopAndTranscribe,
-                    onRetry: self.retryProcessing,
+                    onRetrySession: { self.retryProcessingSession(id: $0.id) },
                     onRevealAudio: self.revealCapturedAudio,
+                    onRecordAgain: self.recordAgain,
                     onCopyTranscript: self.copyTranscript,
                     onOpenMeetingSettings: self.openMeetingSettings,
                     isRetrying: self.isRetrying
@@ -165,7 +167,12 @@ struct MeetingTranscriptionView: View {
                         sessions: self.meetingHistory,
                         selectedSessionID: self.$selectedHistorySessionID,
                         errorMessage: self.meetingHistoryError,
-                        onRefresh: { Task { await self.loadMeetingHistory() } }
+                        isQuiescent: self.coordinator.isQuiescent,
+                        onRefresh: { Task { await self.loadMeetingHistory() } },
+                        onRetry: { self.retryProcessingSession(id: $0) },
+                        onRevealAudio: self.revealCapturedAudio,
+                        onExportAudio: self.exportAudio,
+                        onDeleteRequest: { self.pendingDeleteSessionID = $0 }
                     )
                     .frame(width: 290)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -218,11 +225,36 @@ struct MeetingTranscriptionView: View {
             )
             .interactiveDismissDisabled(!SettingsStore.shared.meetingRecordingDefaults.isConfigured)
         }
+        .alert(
+            "Delete Meeting?",
+            isPresented: Binding(
+                get: { self.pendingDeleteSessionID != nil },
+                set: { if !$0 { self.pendingDeleteSessionID = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { self.pendingDeleteSessionID = nil }
+            Button("Delete", role: .destructive) {
+                if let id = self.pendingDeleteSessionID { self.deleteSession(id: id) }
+            }
+        } message: {
+            Text("The recording and transcript will be permanently deleted from this Mac.")
+        }
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
         if let selectedHistorySession, self.canBrowseMeetingHistory {
-            return .result(selectedHistorySession)
+            switch selectedHistorySession.state {
+            case .failed:
+                let message = selectedHistorySession.failures.last?.message ?? "This meeting failed."
+                return .failed(session: selectedHistorySession, message: message)
+            case .interrupted:
+                let message = selectedHistorySession.endedAt != nil && !selectedHistorySession.processingAttempts.isEmpty
+                    ? "Transcription was interrupted. Captured audio is ready to retry."
+                    : "Recording was interrupted. Captured audio has been preserved on this Mac."
+                return .failed(session: selectedHistorySession, message: message)
+            default:
+                return .result(selectedHistorySession)
+            }
         }
 
         switch self.coordinator.state {
@@ -505,24 +537,98 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func retryProcessing() {
+    private func retryProcessingSession(id: MeetingSessionID) {
         guard !self.isRetrying else { return }
         self.isRetrying = true
         self.actionErrorMessage = nil
+        self.selectedHistorySessionID = nil
         Task {
             defer { self.isRetrying = false }
             do {
-                _ = try await self.coordinator.retryProcessing()
+                _ = try await self.coordinator.retryProcessing(sessionID: id)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func deleteSession(id: MeetingSessionID) {
+        self.pendingDeleteSessionID = nil
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                try await self.coordinator.deleteSession(id: id)
+                if self.selectedHistorySessionID == id { self.selectedHistorySessionID = nil }
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func recordAgain(_ session: MeetingSession) {
+        guard let configuration = self.recordAgainConfiguration(from: session) else { return }
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.recordAgain(from: session.id, configuration: configuration)
+                self.selectedHistorySessionID = nil
+                self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle()
+                await self.loadMeetingHistory()
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
         }
     }
 
+    private func recordAgainConfiguration(from session: MeetingSession) -> MeetingCaptureConfiguration? {
+        guard let microphone = self.resolvedMicrophone(for: session) else {
+            self.actionErrorMessage = "microphone unavailable"
+            return nil
+        }
+        var application: MeetingApplicationIdentity?
+        if session.mode == .onlineCall {
+            guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
+                  let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
+            else {
+                self.actionErrorMessage = "app not running"
+                return nil
+            }
+            application = resolved.identity
+        }
+        return MeetingCaptureConfiguration(
+            mode: session.mode,
+            title: session.title,
+            platform: session.platform,
+            application: application,
+            microphone: microphone
+        )
+    }
+
+    private func resolvedMicrophone(for session: MeetingSession) -> MeetingMicrophoneIdentity? {
+        if let coreAudioUID = session.selectedMicrophone.coreAudioUID,
+           let match = self.microphones.first(where: { $0.identity.coreAudioUID == coreAudioUID })
+        {
+            var identity = match.identity
+            identity.role = session.selectedMicrophone.role
+            return identity
+        }
+        guard let match = self.microphones.first(where: { $0.identity.captureDeviceID == session.selectedMicrophone.captureDeviceID }) else {
+            return nil
+        }
+        var identity = match.identity
+        identity.role = session.selectedMicrophone.role
+        return identity
+    }
+
     private func revealCapturedAudio(_ session: MeetingSession) {
         Task {
             do {
-                let directory = try await MeetingSessionStore.shared.sessionDirectory(for: session.id)
+                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    self.actionErrorMessage = "Captured audio could not be revealed: recording no longer on disk."
+                    return
+                }
                 let firstAudioURL = session.audioTracks
                     .flatMap(\.chunks)
                     .first(where: { $0.finalizationState == .finalized })?
@@ -532,6 +638,80 @@ struct MeetingTranscriptionView: View {
                 self.actionErrorMessage = "Captured audio could not be revealed: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func exportAudio(_ session: MeetingSession) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let destinationFolder = panel.url else { return }
+
+        Task {
+            do {
+                guard let sourceDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    self.actionErrorMessage = "Export failed: recording no longer on disk."
+                    return
+                }
+                try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder)
+            } catch {
+                self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private static func stageExport(
+        of session: MeetingSession,
+        from sourceDirectory: URL,
+        into destinationFolder: URL
+    ) throws {
+        let fileManager = FileManager.default
+        let baseName = Self.sanitizedExportName(session.title)
+        let name = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
+        let stagingDirectory = destinationFolder.appendingPathComponent(".\(name).\(UUID().uuidString).export-tmp", isDirectory: true)
+        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+
+        do {
+            for track in session.audioTracks {
+                for chunk in track.chunks where chunk.finalizationState == .finalized && chunk.byteCount > 0 {
+                    let sourceURL = chunk.fileURL(relativeTo: sourceDirectory)
+                    let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
+                    let fileName = "\(track.kind.rawValue)-\(String(format: "%03d", chunk.sequence)).\(ext)"
+                    try fileManager.copyItem(
+                        at: sourceURL,
+                        to: stagingDirectory.appendingPathComponent(fileName, isDirectory: false)
+                    )
+                }
+            }
+            var destinationName = name
+            do {
+                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
+            } catch CocoaError.fileWriteFileExists {
+                // Destination appeared between the uniqueness check and the move; retry once with a fresh name.
+                destinationName = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
+                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
+            }
+        } catch {
+            try? fileManager.removeItem(at: stagingDirectory)
+            throw error
+        }
+    }
+
+    private static func sanitizedExportName(_ title: String) -> String {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-")
+        let sanitized = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }.prefix(80))
+        return sanitized.isEmpty ? "Meeting" : sanitized
+    }
+
+    private static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
+        var candidate = baseName
+        var suffix = 2
+        while fileManager.fileExists(atPath: folder.appendingPathComponent(candidate).path) {
+            candidate = "\(baseName) \(suffix)"
+            suffix += 1
+        }
+        return candidate
     }
 
     private func startNewMeeting() {
@@ -689,8 +869,9 @@ struct MeetingTranscriptionCanvas: View {
     let onRefreshSources: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
-    let onRetry: () -> Void
+    let onRetrySession: (MeetingSession) -> Void
     let onRevealAudio: (MeetingSession) -> Void
+    let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession) -> Void
     let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
@@ -740,8 +921,9 @@ struct MeetingTranscriptionCanvas: View {
                         session: session,
                         message: self.errorMessage ?? message,
                         isRetrying: self.isRetrying,
-                        onRetry: self.onRetry,
-                        onRevealAudio: self.onRevealAudio
+                        onRetrySession: self.onRetrySession,
+                        onRevealAudio: self.onRevealAudio,
+                        onRecordAgain: self.onRecordAgain
                     )
                 }
             }
@@ -863,7 +1045,12 @@ private struct MeetingHistoryInspector: View {
     let sessions: [MeetingSession]
     @Binding var selectedSessionID: MeetingSessionID?
     let errorMessage: String?
+    let isQuiescent: Bool
     let onRefresh: () -> Void
+    let onRetry: (MeetingSessionID) -> Void
+    let onRevealAudio: (MeetingSession) -> Void
+    let onExportAudio: (MeetingSession) -> Void
+    let onDeleteRequest: (MeetingSessionID) -> Void
 
     @Environment(\.theme) private var theme
     @State private var searchText = ""
@@ -924,6 +1111,26 @@ private struct MeetingHistoryInspector: View {
                     ForEach(self.filteredSessions) { session in
                         MeetingHistoryRow(session: session)
                             .tag(session.id)
+                            .contextMenu {
+                                if session.hasRetryableAudio, session.state == .failed || session.state == .interrupted {
+                                    Button("Retry Transcription", systemImage: "arrow.clockwise") {
+                                        self.onRetry(session.id)
+                                    }
+                                    .disabled(!self.isQuiescent)
+                                }
+                                Button("Reveal Audio", systemImage: "folder") {
+                                    self.onRevealAudio(session)
+                                }
+                                Button("Export Audio…", systemImage: "square.and.arrow.up") {
+                                    self.onExportAudio(session)
+                                }
+                                .disabled(!Self.hasFinalizedAudio(session))
+                                Divider()
+                                Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
+                                    self.onDeleteRequest(session.id)
+                                }
+                                .disabled(!self.isQuiescent)
+                            }
                     }
                 }
                 .listStyle(.sidebar)
@@ -931,6 +1138,10 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .background(self.theme.palette.sidebarBackground)
+    }
+
+    private static func hasFinalizedAudio(_ session: MeetingSession) -> Bool {
+        session.audioTracks.flatMap(\.chunks).contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
     }
 }
 
@@ -1797,16 +2008,14 @@ private struct MeetingFailureCanvas: View {
     let session: MeetingSession?
     let message: String
     let isRetrying: Bool
-    let onRetry: () -> Void
+    let onRetrySession: (MeetingSession) -> Void
     let onRevealAudio: (MeetingSession) -> Void
+    let onRecordAgain: (MeetingSession) -> Void
 
     @Environment(\.theme) private var theme
 
     private var hasRecoverableAudio: Bool {
-        guard let session, session.endedAt != nil else { return false }
-        return session.audioTracks
-            .flatMap(\.chunks)
-            .contains(where: { $0.finalizationState == .finalized && $0.byteCount > 0 })
+        self.session?.hasRetryableAudio == true
     }
 
     private var title: String {
@@ -1846,7 +2055,7 @@ private struct MeetingFailureCanvas: View {
                     if let session, self.hasRecoverableAudio {
                         Button("Reveal Audio", systemImage: "folder", action: { self.onRevealAudio(session) })
                             .fluidButton(.compact, size: .medium)
-                        Button(action: self.onRetry) {
+                        Button(action: { self.onRetrySession(session) }) {
                             if self.isRetrying {
                                 HStack(spacing: self.theme.metrics.spacing.sm) {
                                     ProgressView().controlSize(.small)
@@ -1858,6 +2067,12 @@ private struct MeetingFailureCanvas: View {
                         }
                         .fluidButton(.accent, size: .medium)
                         .disabled(self.isRetrying)
+                    }
+                    if let session {
+                        Button("Record Again", systemImage: "arrow.counterclockwise.circle") {
+                            self.onRecordAgain(session)
+                        }
+                        .fluidButton(.compact, size: .medium)
                     }
                 }
             }

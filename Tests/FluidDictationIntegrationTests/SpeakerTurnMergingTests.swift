@@ -1358,12 +1358,16 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
     private var rejectedSaveStates: [MeetingSessionState] = []
     private var createCallCount = 0
     private var failingSaveState: MeetingSessionState?
+    private var tombstonedIDs: Set<MeetingSessionID> = []
 
     init(failingSaveState: MeetingSessionState?) {
         self.failingSaveState = failingSaveState
     }
 
     func create(_ session: MeetingSession) throws {
+        guard !self.tombstonedIDs.contains(session.id) else {
+            throw MeetingSessionStoreError.sessionDeleted
+        }
         try session.validateForPersistence()
         self.createCallCount += 1
         self.sessions[session.id] = session
@@ -1371,6 +1375,9 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
     }
 
     func save(_ session: MeetingSession) throws {
+        guard !self.tombstonedIDs.contains(session.id) else {
+            throw MeetingSessionStoreError.sessionDeleted
+        }
         try session.validateForPersistence()
         if self.failingSaveState == session.state {
             self.failingSaveState = nil
@@ -1379,6 +1386,11 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
         }
         self.sessions[session.id] = session
         self.persistedStates.append(session.state)
+    }
+
+    func delete(id: MeetingSessionID) throws {
+        self.tombstonedIDs.insert(id)
+        self.sessions.removeValue(forKey: id)
     }
 
     func load(id: MeetingSessionID) -> MeetingSession? {
@@ -1417,6 +1429,10 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
         URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("meeting-coordinator-tests", isDirectory: true)
             .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    func existingSessionDirectory(for id: MeetingSessionID) -> URL? {
+        self.sessions[id] != nil ? self.sessionDirectory(for: id) : nil
     }
 
     func snapshot() -> Snapshot {
