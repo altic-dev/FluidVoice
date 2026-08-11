@@ -18,6 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var shouldSuppressNextReopenActivation = false
     private var wasLaunchedAsLoginItem = false
     private var hasDeferredMLXUpgradeOffer = false
+    private weak var mainWindowHiddenByAppHide: NSWindow?
+    private var shouldSuppressMainWindowLaunchReveal = false
 
     var shouldPresentStartupMicrophoneNotice: Bool {
         !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
@@ -132,16 +134,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return true
         }
 
+        self.mainWindowHiddenByAppHide = nil
+        self.shouldSuppressMainWindowLaunchReveal = false
+
         // Ensure dock-icon reopen always foregrounds FluidVoice.
         sender.activate(ignoringOtherApps: true)
 
         return !self.bringMainWindowToFrontIfPresent()
     }
 
+    func applicationWillHide(_ notification: Notification) {
+        // A system-hidden login launch is not a user request to suppress its configured reveal.
+        if self.wasLaunchedAsLoginItem,
+           !self.didRevealMainWindowOnLaunch,
+           !NSApp.isActive
+        {
+            return
+        }
+
+        // A nonactivating recording panel can make AppKit unhide the process. Remember
+        // the visible main window so the panel does not restore it along with itself.
+        self.shouldSuppressMainWindowLaunchReveal = true
+        self.mainWindowHiddenByAppHide = NSApp.windows.first {
+            self.isMainWindow($0) && $0.isVisible && !$0.isMiniaturized
+        }
+        if self.mainWindowHiddenByAppHide != nil {
+            self.didRevealMainWindowOnLaunch = true
+        }
+    }
+
+    func applicationDidHide(_ notification: Notification) {
+        self.mainWindowHiddenByAppHide?.orderOut(nil)
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard self.hasDeferredMLXUpgradeOffer else { return }
-        self.hasDeferredMLXUpgradeOffer = false
-        self.scheduleMLXUpgradeOffer()
+        self.shouldSuppressMainWindowLaunchReveal = false
+
+        if let mainWindow = self.mainWindowHiddenByAppHide {
+            self.mainWindowHiddenByAppHide = nil
+            if mainWindow.alphaValue <= 0.01 {
+                mainWindow.alphaValue = 1
+            }
+            mainWindow.orderFrontRegardless()
+            mainWindow.makeKeyAndOrderFront(nil)
+        }
+
+        if self.hasDeferredMLXUpgradeOffer {
+            self.hasDeferredMLXUpgradeOffer = false
+            self.scheduleMLXUpgradeOffer()
+        }
     }
 
     func userNotificationCenter(
@@ -204,7 +245,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 guard let self else { return }
                 guard self.didRevealMainWindowOnLaunch == false else { return }
 
-                if revealWindow {
+                let shouldRevealWindow = revealWindow && !self.shouldSuppressMainWindowLaunchReveal
+                if shouldRevealWindow {
                     NSApp.unhide(nil)
                     NSApp.activate(ignoringOtherApps: true)
 
@@ -213,13 +255,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                         return
                     }
                 } else if self.bootMainWindowHiddenIfPresent() {
+                    if self.shouldSuppressMainWindowLaunchReveal,
+                       self.mainWindowHiddenByAppHide == nil
+                    {
+                        self.mainWindowHiddenByAppHide = NSApp.windows.first(where: self.isMainWindow)
+                    }
                     self.didRevealMainWindowOnLaunch = true
                     return
                 }
 
                 DebugLogger.shared.debug("Main window not ready during launch reveal retry", source: "AppDelegate")
                 if delay >= 0.6 {
-                    self.requestMainWindowReopenIfNeeded(activate: revealWindow)
+                    self.requestMainWindowReopenIfNeeded(activate: shouldRevealWindow)
                 }
             }
         }
