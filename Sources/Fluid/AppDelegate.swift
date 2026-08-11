@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var wasLaunchedAsLoginItem = false
     private var analyticsActivationSuppressionDeadline: Date?
     private var hasDeferredMLXUpgradeOffer = false
+    private var updatePromptWindow: NSWindow?
 
     var shouldPresentStartupMicrophoneNotice: Bool {
         !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
@@ -468,27 +469,139 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
+    /// Offers the available update from a floating panel instead of a modal alert.
+    ///
+    /// This prompt used to be an `NSAlert.runModal()`. That call never returns until the alert is
+    /// dismissed, and it runs inside a main actor job, so every other `@MainActor` job queues up
+    /// behind it - including the dictation callbacks `GlobalHotkeyManager` posts from its event
+    /// tap. FluidVoice is a menu bar app that is rarely frontmost, so the alert also came up
+    /// unactivated behind other windows: dictation stayed dead until the user found the hidden
+    /// dialog (#564, #745). The panel keeps the main actor free and floats above other apps
+    /// without stealing focus, and matches the install status panel in SimpleUpdater.
     @MainActor
     private func showUpdateNotification(version: String) {
         DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
 
-        let alert = NSAlert()
-        alert.messageText = "Update Available"
-        alert.informativeText = "FluidVoice \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Install Now")
-        alert.addButton(withTitle: "Later")
-
-        let response = alert.runModal()
-
-        if response == .alertFirstButtonReturn {
-            DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
-            SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
-            self.checkForUpdatesManually()
-        } else {
-            DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
-            SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
+        // Hourly checks keep running now that the prompt no longer blocks them, so never stack panels.
+        guard self.updatePromptWindow == nil else {
+            DebugLogger.shared.debug("Update prompt already on screen, skipping duplicate", source: "AppDelegate")
+            return
         }
+
+        let panelWidth: CGFloat = 420
+        let margin: CGFloat = 22
+        let textLeading: CGFloat = 92
+        let textWidth = panelWidth - textLeading - margin
+
+        let title = NSTextField(labelWithString: "Update Available")
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
+        let titleHeight = ceil(title.fittingSize.height)
+
+        let detail = NSTextField(
+            wrappingLabelWithString: "FluidVoice \(version) is now available. The app will restart automatically after installation."
+        )
+        detail.font = .systemFont(ofSize: 13)
+        detail.textColor = .secondaryLabelColor
+        detail.preferredMaxLayoutWidth = textWidth
+        let detailHeight = ceil(detail.fittingSize.height)
+
+        let installButton = UpdatePromptButton(title: "Install Now") { [weak self] in
+            self?.installOfferedUpdate()
+        }
+        let laterButton = UpdatePromptButton(title: "Later") { [weak self] in
+            self?.postponeOfferedUpdate(version: version)
+        }
+
+        let buttonHeight: CGFloat = 30
+        let installWidth = max(ceil(installButton.fittingSize.width), 96)
+        let laterWidth = max(ceil(laterButton.fittingSize.width), 80)
+        let buttonsY = margin - 2
+        let detailY = buttonsY + buttonHeight + 16
+        let titleY = detailY + detailHeight + 8
+        let panelHeight = titleY + titleHeight + margin
+
+        title.frame = NSRect(x: textLeading, y: titleY, width: textWidth, height: titleHeight)
+        detail.frame = NSRect(x: textLeading, y: detailY, width: textWidth, height: detailHeight)
+        installButton.frame = NSRect(
+            x: panelWidth - margin - installWidth,
+            y: buttonsY,
+            width: installWidth,
+            height: buttonHeight
+        )
+        laterButton.frame = NSRect(
+            x: installButton.frame.minX - 10 - laterWidth,
+            y: buttonsY,
+            width: laterWidth,
+            height: buttonHeight
+        )
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Update Available"
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        panel.hidesOnDeactivate = false
+        // The panel is owned by updatePromptWindow, so let ARC release it after close().
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let content = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight))
+        content.material = .popover
+        content.blendingMode = .behindWindow
+        content.state = .active
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 16
+        content.layer?.masksToBounds = true
+        content.autoresizingMask = [.width, .height]
+
+        let icon = NSImageView(frame: NSRect(x: margin, y: panelHeight - margin - 52, width: 52, height: 52))
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        content.addSubview(icon)
+        content.addSubview(title)
+        content.addSubview(detail)
+        content.addSubview(laterButton)
+        content.addSubview(installButton)
+
+        panel.contentView = content
+        panel.center()
+        // Floating level plus orderFrontRegardless puts the prompt above the frontmost app without
+        // activating FluidVoice, so an in-flight dictation is never interrupted to show it.
+        panel.orderFrontRegardless()
+        self.updatePromptWindow = panel
+    }
+
+    @MainActor
+    private func installOfferedUpdate() {
+        DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
+        self.dismissUpdatePrompt()
+        SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
+        // The manual check still reports failures through a modal alert, so activate first to keep
+        // that alert in front of the user instead of behind other windows. Installing restarts the
+        // app anyway, so taking focus here costs nothing.
+        NSApp.activate(ignoringOtherApps: true)
+        self.checkForUpdatesManually()
+    }
+
+    @MainActor
+    private func postponeOfferedUpdate(version: String) {
+        DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
+        self.dismissUpdatePrompt()
+        SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
+    }
+
+    @MainActor
+    private func dismissUpdatePrompt() {
+        self.updatePromptWindow?.close()
+        self.updatePromptWindow = nil
     }
 
     @MainActor
@@ -500,5 +613,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+/// Push button for the update prompt panel.
+///
+/// The panel is a non-activating panel of a menu bar app, so it never becomes key; accepting the
+/// first mouse keeps a single click on the button working while another app stays frontmost.
+private final class UpdatePromptButton: NSButton {
+    private let onClick: @MainActor () -> Void
+
+    init(title: String, onClick: @escaping @MainActor () -> Void) {
+        self.onClick = onClick
+        super.init(frame: .zero)
+        self.title = title
+        self.bezelStyle = .rounded
+        self.target = self
+        self.action = #selector(self.handleClick)
+        self.sizeToFit()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("UpdatePromptButton is created in code only")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    @objc private func handleClick() {
+        self.onClick()
     }
 }
