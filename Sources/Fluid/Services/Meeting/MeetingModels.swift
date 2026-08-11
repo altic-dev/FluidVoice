@@ -408,6 +408,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var retention: MeetingRetentionState
     var processingAttempts: [MeetingProcessingAttempt]
     var updatedAt: Date
+    /// Set when the user dismisses a recoverable session so it is not re-offered on next launch.
+    /// Optional so pre-M2 persisted manifests still decode.
+    var recoveryResolvedAt: Date? = nil
 
     init(
         id: MeetingSessionID = UUID(),

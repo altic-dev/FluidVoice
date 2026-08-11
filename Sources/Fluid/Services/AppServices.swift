@@ -121,7 +121,7 @@ final class AppServices: ObservableObject {
         self._meetingSessionCoordinator = coordinator
         self.setupMeetingCoordinatorForwarding()
         Task { @MainActor [weak coordinator] in
-            await coordinator?.restoreRecoverableSessionIfNeeded()
+            await coordinator?.ensureRestored()
         }
         return coordinator
     }

@@ -86,6 +86,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var interruptionTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
     private var persistenceTail: Task<Void, Never>?
+    private var restoreTask: Task<Void, Never>?
 
     init(
         store: any MeetingSessionStoring,
@@ -165,6 +166,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func startRecording(configuration: MeetingCaptureConfiguration) async throws -> MeetingSession {
+        await self.ensureRestored()
         try configuration.validate()
         guard self.activeSession == nil,
               self.stopTask == nil,
@@ -289,6 +291,8 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func retryProcessing() async throws -> MeetingSession {
+        if case .processing = self.state { throw MeetingCoordinatorError.activityInProgress }
+        guard self.stopTask == nil else { throw MeetingCoordinatorError.activityInProgress }
         guard var session = self.activeSession,
               self.interruptionTask == nil,
               self.terminationTask == nil,
@@ -301,6 +305,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         let generation = UUID()
         self.operationGeneration = generation
         session.state = .processing
+        self.state = .processing(session.id, .pending)
+        // Close out zombie attempts left behind by a previous crash before starting a fresh one.
+        let closedAt = Date()
+        for index in session.processingAttempts.indices where session.processingAttempts[index].completedAt == nil {
+            session.processingAttempts[index].completedAt = closedAt
+        }
         session.processingAttempts.append(Self.pendingProcessingAttempt())
         session.updatedAt = Date()
         self.activeSession = session
@@ -328,69 +338,116 @@ final class MeetingSessionCoordinator: ObservableObject {
         else {
             throw MeetingCoordinatorError.activityInProgress
         }
+        if var session = self.activeSession,
+           session.state == .interrupted || session.state == .failed
+        {
+            session.recoveryResolvedAt = Date()
+            session.updatedAt = Date()
+            self.enqueuePersistence(session)
+        }
         self.activeSession = nil
         self.trackHealth = [:]
         self.state = .idle
     }
 
-    func restoreRecoverableSessionIfNeeded() async {
+    func ensureRestored() async {
+        if let restoreTask {
+            await restoreTask.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.restoreRecoverableSessionIfNeeded()
+        }
+        self.restoreTask = task
+        await task.value
+    }
+
+    private func restoreRecoverableSessionIfNeeded() async {
         guard self.activeSession == nil else { return }
-        guard var session = try? await self.store.loadRecoverable().first else { return }
-        let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
-            ? [.applicationAudio, .microphone]
-            : [.microphone]
-        guard Set(session.audioTracks.map(\.kind)) == expectedKinds else {
-            let failure = Self.failure(
-                from: MeetingCoordinatorError.noRecoverableAudio,
-                domain: .persistence,
-                recoverable: false
-            )
-            session.state = .failed
-            session.failures.append(failure)
-            session.updatedAt = Date()
-            try? await self.store.save(session)
-            self.activeSession = session
-            self.state = .failed(session.id, failure)
+        let recoverable: [MeetingSession]
+        do {
+            recoverable = try await self.store.loadRecoverable()
+        } catch {
+            DebugLogger.shared.log("Meeting recovery scan failed; will retry next ensureRestored: \(error)")
+            self.restoreTask = nil
             return
         }
+        guard !recoverable.isEmpty else { return }
 
-        if session.state == .failed,
-           Self.hasRecoverableAudio(session),
-           let failure = session.failures.last,
-           failure.recoverable
-        {
-            self.activeSession = session
-            self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
-            self.state = .failed(session.id, failure)
-            return
+        var viable: [MeetingSession] = []
+        for session in recoverable {
+            let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
+                ? [.applicationAudio, .microphone]
+                : [.microphone]
+            let hasExpectedTracks = Set(session.audioTracks.map(\.kind)) == expectedKinds
+            if hasExpectedTracks, Self.hasFinalizedAudio(session) {
+                viable.append(session)
+                continue
+            }
+            // Non-viable sessions never occupy the active slot; a session already marked
+            // .failed keeps its existing failure history instead of gaining a new one.
+            if session.state == .failed {
+                // Non-viable and already failed: nothing to offer now or later — resolve it
+                // so it stops being rescanned. Audio stays on disk, reachable from history.
+                if session.recoveryResolvedAt == nil {
+                    var resolved = session
+                    resolved.recoveryResolvedAt = Date()
+                    resolved.updatedAt = Date()
+                    try? await self.store.save(resolved)
+                }
+                continue
+            }
+            var failedSession = session
+            failedSession.state = .failed
+            if Self.hasFinalizedAudio(session), failedSession.endedAt == nil {
+                let backfilled = session.audioTracks
+                    .compactMap(\.health.lastSampleAt)
+                    .max() ?? session.updatedAt
+                failedSession.endedAt = max(backfilled, session.startedAt)
+            }
+            let failure = Self.nonViableRecoveryFailure(for: session)
+            if failedSession.failures.last?.code != failure.code {
+                failedSession.failures.append(failure)
+            }
+            failedSession.updatedAt = Date()
+            do { try await self.store.save(failedSession) } catch {
+                DebugLogger.shared.log("Failed to persist non-viable recovery classification for \(session.id): \(error)")
+            }
         }
+        guard !viable.isEmpty else { return }
 
-        let previousState = session.state
-        session.state = .interrupted
-        if session.endedAt == nil {
-            session.endedAt = session.audioTracks
-                .compactMap(\.health.lastSampleAt)
-                .max() ?? session.updatedAt
+        let active = viable.sorted { lhs, rhs in
+            lhs.startedAt != rhs.startedAt
+                ? lhs.startedAt < rhs.startedAt
+                : lhs.id.uuidString < rhs.id.uuidString
+        }.last!
+
+        for session in viable {
+            guard session.id == active.id else {
+                guard session.state != .interrupted, session.state != .failed else { continue }
+                let updated = Self.markRecoverableInterrupted(session)
+                do { try await self.store.save(updated) } catch {
+                    DebugLogger.shared.log("Failed to persist deferred recovery for \(session.id): \(error)")
+                }
+                continue
+            }
+            if session.state == .failed,
+               let failure = session.failures.last,
+               failure.recoverable
+            {
+                // Preserve today's behavior: a failed-but-recoverable session is re-offered as-is.
+                self.activeSession = session
+                self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
+                self.state = .failed(session.id, failure)
+            } else {
+                let updated = Self.markRecoverableInterrupted(session)
+                try? await self.store.save(updated)
+                self.activeSession = updated
+                self.trackHealth = Dictionary(uniqueKeysWithValues: updated.audioTracks.map { ($0.kind, $0.health) })
+                self.state = .interrupted(updated.id)
+            }
         }
-        session.events.append(MeetingSessionEvent(
-            id: UUID(),
-            occurredAt: Date(),
-            kind: .captureStoppedUnexpectedly,
-            trackID: nil,
-            detail: previousState == .processing
-                ? "FluidVoice restarted before transcription completed."
-                : "FluidVoice restarted before capture finalized."
-        ))
-        if session.audioTracks.contains(where: { track in
-            track.chunks.contains { $0.finalizationState == .finalized }
-        }), !session.processingAttempts.contains(where: { $0.completedAt == nil }) {
-            session.processingAttempts.append(Self.pendingProcessingAttempt())
-        }
-        session.updatedAt = Date()
-        try? await self.store.save(session)
-        self.activeSession = session
-        self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
-        self.state = .interrupted(session.id)
     }
 
     func shutdownForTermination() async {
@@ -407,6 +464,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performShutdownForTermination() async {
+        await self.restoreTask?.value
         self.captureGeneration = nil
         self.degradeReason = nil
         self.operationGeneration = nil
@@ -414,6 +472,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.interruptionTask?.cancel()
 
         guard var session = self.activeSession else {
+            await self.flushQueuedPersistence()
             await self.capture.shutdownForTermination()
             self.releaseActivityLease()
             return
@@ -450,9 +509,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                     : "Transcription paused at app termination and will resume next launch."
             ))
         }
-        if session.audioTracks.contains(where: { track in
-            track.chunks.contains { $0.finalizationState == .finalized }
-        }), !session.processingAttempts.contains(where: { $0.completedAt == nil }) {
+        if Self.shouldQueuePendingAttempt(for: session) {
             session.processingAttempts.append(Self.pendingProcessingAttempt())
         }
         session.updatedAt = Date()
@@ -497,8 +554,8 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
         var session = inputSession
-        let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
         do {
+            let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
             let result = try await self.processing.process(
                 session: session,
                 sessionDirectory: sessionDirectory
@@ -680,9 +737,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.terminationTask == nil, !Task.isCancelled else { return }
 
         session.state = .interrupted
-        if session.audioTracks.contains(where: { track in
-            track.chunks.contains { $0.finalizationState == .finalized }
-        }), !session.processingAttempts.contains(where: { $0.completedAt == nil }) {
+        if Self.shouldQueuePendingAttempt(for: session) {
             session.processingAttempts.append(Self.pendingProcessingAttempt())
         }
         session.updatedAt = Date()
@@ -721,9 +776,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             detail: error.localizedDescription
         ))
         session.state = .interrupted
-        if session.audioTracks.contains(where: { track in
-            track.chunks.contains { $0.finalizationState == .finalized }
-        }), !session.processingAttempts.contains(where: { $0.completedAt == nil }) {
+        if Self.shouldQueuePendingAttempt(for: session) {
             session.processingAttempts.append(Self.pendingProcessingAttempt())
         }
         session.updatedAt = Date()
@@ -797,6 +850,62 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
+    private static func shouldQueuePendingAttempt(for session: MeetingSession) -> Bool {
+        Self.hasFinalizedAudio(session)
+            && !session.processingAttempts.contains(where: { $0.completedAt == nil })
+    }
+
+    private static func nonViableRecoveryFailure(for session: MeetingSession) -> MeetingSessionFailure {
+        let hasAudio = Self.hasFinalizedAudio(session)
+        let message: String
+        if session.audioTracks.isEmpty {
+            message = "Recording never started — no audio was captured."
+        } else if hasAudio {
+            message = "Some tracks are missing, but captured audio was preserved."
+        } else {
+            message = "No finalized audio survived."
+        }
+        return Self.failure(
+            from: MeetingCoordinatorError.noRecoverableAudio,
+            domain: .persistence,
+            recoverable: hasAudio,
+            message: message
+        )
+    }
+
+    private static func markRecoverableInterrupted(_ inputSession: MeetingSession) -> MeetingSession {
+        var session = inputSession
+        let previousState = session.state
+        session.state = .interrupted
+        if session.endedAt == nil {
+            session.endedAt = session.audioTracks
+                .compactMap(\.health.lastSampleAt)
+                .max() ?? session.updatedAt
+        }
+        if previousState != .interrupted {
+            session.events.append(MeetingSessionEvent(
+                id: UUID(),
+                occurredAt: Date(),
+                kind: .captureStoppedUnexpectedly,
+                trackID: nil,
+                detail: previousState == .processing
+                    ? "FluidVoice restarted before transcription completed."
+                    : "FluidVoice restarted before capture finalized."
+            ))
+        }
+        if Self.shouldQueuePendingAttempt(for: session) {
+            session.processingAttempts.append(Self.pendingProcessingAttempt())
+        }
+        session.updatedAt = Date()
+        return session
+    }
+
+    private static func hasFinalizedAudio(_ session: MeetingSession) -> Bool {
+        session.audioTracks.contains { track in
+            track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
+        }
+    }
+
     private static func hasRecoverableAudio(_ session: MeetingSession) -> Bool {
         session.endedAt != nil && session.audioTracks.contains { track in
             track.chunks.contains {
@@ -812,7 +921,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     private static func failure(
         from error: Error,
         domain: MeetingFailureDomain,
-        recoverable: Bool
+        recoverable: Bool,
+        message: String? = nil
     ) -> MeetingSessionFailure {
         let nsError = error as NSError
         return MeetingSessionFailure(
@@ -820,7 +930,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             occurredAt: Date(),
             domain: domain,
             code: "\(nsError.domain).\(nsError.code)",
-            message: error.localizedDescription,
+            message: message ?? error.localizedDescription,
             recoverable: recoverable
         )
     }

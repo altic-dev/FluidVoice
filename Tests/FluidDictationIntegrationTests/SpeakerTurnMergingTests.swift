@@ -1215,7 +1215,7 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
             audioArbiter: FakeMeetingAudioActivityArbiter()
         )
 
-        await coordinator.restoreRecoverableSessionIfNeeded()
+        await coordinator.ensureRestored()
 
         XCTAssertEqual(coordinator.activeSession?.id, failedSession.id)
         XCTAssertEqual(coordinator.activeSession?.state, .failed)
@@ -1391,6 +1391,7 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
 
     func loadRecoverable() -> [MeetingSession] {
         self.sessions.values.filter {
+            guard $0.recoveryResolvedAt == nil else { return false }
             switch $0.state {
             case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
                 return true

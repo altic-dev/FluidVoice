@@ -103,14 +103,23 @@ actor MeetingSessionStore: MeetingSessionStoring {
         var sessions: [MeetingSession] = []
         sessions.reserveCapacity(allIDs.count)
         for id in allIDs {
-            guard let session = try? self.load(id: id) else { continue }
-            sessions.append(session)
+            do {
+                if let session = try self.load(id: id) {
+                    sessions.append(session)
+                }
+            } catch {
+                DebugLogger.shared.error(
+                    "Failed to load meeting session \(id): \(error.localizedDescription)",
+                    source: "MeetingSessionStore"
+                )
+            }
         }
         return sessions.sorted { $0.startedAt > $1.startedAt }
     }
 
     func loadRecoverable() throws -> [MeetingSession] {
         try self.loadAll().filter {
+            guard $0.recoveryResolvedAt == nil else { return false }
             switch $0.state {
             case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
                 return true
