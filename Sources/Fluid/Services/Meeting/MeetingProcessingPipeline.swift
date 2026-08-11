@@ -16,15 +16,26 @@ actor MeetingProcessingSerializationGate {
     static let shared = MeetingProcessingSerializationGate()
 
     private var isLeased = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+    private var cancelledWaiterIDs: Set<UUID> = []
+    // Pending = created but not parked: lets cancelWaiter tell "not yet registered" (tombstone)
+    // from "already resumed by release()" (no-op), so tombstones can't accumulate forever.
+    private var pendingWaiterIDs: Set<UUID> = []
 
-    func acquire() async {
+    func acquire() async throws {
+        try Task.checkCancellation()
         if !self.isLeased {
             self.isLeased = true
             return
         }
-        await withCheckedContinuation { continuation in
-            self.waiters.append(continuation)
+        let id = UUID()
+        self.pendingWaiterIDs.insert(id)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.register(id: id, continuation: continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
         }
     }
 
@@ -33,7 +44,24 @@ actor MeetingProcessingSerializationGate {
             self.isLeased = false
             return
         }
-        self.waiters.removeFirst().resume()
+        self.waiters.removeFirst().continuation.resume()
+    }
+
+    private func register(id: UUID, continuation: CheckedContinuation<Void, Error>) {
+        self.pendingWaiterIDs.remove(id)
+        if self.cancelledWaiterIDs.remove(id) != nil {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.waiters.append((id, continuation))
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        if let index = self.waiters.firstIndex(where: { $0.id == id }) {
+            self.waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        } else if self.pendingWaiterIDs.contains(id) {
+            self.cancelledWaiterIDs.insert(id)
+        }
     }
 }
 
@@ -375,7 +403,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             throw MeetingProcessingError.noRecoverableAudio
         }
 
-        await self.serializationGate.acquire()
+        try await self.serializationGate.acquire()
         do {
             let result = try await self.processWithLease(
                 session: session,

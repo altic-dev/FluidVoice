@@ -95,7 +95,7 @@ final class AppServices: ObservableObject {
         }
         let arbiter = AudioActivityArbiter { [weak self] in
             guard let self else { throw MeetingCoordinatorError.activityInProgress }
-            return self.asr
+            return self.asr as any ASRActivityLeasing
         }
         self._meetingAudioActivityArbiter = arbiter
         return arbiter
@@ -122,6 +122,7 @@ final class AppServices: ObservableObject {
         self.setupMeetingCoordinatorForwarding()
         Task { @MainActor [weak coordinator] in
             await coordinator?.ensureRestored()
+            await coordinator?.sweepExpiredAudio()
         }
         return coordinator
     }

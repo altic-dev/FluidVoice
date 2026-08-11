@@ -351,6 +351,9 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     var trackKind: MeetingAudioTrackKind
     var isLocalUser: Bool
     var identityCandidates: [MeetingIdentityCandidate]
+    /// Set when this speaker was merged into another; the speaker is kept (not removed) so
+    /// embedding/cluster provenance survives for M3. Optional keeps older manifests decodable.
+    var mergedIntoSpeakerID: SessionSpeakerID? = nil
 }
 
 nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, Sendable {
@@ -384,6 +387,45 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var audioDeletedAt: Date?
     var meetingDeletedAt: Date?
     var retainAudioUntil: Date?
+}
+
+/// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
+/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
+nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
+    case afterTranscription
+    case days7
+    case days30
+    case never
+
+    var displayName: String {
+        switch self {
+        case .afterTranscription: return "After transcription"
+        case .days7: return "7 days"
+        case .days30: return "30 days"
+        case .never: return "Forever"
+        }
+    }
+
+    var retentionDays: Int? {
+        switch self {
+        case .days7: return 7
+        case .days30: return 30
+        case .afterTranscription, .never: return nil
+        }
+    }
+
+    func deadline(endedAt: Date?, startedAt: Date) -> Date? {
+        let completedAt = endedAt ?? startedAt
+        if self == .afterTranscription { return completedAt }
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: completedAt)
+    }
+
+    /// Informational display value only; sweep deadlines always come from `deadline(endedAt:startedAt:)`.
+    func retainUntil(startedAt: Date) -> Date? {
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: startedAt)
+    }
 }
 
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
@@ -435,10 +477,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.audioTracks = []
         self.speakers = []
         self.transcriptSegments = []
+        // Informational; coordinator stamps it post-init from the current policy.
         self.retention = MeetingRetentionState(
             audioDeletedAt: nil,
             meetingDeletedAt: nil,
-            retainAudioUntil: Calendar.current.date(byAdding: .day, value: 7, to: startedAt)
+            retainAudioUntil: nil
         )
         self.processingAttempts = []
         self.updatedAt = startedAt
@@ -448,13 +491,58 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
+    /// Speakers not merged away into another speaker — the set the UI should render.
+    var activeSpeakers: [MeetingSessionSpeaker] {
+        self.speakers.filter { $0.mergedIntoSpeakerID == nil }
+    }
+
     mutating func renameSpeaker(id: SessionSpeakerID, to displayName: String) throws {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptySpeakerName }
-        guard let index = self.speakers.firstIndex(where: { $0.id == id }) else {
+        guard let index = self.speakers.firstIndex(where: { $0.id == id }),
+              self.speakers[index].mergedIntoSpeakerID == nil
+        else {
             throw MeetingDomainError.speakerNotFound
         }
+        guard self.speakers[index].displayName != trimmed else { return }
         self.speakers[index].displayName = trimmed
+        self.updatedAt = Date()
+    }
+
+    mutating func reassignSegment(id: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) throws {
+        guard let segmentIndex = self.transcriptSegments.firstIndex(where: { $0.id == id }) else {
+            throw MeetingDomainError.segmentNotFound
+        }
+        guard let target = self.speakers.first(where: { $0.id == speakerID }),
+              target.mergedIntoSpeakerID == nil
+        else {
+            throw MeetingDomainError.speakerNotFound
+        }
+        guard self.transcriptSegments[segmentIndex].speakerID != speakerID else { return }
+        self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].revision += 1
+        self.updatedAt = Date()
+    }
+
+    mutating func mergeSpeakers(_ sourceID: SessionSpeakerID, into targetID: SessionSpeakerID) throws {
+        guard sourceID != targetID else { throw MeetingDomainError.cannotMergeSpeakerWithItself }
+        guard let sourceIndex = self.speakers.firstIndex(where: { $0.id == sourceID }),
+              self.speakers[sourceIndex].mergedIntoSpeakerID == nil,
+              let targetIndex = self.speakers.firstIndex(where: { $0.id == targetID }),
+              self.speakers[targetIndex].mergedIntoSpeakerID == nil
+        else {
+            throw MeetingDomainError.speakerNotFound
+        }
+        let source = self.speakers[sourceIndex]
+        let target = self.speakers[targetIndex]
+        guard !source.isLocalUser, !target.isLocalUser, source.trackKind == target.trackKind else {
+            throw MeetingDomainError.cannotMergeSpeakers
+        }
+        for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
+            self.transcriptSegments[index].speakerID = targetID
+            self.transcriptSegments[index].revision += 1
+        }
+        self.speakers[sourceIndex].mergedIntoSpeakerID = targetID
         self.updatedAt = Date()
     }
 
@@ -588,17 +676,24 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 }
 
 extension MeetingSession {
-    /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
-    var hasRetryableAudio: Bool {
-        self.endedAt != nil && self.audioTracks.contains { track in
+    var hasFinalizedAudio: Bool {
+        self.audioTracks.contains { track in
             track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
         }
+    }
+
+    /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
+    var hasRetryableAudio: Bool {
+        self.retention.audioDeletedAt == nil && self.endedAt != nil && self.hasFinalizedAudio
     }
 }
 
 nonisolated enum MeetingDomainError: LocalizedError, Equatable {
     case emptySpeakerName
     case speakerNotFound
+    case segmentNotFound
+    case cannotMergeSpeakerWithItself
+    case cannotMergeSpeakers
 
     var errorDescription: String? {
         switch self {
@@ -606,6 +701,12 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
             return "Speaker name cannot be empty."
         case .speakerNotFound:
             return "The speaker is no longer part of this meeting."
+        case .segmentNotFound:
+            return "This transcript line is no longer part of the meeting."
+        case .cannotMergeSpeakerWithItself:
+            return "A speaker can't be merged into itself."
+        case .cannotMergeSpeakers:
+            return "These speakers can't be merged."
         }
     }
 }

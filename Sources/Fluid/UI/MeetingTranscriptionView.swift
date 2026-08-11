@@ -105,6 +105,8 @@ struct MeetingTranscriptionView: View {
     @State private var selectedHistorySessionID: MeetingSessionID?
     @State private var meetingHistoryError: String?
     @State private var pendingDeleteSessionID: MeetingSessionID?
+    @State private var pendingDeleteAudioSessionID: MeetingSessionID?
+    @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
     @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
 
     init(
@@ -157,6 +159,13 @@ struct MeetingTranscriptionView: View {
                     onRevealAudio: self.revealCapturedAudio,
                     onRecordAgain: self.recordAgain,
                     onCopyTranscript: self.copyTranscript,
+                    onExportTranscript: self.exportTranscript,
+                    onReassignSegment: self.reassignSegment,
+                    onRenameSpeaker: self.renameSpeaker,
+                    onMergeSpeakers: self.mergeSpeakers,
+                    onUndoCorrection: self.undoTranscriptCorrection,
+                    canUndoCorrection: { self.coordinator.canUndoCorrection(sessionID: $0) },
+                    isQuiescent: self.coordinator.isQuiescent,
                     onOpenMeetingSettings: self.openMeetingSettings,
                     isRetrying: self.isRetrying
                 )
@@ -172,6 +181,8 @@ struct MeetingTranscriptionView: View {
                         onRetry: { self.retryProcessingSession(id: $0) },
                         onRevealAudio: self.revealCapturedAudio,
                         onExportAudio: self.exportAudio,
+                        onExportTranscript: self.exportTranscript,
+                        onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
                         onDeleteRequest: { self.pendingDeleteSessionID = $0 }
                     )
                     .frame(width: 290)
@@ -212,6 +223,7 @@ struct MeetingTranscriptionView: View {
         .sheet(isPresented: self.$isShowingMeetingSettings) {
             MeetingRecordingSettingsSheet(
                 draft: self.$setupDraft,
+                retentionPolicy: self.$draftMeetingAudioRetentionPolicy,
                 applications: self.applications,
                 microphones: self.microphones,
                 readiness: self.readiness,
@@ -220,7 +232,7 @@ struct MeetingTranscriptionView: View {
                 savedApplicationBundleIdentifier: SettingsStore.shared.meetingRecordingDefaults.applicationBundleIdentifier,
                 onRefreshSources: self.refreshSourcesFromUserAction,
                 onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
-                onOpenScreenRecordingSettings: { Self.openScreenRecordingSettings() },
+                onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
                 onOpenVoiceEngine: self.onOpenVoiceEngine,
                 onCancel: self.cancelMeetingSettings,
                 onSave: self.saveMeetingSettings
@@ -240,6 +252,20 @@ struct MeetingTranscriptionView: View {
             }
         } message: {
             Text("The recording and transcript will be permanently deleted from this Mac.")
+        }
+        .alert(
+            "Delete Audio?",
+            isPresented: Binding(
+                get: { self.pendingDeleteAudioSessionID != nil },
+                set: { if !$0 { self.pendingDeleteAudioSessionID = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { self.pendingDeleteAudioSessionID = nil }
+            Button("Delete Audio", role: .destructive) {
+                if let id = self.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
+            }
+        } message: {
+            Text("The transcript stays; the audio files are deleted from this Mac.")
         }
     }
 
@@ -555,6 +581,54 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private func reassignSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) {
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func renameSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID, to displayName: String) {
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.renameSpeaker(sessionID: sessionID, speakerID: speakerID, to: displayName)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func mergeSpeakers(sessionID: MeetingSessionID, source: SessionSpeakerID, into targetID: SessionSpeakerID) {
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.mergeSpeakers(sessionID: sessionID, source: source, into: targetID)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func undoTranscriptCorrection(sessionID: MeetingSessionID) {
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.undoTranscriptCorrection(sessionID: sessionID)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
     private func deleteSession(id: MeetingSessionID) {
         self.pendingDeleteSessionID = nil
         self.actionErrorMessage = nil
@@ -562,6 +636,19 @@ struct MeetingTranscriptionView: View {
             do {
                 try await self.coordinator.deleteSession(id: id)
                 if self.selectedHistorySessionID == id { self.selectedHistorySessionID = nil }
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
+    private func deleteAudio(id: MeetingSessionID) {
+        self.pendingDeleteAudioSessionID = nil
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.deleteAudio(sessionID: id)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
@@ -627,13 +714,24 @@ struct MeetingTranscriptionView: View {
     private func revealCapturedAudio(_ session: MeetingSession) {
         Task {
             do {
-                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                // Reload fresh: the passed-in session may predate a since-completed audio deletion.
+                guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
                     self.actionErrorMessage = "Captured audio could not be revealed: recording no longer on disk."
                     return
                 }
-                let firstAudioURL = session.audioTracks
+                guard freshSession.retention.audioDeletedAt == nil,
+                      freshSession.hasFinalizedAudio
+                else {
+                    self.actionErrorMessage = "Captured audio could not be revealed: audio for this recording has been deleted."
+                    return
+                }
+                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
+                    self.actionErrorMessage = "Captured audio could not be revealed: recording no longer on disk."
+                    return
+                }
+                let firstAudioURL = freshSession.audioTracks
                     .flatMap(\.chunks)
-                    .first(where: { $0.finalizationState == .finalized })?
+                    .first(where: { $0.finalizationState == .finalized && $0.byteCount > 0 })?
                     .fileURL(relativeTo: directory)
                 NSWorkspace.shared.activateFileViewerSelecting([firstAudioURL ?? directory])
             } catch {
@@ -652,11 +750,22 @@ struct MeetingTranscriptionView: View {
 
         Task {
             do {
-                guard let sourceDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                // Reload fresh: the passed-in session may predate a since-completed audio deletion.
+                guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
                     self.actionErrorMessage = "Export failed: recording no longer on disk."
                     return
                 }
-                try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder)
+                guard freshSession.retention.audioDeletedAt == nil,
+                      freshSession.hasFinalizedAudio
+                else {
+                    self.actionErrorMessage = "Export failed: audio for this recording has been deleted."
+                    return
+                }
+                guard let sourceDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
+                    self.actionErrorMessage = "Export failed: recording no longer on disk."
+                    return
+                }
+                try Self.stageExport(of: freshSession, from: sourceDirectory, into: destinationFolder)
             } catch {
                 self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
             }
@@ -750,11 +859,13 @@ struct MeetingTranscriptionView: View {
 
     private func openMeetingSettings() {
         self.setupDraftBeforeEditing = self.setupDraft
+        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = true
     }
 
     private func cancelMeetingSettings() {
         self.setupDraft = self.setupDraftBeforeEditing
+        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = false
         Task { await self.refreshSources(requestPermissions: false) }
     }
@@ -798,20 +909,40 @@ struct MeetingTranscriptionView: View {
             microphoneRole: self.setupDraft.microphoneRole
         )
 
+        let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
+        settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
+        if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {
+            Task { await self.coordinator.sweepExpiredAudio() }
+        }
+
         self.setupDraftBeforeEditing = self.setupDraft
         self.actionErrorMessage = nil
         self.isShowingMeetingSettings = false
     }
 
     private func copyTranscript(_ session: MeetingSession) {
-        let speakerNames = Dictionary(uniqueKeysWithValues: session.speakers.map { ($0.id, $0.displayName) })
-        let text = session.transcriptSegments.map { segment in
-            let speaker = segment.speakerID.flatMap { speakerNames[$0] } ?? "Unknown speaker"
-            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(segment.text)"
-        }.joined(separator: "\n\n")
+        let text = MeetingTranscriptExporter.text(for: session)
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
+        panel.message = "Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        self.actionErrorMessage = nil
+        do {
+            let data: Data
+            switch format {
+            case .text: data = Data(MeetingTranscriptExporter.text(for: session).utf8)
+            case .json: data = try MeetingTranscriptExporter.json(for: session)
+            }
+            try data.write(to: url, options: .atomic)
+        } catch {
+            self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
+        }
     }
 
     private static func requestMicrophoneAccess() async -> Bool {
@@ -828,10 +959,18 @@ struct MeetingTranscriptionView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private static func openScreenRecordingSettings() {
+    private func openScreenRecordingSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         else { return }
-        NSWorkspace.shared.open(url)
+        PermissionDragGuideController.shared.present(
+            instruction: "Drag \(Bundle.main.fluidAppDisplayName) into the Screen & System Audio Recording list as shown",
+            settingsPaneURL: url,
+            isGranted: { CGPreflightScreenCaptureAccess() },
+            onGranted: { [self] in
+                self.refreshCachedReadiness()
+                Task { await self.refreshSources(requestPermissions: false) }
+            }
+        )
     }
 
     private func refreshCachedReadiness() {
@@ -861,16 +1000,17 @@ struct MeetingTranscriptionView: View {
         formatter.countStyle = .file
         return ("\(formatter.string(fromByteCount: capacity)) available", capacity >= requiredBytes)
     }
+}
 
-    private static func timestampText(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded(.down)))
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        let seconds = total % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+enum MeetingTranscriptExportFormat {
+    case text
+    case json
+
+    var fileExtension: String {
+        switch self {
+        case .text: return "txt"
+        case .json: return "json"
         }
-        return String(format: "%02d:%02d", minutes, seconds)
     }
 }
 
@@ -898,6 +1038,13 @@ struct MeetingTranscriptionCanvas: View {
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession) -> Void
+    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
+    let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    let onRenameSpeaker: (MeetingSessionID, SessionSpeakerID, String) -> Void
+    let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
+    let onUndoCorrection: (MeetingSessionID) -> Void
+    let canUndoCorrection: (MeetingSessionID) -> Bool
+    let isQuiescent: Bool
     let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
 
@@ -939,7 +1086,20 @@ struct MeetingTranscriptionCanvas: View {
                 case let .result(session):
                     MeetingResultCanvas(
                         session: session,
-                        onCopyTranscript: self.onCopyTranscript
+                        isQuiescent: self.isQuiescent,
+                        canUndo: self.canUndoCorrection(session.id),
+                        onCopyTranscript: self.onCopyTranscript,
+                        onExportTranscript: self.onExportTranscript,
+                        onReassignSegment: { segmentID, speakerID in
+                            self.onReassignSegment(session.id, segmentID, speakerID)
+                        },
+                        onRenameSpeaker: { speakerID, name in
+                            self.onRenameSpeaker(session.id, speakerID, name)
+                        },
+                        onMergeSpeakers: { source, target in
+                            self.onMergeSpeakers(session.id, source, target)
+                        },
+                        onUndo: { self.onUndoCorrection(session.id) }
                     )
                 case let .failed(session, message):
                     MeetingFailureCanvas(
@@ -1075,6 +1235,8 @@ private struct MeetingHistoryInspector: View {
     let onRetry: (MeetingSessionID) -> Void
     let onRevealAudio: (MeetingSession) -> Void
     let onExportAudio: (MeetingSession) -> Void
+    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
+    let onDeleteAudioRequest: (MeetingSessionID) -> Void
     let onDeleteRequest: (MeetingSessionID) -> Void
 
     @Environment(\.theme) private var theme
@@ -1086,7 +1248,7 @@ private struct MeetingHistoryInspector: View {
         return self.sessions.filter { session in
             session.title.localizedCaseInsensitiveContains(query) ||
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
-                session.speakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
+                session.activeSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
         }
     }
 
@@ -1149,7 +1311,21 @@ private struct MeetingHistoryInspector: View {
                                 Button("Export Audio…", systemImage: "square.and.arrow.up") {
                                     self.onExportAudio(session)
                                 }
-                                .disabled(!Self.hasFinalizedAudio(session))
+                                .disabled(!session.hasFinalizedAudio)
+                                Button("Export Transcript (Text)…", systemImage: "doc.text") {
+                                    self.onExportTranscript(session, .text)
+                                }
+                                .disabled(session.transcriptSegments.isEmpty)
+                                Button("Export Transcript (JSON)…", systemImage: "curlybraces") {
+                                    self.onExportTranscript(session, .json)
+                                }
+                                .disabled(session.transcriptSegments.isEmpty)
+                                if session.hasFinalizedAudio, session.retention.audioDeletedAt == nil, session.state == .completed {
+                                    Button("Delete Audio (Keep Transcript)…", systemImage: "waveform.slash") {
+                                        self.onDeleteAudioRequest(session.id)
+                                    }
+                                    .disabled(!self.isQuiescent)
+                                }
                                 Divider()
                                 Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
                                     self.onDeleteRequest(session.id)
@@ -1163,10 +1339,6 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .background(self.theme.palette.sidebarBackground)
-    }
-
-    private static func hasFinalizedAudio(_ session: MeetingSession) -> Bool {
-        session.audioTracks.flatMap(\.chunks).contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
     }
 }
 
@@ -1197,9 +1369,9 @@ private struct MeetingHistoryRow: View {
                 Text("·")
                 Text(self.sourceName)
                     .lineLimit(1)
-                if !self.session.speakers.isEmpty {
+                if !self.session.activeSpeakers.isEmpty {
                     Text("·")
-                    Text("\(self.session.speakers.count) speakers")
+                    Text("\(self.session.activeSpeakers.count) speakers")
                 }
             }
             .font(self.theme.typography.caption)
@@ -1255,6 +1427,7 @@ private struct MeetingHistoryRow: View {
 
 private struct MeetingRecordingSettingsSheet: View {
     @Binding var draft: MeetingTranscriptionSetupDraft
+    @Binding var retentionPolicy: MeetingAudioRetentionPolicy
 
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
@@ -1414,6 +1587,22 @@ private struct MeetingRecordingSettingsSheet: View {
                                 Text(self.separationDescription)
                                     .font(self.theme.typography.bodyStrong)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(
+                                title: "Keep audio",
+                                detail: "Applies to all recordings, including past ones. Audio is deleted only "
+                                    + "while FluidVoice is running; transcripts are always kept."
+                            ) {
+                                Picker("Keep audio", selection: self.$retentionPolicy) {
+                                    ForEach(MeetingAudioRetentionPolicy.allCases, id: \.self) { policy in
+                                        Text(policy.displayName).tag(policy)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 320, alignment: .trailing)
+                                .accessibilityLabel("Audio retention")
                             }
                         }
                     }
@@ -1907,15 +2096,35 @@ private struct MeetingProcessingCanvas: View {
 
 private struct MeetingResultCanvas: View {
     let session: MeetingSession
+    let isQuiescent: Bool
+    let canUndo: Bool
     let onCopyTranscript: (MeetingSession) -> Void
+    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
+    let onReassignSegment: (MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    let onRenameSpeaker: (SessionSpeakerID, String) -> Void
+    let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
+    let onUndo: () -> Void
 
     @Environment(\.theme) private var theme
+    @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
+    @State private var pendingRenameText = ""
 
     private var speakerNames: [SessionSpeakerID: String] {
-        Dictionary(uniqueKeysWithValues: self.session.speakers.map { ($0.id, $0.displayName) })
+        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
+    }
+
+    /// Sorted once with per-row display state — no per-row re-sorting.
+    private var rows: [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
+        let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
+        return sorted.enumerated().map { index, segment in
+            let showsLabel = index == 0 || segment.speakerID != sorted[index - 1].speakerID
+            return (segment, showsLabel, self.isLocalSegment(segment))
+        }
     }
 
     var body: some View {
+        let speakerNames = self.speakerNames
+        let activeSpeakers = self.session.activeSpeakers
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             HStack(alignment: .firstTextBaseline) {
                 Text(self.session.title)
@@ -1937,10 +2146,10 @@ private struct MeetingResultCanvas: View {
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
 
-            if !self.session.speakers.isEmpty {
+            if !activeSpeakers.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
-                        ForEach(self.session.speakers) { speaker in
+                        ForEach(activeSpeakers) { speaker in
                             Label(
                                 self.displayName(for: speaker),
                                 systemImage: speaker.isLocalUser ? "person.crop.circle.badge.checkmark" : "person.crop.circle"
@@ -1949,6 +2158,7 @@ private struct MeetingResultCanvas: View {
                             .padding(.horizontal, self.theme.metrics.spacing.md)
                             .padding(.vertical, self.theme.metrics.spacing.sm)
                             .background(self.theme.palette.contentBackground, in: Capsule())
+                            .contextMenu { self.speakerChipMenu(for: speaker) }
                         }
                     }
                 }
@@ -1963,12 +2173,15 @@ private struct MeetingResultCanvas: View {
                 .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 VStack(alignment: .leading, spacing: 28) {
-                    ForEach(Array(self.session.transcriptSegments.enumerated()), id: \.element.id) { index, segment in
+                    ForEach(self.rows, id: \.segment.id) { row in
                         MeetingTranscriptSegmentRow(
-                            segment: segment,
-                            speakerName: segment.speakerID.flatMap { self.speakerNames[$0] } ?? "Unknown speaker",
-                            isLocalUser: self.isLocalSegment(segment),
-                            showsSpeakerLabel: self.showsSpeakerLabel(at: index)
+                            segment: row.segment,
+                            speakerName: row.segment.speakerID.flatMap { speakerNames[$0] } ?? "Unknown speaker",
+                            isLocalUser: row.isLocal,
+                            showsSpeakerLabel: row.showsLabel,
+                            reassignTargets: activeSpeakers.filter { $0.id != row.segment.speakerID },
+                            isQuiescent: self.isQuiescent,
+                            onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) }
                         )
                     }
                 }
@@ -1977,11 +2190,69 @@ private struct MeetingResultCanvas: View {
                 .padding(.vertical, self.theme.metrics.spacing.lg)
             }
 
-            Button("Copy Transcript", systemImage: "doc.on.doc") {
-                self.onCopyTranscript(self.session)
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Button("Copy Transcript", systemImage: "doc.on.doc") {
+                    self.onCopyTranscript(self.session)
+                }
+                .fluidButton(.compact, size: .medium)
+                .disabled(self.session.transcriptSegments.isEmpty)
+
+                Menu("Export Transcript", systemImage: "square.and.arrow.up") {
+                    Button("Text…") { self.onExportTranscript(self.session, .text) }
+                    Button("JSON…") { self.onExportTranscript(self.session, .json) }
+                }
+                .fluidButton(.compact, size: .medium)
+                .disabled(self.session.transcriptSegments.isEmpty)
+
+                Button("Undo", systemImage: "arrow.uturn.backward") {
+                    self.onUndo()
+                }
+                .fluidButton(.compact, size: .medium)
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!self.canUndo || !self.isQuiescent)
             }
-            .fluidButton(.compact, size: .medium)
-            .disabled(self.session.transcriptSegments.isEmpty)
+        }
+        .alert(
+            "Rename Speaker",
+            isPresented: Binding(
+                get: { self.pendingRenameSpeaker != nil },
+                set: { if !$0 { self.pendingRenameSpeaker = nil } }
+            )
+        ) {
+            TextField("Speaker name", text: self.$pendingRenameText)
+            Button("Cancel", role: .cancel) { self.pendingRenameSpeaker = nil }
+            Button("Rename") {
+                if let speaker = self.pendingRenameSpeaker {
+                    self.onRenameSpeaker(speaker.id, self.pendingRenameText)
+                }
+                self.pendingRenameSpeaker = nil
+            }
+        } message: {
+            Text("Enter a new name for this speaker.")
+        }
+    }
+
+    @ViewBuilder
+    private func speakerChipMenu(for speaker: MeetingSessionSpeaker) -> some View {
+        Button("Rename…", systemImage: "pencil") {
+            self.pendingRenameSpeaker = speaker
+            self.pendingRenameText = speaker.displayName
+        }
+        .disabled(!self.isQuiescent)
+        if !speaker.isLocalUser {
+            let eligibleTargets = self.session.activeSpeakers.filter {
+                $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
+            }
+            if !eligibleTargets.isEmpty {
+                Menu("Merge into") {
+                    ForEach(eligibleTargets) { target in
+                        Button(target.displayName) {
+                            self.onMergeSpeakers(speaker.id, target.id)
+                        }
+                    }
+                }
+                .disabled(!self.isQuiescent)
+            }
         }
     }
 
@@ -2000,12 +2271,6 @@ private struct MeetingResultCanvas: View {
               let speaker = self.session.speakers.first(where: { $0.id == speakerID })
         else { return false }
         return speaker.isLocalUser || speaker.trackKind == .microphone
-    }
-
-    private func showsSpeakerLabel(at index: Int) -> Bool {
-        let segments = self.session.transcriptSegments
-        guard index > 0 else { return true }
-        return segments[index].speakerID != segments[index - 1].speakerID
     }
 
     @ViewBuilder
@@ -2274,6 +2539,9 @@ private struct MeetingTranscriptSegmentRow: View {
     let speakerName: String
     let isLocalUser: Bool
     let showsSpeakerLabel: Bool
+    let reassignTargets: [MeetingSessionSpeaker]
+    let isQuiescent: Bool
+    let onReassign: (SessionSpeakerID) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -2285,16 +2553,26 @@ private struct MeetingTranscriptSegmentRow: View {
                 self.remoteMessage
             }
         }
+        .contextMenu {
+            Menu("Reassign to") {
+                ForEach(self.reassignTargets) { target in
+                    Button(target.displayName) {
+                        self.onReassign(target.id)
+                    }
+                }
+            }
+            .disabled(!self.isQuiescent)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(Self.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
+            "\(MeetingTranscriptExporter.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
         )
     }
 
     private var localBubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
             if self.showsSpeakerLabel {
-                Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
+                Text("\(self.speakerName)  ·  \(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
@@ -2317,7 +2595,7 @@ private struct MeetingTranscriptSegmentRow: View {
     private var remoteMessage: some View {
         VStack(alignment: .leading, spacing: 6) {
             if self.showsSpeakerLabel {
-                Text("\(self.speakerName)  ·  \(Self.timestampText(self.segment.start.seconds))")
+                Text("\(self.speakerName)  ·  \(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
@@ -2331,14 +2609,4 @@ private struct MeetingTranscriptSegmentRow: View {
         .padding(.trailing, 48)
     }
 
-    private static func timestampText(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded(.down)))
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        let seconds = total % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%02d:%02d", minutes, seconds)
-    }
 }

@@ -9,6 +9,9 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
     func delete(id: MeetingSessionID) async throws
+    /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
+    /// transcript untouched. Idempotent — missing paths are not an error.
+    func deleteAudioFiles(for id: MeetingSessionID) async throws
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -129,7 +132,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
 
     func loadRecoverable() throws -> [MeetingSession] {
         try self.loadAll().filter {
-            guard $0.recoveryResolvedAt == nil else { return false }
+            guard $0.recoveryResolvedAt == nil, $0.retention.audioDeletedAt == nil else { return false }
             switch $0.state {
             case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
                 return true
@@ -174,6 +177,18 @@ actor MeetingSessionStore: MeetingSessionStoring {
         try self.removeFromIndex(id)
     }
 
+    func deleteAudioFiles(for id: MeetingSessionID) throws {
+        let directory = self.sessionDirectoryURL(for: id)
+        let tracksURL = directory.appendingPathComponent("tracks", isDirectory: true)
+        if self.fileSystem.manager.fileExists(atPath: tracksURL.path) {
+            try self.fileSystem.manager.removeItem(at: tracksURL)
+        }
+        let checkpointURL = directory.appendingPathComponent("checkpoint.json", isDirectory: false)
+        if self.fileSystem.manager.fileExists(atPath: checkpointURL.path) {
+            try self.fileSystem.manager.removeItem(at: checkpointURL)
+        }
+    }
+
     private func writeSession(_ session: MeetingSession) throws {
         let data = try self.encoder.encode(session)
         try self.atomicPrivateWrite(data, to: self.sessionManifestURL(for: session.id))
@@ -188,6 +203,17 @@ actor MeetingSessionStore: MeetingSessionStoring {
 
     private func reconcileTrackManifests(in inputSession: MeetingSession) throws -> MeetingSession {
         var session = inputSession
+
+        // Audio was already deleted: never re-import a leftover tracks/ manifest from the crash
+        // window between the cleared save and file removal — audioDeletedAt is authoritative.
+        guard session.retention.audioDeletedAt == nil else {
+            for index in session.audioTracks.indices where !session.audioTracks[index].chunks.isEmpty {
+                session.audioTracks[index].chunks = []
+            }
+            try session.validateForPersistence()
+            return session
+        }
+
         let expectedKinds: Set<MeetingAudioTrackKind> = session.mode == .onlineCall
             ? [.applicationAudio, .microphone]
             : [.microphone]

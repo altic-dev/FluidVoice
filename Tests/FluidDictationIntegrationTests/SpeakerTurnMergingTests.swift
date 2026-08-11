@@ -509,6 +509,153 @@ final class SpeakerLabeledTranscriptionPolicyTests: XCTestCase {
 
 #endif
 
+// MARK: - Transcript exporter tests (kept on MeetingSessionModelTests so the standard
+// meeting-suite -only-testing invocation exercises them without an extra class filter).
+extension MeetingSessionModelTests {
+    private static let allowedExportKeys: Set<String> = [
+        "schemaVersion", "title", "languageCode", "startedAt", "endedAt", "durationSeconds",
+        "mode", "applicationDisplayName", "speakers", "id", "displayName", "isLocalUser",
+        "segments", "startSeconds", "endSeconds", "speakerID", "text", "revision", "status",
+        "overlap", "completeness",
+    ]
+
+    private func collectDictionaryKeys(in value: Any, into keys: inout Set<String>) {
+        if let dict = value as? [String: Any] {
+            for (key, nested) in dict {
+                keys.insert(key)
+                self.collectDictionaryKeys(in: nested, into: &keys)
+            }
+        } else if let array = value as? [Any] {
+            for element in array {
+                self.collectDictionaryKeys(in: element, into: &keys)
+            }
+        }
+    }
+
+    func testTextFormatMatchesTimestampFormatAndUnknownSpeaker() {
+        var session = MeetingModelFixture.makeSession()
+        var unknownSpeakerSegment = session.transcriptSegments[0]
+        unknownSpeakerSegment.id = UUID()
+        unknownSpeakerSegment.start = MeetingModelFixture.mediaTime(65)
+        unknownSpeakerSegment.end = MeetingModelFixture.mediaTime(70)
+        unknownSpeakerSegment.speakerID = nil
+        unknownSpeakerSegment.text = "No speaker text"
+        // Inserted out of chronological order to prove the exporter sorts by start.
+        session.transcriptSegments.insert(unknownSpeakerSegment, at: 0)
+
+        let lines = MeetingTranscriptExporter.text(for: session).components(separatedBy: "\n\n")
+
+        XCTAssertEqual(lines, [
+            "[00:04] Speaker 1: Initial provisional text",
+            "[01:05] Unknown speaker: No speaker text",
+        ])
+    }
+
+    func testJSONExportContainsOnlyAllowlistedKeys() throws {
+        let session = MeetingModelFixture.makeSession()
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try JSONSerialization.jsonObject(with: data)
+
+        var keys: Set<String> = []
+        self.collectDictionaryKeys(in: json, into: &keys)
+
+        XCTAssertTrue(
+            keys.isSubset(of: Self.allowedExportKeys),
+            "Unexpected keys leaked into the export: \(keys.subtracting(Self.allowedExportKeys))"
+        )
+        XCTAssertTrue(keys.contains("schemaVersion"))
+        XCTAssertTrue(keys.contains("speakers"))
+        XCTAssertTrue(keys.contains("segments"))
+    }
+
+    /// Belt-and-suspenders on top of the key-allowlist test above: even with diarization
+    /// embeddings/quality and an app/mic identity populated, none of that raw content — not just
+    /// its JSON keys — may appear anywhere in the exported bytes.
+    func testJSONExportRawBytesNeverContainPrivacySensitiveContent() throws {
+        var session = MeetingModelFixture.makeSession()
+        session.speakers[0].diarizationEmbedding = [0.998_877, -0.112_233]
+        session.speakers[0].diarizationEmbeddingObservationCount = 990_881_774
+        session.speakers[0].diarizationQuality = 0.771_122
+
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertFalse(raw.contains("998877"), "diarization embedding values must never leak into the export")
+        XCTAssertFalse(raw.contains("112233"), "diarization embedding values must never leak into the export")
+        XCTAssertFalse(raw.contains("990881774"), "diarization embedding observation count must never leak into the export")
+        XCTAssertFalse(raw.contains("771122"), "diarization quality must never leak into the export")
+        XCTAssertFalse(raw.contains("cluster"), "diarization cluster id must never leak into the export")
+        XCTAssertFalse(raw.contains("us.zoom.xos"), "the captured application's bundle identifier must never leak into the export")
+        XCTAssertFalse(raw.contains("capture-mic"), "the microphone capture device id must never leak into the export")
+        XCTAssertFalse(raw.contains("core-audio-mic"), "the microphone Core Audio UID must never leak into the export")
+    }
+
+    func testJSONExportOmitsMergedAwaySpeakerAndReflectsCorrectedName() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        try session.mergeSpeakers(MeetingModelFixture.speakerID, into: targetID)
+
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let speakers = try XCTUnwrap(json["speakers"] as? [[String: Any]])
+        let speakerIDs = Set(speakers.compactMap { $0["id"] as? String })
+
+        XCTAssertFalse(speakerIDs.contains(MeetingModelFixture.speakerID.uuidString))
+        XCTAssertTrue(speakerIDs.contains(targetID.uuidString))
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: session).contains("Speaker 2:"))
+    }
+
+    /// Every exported segment's speakerID must resolve through the same alias chain as the
+    /// exported speakers array — no JSON segment may reference a speaker absent from `speakers`.
+    func testJSONExportSegmentSpeakerIDsAllResolveIntoExportedSpeakers() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        try session.mergeSpeakers(MeetingModelFixture.speakerID, into: targetID)
+
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let speakers = try XCTUnwrap(json["speakers"] as? [[String: Any]])
+        let exportedSpeakerIDs = Set(speakers.compactMap { $0["id"] as? String })
+        let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+
+        for segment in segments {
+            guard let speakerID = segment["speakerID"] as? String else { continue }
+            XCTAssertTrue(
+                exportedSpeakerIDs.contains(speakerID),
+                "segment speakerID \(speakerID) is missing from the exported speakers array"
+            )
+        }
+    }
+
+    func testTextAndJSONExportReflectRenamedSpeaker() throws {
+        var session = MeetingModelFixture.makeSession()
+        try session.renameSpeaker(id: MeetingModelFixture.speakerID, to: "Erik")
+
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: session).contains("Erik:"))
+
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let speakers = try XCTUnwrap(json["speakers"] as? [[String: Any]])
+        XCTAssertTrue(speakers.contains { ($0["displayName"] as? String) == "Erik" })
+    }
+
+    func testDurationAndStartSecondsAreNumericallySane() throws {
+        let session = MeetingModelFixture.makeSession()
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        let duration = try XCTUnwrap(json["durationSeconds"] as? Double)
+        XCTAssertEqual(duration, session.duration, accuracy: 0.001)
+        XCTAssertGreaterThan(duration, 0)
+
+        let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+        let startSeconds = try XCTUnwrap(segments.first?["startSeconds"] as? Double)
+        XCTAssertEqual(startSeconds, 4, accuracy: 0.001)
+    }
+}
+
 final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
     func testSameVoiceAcrossChunksMatchesStableSpeakerID() {
         let speakerID = UUID()
@@ -802,6 +949,131 @@ final class MeetingSessionModelTests: XCTestCase {
         }
     }
 
+    func testRenameSpeakerAppliesToAllSegmentsViaLookupNotStorage() throws {
+        var session = MeetingModelFixture.makeSession()
+        var secondSegment = session.transcriptSegments[0]
+        secondSegment.id = UUID()
+        session.transcriptSegments.append(secondSegment)
+        let originalSegmentIDs = session.transcriptSegments.map(\.id)
+        let originalSpeakerIDs = session.transcriptSegments.map(\.speakerID)
+
+        try session.renameSpeaker(id: MeetingModelFixture.speakerID, to: "Renamed")
+
+        XCTAssertEqual(session.transcriptSegments.map(\.id), originalSegmentIDs)
+        XCTAssertEqual(session.transcriptSegments.map(\.speakerID), originalSpeakerIDs)
+        XCTAssertEqual(session.speakers.first(where: { $0.id == MeetingModelFixture.speakerID })?.displayName, "Renamed")
+    }
+
+    func testRenameAliasedSpeakerThrows() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        try session.mergeSpeakers(MeetingModelFixture.speakerID, into: targetID)
+
+        XCTAssertThrowsError(try session.renameSpeaker(id: MeetingModelFixture.speakerID, to: "New Name")) {
+            XCTAssertEqual($0 as? MeetingDomainError, .speakerNotFound)
+        }
+    }
+
+    func testReassignSegmentChangesSpeakerAndBumpsRevision() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        let originalSegmentID = session.transcriptSegments[0].id
+        let originalRevision = session.transcriptSegments[0].revision
+
+        try session.reassignSegment(id: originalSegmentID, to: targetID)
+
+        let segment = try XCTUnwrap(session.transcriptSegments.first)
+        XCTAssertEqual(segment.id, originalSegmentID)
+        XCTAssertEqual(segment.speakerID, targetID)
+        XCTAssertEqual(segment.revision, originalRevision + 1)
+    }
+
+    func testReassignSegmentToSameSpeakerIsNoOp() throws {
+        var session = MeetingModelFixture.makeSession()
+        let segmentID = session.transcriptSegments[0].id
+        let speakerID = try XCTUnwrap(session.transcriptSegments[0].speakerID)
+        let originalRevision = session.transcriptSegments[0].revision
+
+        try session.reassignSegment(id: segmentID, to: speakerID)
+
+        XCTAssertEqual(session.transcriptSegments[0].revision, originalRevision)
+    }
+
+    func testReassignSegmentThrowsForMissingSegmentOrSpeaker() {
+        var session = MeetingModelFixture.makeSession()
+        XCTAssertThrowsError(try session.reassignSegment(id: UUID(), to: MeetingModelFixture.speakerID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .segmentNotFound)
+        }
+        XCTAssertThrowsError(try session.reassignSegment(id: MeetingModelFixture.segmentID, to: UUID())) {
+            XCTAssertEqual($0 as? MeetingDomainError, .speakerNotFound)
+        }
+    }
+
+    func testReassignSegmentToAliasThrows() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        let aliasID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        session.speakers.append(MeetingModelFixture.speaker(id: aliasID, name: "Alias", mergedIntoSpeakerID: targetID))
+
+        XCTAssertThrowsError(try session.reassignSegment(id: MeetingModelFixture.segmentID, to: aliasID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .speakerNotFound)
+        }
+    }
+
+    func testMergeSpeakersMovesSegmentsAndKeepsSourceAsAlias() throws {
+        var session = MeetingModelFixture.makeSession()
+        let sourceID = MeetingModelFixture.speakerID
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+        let segmentID = session.transcriptSegments[0].id
+        let originalRevision = session.transcriptSegments[0].revision
+
+        try session.mergeSpeakers(sourceID, into: targetID)
+
+        let movedSegment = try XCTUnwrap(session.transcriptSegments.first(where: { $0.id == segmentID }))
+        XCTAssertEqual(movedSegment.speakerID, targetID)
+        XCTAssertEqual(movedSegment.revision, originalRevision + 1)
+        let source = try XCTUnwrap(session.speakers.first(where: { $0.id == sourceID }))
+        XCTAssertEqual(source.mergedIntoSpeakerID, targetID)
+        XCTAssertFalse(session.activeSpeakers.contains(where: { $0.id == sourceID }))
+        XCTAssertTrue(session.activeSpeakers.contains(where: { $0.id == targetID }))
+    }
+
+    func testMergeSpeakerWithItselfThrows() {
+        var session = MeetingModelFixture.makeSession()
+        XCTAssertThrowsError(try session.mergeSpeakers(MeetingModelFixture.speakerID, into: MeetingModelFixture.speakerID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .cannotMergeSpeakerWithItself)
+        }
+    }
+
+    func testMergeSpeakersAcrossTracksThrows() throws {
+        var session = MeetingModelFixture.makeSession()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Mic speaker", trackKind: .microphone))
+
+        XCTAssertThrowsError(try session.mergeSpeakers(MeetingModelFixture.speakerID, into: targetID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .cannotMergeSpeakers)
+        }
+    }
+
+    func testMergeLocalUserSpeakerThrows() throws {
+        var session = MeetingModelFixture.makeSession()
+        let localID = UUID()
+        let targetID = UUID()
+        session.speakers.append(MeetingModelFixture.speaker(id: localID, name: "You", isLocalUser: true))
+        session.speakers.append(MeetingModelFixture.speaker(id: targetID, name: "Speaker 2"))
+
+        XCTAssertThrowsError(try session.mergeSpeakers(localID, into: targetID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .cannotMergeSpeakers)
+        }
+        XCTAssertThrowsError(try session.mergeSpeakers(targetID, into: localID)) {
+            XCTAssertEqual($0 as? MeetingDomainError, .cannotMergeSpeakers)
+        }
+    }
+
     func testProcessingAttemptLanguageMustMatchSessionLanguage() {
         self.assertSessionValidationError(.unsupportedLanguage) {
             $0.processingAttempts[0].languageCode = "fr"
@@ -1004,6 +1276,24 @@ private enum MeetingModelFixture {
         return session
     }
 
+    static func speaker(
+        id: SessionSpeakerID,
+        name: String,
+        trackKind: MeetingAudioTrackKind = .applicationAudio,
+        isLocalUser: Bool = false,
+        mergedIntoSpeakerID: SessionSpeakerID? = nil
+    ) -> MeetingSessionSpeaker {
+        MeetingSessionSpeaker(
+            id: id,
+            displayName: name,
+            diarizationClusterID: nil,
+            trackKind: trackKind,
+            isLocalUser: isLocalUser,
+            identityCandidates: [],
+            mergedIntoSpeakerID: mergedIntoSpeakerID
+        )
+    }
+
     private static func chunk(
         id: MeetingAudioChunkID,
         sequence: Int,
@@ -1117,6 +1407,12 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         )
         _ = try await harness.coordinator.stopAndTranscribe()
         let completedBeforeEvent = try XCTUnwrap(harness.coordinator.latestCompletedSession)
+        // Completion schedules a background retention sweep; wait for it to release the mutation
+        // gate rather than racing it (it would otherwise throw .maintenanceInProgress here).
+        for _ in 0..<40 {
+            if harness.coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         let secondSession = try await harness.coordinator.startRecording(
             configuration: MeetingModelFixture.makeOnlineConfiguration()
         )
@@ -1286,8 +1582,11 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
             detail: "fixture stream ended"
         ))
         await harness.capture.waitForStopCall()
-        for _ in 0..<4 {
-            await Task.yield()
+        // coordinator.state flips to .interrupted synchronously in handleCaptureEvent, well before
+        // finishUnexpectedStop's async finalize/release runs — poll the actual release instead.
+        for _ in 0..<40 {
+            if harness.arbiter.releaseCallCount > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
 
         XCTAssertEqual(harness.coordinator.state, .interrupted(started.id))
@@ -1391,6 +1690,12 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
     func delete(id: MeetingSessionID) throws {
         self.tombstonedIDs.insert(id)
         self.sessions.removeValue(forKey: id)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID) throws {
+        guard var session = self.sessions[id] else { return }
+        for index in session.audioTracks.indices { session.audioTracks[index].chunks = [] }
+        self.sessions[id] = session
     }
 
     func load(id: MeetingSessionID) -> MeetingSession? {
