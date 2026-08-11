@@ -826,9 +826,9 @@ struct SettingsView: View {
                                             Text(self.hotkeyMode.description)
                                                 .font(self.theme.typography.bodySmall)
                                                 .foregroundStyle(self.settingsSecondaryText)
+                                                .fixedSize(horizontal: false, vertical: true)
                                         }
-
-                                        Spacer()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
                                         Picker("", selection: self.$hotkeyMode) {
                                             ForEach(HotkeyActivationMode.allCases) { mode in
@@ -942,8 +942,7 @@ struct SettingsView: View {
                                         isOn: Binding(
                                             get: { SettingsStore.shared.skipSilentRecordingsEnabled },
                                             set: { SettingsStore.shared.skipSilentRecordingsEnabled = $0 }
-                                        ),
-                                        allowsDescriptionWrapping: true
+                                        )
                                     )
                                     .settingsSearchTarget(.skipSilentRecordings)
                                     Divider().opacity(0.2)
@@ -1991,8 +1990,7 @@ struct SettingsView: View {
     private func optionToggleRow(
         title: String,
         description: String,
-        isOn: Binding<Bool>,
-        allowsDescriptionWrapping: Bool = false
+        isOn: Binding<Bool>
     ) -> some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2002,13 +2000,9 @@ struct SettingsView: View {
                 Text(description)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
-                    .fixedSize(horizontal: false, vertical: allowsDescriptionWrapping)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: allowsDescriptionWrapping ? .infinity : nil, alignment: .leading)
-
-            if !allowsDescriptionWrapping {
-                Spacer()
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Toggle("", isOn: isOn)
                 .toggleStyle(.switch)
