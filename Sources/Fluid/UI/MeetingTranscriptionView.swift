@@ -181,7 +181,7 @@ struct MeetingTranscriptionView: View {
                         onRetry: { self.retryProcessingSession(id: $0) },
                         onRevealAudio: self.revealCapturedAudio,
                         onExportAudio: self.exportAudio,
-                        onExportTranscript: self.exportTranscript,
+                        onExportTranscript: { self.exportTranscript($0, format: $1, includeEchoes: false) },
                         onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
                         onDeleteRequest: { self.pendingDeleteSessionID = $0 }
                     )
@@ -920,14 +920,14 @@ struct MeetingTranscriptionView: View {
         self.isShowingMeetingSettings = false
     }
 
-    private func copyTranscript(_ session: MeetingSession) {
-        let text = MeetingTranscriptExporter.text(for: session)
+    private func copyTranscript(_ session: MeetingSession, includeEchoes: Bool) {
+        let text = MeetingTranscriptExporter.text(for: session, includeEchoes: includeEchoes)
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat) {
+    private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
         panel.message = "Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."
@@ -936,7 +936,7 @@ struct MeetingTranscriptionView: View {
         do {
             let data: Data
             switch format {
-            case .text: data = Data(MeetingTranscriptExporter.text(for: session).utf8)
+            case .text: data = Data(MeetingTranscriptExporter.text(for: session, includeEchoes: includeEchoes).utf8)
             case .json: data = try MeetingTranscriptExporter.json(for: session)
             }
             try data.write(to: url, options: .atomic)
@@ -1037,8 +1037,8 @@ struct MeetingTranscriptionCanvas: View {
     let onRetrySession: (MeetingSession) -> Void
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
-    let onCopyTranscript: (MeetingSession) -> Void
-    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
+    let onCopyTranscript: (MeetingSession, Bool) -> Void
+    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
     let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
     let onRenameSpeaker: (MeetingSessionID, SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
@@ -1315,7 +1315,7 @@ private struct MeetingHistoryInspector: View {
                                 Button("Export Transcript (Text)…", systemImage: "doc.text") {
                                     self.onExportTranscript(session, .text)
                                 }
-                                .disabled(session.transcriptSegments.isEmpty)
+                                .disabled(!session.transcriptSegments.contains(where: { !$0.isEcho }))
                                 Button("Export Transcript (JSON)…", systemImage: "curlybraces") {
                                     self.onExportTranscript(session, .json)
                                 }
@@ -2098,8 +2098,9 @@ private struct MeetingResultCanvas: View {
     let session: MeetingSession
     let isQuiescent: Bool
     let canUndo: Bool
-    let onCopyTranscript: (MeetingSession) -> Void
-    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
+    @State private var showsProbableEchoes = false
+    let onCopyTranscript: (MeetingSession, Bool) -> Void
+    let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
     let onReassignSegment: (MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
     let onRenameSpeaker: (SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
@@ -2113,23 +2114,42 @@ private struct MeetingResultCanvas: View {
         Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
     }
 
+    private var hasEchoSegments: Bool {
+        self.session.transcriptSegments.contains(where: \.isEcho)
+    }
+
+    /// Single projection so shown and copied never disagree.
+    private func visibleSegments(sorted: [MeetingTranscriptSegment]) -> [MeetingTranscriptSegment] {
+        self.showsProbableEchoes ? sorted : sorted.filter { !$0.isEcho }
+    }
+
     /// Sorted once with per-row display state — no per-row re-sorting.
-    private var rows: [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
-        let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
-        return sorted.enumerated().map { index, segment in
-            let showsLabel = index == 0 || segment.speakerID != sorted[index - 1].speakerID
+    private func rows(
+        for visibleSegments: [MeetingTranscriptSegment]
+    ) -> [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
+        visibleSegments.enumerated().map { index, segment in
+            let showsLabel = index == 0 || segment.speakerID != visibleSegments[index - 1].speakerID
             return (segment, showsLabel, self.isLocalSegment(segment))
         }
     }
 
     var body: some View {
         let speakerNames = self.speakerNames
-        let activeSpeakers = self.session.activeSpeakers
+        let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
+        let visibleSegments = self.visibleSegments(sorted: sorted)
+        let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
+        let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
+        let rows = self.rows(for: visibleSegments)
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             HStack(alignment: .firstTextBaseline) {
                 Text(self.session.title)
                     .font(self.theme.typography.title)
                 Spacer()
+                if self.hasEchoSegments {
+                    Toggle("Show probable echo", isOn: self.$showsProbableEchoes)
+                        .toggleStyle(.checkbox)
+                        .font(self.theme.typography.caption)
+                }
                 Label(self.statusText, systemImage: self.statusIcon)
                     .font(self.theme.typography.badge)
                     .foregroundStyle(self.statusColor)
@@ -2164,7 +2184,7 @@ private struct MeetingResultCanvas: View {
                 }
             }
 
-            if self.session.transcriptSegments.isEmpty {
+            if visibleSegments.isEmpty {
                 ContentUnavailableView(
                     "No transcript text",
                     systemImage: "waveform.slash",
@@ -2173,7 +2193,7 @@ private struct MeetingResultCanvas: View {
                 .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 VStack(alignment: .leading, spacing: 28) {
-                    ForEach(self.rows, id: \.segment.id) { row in
+                    ForEach(rows, id: \.segment.id) { row in
                         MeetingTranscriptSegmentRow(
                             segment: row.segment,
                             speakerName: row.segment.speakerID.flatMap { speakerNames[$0] } ?? "Unknown speaker",
@@ -2192,17 +2212,17 @@ private struct MeetingResultCanvas: View {
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Button("Copy Transcript", systemImage: "doc.on.doc") {
-                    self.onCopyTranscript(self.session)
+                    self.onCopyTranscript(self.session, self.showsProbableEchoes)
                 }
                 .fluidButton(.compact, size: .medium)
-                .disabled(self.session.transcriptSegments.isEmpty)
+                .disabled(visibleSegments.isEmpty)
 
                 Menu("Export Transcript", systemImage: "square.and.arrow.up") {
-                    Button("Text…") { self.onExportTranscript(self.session, .text) }
-                    Button("JSON…") { self.onExportTranscript(self.session, .json) }
+                    Button("Text…") { self.onExportTranscript(self.session, .text, self.showsProbableEchoes) }
+                    Button("JSON…") { self.onExportTranscript(self.session, .json, self.showsProbableEchoes) }
                 }
                 .fluidButton(.compact, size: .medium)
-                .disabled(self.session.transcriptSegments.isEmpty)
+                .disabled(visibleSegments.isEmpty)
 
                 Button("Undo", systemImage: "arrow.uturn.backward") {
                     self.onUndo()
@@ -2230,6 +2250,8 @@ private struct MeetingResultCanvas: View {
         } message: {
             Text("Enter a new name for this speaker.")
         }
+        // Prevents an echo toggle left on for one meeting from leaking into the next.
+        .onChange(of: self.session.id) { _, _ in self.showsProbableEchoes = false }
     }
 
     @ViewBuilder
@@ -2553,6 +2575,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 self.remoteMessage
             }
         }
+        .opacity(self.segment.isEcho ? 0.6 : 1)
         .contextMenu {
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
@@ -2587,6 +2610,11 @@ private struct MeetingTranscriptSegmentRow: View {
                     self.theme.palette.contentBackground,
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                 )
+            if self.segment.isEcho {
+                Text("probable echo")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 96)
@@ -2604,6 +2632,11 @@ private struct MeetingTranscriptSegmentRow: View {
                 .lineSpacing(5)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
+            if self.segment.isEcho {
+                Text("probable echo")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, 48)

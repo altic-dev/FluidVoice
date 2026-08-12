@@ -367,6 +367,10 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
     var completeness: MeetingTranscriptCompleteness
+    /// Optional so pre-fix manifests still decode; a non-optional default would `keyNotFound`.
+    var isLikelyEcho: Bool? = nil
+
+    var isEcho: Bool { self.isLikelyEcho == true }
 }
 
 nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, Sendable {

@@ -39,17 +39,42 @@ final class SpeakerTurnMergingTests: XCTestCase {
     func testSameSpeakerAcrossLongGapStaysSeparate() {
         let merged = SpeakerDiarizationService.mergeAdjacentTurns([
             self.turn("Speaker 1", 0, 5),
-            self.turn("Speaker 1", 6.5, 9),
+            self.turn("Speaker 1", 8.5, 11),
         ])
-        XCTAssertEqual(merged.count, 2, "1.5s exceeds the 1.0s merge gap")
+        XCTAssertEqual(merged.count, 2, "3.5s exceeds the 1.0s default merge gap")
+    }
+
+    func testDefaultGapIsPinnedAtOneSecond() {
+        let merged = SpeakerDiarizationService.mergeAdjacentTurns([
+            self.turn("Speaker 1", 0, 5),
+            self.turn("Speaker 1", 6.0, 9),
+        ])
+        XCTAssertEqual(merged.count, 1, "a gap of exactly the 1.0s default still merges")
+
+        let separated = SpeakerDiarizationService.mergeAdjacentTurns([
+            self.turn("Speaker 1", 0, 5),
+            self.turn("Speaker 1", 6.1, 9),
+        ])
+        XCTAssertEqual(separated.count, 2, "1.1s exceeds the 1.0s default merge gap; file transcription keeps this default")
     }
 
     func testGapExactlyAtTheLimitIsMerged() {
         let merged = SpeakerDiarizationService.mergeAdjacentTurns([
             self.turn("Speaker 1", 0, 5),
-            self.turn("Speaker 1", 6.0, 9),
-        ])
+            self.turn("Speaker 1", 8.0, 11),
+        ], maxGapSeconds: 3.0)
         XCTAssertEqual(merged.count, 1, "a gap of exactly maxGapSeconds still merges")
+    }
+
+    /// Real conversational pauses run to a few seconds; meeting processing passes 3.0s
+    /// explicitly (MeetingProcessingPipeline.meetingTurnMergeGapSeconds) so a 1.0s gap doesn't
+    /// fragment every turn on a live Zoom call and starve the ASR of context.
+    func testTypicalConversationalPauseMerges() {
+        let merged = SpeakerDiarizationService.mergeAdjacentTurns([
+            self.turn("Speaker 1", 0, 5),
+            self.turn("Speaker 1", 7.5, 11),
+        ], maxGapSeconds: 3.0)
+        XCTAssertEqual(merged.count, 1)
     }
 
     func testDifferentSpeakersAreNeverMerged() {
@@ -516,7 +541,7 @@ extension MeetingSessionModelTests {
         "schemaVersion", "title", "languageCode", "startedAt", "endedAt", "durationSeconds",
         "mode", "applicationDisplayName", "speakers", "id", "displayName", "isLocalUser",
         "segments", "startSeconds", "endSeconds", "speakerID", "text", "revision", "status",
-        "overlap", "completeness",
+        "overlap", "completeness", "isLikelyEcho",
     ]
 
     private func collectDictionaryKeys(in value: Any, into keys: inout Set<String>) {
@@ -549,6 +574,30 @@ extension MeetingSessionModelTests {
             "[00:04] Speaker 1: Initial provisional text",
             "[01:05] Unknown speaker: No speaker text",
         ])
+    }
+
+    /// `isLikelyEcho` must stay optional: a non-optional defaulted property makes the synthesized
+    /// decoder require the key, and the store silently drops sessions that fail to decode.
+    func testSegmentWithoutEchoKeyStillDecodes() throws {
+        let legacySegmentJSON = """
+        {
+          "id": "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+          "start": { "value": 0, "timescale": 1000 },
+          "end": { "value": 1000, "timescale": 1000 },
+          "sourceTrackID": "3F2504E0-4F89-11D3-9A0C-0305E82C3302",
+          "text": "legacy segment",
+          "revision": 0,
+          "status": "final",
+          "overlap": "none",
+          "completeness": "complete"
+        }
+        """
+        let segment = try JSONDecoder().decode(
+            MeetingTranscriptSegment.self,
+            from: Data(legacySegmentJSON.utf8)
+        )
+        XCTAssertFalse(segment.isEcho)
+        XCTAssertNil(segment.isLikelyEcho)
     }
 
     func testJSONExportContainsOnlyAllowlistedKeys() throws {
@@ -653,6 +702,160 @@ extension MeetingSessionModelTests {
         let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
         let startSeconds = try XCTUnwrap(segments.first?["startSeconds"] as? Double)
         XCTAssertEqual(startSeconds, 4, accuracy: 0.001)
+    }
+
+    func testTextExportExcludesEchoByDefaultAndIncludesWithFlag() throws {
+        var session = MeetingModelFixture.makeSession()
+        var echoSegment = session.transcriptSegments[0]
+        echoSegment.id = UUID()
+        echoSegment.start = MeetingModelFixture.mediaTime(20)
+        echoSegment.end = MeetingModelFixture.mediaTime(24)
+        echoSegment.text = "Echoed remote text"
+        echoSegment.isLikelyEcho = true
+        session.transcriptSegments.append(echoSegment)
+
+        let withoutEchoes = MeetingTranscriptExporter.text(for: session)
+        XCTAssertFalse(withoutEchoes.contains("Echoed remote text"))
+
+        let withEchoes = MeetingTranscriptExporter.text(for: session, includeEchoes: true)
+        XCTAssertTrue(withEchoes.contains("Echoed remote text"))
+    }
+
+    func testJSONExportAlwaysIncludesEchoSegmentsWithFlag() throws {
+        var session = MeetingModelFixture.makeSession()
+        var echoSegment = session.transcriptSegments[0]
+        echoSegment.id = UUID()
+        echoSegment.start = MeetingModelFixture.mediaTime(20)
+        echoSegment.end = MeetingModelFixture.mediaTime(24)
+        echoSegment.text = "Echoed remote text"
+        echoSegment.isLikelyEcho = true
+        session.transcriptSegments.append(echoSegment)
+
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+
+        XCTAssertEqual(segments.count, 2)
+        let echoFlags = segments.compactMap { $0["isLikelyEcho"] as? Bool }
+        XCTAssertEqual(echoFlags.count, 2, "isLikelyEcho must always be present so the export key set stays stable")
+        XCTAssertTrue(echoFlags.contains(true))
+        XCTAssertTrue(echoFlags.contains(false))
+    }
+}
+
+final class MeetingEchoDetectorTests: XCTestCase {
+    func testIdenticalTextIsEcho() {
+        let text = "It was proactive like sometimes it was just like check on me during the day."
+        XCTAssertTrue(MeetingEchoDetector.isLikelyEcho(micText: text, remoteText: text))
+    }
+
+    /// The real pair that motivated containment over Jaccard.
+    func testRealZoomPairIsEcho() {
+        let mic = "It was proactive like sometimes it was just like check on me during the day."
+        let remote = "It was proactive, like sometimes the winter like check on me during the day."
+        XCTAssertTrue(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: remote))
+    }
+
+    func testUnrelatedMicTextOverlappingRemoteTextIsNotEcho() {
+        let mic = "Let's move the roadmap review to Thursday afternoon instead please."
+        let remote = "It was proactive, like sometimes the winter like check on me during the day."
+        XCTAssertFalse(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: remote))
+    }
+
+    func testShortFullyContainedMicLineIsNotEchoBelowMinimumWordFloor() {
+        let mic = "check on me"
+        let remote = "It was proactive, like sometimes the winter like check on me during the day."
+        XCTAssertLessThan(MeetingEchoDetector.normalizedWords(mic).count, MeetingEchoDetector.minimumMicWords)
+        XCTAssertEqual(MeetingEchoDetector.containment(micText: mic, remoteText: remote), 1.0)
+        XCTAssertFalse(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: remote))
+    }
+
+    func testEmptyRemoteTextIsNotEcho() {
+        let mic = "It was proactive like sometimes it was just like check on me during the day."
+        XCTAssertFalse(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: ""))
+    }
+
+    /// Short genuine speech that happens to share most of its (few) content words with unrelated
+    /// remote text must not be flagged — only 2 of 3 mic content words match.
+    func testShortGenuineSpeechSharingFewContentWordsIsNotEcho() {
+        let mic = "the roadmap timeline works"
+        let remote = "roadmap timeline"
+        XCTAssertFalse(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: remote))
+    }
+}
+
+final class MeetingTurnSelectionTests: XCTestCase {
+    private typealias Turn = (index: Int, turn: String, text: String)
+
+    func testMiddleTurnEmptyKeepsOthersWithOriginalIndices() {
+        let turns: [Turn] = [(0, "a", "hello"), (1, "b", ""), (2, "c", "world")]
+        let kept = MeetingTurnSelection.keepingNonEmpty(turns)
+        XCTAssertEqual(kept?.map(\.index), [0, 2])
+        XCTAssertEqual(kept?.map(\.text), ["hello", "world"])
+    }
+
+    func testAllEmptyReturnsNil() {
+        let turns: [Turn] = [(0, "a", ""), (1, "b", "")]
+        XCTAssertNil(MeetingTurnSelection.keepingNonEmpty(turns))
+    }
+
+    func testNoneEmptyReturnsUnchanged() {
+        let turns: [Turn] = [(0, "a", "hello"), (1, "b", "world")]
+        let kept = MeetingTurnSelection.keepingNonEmpty(turns)
+        XCTAssertEqual(kept?.map(\.index), [0, 1])
+        XCTAssertEqual(kept?.map(\.text), ["hello", "world"])
+    }
+}
+
+/// F1 regression guard: the 60s whole-chunk fallback segment is too coarse to score for echo
+/// containment, so it must never enter the candidate set.
+final class MeetingEchoCandidateTextTests: XCTestCase {
+    private let applicationTrackID = UUID()
+    private let diarizedSpeakerID = UUID()
+    private let fallbackSpeakerID = UUID()
+
+    private func segment(speakerID: SessionSpeakerID, start: TimeInterval, end: TimeInterval, text: String) -> MeetingTranscriptSegment {
+        MeetingTranscriptSegment(
+            id: UUID(),
+            start: MeetingMediaTime(value: Int64(start * 1000), timescale: 1000),
+            end: MeetingMediaTime(value: Int64(end * 1000), timescale: 1000),
+            sourceTrackID: self.applicationTrackID,
+            speakerID: speakerID,
+            text: text,
+            revision: 0,
+            status: .final,
+            overlap: .none,
+            completeness: .complete
+        )
+    }
+
+    func testFallbackSpeakerSegmentIsExcludedFromCandidateSet() {
+        let diarized = self.segment(speakerID: self.diarizedSpeakerID, start: 0, end: 5, text: "diarized remote text")
+        let fallback = self.segment(speakerID: self.fallbackSpeakerID, start: 0, end: 60, text: "coarse whole chunk fallback text")
+
+        let text = MeetingProcessingPipeline.echoCandidateText(
+            segments: [diarized, fallback],
+            speakerIDToExclude: self.fallbackSpeakerID,
+            applicationTrackID: self.applicationTrackID,
+            window: (start: 1, end: 3)
+        )
+
+        XCTAssertEqual(text, "diarized remote text")
+    }
+
+    func testNilExclusionKeepsAllOverlappingSegments() {
+        let diarized = self.segment(speakerID: self.diarizedSpeakerID, start: 0, end: 5, text: "diarized remote text")
+        let fallback = self.segment(speakerID: self.fallbackSpeakerID, start: 0, end: 60, text: "coarse whole chunk fallback text")
+
+        let text = MeetingProcessingPipeline.echoCandidateText(
+            segments: [diarized, fallback],
+            speakerIDToExclude: nil,
+            applicationTrackID: self.applicationTrackID,
+            window: (start: 1, end: 3)
+        )
+
+        XCTAssertTrue(text.contains("diarized remote text"))
+        XCTAssertTrue(text.contains("coarse whole chunk fallback text"))
     }
 }
 

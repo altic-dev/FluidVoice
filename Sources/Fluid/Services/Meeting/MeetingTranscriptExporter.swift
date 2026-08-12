@@ -2,9 +2,11 @@ import Foundation
 
 /// Single source of truth for rendering a `MeetingSession` transcript as plain text or JSON.
 nonisolated enum MeetingTranscriptExporter {
-    static func text(for session: MeetingSession) -> String {
+    static func text(for session: MeetingSession, includeEchoes: Bool = false) -> String {
         let speakerNames = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
-        let segments = session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
+        let segments = session.transcriptSegments
+            .filter { includeEchoes || !$0.isEcho }
+            .sorted { $0.start.seconds < $1.start.seconds }
         return segments.map { segment in
             let speaker = Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames)
             return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(segment.text)"
@@ -32,7 +34,8 @@ nonisolated enum MeetingTranscriptExporter {
                     revision: $0.revision,
                     status: $0.status.rawValue,
                     overlap: $0.overlap.rawValue,
-                    completeness: $0.completeness.rawValue
+                    completeness: $0.completeness.rawValue,
+                    isLikelyEcho: $0.isEcho
                 )
             }
         let document = ExportedTranscript(
@@ -115,6 +118,7 @@ private struct ExportedSegment: Codable {
     var status: String
     var overlap: String
     var completeness: String
+    var isLikelyEcho: Bool
 }
 
 private struct ExportedTranscript: Codable {

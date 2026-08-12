@@ -177,6 +177,16 @@ nonisolated struct MeetingSpeakerEmbeddingIndex: Sendable {
     }
 }
 
+nonisolated enum MeetingTurnSelection {
+    /// Drops empty-text turns; nil when all were empty (caller falls back to whole-chunk).
+    static func keepingNonEmpty<T>(
+        _ turns: [(index: Int, turn: T, text: String)]
+    ) -> [(index: Int, turn: T, text: String)]? {
+        let nonEmpty = turns.filter { !$0.text.isEmpty }
+        return nonEmpty.isEmpty ? nil : nonEmpty
+    }
+}
+
 nonisolated enum MeetingLocalSpeakerEvidenceSelector {
     static func candidate(
         cleanDurationByCluster: [SessionSpeakerID: TimeInterval],
@@ -268,7 +278,9 @@ private final class MeetingProviderLanguagePin {
 
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
-    static let pipelineVersion = 1
+    static let pipelineVersion = 2
+    /// Conversational pauses run to a few seconds; 1.0s fragmented turns and starved the ASR.
+    static let meetingTurnMergeGapSeconds = 3.0
 
     private enum LabeledPassError: Error {
         case emptyTurn
@@ -288,6 +300,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var end: TimeInterval
         var text: String
         var overlapsRemote: Bool
+        var isLikelyEcho = false
     }
 
     private struct Accumulator {
@@ -663,16 +676,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }.value
         if SpeakerDiarizationService.isSupported {
             do {
-                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
+                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
                 let turns = diarization.turns
                 if !turns.isEmpty {
-                    remoteSpeech.append(contentsOf: turns.map { turn in
-                        TimelineInterval(
-                            start: chunkOffset + turn.startSeconds,
-                            end: chunkOffset + turn.endSeconds
-                        )
-                    })
-                    var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
+                    var allTurns: [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] = []
                     for (index, turn) in turns.enumerated() {
                         let text = try await self.transcribeTurn(
                             turn,
@@ -682,9 +689,24 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             asrService: context.asrService,
                             languagePin: context.languagePin
                         )
-                        guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
-                        transcribedTurns.append((index, turn, text))
+                        allTurns.append((index, turn, text))
                     }
+                    guard let transcribedTurns = MeetingTurnSelection.keepingNonEmpty(allTurns) else {
+                        throw LabeledPassError.emptyTurn
+                    }
+                    if transcribedTurns.count < allTurns.count {
+                        DebugLogger.shared.log(
+                            "Meeting remote transcription chunk \(chunk.id): skipped \(allTurns.count - transcribedTurns.count) of \(allTurns.count) silent turns",
+                            source: "MeetingProcessingPipeline"
+                        )
+                    }
+                    // Filtered turns only: a silent turn must not mark a mic turn overlapsRemote.
+                    remoteSpeech.append(contentsOf: transcribedTurns.map { _, turn, _ in
+                        TimelineInterval(
+                            start: chunkOffset + turn.startSeconds,
+                            end: chunkOffset + turn.endSeconds
+                        )
+                    })
                     var speakerIDByLabel: [String: SessionSpeakerID] = [:]
                     var usedSpeakerIDs = Set<SessionSpeakerID>()
                     for (_, turn, _) in transcribedTurns where speakerIDByLabel[turn.speakerLabel] == nil {
@@ -732,7 +754,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if error is CancellationError { throw error }
                 if case MeetingProcessingError.audioUnreadable = error { throw error }
                 DebugLogger.shared.warning(
-                    "Meeting remote diarization failed; preserving an unlabeled track transcript",
+                    "Meeting remote diarization failed; preserving an unlabeled track transcript: \(error)",
                     source: "MeetingProcessingPipeline"
                 )
             }
@@ -827,10 +849,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }.value
         if SpeakerDiarizationService.isSupported {
             do {
-                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url)
+                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
                 let turns = diarization.turns
                 if !turns.isEmpty {
-                    var transcribedTurns: [(Int, SpeakerDiarizationService.SpeakerTurn, String)] = []
+                    var allTurns: [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] = []
                     for (index, turn) in turns.enumerated() {
                         let text = try await self.transcribeTurn(
                             turn,
@@ -840,8 +862,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             asrService: context.asrService,
                             languagePin: context.languagePin
                         )
-                        guard !text.isEmpty else { throw LabeledPassError.emptyTurn }
-                        transcribedTurns.append((index, turn, text))
+                        allTurns.append((index, turn, text))
+                    }
+                    guard let transcribedTurns = MeetingTurnSelection.keepingNonEmpty(allTurns) else {
+                        throw LabeledPassError.emptyTurn
+                    }
+                    if transcribedTurns.count < allTurns.count {
+                        DebugLogger.shared.log(
+                            "Meeting microphone transcription chunk \(chunk.id): skipped \(allTurns.count - transcribedTurns.count) of \(allTurns.count) silent turns",
+                            source: "MeetingProcessingPipeline"
+                        )
                     }
                     var clusterIDByLabel: [String: SessionSpeakerID] = [:]
                     var usedClusterIDs = Set<SessionSpeakerID>()
@@ -882,7 +912,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if error is CancellationError { throw error }
                 if case MeetingProcessingError.audioUnreadable = error { throw error }
                 DebugLogger.shared.warning(
-                    "Meeting microphone speech detection failed; preserving an unlabeled track transcript",
+                    "Meeting microphone speech detection failed; preserving an unlabeled track transcript: \(error)",
                     source: "MeetingProcessingPipeline"
                 )
             }
@@ -983,7 +1013,27 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             isLocalUser: false,
             clusterID: nil
         )
-        for turn in stagedTurns {
+        let applicationTrackID = session.audioTracks.first(where: { $0.kind == .applicationAudio })?.id
+        // The 60s remote whole-chunk fallback is too coarse to score against; exclude its speaker.
+        let fallbackSpeakerID = accumulator.speakerIDByKey["meeting-audio"]
+        var classifiedTurns = stagedTurns
+        if let applicationTrackID {
+            for index in classifiedTurns.indices where classifiedTurns[index].overlapsRemote {
+                let turn = classifiedTurns[index]
+                guard turn.clusterID != localClusterID else { continue }
+                let remoteText = Self.echoCandidateText(
+                    segments: accumulator.segments,
+                    speakerIDToExclude: fallbackSpeakerID,
+                    applicationTrackID: applicationTrackID,
+                    window: (turn.start, turn.end)
+                )
+                classifiedTurns[index].isLikelyEcho = MeetingEchoDetector.isLikelyEcho(
+                    micText: turn.text,
+                    remoteText: remoteText
+                )
+            }
+        }
+        for turn in classifiedTurns {
             let isCleanLocalTurn = turn.clusterID == localClusterID && !turn.overlapsRemote
             accumulator.segments.append(Self.segment(
                 key: "microphone:\(turn.chunkID.uuidString):\(turn.index)",
@@ -992,7 +1042,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 start: turn.start,
                 end: turn.end,
                 text: turn.text,
-                overlap: turn.overlapsRemote ? .overlapsOtherTrack : .none
+                overlap: turn.overlapsRemote ? .overlapsOtherTrack : .none,
+                isLikelyEcho: turn.isLikelyEcho
             ))
         }
     }
@@ -1114,6 +1165,23 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         return Double(file.length) / file.processingFormat.sampleRate
     }
 
+    /// Overlapping application-track text, minus the coarse whole-chunk fallback speaker.
+    nonisolated static func echoCandidateText(
+        segments: [MeetingTranscriptSegment],
+        speakerIDToExclude: SessionSpeakerID?,
+        applicationTrackID: MeetingAudioTrackID,
+        window: (start: TimeInterval, end: TimeInterval)
+    ) -> String {
+        segments
+            .filter { segment in
+                segment.sourceTrackID == applicationTrackID
+                    && (speakerIDToExclude == nil || segment.speakerID != speakerIDToExclude)
+                    && min(window.end, segment.end.seconds) - max(window.start, segment.start.seconds) > 0.15
+            }
+            .map(\.text)
+            .joined(separator: " ")
+    }
+
     private static func segment(
         key: String,
         trackID: MeetingAudioTrackID,
@@ -1121,7 +1189,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         start: TimeInterval,
         end: TimeInterval,
         text: String,
-        overlap: MeetingTranscriptOverlap
+        overlap: MeetingTranscriptOverlap,
+        isLikelyEcho: Bool = false
     ) -> MeetingTranscriptSegment {
         MeetingTranscriptSegment(
             id: self.stableUUID("segment:\(key)"),
@@ -1133,7 +1202,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             revision: 0,
             status: .final,
             overlap: overlap,
-            completeness: .complete
+            completeness: .complete,
+            isLikelyEcho: isLikelyEcho
         )
     }
 
