@@ -2886,6 +2886,18 @@ final class ASRService: ObservableObject {
         }
     }
 
+    func transcribeMeetingSamplesWithTimings(
+        _ samples: [Float],
+        provider: any TranscriptionProvider
+    ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        guard self.activeExclusiveActivity == .meeting else {
+            throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .meeting)
+        }
+        return try await self.transcriptionExecutor.run { [provider] in
+            try await provider.transcribeWithWordTimings(samples)
+        }
+    }
+
     func transcribeMeetingFile(
         at fileURL: URL,
         provider: any TranscriptionProvider

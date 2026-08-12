@@ -278,7 +278,7 @@ private final class MeetingProviderLanguagePin {
 
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
-    static let pipelineVersion = 2
+    static let pipelineVersion = 3
     /// Conversational pauses run to a few seconds; 1.0s fragmented turns and starved the ASR.
     static let meetingTurnMergeGapSeconds = 3.0
 
@@ -679,18 +679,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
                 let turns = diarization.turns
                 if !turns.isEmpty {
-                    var allTurns: [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] = []
-                    for (index, turn) in turns.enumerated() {
-                        let text = try await self.transcribeTurn(
-                            turn,
-                            fileURL: url,
-                            provider: context.provider,
-                            languageCode: context.languageCode,
-                            asrService: context.asrService,
-                            languagePin: context.languagePin
-                        )
-                        allTurns.append((index, turn, text))
-                    }
+                    let allTurns = try await self.transcribeTurns(turns, chunkID: chunk.id, trackKind: .applicationAudio, fileURL: url, context: context)
                     guard let transcribedTurns = MeetingTurnSelection.keepingNonEmpty(allTurns) else {
                         throw LabeledPassError.emptyTurn
                     }
@@ -852,18 +841,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
                 let turns = diarization.turns
                 if !turns.isEmpty {
-                    var allTurns: [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] = []
-                    for (index, turn) in turns.enumerated() {
-                        let text = try await self.transcribeTurn(
-                            turn,
-                            fileURL: url,
-                            provider: context.provider,
-                            languageCode: context.languageCode,
-                            asrService: context.asrService,
-                            languagePin: context.languagePin
-                        )
-                        allTurns.append((index, turn, text))
-                    }
+                    let allTurns = try await self.transcribeTurns(turns, chunkID: chunk.id, trackKind: .microphone, fileURL: url, context: context)
                     guard let transcribedTurns = MeetingTurnSelection.keepingNonEmpty(allTurns) else {
                         throw LabeledPassError.emptyTurn
                     }
@@ -1046,6 +1024,158 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 isLikelyEcho: turn.isLikelyEcho
             ))
         }
+    }
+
+    /// Each word lands in at most one turn: max overlap wins, ties to the lower index.
+    nonisolated static func assignWords(
+        _ words: [ASRWordTiming],
+        toTurns turns: [(index: Int, start: TimeInterval, end: TimeInterval)],
+        nearestTolerance: TimeInterval = 0.5
+    ) -> (byTurn: [Int: String], unassigned: Int) {
+        var accumulated: [Int: [String]] = [:]
+        var unassignedCount = 0
+
+        for word in words {
+            // Half-open [start, end): a boundary instant scores 0 on both sides, never doubles.
+            let overlaps = turns.map { turn in
+                (index: turn.index, overlap: max(0, min(word.end, turn.end) - max(word.start, turn.start)))
+            }
+            if let maxOverlap = overlaps.map(\.overlap).max(), maxOverlap > 0,
+               let winner = overlaps.filter({ $0.overlap == maxOverlap }).min(by: { $0.index < $1.index })
+            {
+                accumulated[winner.index, default: []].append(word.text)
+                continue
+            }
+
+            let distances = turns.map { turn -> (index: Int, distance: TimeInterval) in
+                let distance: TimeInterval
+                if word.end <= turn.start {
+                    distance = turn.start - word.end
+                } else if word.start >= turn.end {
+                    distance = word.start - turn.end
+                } else {
+                    distance = 0
+                }
+                return (turn.index, distance)
+            }
+            if let nearest = distances.min(by: { $0.distance < $1.distance || ($0.distance == $1.distance && $0.index < $1.index) }),
+               nearest.distance <= nearestTolerance
+            {
+                accumulated[nearest.index, default: []].append(word.text)
+            } else {
+                unassignedCount += 1
+            }
+        }
+
+        return (accumulated.mapValues { $0.joined(separator: " ") }, unassignedCount)
+    }
+
+    /// Above this share of unplaceable words the timings are not trustworthy enough to keep.
+    static let maxUnassignedWordFraction = 0.25
+
+    /// Words outside every turn attach to the nearest turn within this window. Zero on the
+    /// microphone, where bleed would otherwise be credited to the user as their own words.
+    nonisolated static func wordAttachmentTolerance(for trackKind: MeetingAudioTrackKind) -> TimeInterval {
+        trackKind == .microphone ? 0 : 0.5
+    }
+
+    /// The chunk-level catch classifies on these; swallowing one would mislabel the chunk.
+    nonisolated static func alignmentErrorMustPropagate(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if case MeetingProcessingError.audioUnreadable = error { return true }
+        return false
+    }
+
+    nonisolated static func tooManyWordsUnassigned(unassigned: Int, totalWords: Int) -> Bool {
+        totalWords > 0 && Double(unassigned) > Double(totalWords) * Self.maxUnassignedWordFraction
+    }
+
+    private func transcribeTurnsWordAligned(
+        _ turns: [SpeakerDiarizationService.SpeakerTurn],
+        chunkID: MeetingAudioChunkID,
+        trackKind: MeetingAudioTrackKind,
+        fileURL: URL,
+        context: ProcessingContext
+    ) async throws -> [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)]? {
+        let samples = try await Task.detached(priority: .userInitiated) {
+            try Self.readSamples(fileURL: fileURL, startSeconds: 0, endSeconds: nil)
+        }.value
+        guard samples.count >= 16_000 else { return nil }
+
+        context.languagePin.apply()
+        let outcome = try await context.asrService.transcribeMeetingSamplesWithTimings(
+            samples,
+            provider: context.provider
+        )
+        guard !outcome.words.isEmpty else { return nil }
+
+        let assignment = Self.assignWords(
+            outcome.words,
+            toTurns: turns.enumerated().map { (index: $0.offset, start: $0.element.startSeconds, end: $0.element.endSeconds) },
+            nearestTolerance: Self.wordAttachmentTolerance(for: trackKind)
+        )
+        guard !Self.tooManyWordsUnassigned(unassigned: assignment.unassigned, totalWords: outcome.words.count) else {
+            DebugLogger.shared.warning(
+                "Meeting word alignment chunk \(chunkID): \(assignment.unassigned)/\(outcome.words.count) words unassigned, falling back to per-turn",
+                source: "MeetingProcessingPipeline"
+            )
+            return nil
+        }
+        if assignment.unassigned > 0 {
+            DebugLogger.shared.warning(
+                "Meeting word alignment chunk \(chunkID): dropped \(assignment.unassigned) of \(outcome.words.count) unplaceable word(s)",
+                source: "MeetingProcessingPipeline"
+            )
+        }
+        return turns.enumerated().map { index, turn in
+            (index, turn, assignment.byTurn[index] ?? "")
+        }
+    }
+
+    private func transcribeTurns(
+        _ turns: [SpeakerDiarizationService.SpeakerTurn],
+        chunkID: MeetingAudioChunkID,
+        trackKind: MeetingAudioTrackKind,
+        fileURL: URL,
+        context: ProcessingContext
+    ) async throws -> [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] {
+        if !context.provider.supportsWordTimings {
+            DebugLogger.shared.log(
+                "Meeting chunk \(chunkID): provider \(context.provider.name) exposes no word timings; transcribing per turn",
+                source: "MeetingProcessingPipeline"
+            )
+        } else {
+            do {
+                if let aligned = try await self.transcribeTurnsWordAligned(
+                    turns,
+                    chunkID: chunkID,
+                    trackKind: trackKind,
+                    fileURL: fileURL,
+                    context: context
+                ) {
+                    return aligned
+                }
+            } catch {
+                if Self.alignmentErrorMustPropagate(error) { throw error }
+                DebugLogger.shared.warning(
+                    "Meeting word alignment chunk \(chunkID) failed; falling back to per-turn: \(error)",
+                    source: "MeetingProcessingPipeline"
+                )
+            }
+        }
+        var allTurns: [(index: Int, turn: SpeakerDiarizationService.SpeakerTurn, text: String)] = []
+        for (index, turn) in turns.enumerated() {
+            let text = try await self.transcribeTurn(
+                turn,
+                fileURL: fileURL,
+                provider: context.provider,
+                languageCode: context.languageCode,
+                asrService: context.asrService,
+                languagePin: context.languagePin
+            )
+            allTurns.append((index, turn, text))
+        }
+        return allTurns
     }
 
     private func transcribeTurn(

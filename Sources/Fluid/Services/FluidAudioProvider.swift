@@ -30,6 +30,10 @@ final class FluidAudioProvider: TranscriptionProvider {
         true
     }
 
+    /// Boosting rescores tokens without moving their timings. Checked up front so a chunk that
+    /// cannot be aligned is never transcribed twice.
+    var supportsWordTimings: Bool { !self.isWordBoostingActive }
+
     private var streamingAsrManager: AsrManager?
     private var finalAsrManager: AsrManager?
     private var latestStreamingPreviewText: String = ""
@@ -51,6 +55,12 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.modelOverride = modelOverride
         self.configureWordBoosting = configureWordBoosting
     }
+
+    #if DEBUG
+    func setWordBoostingActiveForTesting(_ active: Bool) {
+        self.isWordBoostingActive = active
+    }
+    #endif
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
@@ -388,9 +398,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         // manager so the user still gets a transcription (just without CTC rescoring).
         do {
             let startedAt = Date().timeIntervalSince1970
-            let result = try await self.transcribeFinalResult(samples, manager: manager)
-            self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: false)
-            return result
+            let outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false)
+            return outcome.result
         } catch {
             guard let fallback = self.streamingAsrManager, fallback !== manager else {
                 throw error
@@ -400,9 +410,9 @@ final class FluidAudioProvider: TranscriptionProvider {
                 source: "FluidAudioProvider"
             )
             let startedAt = Date().timeIntervalSince1970
-            let result = try await self.transcribeFinalResult(samples, manager: fallback)
-            self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: true)
-            return result
+            let outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true)
+            return outcome.result
         }
     }
 
@@ -469,7 +479,44 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.incrementalAcceptedSampleCount = 0
     }
 
-    private func transcribeFinalResult(_ samples: [Float], manager: AsrManager) async throws -> ASRTranscriptionResult {
+    func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        guard let manager = self.finalAsrManager ?? self.streamingAsrManager else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
+            )
+        }
+
+        let outcome: (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool)
+        do {
+            let startedAt = Date().timeIntervalSince1970
+            outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false, source: "meeting")
+        } catch {
+            guard let fallback = self.streamingAsrManager, fallback !== manager else {
+                throw error
+            }
+            let startedAt = Date().timeIntervalSince1970
+            outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true, source: "meeting")
+        }
+
+        guard !outcome.textMayBeCorrected, let tokenTimings = outcome.tokenTimings else {
+            return (outcome.result, [])
+        }
+        return (outcome.result, Self.makeWordTimings(from: tokenTimings))
+    }
+
+    static func makeWordTimings(from tokenTimings: [TokenTiming]) -> [ASRWordTiming] {
+        WordAudioChunkExtractor.words(from: tokenTimings).map {
+            ASRWordTiming(text: $0.text, start: $0.startTime, end: $0.endTime)
+        }
+    }
+
+    private func transcribeFinalResult(
+        _ samples: [Float], manager: AsrManager
+    ) async throws -> (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool) {
         let matchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled && samples.count <= 16_000 * 15
         let dictionaryLabels = Self.dictionaryLabels(
             from: SettingsStore.shared.customDictionaryEntries
@@ -490,13 +537,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         } else {
             profiles = []
         }
+        // Rewritten text leaves timings on the old tokens; realigning would revert corrections.
+        let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
             let result = try await manager.transcribe(samples, source: AudioSource.microphone)
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard let features, !profiles.isEmpty else {
-                return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+                return (ASRTranscriptionResult(text: result.text, confidence: result.confidence), result.tokenTimings, textMayBeCorrected)
             }
             let startedAt = Date().timeIntervalSince1970
             let corrected = self.applyPronunciationMatches(result: result, features: features, profiles: profiles)
@@ -505,7 +554,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 "PRONUNCIATION_MATCH profiles=\(profiles.count) elapsedMs=\(elapsedMs) changed=\(corrected != result.text)",
                 source: "PronunciationMatching"
             )
-            return ASRTranscriptionResult(text: corrected, confidence: result.confidence)
+            return (ASRTranscriptionResult(text: corrected, confidence: result.confidence), result.tokenTimings, textMayBeCorrected)
         } catch {
             _ = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)

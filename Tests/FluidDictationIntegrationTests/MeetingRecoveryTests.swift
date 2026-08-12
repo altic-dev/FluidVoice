@@ -849,14 +849,15 @@ final class MeetingRecoveryTests: XCTestCase {
     private func makeCheckpoint(
         sessionID: MeetingSessionID = UUID(),
         completedTrackID: MeetingAudioTrackID = UUID(),
-        trackFingerprints: [MeetingAudioTrackID: [MeetingProcessingCheckpoint.ChunkFingerprint]] = [:]
+        trackFingerprints: [MeetingAudioTrackID: [MeetingProcessingCheckpoint.ChunkFingerprint]] = [:],
+        asrModel: String = "base"
     ) -> MeetingProcessingCheckpoint {
         MeetingProcessingCheckpoint(
             version: MeetingProcessingCheckpoint.currentVersion,
             sessionID: sessionID,
             pipelineVersion: MeetingProcessingPipeline.pipelineVersion,
             asrProvider: "apple",
-            asrModel: "base",
+            asrModel: asrModel,
             languageCode: "en",
             completedTrackID: completedTrackID,
             trackFingerprints: trackFingerprints,
@@ -948,6 +949,40 @@ final class MeetingRecoveryTests: XCTestCase {
             completedTrackID: trackID,
             expectedFingerprints: fingerprints
         ))
+    }
+
+    /// A checkpoint must validate a resume on the same model and be invalidated by a model
+    /// switch, so a resume can never continue from a stale, wrong-model checkpoint.
+    func testResumedVersusCleanCheckpointEquivalenceAcrossAModelSwitch() throws {
+        let session = self.makeSession(state: .interrupted, endedAt: Date())
+        let trackID = UUID()
+        let fingerprint = MeetingProcessingCheckpoint.ChunkFingerprint(id: UUID(), byteCount: 128, sha256: "abc123")
+        let fingerprints: [MeetingAudioTrackID: [MeetingProcessingCheckpoint.ChunkFingerprint]] = [trackID: [fingerprint]]
+
+        let checkpoint = self.makeCheckpoint(
+            sessionID: session.id, completedTrackID: trackID, trackFingerprints: fingerprints,
+            asrModel: "parakeet-tdt-v2"
+        )
+
+        XCTAssertTrue(checkpoint.isValid(
+            session: session,
+            pipelineVersion: MeetingProcessingPipeline.pipelineVersion,
+            provider: checkpoint.asrProvider,
+            model: "parakeet-tdt-v2",
+            language: "en",
+            completedTrackID: trackID,
+            expectedFingerprints: fingerprints
+        ), "resuming with the same resolved model as the clean run must validate")
+
+        XCTAssertFalse(checkpoint.isValid(
+            session: session,
+            pipelineVersion: MeetingProcessingPipeline.pipelineVersion,
+            provider: checkpoint.asrProvider,
+            model: "whisper-large-turbo",
+            language: "en",
+            completedTrackID: trackID,
+            expectedFingerprints: fingerprints
+        ), "a model switch between runs must invalidate the checkpoint rather than resume stale speaker/segment state")
     }
 
     // MARK: - Slice 3, test 3: coordinator deletes checkpoint after success
@@ -1301,6 +1336,43 @@ final class MeetingRecoveryTests: XCTestCase {
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers.first(where: { $0.id == speakerA })?.displayName, "Speaker A")
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    /// When the inverse's target is gone, undo drops the stale entry, throws
+    /// `.noCorrectionToUndo`, and never saves — whatever other mutation produced is left as-is.
+    func testUndoWithGoneInverseTargetDropsEntryAndSavesNothing() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, speakerB, segmentID) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        _ = try await coordinator.reassignSegment(sessionID: session.id, segmentID: segmentID, to: speakerB)
+        XCTAssertTrue(coordinator.canUndoCorrection(sessionID: session.id))
+
+        // Segment vanishes from under the undo stack: save without it, bypassing the coordinator.
+        let loaded = try await store.load(id: session.id)
+        var mutated = try XCTUnwrap(loaded)
+        mutated.transcriptSegments.removeAll { $0.id == segmentID }
+        try await store.save(mutated)
+
+        do {
+            _ = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+            XCTFail("Expected undo to throw when the inverse target no longer exists")
+        } catch let error as MeetingCoordinatorError {
+            guard case .noCorrectionToUndo = error else {
+                return XCTFail("Expected .noCorrectionToUndo, got \(error)")
+            }
+        }
+
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "the stale entry must be dropped")
+        let reloaded = try await store.load(id: session.id)
+        XCTAssertEqual(reloaded?.transcriptSegments.count, mutated.transcriptSegments.count, "undo must never save on a dropped entry")
+        XCTAssertFalse(reloaded?.transcriptSegments.contains { $0.id == segmentID } ?? true)
     }
 
     func testCorrectionRefusedWhileProcessingSameSession() async throws {
@@ -2159,6 +2231,92 @@ final class MeetingRecoveryTests: XCTestCase {
             await coordinator.sweepExpiredAudio()
             XCTAssertFalse(coordinator.hasScheduledRetentionSweep, "policy .never has no deadline to schedule against")
         }
+    }
+
+    /// A contended past-deadline session must re-arm within 60s instead of being skipped forever.
+    /// Caught mid-`retryProcessing`: the sweep reads disk state (`.completed`, eligible) while
+    /// `isSafeToSweep` reads in-memory state (`.processing`, contended) — the race the re-arm exists for.
+    func testContendedSweepPastDeadlineSessionReArmsWithinSixtySeconds() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let realStore = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.startedAt = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        session.endedAt = session.startedAt
+        try await realStore.create(session)
+
+        let recorder = EventRecorder()
+        let gatedStore = GatedThrowingSaveStore(inner: realStore, recorder: recorder)
+        await gatedStore.closeGate()
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.days7) {
+            let retryTask = Task { try await coordinator.retryProcessing(sessionID: session.id) }
+
+            for _ in 0..<40 {
+                if await recorder.events.contains("store.save.start") { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            let eventsSoFar = await recorder.events
+            XCTAssertTrue(eventsSoFar.contains("store.save.start"))
+            guard case .processing = coordinator.state else {
+                await gatedStore.openGate()
+                _ = try? await retryTask.value
+                return XCTFail("retryProcessing did not reach .processing before its save landed")
+            }
+
+            await coordinator.sweepExpiredAudio()
+            let reloaded = try await realStore.load(id: session.id)
+            XCTAssertNil(reloaded?.retention.audioDeletedAt, "a contended session must not be swept")
+            XCTAssertTrue(coordinator.hasScheduledRetentionSweep, "a contended past-deadline session must re-arm a retry")
+
+            await gatedStore.openGate()
+            _ = try await retryTask.value
+        }
+    }
+
+    /// deleteSession racing shutdownForTermination must never resurrect the session as an
+    /// interrupted offer: delete wins, coordinator settles at `.idle`, session gone from disk.
+    func testDeleteVersusTerminationLeavesNoResurrectionAndSettlesAtIdle() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let realStore = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(
+            state: .interrupted,
+            endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
+        )
+        try await realStore.create(session)
+
+        let recorder = EventRecorder()
+        let gatedStore = GatedDeleteStore(inner: realStore, recorder: recorder)
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+        XCTAssertEqual(coordinator.activeSession?.id, session.id)
+
+        let deleteTask = Task { try await coordinator.deleteSession(id: session.id) }
+        for _ in 0..<40 {
+            if await recorder.events.contains("store.delete.start") { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let eventsSoFar = await recorder.events
+        XCTAssertTrue(eventsSoFar.contains("store.delete.start"))
+
+        // Returns promptly mid-delete: it waits on isMutatingSession, not isDeleting.
+        await coordinator.shutdownForTermination()
+
+        await gatedStore.openGate()
+        try await deleteTask.value
+
+        XCTAssertNil(coordinator.activeSession)
+        XCTAssertEqual(coordinator.state, .idle)
+        let reloaded = try? await realStore.load(id: session.id)
+        XCTAssertNil(reloaded, "deleteSession must have the final say; termination must not resurrect it")
     }
 
     /// O5: renaming a speaker to its current name must be a true no-op — no save, no undo entry.

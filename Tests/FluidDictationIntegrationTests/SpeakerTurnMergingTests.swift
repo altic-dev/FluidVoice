@@ -3,6 +3,7 @@ import Foundation
 import XCTest
 
 #if arch(arm64)
+import FluidAudio
 
 // `mergeAdjacentTurns` joins consecutive turns from the same speaker across short pauses.
 // When clustering collapses to one label, that intentionally produces one longer segment;
@@ -529,6 +530,38 @@ final class SpeakerLabeledTranscriptionPolicyTests: XCTestCase {
         ]
 
         XCTAssertNil(SpeakerLabeledTranscriptionPolicy.assembleTurns(turns))
+
+/// Word-timing mapping is meeting-only: `transcribeFinal` never reaches it.
+final class FluidAudioProviderWordTimingTests: XCTestCase {
+    func testMakeWordTimingsReconstructsWordsFromTokenTimings() {
+        let tokenTimings: [TokenTiming] = [
+            TokenTiming(token: "▁Hello", tokenId: 1, startTime: 0.0, endTime: 0.4, confidence: 0.9),
+            TokenTiming(token: "▁world", tokenId: 2, startTime: 0.5, endTime: 0.9, confidence: 0.9),
+        ]
+
+        let words = FluidAudioProvider.makeWordTimings(from: tokenTimings)
+
+        XCTAssertEqual(words.map(\.text), ["Hello", "world"])
+        XCTAssertEqual(words.first?.start, 0.0)
+        XCTAssertEqual(words.first?.end, 0.4)
+        XCTAssertEqual(words.last?.start, 0.5)
+        XCTAssertEqual(words.last?.end, 0.9)
+    }
+
+    func testMakeWordTimingsEmptyInputProducesNoWords() {
+        XCTAssertTrue(FluidAudioProvider.makeWordTimings(from: []).isEmpty)
+    }
+
+    /// With boosting active, alignment must be off so no second full ASR pass ever runs.
+    func testSupportsWordTimingsDisabledWhileBoostingActive() {
+        let provider = FluidAudioProvider(configureWordBoosting: true)
+        XCTAssertTrue(provider.supportsWordTimings, "no boosting configured yet: timings should be available")
+
+        provider.setWordBoostingActiveForTesting(true)
+        XCTAssertFalse(provider.supportsWordTimings, "boosting active: word alignment must be disabled")
+
+        provider.setWordBoostingActiveForTesting(false)
+        XCTAssertTrue(provider.supportsWordTimings)
     }
 }
 
@@ -1305,6 +1338,137 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertThrowsError(try session.validateForPersistence(), file: file, line: line) {
             XCTAssertEqual($0 as? MeetingModelValidationError, expected, file: file, line: line)
         }
+    }
+
+    // MARK: - assignWords
+
+    private func word(_ text: String, _ start: Double, _ end: Double) -> ASRWordTiming {
+        ASRWordTiming(text: text, start: start, end: end)
+    }
+
+    func testAssignWordsEmptyInput() {
+        let result = MeetingProcessingPipeline.assignWords([], toTurns: [(index: 0, start: 0, end: 5)])
+        XCTAssertTrue(result.byTurn.isEmpty)
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    func testAssignWordsWordFullyInsideATurn() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("hello", 1, 2)],
+            toTurns: [(index: 0, start: 0, end: 5), (index: 1, start: 5, end: 10)]
+        )
+        XCTAssertEqual(result.byTurn[0], "hello")
+        XCTAssertNil(result.byTurn[1])
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    func testAssignWordsStraddlingBoundaryGoesToMaxOverlapExactlyOnce() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("straddle", 4, 8)],
+            toTurns: [(index: 0, start: 0, end: 5), (index: 1, start: 5, end: 8)]
+        )
+        XCTAssertNil(result.byTurn[0])
+        XCTAssertEqual(result.byTurn[1], "straddle")
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    func testAssignWordsBoundaryInstantIsNotDoubleAssigned() {
+        // Overlaps neither half-open turn, so nearest-turn attachment takes it (lower index wins).
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("tick", 5, 5)],
+            toTurns: [(index: 0, start: 0, end: 5), (index: 1, start: 5, end: 10)]
+        )
+        XCTAssertEqual(result.byTurn[0], "tick")
+        XCTAssertNil(result.byTurn[1])
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    func testAssignWordsInGapWithinToleranceAttachesToNearest() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("gap", 5.2, 5.3)],
+            toTurns: [(index: 0, start: 0, end: 5), (index: 1, start: 5.5, end: 10)],
+            nearestTolerance: 0.5
+        )
+        XCTAssertEqual(result.byTurn[0], "gap")
+        XCTAssertNil(result.byTurn[1])
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    func testAssignWordsFarOutsideCountsAsUnassigned() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("far", 20, 21)],
+            toTurns: [(index: 0, start: 0, end: 5)],
+            nearestTolerance: 0.5
+        )
+        XCTAssertTrue(result.byTurn.isEmpty)
+        XCTAssertEqual(result.unassigned, 1)
+    }
+
+    func testAssignWordsPreservesChronologicalOrderWithinATurn() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("one", 0, 1), self.word("two", 1, 2), self.word("three", 2, 3)],
+            toTurns: [(index: 0, start: 0, end: 5)]
+        )
+        XCTAssertEqual(result.byTurn[0], "one two three")
+    }
+
+    // MARK: - Speaker bleed must never be attached to a local turn
+
+    func testWordAttachmentToleranceIsZeroOnTheMicrophoneTrack() {
+        XCTAssertEqual(MeetingProcessingPipeline.wordAttachmentTolerance(for: .microphone), 0)
+        XCTAssertGreaterThan(MeetingProcessingPipeline.wordAttachmentTolerance(for: .applicationAudio), 0)
+    }
+
+    func testMicrophoneToleranceLeavesOutOfTurnWordsUnassignedInsteadOfCreditingTheUser() {
+        // Bled 0.3s after the local turn ends: inside the application window, but not the user's.
+        let bled = self.word("bleed", 5.3, 5.8)
+        let turns = [(index: 0, start: 0.0, end: 5.0)]
+
+        let onMicrophone = MeetingProcessingPipeline.assignWords(
+            [self.word("mine", 1, 2), bled],
+            toTurns: turns,
+            nearestTolerance: MeetingProcessingPipeline.wordAttachmentTolerance(for: .microphone)
+        )
+        XCTAssertEqual(onMicrophone.byTurn[0], "mine")
+        XCTAssertEqual(onMicrophone.unassigned, 1)
+
+        let onApplication = MeetingProcessingPipeline.assignWords(
+            [self.word("mine", 1, 2), bled],
+            toTurns: turns,
+            nearestTolerance: MeetingProcessingPipeline.wordAttachmentTolerance(for: .applicationAudio)
+        )
+        XCTAssertEqual(onApplication.byTurn[0], "mine bleed", "remote speakers still absorb near-boundary words")
+    }
+
+    func testZeroToleranceStillKeepsWordsOverlappingTheirTurn() {
+        let result = MeetingProcessingPipeline.assignWords(
+            [self.word("straddle", 4.8, 5.4)],
+            toTurns: [(index: 0, start: 0, end: 5)],
+            nearestTolerance: 0
+        )
+        XCTAssertEqual(result.byTurn[0], "straddle")
+        XCTAssertEqual(result.unassigned, 0)
+    }
+
+    // MARK: - Alignment failures fall back, except what the chunk catch classifies on
+
+    func testAlignmentErrorPropagationClassification() {
+        XCTAssertTrue(MeetingProcessingPipeline.alignmentErrorMustPropagate(CancellationError()))
+        XCTAssertTrue(MeetingProcessingPipeline.alignmentErrorMustPropagate(MeetingProcessingError.audioUnreadable))
+        XCTAssertFalse(MeetingProcessingPipeline.alignmentErrorMustPropagate(MeetingProcessingError.modelUnavailable))
+        XCTAssertFalse(
+            MeetingProcessingPipeline.alignmentErrorMustPropagate(
+                NSError(domain: "test", code: 1)
+            )
+        )
+    }
+
+    // MARK: - Aligned-path safety valve
+
+    func testTooManyWordsUnassignedTripsAboveTwentyFivePercent() {
+        XCTAssertTrue(MeetingProcessingPipeline.tooManyWordsUnassigned(unassigned: 26, totalWords: 100))
+        XCTAssertFalse(MeetingProcessingPipeline.tooManyWordsUnassigned(unassigned: 25, totalWords: 100))
+        XCTAssertFalse(MeetingProcessingPipeline.tooManyWordsUnassigned(unassigned: 0, totalWords: 0))
     }
 }
 
