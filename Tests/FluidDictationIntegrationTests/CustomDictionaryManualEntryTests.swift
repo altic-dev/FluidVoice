@@ -1,6 +1,7 @@
 @testable import FluidVoice_Debug
 import XCTest
 
+@MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
     func testKeepsWhitespaceOnlyReplacements() {
         XCTAssertEqual(CustomDictionaryManualEntry.sanitizedReplacement("\n"), "\n")
@@ -17,5 +18,22 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(CustomDictionaryManualEntry.replacementDisplayText(" \n"), "␣⏎")
         XCTAssertEqual(CustomDictionaryManualEntry.replacementDisplayText("FluidVoice"), "FluidVoice")
         XCTAssertEqual(CustomDictionaryManualEntry.replacementDisplayText(""), "")
+    }
+
+    func testTransferImportPreservesWhitespaceOnlyReplacements() throws {
+        let document = DictionaryTransferDocument(
+            replacements: [DictionaryTransferReplacement(from: ["new line"], to: "\n")],
+            customWords: []
+        )
+
+        let state = try DictionaryTransferService.importState(
+            document: document,
+            mode: .replace,
+            currentReplacements: [],
+            currentCustomWords: []
+        )
+
+        XCTAssertEqual(state.replacements.map(\.replacement), ["\n"])
+        XCTAssertEqual(state.replacements.first?.triggers, ["new line"])
     }
 }
