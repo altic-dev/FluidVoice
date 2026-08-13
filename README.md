@@ -191,7 +191,7 @@ curl -s http://127.0.0.1:47733/v1/transcribe \
 # → {"text":"…","confidence":0.97,"sampleCount":…,"provider":"Parakeet TDT v3 (Multilingual)"}
 ```
 
-Audio can also be sent inline as `{"audioBase64": "…", "filename": "clip.wav"}`. Limits: **25 MB** request body and **300 s (5 min)** of audio per transcription (independent caps). File-path input and inline OGG/Opus input longer than 300 s are rejected; other inline formats are truncated to the first 300 s. Note: `/v1/transcribe` runs on-device, but `/v1/postprocess` uses your configured AI provider (Settings → AI Enhancement), which may be remote. Full reference: [docs/local-api.md](docs/local-api.md).
+Audio can also be sent inline as `{"audioBase64": "…", "filename": "clip.wav"}`. Limits: **25 MB** request body, **25 MB** referenced OGG/Opus file, and **300 s (5 min)** of audio per transcription (independent caps). File-path input and inline OGG/Opus input longer than 300 s are rejected; other inline formats are truncated to the first 300 s. Note: `/v1/transcribe` runs on-device, but `/v1/postprocess` uses your configured AI provider (Settings → AI Enhancement), which may be remote. Full reference: [docs/local-api.md](docs/local-api.md).
 
 ---
 
