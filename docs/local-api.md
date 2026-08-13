@@ -105,8 +105,14 @@ curl -s http://127.0.0.1:47733/v1/transcribe \
 Python:
 
 ```python
+import subprocess
+
 import requests
+token = subprocess.check_output(
+    ["defaults", "read", "com.FluidApp.app", "LocalAPIAuthToken"], text=True
+).strip()
 r = requests.post("http://127.0.0.1:47733/v1/transcribe",
+                  headers={"Authorization": f"Bearer {token}"},
                   json={"path": "/tmp/memo.ogg"}, timeout=90)
 print(r.json()["text"])
 ```
