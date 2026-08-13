@@ -27,6 +27,7 @@ enum OggOpusDecoder {
         let preSkip: Int
         let finalGranule: UInt64
         let precedingMaxGranule: UInt64?
+        let framesBeforeFinalPage: Int
         let packets: [Data]
     }
 
@@ -47,6 +48,8 @@ enum OggOpusDecoder {
         var headers: [Data] = []
         var finalGranule: UInt64 = 0
         var precedingMaxGranule: UInt64?
+        var decodedFrames = 0
+        var framesBeforeFinalPage = 0
         var sawEOS = false
 
         while true {
@@ -91,6 +94,7 @@ enum OggOpusDecoder {
             }
             expectedSequence = sequence &+ 1
             sawEOS = fixedHeader[5] & 0x04 != 0
+            let framesAtPageStart = decodedFrames
             let pageGranule = self.uint64(fixedHeader, at: 6)
             if finalGranule != UInt64.max {
                 precedingMaxGranule = max(precedingMaxGranule ?? 0, finalGranule)
@@ -100,14 +104,22 @@ enum OggOpusDecoder {
             var cursor = 0
             for lengthByte in segmentTable {
                 let length = Int(lengthByte)
-                if headers.count < 2 {
-                    packet.append(payload[cursor ..< cursor + length])
-                }
+                packet.append(payload[cursor ..< cursor + length])
                 cursor += length
-                if length < 255, headers.count < 2 {
-                    headers.append(packet)
+                if length < 255 {
+                    if headers.count < 2 {
+                        headers.append(packet)
+                    } else {
+                        decodedFrames += try self.opusPacketFrameCount(packet)
+                    }
                     packet.removeAll(keepingCapacity: true)
                 }
+            }
+            if sawEOS {
+                framesBeforeFinalPage = framesAtPageStart
+            }
+            if decodedFrames > self.maxDecodedFrames + 5_760 {
+                throw DecoderError.durationLimit
             }
         }
 
@@ -141,6 +153,9 @@ enum OggOpusDecoder {
         }
         let streamFrames = finalGranuleValue - preSkip
         guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
+        guard finalGranuleValue >= framesBeforeFinalPage else {
+            throw DecoderError.invalidContainer("final granule understates decoded audio.")
+        }
         return streamFrames / 3
     }
 
@@ -155,7 +170,7 @@ enum OggOpusDecoder {
         defer { opus_decoder_destroy(decoder) }
 
         var decoded: [Float] = []
-        decoded.reserveCapacity(min(self.maxDecodedFrames, streamFrames + stream.preSkip) * stream.channels)
+        decoded.reserveCapacity((streamFrames + stream.preSkip) * stream.channels)
         var frameBuffer = [Float](repeating: 0, count: 5_760 * stream.channels)
 
         for packet in stream.packets {
@@ -215,6 +230,9 @@ enum OggOpusDecoder {
         }
         let streamFrames = finalGranule - stream.preSkip
         guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
+        guard finalGranule >= stream.framesBeforeFinalPage else {
+            throw DecoderError.invalidContainer("final granule understates decoded audio.")
+        }
         return streamFrames
     }
 
@@ -226,6 +244,8 @@ enum OggOpusDecoder {
         var packets: [Data] = []
         var finalGranule: UInt64 = 0
         var precedingMaxGranule: UInt64?
+        var decodedFrames = 0
+        var framesBeforeFinalPage = 0
         var sawEOS = false
 
         while offset < data.count {
@@ -257,6 +277,7 @@ enum OggOpusDecoder {
             }
             expectedSequence = sequence &+ 1
             sawEOS = headerType & 0x04 != 0
+            let framesAtPageStart = decodedFrames
             let pageGranule = self.uint64(data, at: offset + 6)
             if finalGranule != UInt64.max {
                 precedingMaxGranule = max(precedingMaxGranule ?? 0, finalGranule)
@@ -280,8 +301,17 @@ enum OggOpusDecoder {
                 cursor += length
                 if length < 255 {
                     packets.append(packet)
+                    if packets.count > 2 {
+                        decodedFrames += try self.opusPacketFrameCount(packet)
+                    }
                     packet.removeAll(keepingCapacity: true)
                 }
+            }
+            if sawEOS {
+                framesBeforeFinalPage = framesAtPageStart
+            }
+            if decodedFrames > self.maxDecodedFrames + 5_760 {
+                throw DecoderError.durationLimit
             }
             offset = pageEnd
         }
@@ -306,8 +336,20 @@ enum OggOpusDecoder {
             preSkip: Int(self.uint16(header, at: 10)),
             finalGranule: finalGranule,
             precedingMaxGranule: precedingMaxGranule,
+            framesBeforeFinalPage: framesBeforeFinalPage,
             packets: Array(packets.dropFirst(2))
         )
+    }
+
+    private static func opusPacketFrameCount(_ packet: Data) throws -> Int {
+        let frameCount = packet.withUnsafeBytes { bytes -> Int32 in
+            guard let baseAddress = bytes.bindMemory(to: UInt8.self).baseAddress else { return OPUS_BAD_ARG }
+            return opus_packet_get_nb_samples(baseAddress, Int32(packet.count), Int32(self.opusRate))
+        }
+        guard frameCount >= 0 else {
+            throw DecoderError.invalidContainer("invalid Opus packet duration (code \(frameCount)).")
+        }
+        return Int(frameCount)
     }
 
     private static func uint16(_ data: Data, at offset: Int) -> UInt16 {

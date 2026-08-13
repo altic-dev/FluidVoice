@@ -215,6 +215,38 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         XCTAssertEqual(try LocalAPIAudioDecoder.validateDurationWithinLimit(for: fixtureURL), 18_524)
     }
 
+    func testOggPathPreparationRejectsFinalGranuleThatUnderstatesPacketDuration() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let pageOffsets = self.oggPageOffsets(in: data)
+        let lastPage = try XCTUnwrap(pageOffsets.last)
+
+        for pageOffset in pageOffsets.dropFirst().dropLast() {
+            data.replaceSubrange(pageOffset + 6 ..< pageOffset + 14, with: repeatElement(UInt8.max, count: 8))
+            self.updateOggPageChecksum(in: &data, pageOffset: pageOffset)
+        }
+        let understatedGranule = UInt64(6_000)
+        data.replaceSubrange(
+            lastPage + 6 ..< lastPage + 14,
+            with: (0 ..< 8).map { UInt8(truncatingIfNeeded: understatedGranule >> UInt64($0 * 8)) }
+        )
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
+
+        let craftedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluidvoice-understated-granule-\(UUID().uuidString).ogg")
+        try data.write(to: craftedURL)
+        defer { try? FileManager.default.removeItem(at: craftedURL) }
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.prepareForTranscription(fileURL: craftedURL)) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Invalid OGG/Opus audio: final granule understates decoded audio."
+            )
+        }
+    }
+
     func testOggPathDurationValidationEnforcesRequestSizeLimitBeforeParsing() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
@@ -276,5 +308,18 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             pageOffset + 22 ..< pageOffset + 26,
             with: (0 ..< 4).map { UInt8(truncatingIfNeeded: checksum >> UInt32($0 * 8)) }
         )
+    }
+
+    private func oggPageOffsets(in data: Data) -> [Int] {
+        var offsets: [Int] = []
+        var offset = 0
+        while offset < data.count {
+            offsets.append(offset)
+            let segmentCount = Int(data[offset + 26])
+            let payloadOffset = offset + 27 + segmentCount
+            let payloadLength = data[offset + 27 ..< payloadOffset].reduce(0) { $0 + Int($1) }
+            offset = payloadOffset + payloadLength
+        }
+        return offsets
     }
 }
