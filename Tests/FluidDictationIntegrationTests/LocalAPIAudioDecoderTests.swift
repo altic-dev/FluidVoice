@@ -33,6 +33,36 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         }
     }
 
+    func testTranscribeAPIRejectsFinalOggGranuleBeyondDecodedAudio() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
+        let impossibleGranule = UInt64(10 * 48_000)
+        data.replaceSubrange(
+            lastPage + 6 ..< lastPage + 14,
+            with: (0 ..< 8).map { UInt8(truncatingIfNeeded: impossibleGranule >> UInt64($0 * 8)) }
+        )
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: final granule exceeds decoded audio.")
+        }
+    }
+
+    func testTranscribeAPIRejectsFinalOggGranuleBeforePreSkip() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
+        data.replaceSubrange(lastPage + 6 ..< lastPage + 14, with: repeatElement(UInt8.zero, count: 8))
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: final granule precedes Opus pre-skip.")
+        }
+    }
+
     func testOggPathRequiresBufferedTranscription() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")

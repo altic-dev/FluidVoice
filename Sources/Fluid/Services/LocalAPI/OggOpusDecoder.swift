@@ -74,11 +74,15 @@ enum OggOpusDecoder {
         }
 
         let decodedFrames = decoded.count / stream.channels
-        let streamFrames = finalGranule > stream.preSkip
-            ? finalGranule - stream.preSkip
-            : max(0, decodedFrames - stream.preSkip)
+        guard finalGranule >= stream.preSkip else {
+            throw DecoderError.invalidContainer("final granule precedes Opus pre-skip.")
+        }
+        let streamFrames = finalGranule - stream.preSkip
         guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
-        let availableFrames = max(0, min(streamFrames, decodedFrames - stream.preSkip))
+        guard decodedFrames >= stream.preSkip, streamFrames <= decodedFrames - stream.preSkip else {
+            throw DecoderError.invalidContainer("final granule exceeds decoded audio.")
+        }
+        let availableFrames = streamFrames
         guard availableFrames > 0 else { return [] }
 
         if stream.channels == 1 {
