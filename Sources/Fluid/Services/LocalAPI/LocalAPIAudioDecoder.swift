@@ -143,14 +143,32 @@ enum LocalAPIAudioDecoder {
         return Int((Double(file.length) * self.sampleRate / sourceFormat.sampleRate).rounded())
     }
 
-    private static func downsampleOpusTo16k(_ samples: [Float]) -> [Float] {
-        guard samples.count >= 3 else { return [] }
-        var output = [Float]()
-        output.reserveCapacity(samples.count / 3)
-        for index in stride(from: 0, through: samples.count - 3, by: 3) {
-            output.append((samples[index] + samples[index + 1] + samples[index + 2]) / 3)
+    static func resampleOpusTo16k(_ samples: [Float]) throws -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        guard let sourceFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ), let sourceBuffer = AVAudioPCMBuffer(
+            pcmFormat: sourceFormat,
+            frameCapacity: AVAudioFrameCount(samples.count)
+        ), let channelData = sourceBuffer.floatChannelData else {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -11,
+                userInfo: [NSLocalizedDescriptionKey: "Unable to allocate an OGG/Opus audio buffer."]
+            )
         }
-        return output
+
+        sourceBuffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { pointer in
+            channelData[0].update(from: pointer.baseAddress!, count: samples.count)
+        }
+        return try AudioBufferConverter.monoSamples(
+            from: sourceBuffer,
+            targetSampleRate: self.sampleRate
+        )
     }
 
     static func oggOpusSamples(from data: Data) throws -> [Float] {
@@ -162,7 +180,7 @@ enum LocalAPIAudioDecoder {
                 userInfo: [NSLocalizedDescriptionKey: "Audio input is not an OGG/Opus stream."]
             )
         }
-        return self.downsampleOpusTo16k(try OggOpusDecoder.samples(from: data))
+        return try self.resampleOpusTo16k(OggOpusDecoder.samples(from: data))
     }
 
     private static func validateRequestSize(_ data: Data) throws {

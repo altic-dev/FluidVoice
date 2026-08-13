@@ -42,6 +42,16 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         XCTAssertTrue(samples.contains { abs($0) > 0.001 })
     }
 
+    func testOggOpusResamplingFiltersEnergyAbove16kNyquist() throws {
+        let input = (0 ..< 48_000).map { $0.isMultiple(of: 2) ? Float(1) : Float(-1) }
+
+        let samples = try LocalAPIAudioDecoder.resampleOpusTo16k(input)
+        let rootMeanSquare = sqrt(samples.reduce(Float.zero) { $0 + $1 * $1 } / Float(samples.count))
+
+        XCTAssertEqual(samples.count, 16_000, accuracy: 1)
+        XCTAssertLessThan(rootMeanSquare, 0.1)
+    }
+
     func testTranscribeAPIRejectsOggOpusPageWithCorruptPayload() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
@@ -161,7 +171,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
 
         let samples = try LocalAPIAudioDecoder.oggOpusSamples(from: data)
 
-        XCTAssertEqual(samples.count, 16_562)
+        XCTAssertEqual(samples.count, 16_563)
     }
 
     func testTranscribeAPIAcceptsFinalGranuleAtPreviousPageBoundary() throws {
