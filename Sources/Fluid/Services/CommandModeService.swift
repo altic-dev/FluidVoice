@@ -15,7 +15,6 @@ final class CommandModeService: ObservableObject {
     private let chatStore = ChatHistoryStore.shared
     private var currentTurnCount = 0
     private let maxTurns = 20
-    private var didRequireConfirmationThisRun: Bool = false
 
     // Flag to enable notch output display
     var enableNotchOutput: Bool = true
@@ -307,9 +306,13 @@ final class CommandModeService: ObservableObject {
     func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        AnalyticsService.shared.recordUsage(
+            mode: .command,
+            aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
+        )
+
         self.isProcessing = true
         self.currentTurnCount = 0
-        self.didRequireConfirmationThisRun = false
         self.conversationHistory.append(Message(role: .user, content: text))
 
         // Auto-save after adding user message
@@ -328,6 +331,11 @@ final class CommandModeService: ObservableObject {
     func processFollowUpCommand(_ text: String) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        AnalyticsService.shared.recordUsage(
+            mode: .command,
+            aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
+        )
+
         // Add to both histories
         self.conversationHistory.append(Message(role: .user, content: text))
         if self.shouldSyncCommandNotchState {
@@ -338,7 +346,6 @@ final class CommandModeService: ObservableObject {
         self.saveCurrentChat()
 
         self.isProcessing = true
-        self.didRequireConfirmationThisRun = false
         if self.shouldSyncCommandNotchState {
             NotchContentState.shared.setCommandProcessing(true)
         }
@@ -382,8 +389,6 @@ final class CommandModeService: ObservableObject {
 
             // Auto-save on completion
             self.saveCurrentChat()
-
-            self.captureCommandRunCompleted(success: false)
 
             // Push to notch
             if self.shouldSyncCommandNotchState {
@@ -433,7 +438,6 @@ final class CommandModeService: ObservableObject {
 
                 // Check if we need confirmation for destructive commands
                 if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
-                    self.didRequireConfirmationThisRun = true
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
@@ -473,8 +477,6 @@ final class CommandModeService: ObservableObject {
                 // Auto-save on completion
                 self.saveCurrentChat()
 
-                self.captureCommandRunCompleted(success: isFinal)
-
                 // Push final response to notch and show expanded view
                 if self.shouldSyncCommandNotchState {
                     NotchContentState.shared.updateCommandStreamingText("") // Clear streaming
@@ -506,8 +508,6 @@ final class CommandModeService: ObservableObject {
             // Auto-save on error
             self.saveCurrentChat()
 
-            self.captureCommandRunCompleted(success: false)
-
             // Push error to notch
             if self.shouldSyncCommandNotchState {
                 NotchContentState.shared.addCommandMessage(role: .assistant, content: errorMsg)
@@ -515,38 +515,6 @@ final class CommandModeService: ObservableObject {
                 self.showExpandedNotchIfNeeded()
             }
         }
-    }
-
-    private func captureCommandRunCompleted(success: Bool) {
-        let toolCalls = self.conversationHistory.compactMap { $0.toolCall }.count
-        let turns = self.currentTurnCount
-
-        let turnsBucket: String
-        switch turns {
-        case ...1: turnsBucket = "1"
-        case 2...3: turnsBucket = "2-3"
-        case 4...7: turnsBucket = "4-7"
-        case 8...20: turnsBucket = "8-20"
-        default: turnsBucket = "20+"
-        }
-
-        let toolCallsBucket: String
-        switch toolCalls {
-        case 0: toolCallsBucket = "0"
-        case 1...2: toolCallsBucket = "1-2"
-        case 3...5: toolCallsBucket = "3-5"
-        default: toolCallsBucket = "6+"
-        }
-
-        AnalyticsService.shared.capture(
-            .commandModeRunCompleted,
-            properties: [
-                "success": success,
-                "turns_bucket": turnsBucket,
-                "tool_calls_bucket": toolCallsBucket,
-                "confirmation_needed": self.didRequireConfirmationThisRun,
-            ]
-        )
     }
 
     /// Show expanded notch output if there's content to display

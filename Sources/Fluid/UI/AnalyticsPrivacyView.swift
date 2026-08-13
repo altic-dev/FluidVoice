@@ -30,24 +30,26 @@ struct AnalyticsPrivacyView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     self.sectionTitle("We collect")
-                    self.bullet("Basic app/device info (app version, macOS version, CPU family/chip class, etc.)")
-                    self.bullet("Which features were used (for example: dictation, Command Mode etc.)")
-                    self.bullet("Performance metrics such as transcription chunk latency and AI post-processing latency (milliseconds).")
-                    self.bullet("Model/provider metadata and post-processing input length (character count only, not text content).")
-                    self.bullet("Whether something worked and high-level error info.")
+                    self.bullet("A random installation ID, app version, and the operating-system label macOS.")
+                    self.bullet("One daily active-use signal after you interact with the app.")
+                    self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
+                    self.bullet("Onboarding steps viewed and completed, including skips.")
+                    self.bullet("Transcription and AI provider/model identifiers, counted as daily totals.")
+                    self.bullet("Model download source, outcome, and download duration.")
 
                     self.sectionTitle("We do NOT collect")
                     self.bullet("Any transcription text or audio.")
                     self.bullet("Selected text, rewrite prompts, or AI responses.")
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
+                    self.bullet("Hardware identifiers, CPU/chip details, performance timings, or individual transcription events.")
 
                     self.sectionTitle("How it’s used")
-                    self.bullet("To understand which features are being used and where reliability/performance can be improved.")
-                    self.bullet("To measure product health (e.g., active devices, retention) without requiring accounts.")
+                    self.bullet("To understand feature adoption, onboarding completion, model usage, active installations, and retention without requiring accounts.")
 
                     self.sectionTitle("Control")
                     self.bullet("You can disable analytics anytime in Settings → Share Anonymous Analytics.")
+                    self.bullet("Disabling analytics securely removes all queued and aggregated analytics stored on this Mac.")
                 }
                 .padding(.vertical, 6)
             }

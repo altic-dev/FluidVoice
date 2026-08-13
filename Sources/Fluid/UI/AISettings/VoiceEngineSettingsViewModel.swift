@@ -131,7 +131,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.asr.resetTranscriptionProvider()
         Task {
             do {
-                try await self.asr.ensureAsrReady()
+                try await self.asr.ensureAsrReady(source: .settings)
             } catch is CancellationError {
                 DebugLogger.shared.info("Model activation cancelled: \(model.displayName)", source: "AISettingsView")
             } catch {
@@ -233,7 +233,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func downloadModels() async {
         do {
-            try await self.asr.ensureAsrReady()
+            try await self.asr.ensureAsrReady(source: .settings)
         } catch is CancellationError {
             DebugLogger.shared.info("Model download cancelled", source: "AISettingsView")
         } catch {

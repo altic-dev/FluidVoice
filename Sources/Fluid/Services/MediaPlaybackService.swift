@@ -3,6 +3,17 @@ import Foundation
 import MediaRemoteAdapter
 #endif
 
+#if arch(arm64)
+@MainActor
+protocol MediaPlaybackControlling {
+    func getTrackInfo(_ onReceive: @escaping (TrackInfo?) -> Void)
+    func pause()
+    func play()
+}
+
+extension MediaController: MediaPlaybackControlling {}
+#endif
+
 /// Service that wraps MediaRemoteAdapter's MediaController to provide
 /// controlled pause/resume functionality during transcription.
 ///
@@ -10,21 +21,54 @@ import MediaRemoteAdapter
 /// and only resume if we were the ones who paused it.
 @MainActor
 final class MediaPlaybackService {
+    #if arch(arm64)
+    typealias TimeoutScheduler = (
+        _ delay: TimeInterval,
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> Void
+
+    /// The pinned adapter's two-second deadline can occupy roughly 2.1 seconds
+    /// in run-loop slices. Leave additional time for process and callback delivery.
+    static let nowPlayingQueryTimeoutSeconds: TimeInterval = 2.5
+
+    private static let productionTimeoutScheduler: TimeoutScheduler = { delay, action in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+    }
+
+    static let shared = MediaPlaybackService(
+        mediaController: MediaController(),
+        queryTimeoutSeconds: MediaPlaybackService.nowPlayingQueryTimeoutSeconds,
+        timeoutScheduler: MediaPlaybackService.productionTimeoutScheduler
+    )
+
+    private let mediaController: any MediaPlaybackControlling
+    private let queryTimeoutSeconds: TimeInterval
+    private let timeoutScheduler: TimeoutScheduler
+
+    /// Creates an isolated service with injectable dependencies for deterministic tests.
+    init(
+        mediaController: any MediaPlaybackControlling,
+        queryTimeoutSeconds: TimeInterval,
+        timeoutScheduler: @escaping TimeoutScheduler
+    ) {
+        self.mediaController = mediaController
+        self.queryTimeoutSeconds = queryTimeoutSeconds
+        self.timeoutScheduler = timeoutScheduler
+    }
+    #else
     static let shared = MediaPlaybackService()
 
-    #if arch(arm64)
-    private let mediaController = MediaController()
-    #endif
-
     private init() {}
+    #endif
 
     // MARK: - Public API
 
     #if arch(arm64)
     /// Pauses system media playback if something is currently playing.
     ///
-    /// - Returns: `true` if we successfully paused playback, `false` if nothing was playing
-    ///   or if we couldn't determine playback state.
+    /// - Returns: `true` if a pause request was issued, `false` if nothing was playing or
+    ///   if we couldn't determine playback state. The media adapter does not acknowledge
+    ///   command completion.
     ///
     /// - Note: Uses a local one-shot gate to protect against `MediaRemoteAdapter`
     ///   firing the `getTrackInfo` callback more than once, which would otherwise
@@ -32,10 +76,22 @@ final class MediaPlaybackService {
     ///   `CheckedContinuation`.
     func pauseIfPlaying() async -> Bool {
         return await withCheckedContinuation { continuation in
+            let queryStartedAt = DispatchTime.now().uptimeNanoseconds
             let resumeLock = NSLock()
             var didResume = false
 
-            func resumeOnce(_ value: Bool) {
+            @MainActor
+            func elapsedMilliseconds() -> UInt64 {
+                (DispatchTime.now().uptimeNanoseconds - queryStartedAt) / 1_000_000
+            }
+
+            @discardableResult
+            @MainActor
+            func resumeOnce(
+                _ value: Bool,
+                logDuplicate: Bool = true,
+                beforeResume: () -> Void = {}
+            ) -> Bool {
                 var shouldResume = false
 
                 resumeLock.lock()
@@ -46,18 +102,44 @@ final class MediaPlaybackService {
                 resumeLock.unlock()
 
                 guard shouldResume else {
-                    DebugLogger.shared.warning(
-                        "MediaPlaybackService: Suppressed duplicate resume (MediaRemoteAdapter callback fired more than once)",
-                        source: "MediaPlaybackService"
-                    )
-                    return
+                    if logDuplicate {
+                        DebugLogger.shared.warning(
+                            """
+                            MediaPlaybackService: Suppressed late or duplicate media callback \
+                            (elapsedMs: \(elapsedMilliseconds()))
+                            """,
+                            source: "MediaPlaybackService"
+                        )
+                    }
+                    return false
                 }
 
+                beforeResume()
                 continuation.resume(returning: value)
+                return true
+            }
+
+            self.timeoutScheduler(self.queryTimeoutSeconds) {
+                if resumeOnce(false, logDuplicate: false) {
+                    DebugLogger.shared.warning(
+                        """
+                        MediaPlaybackService: Now Playing query timed out; leaving playback unchanged \
+                        (elapsedMs: \(elapsedMilliseconds()))
+                        """,
+                        source: "MediaPlaybackService"
+                    )
+                }
             }
 
             self.mediaController.getTrackInfo { [weak self] trackInfo in
                 guard let self = self else {
+                    DebugLogger.shared.warning(
+                        """
+                        MediaPlaybackService: Service released before query completed \
+                        (elapsedMs: \(elapsedMilliseconds()))
+                        """,
+                        source: "MediaPlaybackService"
+                    )
                     resumeOnce(false)
                     return
                 }
@@ -65,7 +147,10 @@ final class MediaPlaybackService {
                 // If no track info is available, nothing is playing
                 guard let trackInfo = trackInfo else {
                     DebugLogger.shared.debug(
-                        "MediaPlaybackService: No track info available, nothing to pause",
+                        """
+                        MediaPlaybackService: No track info available, nothing to pause \
+                        (elapsedMs: \(elapsedMilliseconds()))
+                        """,
                         source: "MediaPlaybackService"
                     )
                     resumeOnce(false)
@@ -92,20 +177,28 @@ final class MediaPlaybackService {
                     - isPlaying: \(trackInfo.payload.isPlaying?.description ?? "nil")
                     - playbackRate: \(trackInfo.payload.playbackRate?.description ?? "nil")
                     - Determined playing: \(isPlaying)
+                    - elapsedMs: \(elapsedMilliseconds())
                     """,
                     source: "MediaPlaybackService"
                 )
 
                 if isPlaying {
-                    DebugLogger.shared.info(
-                        "MediaPlaybackService: Media is playing, sending pause command",
-                        source: "MediaPlaybackService"
-                    )
-                    self.mediaController.pause()
-                    resumeOnce(true)
+                    resumeOnce(true) {
+                        DebugLogger.shared.info(
+                            """
+                            MediaPlaybackService: Media is playing, sending pause command \
+                            (elapsedMs: \(elapsedMilliseconds()))
+                            """,
+                            source: "MediaPlaybackService"
+                        )
+                        self.mediaController.pause()
+                    }
                 } else {
                     DebugLogger.shared.debug(
-                        "MediaPlaybackService: Media is not playing, no action needed",
+                        """
+                        MediaPlaybackService: Media is not playing, no action needed \
+                        (elapsedMs: \(elapsedMilliseconds()))
+                        """,
                         source: "MediaPlaybackService"
                     )
                     resumeOnce(false)

@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// A lightweight file-backed logger that mirrors in-app debug logs to disk for diagnostics.
-final class FileLogger {
+final nonisolated class FileLogger: @unchecked Sendable {
     static let shared = FileLogger()
 
     private let queue = DispatchQueue(label: "file.logger.queue", qos: .utility)
@@ -196,7 +196,7 @@ final class FileLogger {
     }
 }
 
-private func fileLoggerSignalHandler(_ signalNumber: Int32) {
+private nonisolated func fileLoggerSignalHandler(_ signalNumber: Int32) {
     FileLogger.writeCrashSignalLine(signalNumber)
     signal(signalNumber, SIG_DFL)
     raise(signalNumber)

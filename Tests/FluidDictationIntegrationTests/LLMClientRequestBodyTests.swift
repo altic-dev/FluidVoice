@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import Foundation
 import XCTest
 
 // Regression tests for https://github.com/altic-dev/FluidVoice/issues/295
@@ -196,4 +197,112 @@ final class LLMClientRequestBodyTests: XCTestCase {
         guard let messages = body["messages"] as? [[String: Any]] else { return [] }
         return messages.compactMap { $0["content"] as? String }
     }
+}
+
+@MainActor
+final class LLMClientStreamingTests: XCTestCase {
+    // Regression test for https://github.com/altic-dev/FluidVoice/issues/445
+    func testReasoningContentDeltaPreservesChunkedToolCall() async throws {
+        let client = makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Show the working directory"]],
+            model: "qwen3.5:9b",
+            baseURL: "https://issue-445.test/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "I should inspect the current directory.")
+        XCTAssertEqual(response.content, "")
+        XCTAssertEqual(response.toolCalls.count, 1)
+        XCTAssertEqual(response.toolCalls.first?.id, "call_445")
+        XCTAssertEqual(response.toolCalls.first?.name, "run_terminal")
+        XCTAssertEqual(response.toolCalls.first?.getString("command"), "pwd")
+    }
+
+    func testTagBasedReasoningStillPreservesChunkedToolCall() async throws {
+        let client = makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Show the working directory"]],
+            model: "qwen-thinking",
+            baseURL: "https://issue-445.test/tag-parser/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "Inspecting.")
+        XCTAssertEqual(response.content, "Ready.")
+        XCTAssertEqual(response.toolCalls.count, 1)
+        XCTAssertEqual(response.toolCalls.first?.id, "call_tag_control")
+        XCTAssertEqual(response.toolCalls.first?.name, "run_terminal")
+        XCTAssertEqual(response.toolCalls.first?.getString("command"), "pwd")
+    }
+
+    private func makeClient() -> LLMClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [Issue445StreamURLProtocol.self]
+        return LLMClient(session: URLSession(configuration: configuration))
+    }
+}
+
+private class Issue445StreamURLProtocol: URLProtocol {
+    // The empty-string `content` fields are load-bearing: HEAD skips tool calls only
+    // when `delta["content"] as? String` succeeds, so replacing them with null defangs the regression.
+    private static let separateReasoningFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"reasoning_content":"I should inspect the current directory.","content":"","tool_calls":[{"index":0,"id":"call_445","type":"function","function":{"name":"run_terminal","arguments":"{\"command\":\""}}]}}]}
+
+    data: {"choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"function":{"arguments":"pwd\"}"}}]},"finish_reason":"tool_calls"}]}
+
+    data: [DONE]
+
+    """#
+
+    private static let tagParserFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"content":"<think>Inspecting.</think>Ready.","tool_calls":[{"index":0,"id":"call_tag_control","type":"function","function":{"name":"run_terminal","arguments":"{\"command\":\""}}]}}]}
+
+    data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"pwd\"}"}}]},"finish_reason":"tool_calls"}]}
+
+    data: [DONE]
+
+    """#
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "issue-445.test"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        guard let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        ) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        let fixture = url.path.contains("tag-parser") ? Self.tagParserFixture : Self.separateReasoningFixture
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(fixture.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

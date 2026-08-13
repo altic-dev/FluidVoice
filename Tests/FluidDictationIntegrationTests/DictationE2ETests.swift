@@ -26,6 +26,7 @@ final class DictationE2ETests: XCTestCase {
     private let literalDictationFormattingEnabledKey = "LiteralDictationFormattingEnabled"
     private let punctuationDictionaryPrefixKey = "PunctuationDictionaryPrefix"
     private let punctuationDictionaryRulesKey = "PunctuationDictionaryRules"
+    private let spokenFormattingActionRulesKey = "SpokenFormattingActionRules"
     private let commandModeLinkedToGlobalKey = "CommandModeLinkedToGlobal"
     private let commandModeSelectedProviderIDKey = "CommandModeSelectedProviderID"
     private let commandModeSelectedModelKey = "CommandModeSelectedModel"
@@ -57,6 +58,7 @@ final class DictationE2ETests: XCTestCase {
             self.autoConvertPunctuationEnabledKey,
             self.punctuationDictionaryPrefixKey,
             self.punctuationDictionaryRulesKey,
+            self.spokenFormattingActionRulesKey,
         ]
     }
 
@@ -819,14 +821,14 @@ final class DictationE2ETests: XCTestCase {
         let store = PronunciationDictionaryStore(fileURL: fileURL)
         let entryID = UUID()
 
-        let initialEnrollments = (0 ..< 8).map { value in
+        let initialEnrollments = (0..<8).map { value in
             PronunciationEnrollmentCapture(
                 values: [Float(value), Float(value)],
                 sourceFrameCount: 1,
                 modelKey: "model-a"
             )
         }
-        let retrainedEnrollments = (8 ..< 13).map { value in
+        let retrainedEnrollments = (8..<13).map { value in
             PronunciationEnrollmentCapture(
                 values: [Float(value), Float(value)],
                 sourceFrameCount: 1,
@@ -849,7 +851,7 @@ final class DictationE2ETests: XCTestCase {
 
         let profiles = await store.profiles(modelKey: "model-a")
         XCTAssertEqual(profiles.count, 1)
-        XCTAssertEqual(profiles.first?.enrollments.compactMap(\.values.first), (3 ..< 13).map { Float($0) })
+        XCTAssertEqual(profiles.first?.enrollments.compactMap(\.values.first), (3..<13).map { Float($0) })
     }
 
     func testPronunciationStoreRestoreRejectsMalformedProfiles() async {
@@ -902,9 +904,9 @@ final class DictationE2ETests: XCTestCase {
 
     func testDictionaryTrainingAudioCursorResetsAfterBufferGenerationChange() {
         var cursor = DictionaryTrainingAudioCursor(generation: 4)
-        cursor.consume(1_600)
+        cursor.consume(1600)
         cursor.synchronize(generation: 4)
-        XCTAssertEqual(cursor.sampleOffset, 1_600)
+        XCTAssertEqual(cursor.sampleOffset, 1600)
 
         cursor.synchronize(generation: 5)
         XCTAssertEqual(cursor.sampleOffset, 0)
@@ -2330,5 +2332,237 @@ final class DictationE2ETests: XCTestCase {
             ],
             run: run
         )
+    }
+}
+
+extension DictationE2ETests {
+    func testSpokenFormattingActionsUseSharedPrefix() {
+        self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
+            let settings = SettingsStore.shared
+            UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
+            settings.punctuationDictionaryPrefix = "literal"
+            settings.spokenFormattingActionRules = SettingsStore.defaultSpokenFormattingActionRules
+
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal next line second"),
+                "First\nsecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal next paragraph second"),
+                "First\n\nsecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("one literal tab two"),
+                "one\ttwo"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("one   literal space   two"),
+                "one two"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First next line second"),
+                "First next line second"
+            )
+        }
+    }
+
+    func testSpokenFormattingActionsRemoveAdjacentGeneratedPeriodsOnly() {
+        self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
+            let settings = SettingsStore.shared
+            UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
+            settings.punctuationDictionaryPrefix = "literal"
+            settings.spokenFormattingActionRules = SettingsStore.defaultSpokenFormattingActionRules
+
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First. literal new line. Second"),
+                "First\nSecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First. literal new paragraph. Second"),
+                "First\n\nSecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("one. literal tab. two"),
+                "one\ttwo"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("one. literal space. two"),
+                "one two"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal period literal new line Second"),
+                "First.\nSecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal new line, Second"),
+                "First\nSecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal new paragraph, Second"),
+                "First\n\nSecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal new line literal comma Second"),
+                "First\n, Second"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("one literal tab, two"),
+                "one\t, two"
+            )
+        }
+    }
+
+    func testSpokenFormattingActionsCanBeCustomizedAndUnset() {
+        self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
+            let settings = SettingsStore.shared
+            UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
+            settings.spokenFormattingActionRules = [
+                SettingsStore.SpokenFormattingActionRule(
+                    action: .newLine,
+                    aliases: ["drop down"]
+                ),
+                SettingsStore.SpokenFormattingActionRule(
+                    action: .tab,
+                    aliases: [],
+                    isEnabled: true
+                ),
+                SettingsStore.SpokenFormattingActionRule(
+                    action: .space,
+                    aliases: ["little gap"],
+                    isEnabled: false
+                ),
+            ]
+
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("First literal drop down second"),
+                "First\nsecond"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("literal tab"),
+                "literal tab"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("literal little gap"),
+                "literal little gap"
+            )
+        }
+    }
+
+    func testSpokenFormattingActionAliasesRejectPunctuationAndActionConflicts() {
+        self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
+            let settings = SettingsStore.shared
+            settings.spokenFormattingActionRules = [
+                SettingsStore.SpokenFormattingActionRule(
+                    action: .newLine,
+                    aliases: ["comma", "shared action", "drop down"]
+                ),
+                SettingsStore.SpokenFormattingActionRule(
+                    action: .newParagraph,
+                    aliases: ["shared action", "paragraph break"]
+                ),
+            ]
+
+            let rules = settings.spokenFormattingActionRules
+            XCTAssertEqual(rules.first { $0.action == .newLine }?.aliases, ["shared action", "drop down"])
+            XCTAssertEqual(rules.first { $0.action == .newParagraph }?.aliases, ["paragraph break"])
+
+            UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
+            XCTAssertEqual(ASRService.applySpokenPunctuationFormatting("literal comma"), ",")
+            XCTAssertEqual(ASRService.applySpokenPunctuationFormatting("literal shared action"), "\n")
+        }
+    }
+
+    func testSpokenFormattingActionRulesRoundTripAndLegacyBackupsPreserveCurrentRules() async throws {
+        let defaults = UserDefaults.standard
+        let originalValue = defaults.object(forKey: self.spokenFormattingActionRulesKey)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: self.spokenFormattingActionRulesKey)
+            } else {
+                defaults.removeObject(forKey: self.spokenFormattingActionRulesKey)
+            }
+        }
+
+        let settings = SettingsStore.shared
+        let backedUpRules = [
+            SettingsStore.SpokenFormattingActionRule(
+                action: .newLine,
+                aliases: ["line break"]
+            ),
+            SettingsStore.SpokenFormattingActionRule(
+                action: .tab,
+                aliases: ["indent"],
+                isEnabled: false
+            ),
+        ]
+        settings.spokenFormattingActionRules = backedUpRules
+
+        let document = await BackupService.shared.makeBackupDocument()
+        let encoded = try BackupService.shared.encode(document)
+        let decoded = try BackupService.shared.decode(encoded)
+        XCTAssertEqual(decoded.settings.spokenFormattingActionRules, settings.spokenFormattingActionRules)
+
+        settings.spokenFormattingActionRules = SettingsStore.defaultSpokenFormattingActionRules
+        settings.restore(from: decoded.settings)
+        XCTAssertEqual(settings.spokenFormattingActionRules, decoded.settings.spokenFormattingActionRules)
+
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var encodedSettings = try XCTUnwrap(root["settings"] as? [String: Any])
+        encodedSettings.removeValue(forKey: "spokenFormattingActionRules")
+        root["settings"] = encodedSettings
+        let legacyBackup = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacyBackup.settings.spokenFormattingActionRules)
+
+        let rulesBeforeLegacyRestore = [
+            SettingsStore.SpokenFormattingActionRule(
+                action: .newParagraph,
+                aliases: ["keep this paragraph"]
+            ),
+        ]
+        settings.spokenFormattingActionRules = rulesBeforeLegacyRestore
+        let normalizedRulesBeforeLegacyRestore = settings.spokenFormattingActionRules
+        settings.restore(from: legacyBackup.settings)
+        XCTAssertEqual(settings.spokenFormattingActionRules, normalizedRulesBeforeLegacyRestore)
+    }
+}
+
+@MainActor
+final class OverlayFailureStateTests: XCTestCase {
+    func testCustomNonRetryableMessage() {
+        let state = NotchContentState.shared
+        defer {
+            state.showAIProcessingFailure()
+            state.clearAIProcessingFailure()
+        }
+
+        state.showAIProcessingFailure(
+            message: "Edit Mode cannot be used with Fluid-1",
+            canRetry: false
+        )
+
+        XCTAssertTrue(state.isAIProcessingFailureVisible)
+        XCTAssertEqual(state.aiProcessingFailureMessage, "Edit Mode cannot be used with Fluid-1")
+        XCTAssertFalse(state.canRetryAIProcessingFailure)
+
+        state.showAIProcessingFailure()
+
+        XCTAssertEqual(state.aiProcessingFailureMessage, "AI Enhancement failed")
+        XCTAssertTrue(state.canRetryAIProcessingFailure)
+    }
+}
+
+@MainActor
+final class SimpleUpdaterTests: XCTestCase {
+    func testUpdateOperationGateAllowsOnlyOneActiveInstall() {
+        var gate = UpdateOperationGate()
+
+        XCTAssertTrue(gate.begin())
+        XCTAssertTrue(gate.isActive)
+        XCTAssertFalse(gate.begin())
+
+        gate.finish()
+
+        XCTAssertFalse(gate.isActive)
+        XCTAssertTrue(gate.begin())
     }
 }

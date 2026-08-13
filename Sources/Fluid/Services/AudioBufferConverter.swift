@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 enum AudioBufferConverter {
@@ -28,7 +28,7 @@ enum AudioBufferConverter {
         }
     }
 
-    static func monoSamples(
+    nonisolated static func monoSamples(
         from buffer: AVAudioPCMBuffer,
         targetSampleRate: Double
     ) throws -> [Float] {

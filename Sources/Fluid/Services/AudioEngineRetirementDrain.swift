@@ -25,20 +25,33 @@ final nonisolated class AudioEngineRetirementToken: @unchecked Sendable {
 /// construction must be able to await its completion.
 final nonisolated class AudioEngineRetirementDrain: @unchecked Sendable {
     private let queue: DispatchQueue
+    private let stateLock = NSLock()
+    private var scheduledReleaseCount = 0
 
     init(label: String = "app.fluidvoice.audio-engine-retirement") {
         self.queue = DispatchQueue(label: label, qos: .utility)
     }
 
     func schedule(_ token: AudioEngineRetirementToken) {
-        self.queue.async {
+        self.stateLock.lock()
+        self.scheduledReleaseCount += 1
+        self.queue.async { [self] in
             token.releaseEngine()
+            self.completeScheduledRelease()
         }
+        self.stateLock.unlock()
     }
 
     func releaseAndWait(_ token: AudioEngineRetirementToken) async {
-        await self.enqueueAndWait {
-            token.releaseEngine()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.stateLock.lock()
+            self.scheduledReleaseCount += 1
+            self.queue.async { [self] in
+                token.releaseEngine()
+                self.completeScheduledRelease()
+                continuation.resume()
+            }
+            self.stateLock.unlock()
         }
     }
 
@@ -46,15 +59,27 @@ final nonisolated class AudioEngineRetirementDrain: @unchecked Sendable {
     /// capture start so a fire-and-forget retirement from a non-route path cannot
     /// overlap construction of the next AVAudioEngine.
     func waitForScheduledReleases() async {
-        await self.enqueueAndWait {}
-    }
-
-    private func enqueueAndWait(_ operation: @escaping @Sendable () -> Void) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.stateLock.lock()
+            guard self.scheduledReleaseCount > 0 else {
+                self.stateLock.unlock()
+                continuation.resume()
+                return
+            }
+
+            // Enqueue while holding the same lock used by schedule(_:). This
+            // preserves the barrier ordering without paying a utility-queue hop
+            // when no AVAudioEngine release is pending.
             self.queue.async {
-                operation()
                 continuation.resume()
             }
+            self.stateLock.unlock()
         }
+    }
+
+    private func completeScheduledRelease() {
+        self.stateLock.lock()
+        self.scheduledReleaseCount -= 1
+        self.stateLock.unlock()
     }
 }

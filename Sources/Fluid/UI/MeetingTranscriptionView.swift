@@ -5,6 +5,7 @@ struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
     @State private var selectedFileURL: URL?
     @Environment(\.theme) private var theme
 
@@ -33,6 +34,11 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private var selectedFileIsVideo: Bool {
+        guard let fileExtension = selectedFileURL?.pathExtension.lowercased() else { return false }
+        return UTType(filenameExtension: fileExtension)?.conforms(to: .movie) ?? false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -45,7 +51,7 @@ struct MeetingTranscriptionView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("Upload audio or video files to transcribe")
+                Text("Choose an audio or video file to transcribe")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -164,6 +170,54 @@ struct MeetingTranscriptionView: View {
                         )
                 )
 
+                // Speaker labeling options (unavailable on Intel Macs)
+                if SpeakerDiarizationService.isSupported {
+                    VStack(spacing: 10) {
+                        Toggle(isOn: self.$settings.fileTranscriptionSpeakerLabelsEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Label speakers")
+                                    .font(.subheadline)
+
+                                Text(self.selectedFileIsVideo
+                                    ? "Available for audio files only"
+                                    : "Identify who said what (downloads speaker models on first use)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .disabled(self.selectedFileIsVideo)
+
+                        if self.settings.fileTranscriptionSpeakerLabelsEnabled, !self.selectedFileIsVideo {
+                            HStack {
+                                Text("Number of speakers")
+                                    .font(.subheadline)
+
+                                Spacer()
+
+                                Picker("", selection: self.$settings.fileTranscriptionExpectedSpeakerCount) {
+                                    Text("Auto").tag(0)
+                                    ForEach(2...8, id: \.self) { count in
+                                        Text("\(count)").tag(count)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .frame(width: 90)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(self.theme.palette.cardBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                            )
+                    )
+                }
+
                 // Transcribe Button
                 Button(action: {
                     Task {
@@ -189,7 +243,7 @@ struct MeetingTranscriptionView: View {
                         Image(systemName: "arrow.up.doc.fill")
                             .font(.system(size: 32))
 
-                        Text("Choose Audio or Video File")
+                        Text("Drag and drop a file here, or click to open")
                             .font(.headline)
 
                         Text(MeetingTranscriptionService.supportedFormatsDescription)
@@ -308,15 +362,46 @@ struct MeetingTranscriptionView: View {
                 .buttonStyle(.borderless)
             }
 
+            if let notice = transcriptionService.fallbackNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Divider()
 
             // Transcription text
             ScrollView {
-                Text(result.text)
-                    .font(.body)
-                    .textSelection(.enabled)
+                if !result.speakerSegments.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(result.speakerSegments) { segment in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(segment.speaker)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(Color.fluidGreen)
+
+                                    Text(segment.timestampText)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Text(segment.text)
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
+                } else {
+                    Text(result.text)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
             }
             .frame(maxHeight: 300)
             .background(

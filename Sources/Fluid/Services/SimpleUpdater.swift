@@ -8,6 +8,7 @@ enum SimpleUpdateError: Error, LocalizedError {
     case jsonDecoding
     case noSuitableRelease
     case noAsset
+    case updateAlreadyInProgress
     case downloadFailed
     case unzipFailed
     case notAnAppBundle
@@ -22,6 +23,7 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .jsonDecoding: return "The data couldn’t be read because it isn’t in the correct format."
         case .noSuitableRelease: return "No suitable release found."
         case .noAsset: return "No matching asset found in the latest release."
+        case .updateAlreadyInProgress: return "An update is already being installed."
         case .downloadFailed: return "Failed to download update."
         case .unzipFailed: return "Failed to extract the update archive."
         case .notAnAppBundle: return "Extracted content does not contain an app bundle."
@@ -29,6 +31,20 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .rollbackUnavailable: return "No rollback backup is available."
         case .rollbackRestoreFailed: return "Failed to restore a previous version."
         }
+    }
+}
+
+struct UpdateOperationGate {
+    private(set) var isActive = false
+
+    mutating func begin() -> Bool {
+        guard !self.isActive else { return false }
+        self.isActive = true
+        return true
+    }
+
+    mutating func finish() {
+        self.isActive = false
     }
 }
 
@@ -114,6 +130,12 @@ final class SimpleUpdater {
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
     private let rollbackBackupDirectoryName = "RollbackBackups"
+    private var updateOperationGate = UpdateOperationGate()
+    private var updateStatusWindow: NSWindow?
+
+    var isUpdateInProgress: Bool {
+        return self.updateOperationGate.isActive
+    }
 
     private var installedAppName: String {
         return Bundle.main.bundleURL.deletingPathExtension().lastPathComponent
@@ -133,6 +155,17 @@ final class SimpleUpdater {
     }
 
     func rollbackToLatestBackup() async throws {
+        guard self.updateOperationGate.begin() else {
+            throw SimpleUpdateError.updateAlreadyInProgress
+        }
+
+        var shouldKeepOperationActive = false
+        defer {
+            if !shouldKeepOperationActive {
+                self.resetUpdateOperation()
+            }
+        }
+
         guard let rollbackBundleURL = self.latestRollbackBackup() else {
             throw SimpleUpdateError.rollbackUnavailable
         }
@@ -148,6 +181,7 @@ final class SimpleUpdater {
                 "SimpleUpdater: Rolled back to \(rollbackBundleURL.lastPathComponent)",
                 source: "SimpleUpdater"
             )
+            shouldKeepOperationActive = true
         } catch {
             throw SimpleUpdateError.rollbackRestoreFailed
         }
@@ -268,6 +302,10 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws -> (hasUpdate: Bool, latestVersion: String) {
+        guard !self.isUpdateInProgress else {
+            throw SimpleUpdateError.updateAlreadyInProgress
+        }
+
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
 
         guard let latest = self.selectLatestRelease(
@@ -298,6 +336,17 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws {
+        guard self.updateOperationGate.begin() else {
+            throw SimpleUpdateError.updateAlreadyInProgress
+        }
+
+        var shouldKeepOperationActive = false
+        defer {
+            if !shouldKeepOperationActive {
+                self.resetUpdateOperation()
+            }
+        }
+
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
 
         guard let latest = self.selectLatestRelease(
@@ -338,6 +387,8 @@ final class SimpleUpdater {
         }
 
         guard let asset = asset else { throw SimpleUpdateError.noAsset }
+
+        self.showUpdateInstallStatus(version: rawVersion)
 
         let tempDir = try FileManager.default.url(
             for: .itemReplacementDirectory,
@@ -412,9 +463,73 @@ final class SimpleUpdater {
 
         // Replace and relaunch
         try self.performSwapAndRelaunch(installedAppURL: currentBundle.bundleURL, downloadedAppURL: extractedBundleURL)
+        shouldKeepOperationActive = true
     }
 
     // MARK: - Helpers
+
+    private func showUpdateInstallStatus(version: String) {
+        guard self.updateStatusWindow == nil else { return }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 132),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Installing FluidVoice \(version)"
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let content = NSVisualEffectView(frame: panel.contentView?.bounds ?? .zero)
+        content.material = .popover
+        content.blendingMode = .behindWindow
+        content.state = .active
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 16
+        content.layer?.masksToBounds = true
+        content.autoresizingMask = [.width, .height]
+
+        let icon = NSImageView(frame: NSRect(x: 22, y: 42, width: 52, height: 52))
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        content.addSubview(icon)
+
+        let title = NSTextField(labelWithString: "Installing FluidVoice \(version)")
+        title.frame = NSRect(x: 92, y: 76, width: 304, height: 24)
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
+        content.addSubview(title)
+
+        let detail = NSTextField(wrappingLabelWithString: "Downloading the update. FluidVoice will restart automatically.")
+        detail.frame = NSRect(x: 92, y: 42, width: 304, height: 34)
+        detail.font = .systemFont(ofSize: 13)
+        detail.textColor = .secondaryLabelColor
+        detail.maximumNumberOfLines = 2
+        content.addSubview(detail)
+
+        let progress = NSProgressIndicator(frame: NSRect(x: 92, y: 24, width: 304, height: 6))
+        progress.style = .bar
+        progress.isIndeterminate = true
+        progress.controlSize = .small
+        progress.startAnimation(nil)
+        content.addSubview(progress)
+
+        panel.contentView = content
+        panel.center()
+        panel.orderFrontRegardless()
+        self.updateStatusWindow = panel
+    }
+
+    private func resetUpdateOperation() {
+        self.updateOperationGate.finish()
+        self.updateStatusWindow?.close()
+        self.updateStatusWindow = nil
+    }
 
     private func fetchReleases(owner: String, repo: String) async throws -> [GHRelease] {
         guard let releasesURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases") else {
@@ -781,6 +896,7 @@ final class SimpleUpdater {
             // Verify the app exists before trying to launch
             guard FileManager.default.fileExists(atPath: finalAppURL.path) else {
                 DebugLogger.shared.error("SimpleUpdater: ERROR - App not found at expected location: \(finalAppURL.path)", source: "SimpleUpdater")
+                self.resetUpdateOperation()
                 // Don't terminate if we can't find the new app
                 return
             }
@@ -792,6 +908,9 @@ final class SimpleUpdater {
                 if let error = error {
                     DebugLogger.shared.error("SimpleUpdater: Failed to relaunch app: \(error)", source: "SimpleUpdater")
                     DebugLogger.shared.error("SimpleUpdater: App location: \(finalAppURL.path)", source: "SimpleUpdater")
+                    Task { @MainActor in
+                        self.resetUpdateOperation()
+                    }
                     // Don't terminate if relaunch failed - let user manually restart
                     return
                 }

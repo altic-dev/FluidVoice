@@ -136,7 +136,7 @@ struct DictionaryAPIController: LocalAPIRouteHandler {
             for entry in incoming {
                 let normalized = Self.storeEntry(from: entry)
                 guard !normalized.triggers.isEmpty,
-                      !normalized.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      !SettingsStore.CustomDictionaryEntry.sanitizedReplacement(normalized.replacement).isEmpty
                 else {
                     continue
                 }
