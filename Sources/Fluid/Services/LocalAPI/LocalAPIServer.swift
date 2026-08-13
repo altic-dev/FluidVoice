@@ -153,7 +153,7 @@ final class LocalAPIServer {
 }
 
 @MainActor
-private final class LocalAPIConnectionHandler {
+final class LocalAPIConnectionHandler {
     private let connection: NWConnection
     private let router: LocalAPIRouter
     private let inFlightRequest = LocalAPIInFlightRequest()
@@ -212,6 +212,17 @@ private final class LocalAPIConnectionHandler {
     }
 
     private func send(_ response: LocalAPI.Response) {
+        let data = Self.serialize(response)
+
+        self.connection.send(content: data, completion: .contentProcessed { [connection] _ in
+            connection.cancel()
+            Task { @MainActor [weak self] in
+                self?.close()
+            }
+        })
+    }
+
+    static func serialize(_ response: LocalAPI.Response) -> Data {
         let body = response.body
         var headers = response.headers
         headers["Content-Length"] = "\(body.count)"
@@ -224,13 +235,7 @@ private final class LocalAPIConnectionHandler {
             .joined()
         var data = Data((statusLine + headerLines + "\r\n").utf8)
         data.append(body)
-
-        self.connection.send(content: data, completion: .contentProcessed { [connection] _ in
-            connection.cancel()
-            Task { @MainActor [weak self] in
-                self?.close()
-            }
-        })
+        return data
     }
 
     private func close() {
@@ -325,6 +330,7 @@ private final class LocalAPIConnectionHandler {
         case 200: return "OK"
         case 204: return "No Content"
         case 400: return "Bad Request"
+        case 401: return "Unauthorized"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
         case 413: return "Payload Too Large"

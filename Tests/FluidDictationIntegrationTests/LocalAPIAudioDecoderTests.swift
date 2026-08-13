@@ -4,6 +4,16 @@ import XCTest
 
 final class LocalAPIAudioDecoderTests: XCTestCase {
     @MainActor
+    func testLocalAPIUnauthorizedResponseUsesStandardReasonPhrase() throws {
+        let response = LocalAPI.error("Authentication required.", status: 401)
+
+        let data = LocalAPIConnectionHandler.serialize(response)
+        let responseText = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(responseText.hasPrefix("HTTP/1.1 401 Unauthorized\r\n"))
+    }
+
+    @MainActor
     func testLocalAPIInFlightRequestCancellationStopsPendingWork() async {
         let request = LocalAPIInFlightRequest()
         let started = expectation(description: "request started")
