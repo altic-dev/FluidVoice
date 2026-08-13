@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import FluidVoice_Debug
 
@@ -51,6 +52,17 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
 
         await fulfillment(of: [cancelled], timeout: 1)
         _ = await task.result
+    }
+
+    func testLocalAPIListenerParametersRequireIPv4Loopback() throws {
+        let port = try XCTUnwrap(NWEndpoint.Port(rawValue: 47_733))
+
+        let parameters = LocalAPIServer.loopbackParameters(port: port)
+
+        XCTAssertEqual(
+            parameters.requiredLocalEndpoint,
+            .hostPort(host: NWEndpoint.Host("127.0.0.1"), port: port)
+        )
     }
 
     @MainActor

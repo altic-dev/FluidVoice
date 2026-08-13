@@ -49,7 +49,7 @@ final class LocalAPIServer {
                 return
             }
 
-            let parameters = NWParameters.tcp
+            let parameters = Self.loopbackParameters(port: port)
 
             let listener = try NWListener(using: parameters, on: port)
             listener.newConnectionHandler = { [weak self, weak listener] connection in
@@ -143,6 +143,12 @@ final class LocalAPIServer {
         @unknown default:
             return false
         }
+    }
+
+    nonisolated static func loopbackParameters(port: NWEndpoint.Port) -> NWParameters {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+        return parameters
     }
 }
 
