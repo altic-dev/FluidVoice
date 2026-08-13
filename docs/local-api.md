@@ -25,6 +25,9 @@ it to take effect, since the server is otherwise started only at app launch.
 
 - The listener **refuses all non-loopback connections** — any non-local peer is rejected at
   accept time, before it can send a request — so the API is usable only from processes on this Mac.
+- The API has **no authentication**. Loopback does not distinguish macOS login sessions: every local
+  process that can connect may use every route, including reading transcription history and changing
+  dictionary entries. Enable it only on a trusted Mac and turn it off when it is not needed.
 - It is opt-in and off by default.
 - Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request. For file-`path`
   input, audio longer than the limit is **rejected**; for inline `audioBase64` input it is currently

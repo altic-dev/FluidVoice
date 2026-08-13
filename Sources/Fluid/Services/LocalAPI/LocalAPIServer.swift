@@ -33,17 +33,15 @@ final class LocalAPIServer {
             let parameters = NWParameters.tcp
 
             let listener = try NWListener(using: parameters, on: port)
-            listener.newConnectionHandler = { [weak self] connection in
+            listener.newConnectionHandler = { [weak self, weak listener] connection in
                 guard Self.isLoopback(connection.endpoint) else {
                     connection.cancel()
                     return
                 }
 
                 Task { @MainActor [weak self] in
-                    // Drop connections accepted just before the server was disabled: stop()
-                    // clears `listener`, so a task still queued here must not spin up a handler
-                    // after the API was turned off (e.g. a live toggle-off via refresh()).
-                    guard let self, self.listener != nil else {
+                    // Drop connections queued by a listener that was disabled or superseded.
+                    guard let self, let listener, self.listener === listener else {
                         connection.cancel()
                         return
                     }

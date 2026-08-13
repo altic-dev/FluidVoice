@@ -177,7 +177,7 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 FluidVoice can expose a **loopback-only** HTTP API so other apps and AI agents running **on the same Mac** can reuse its transcription and post-processing — instead of bundling and loading their own ASR model. One model stays warm in FluidVoice; agents get FluidVoice-quality transcription with no extra memory footprint.
 
-**Enable it:** `Settings → Local API (on-device agents)`. It is **off by default** and **refuses all non-loopback connections** — any non-local peer is rejected at accept time, before it can send a request — so the API is usable only from processes on this Mac.
+**Enable it:** `Settings → Local API (on-device agents)`. It is **off by default** and **refuses all non-loopback connections** — any non-local peer is rejected at accept time, before it can send a request — so the API is usable only from processes on this Mac. The API has no authentication; every local login session/process can access all enabled routes, including history and dictionary routes.
 
 - Base URL: `http://127.0.0.1:47733` (port configurable via the `LocalAPIPort` preference)
 - `GET  /v1/health` — liveness check
