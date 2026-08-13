@@ -110,6 +110,7 @@ enum OggOpusDecoder {
         var packets: [Data] = []
         var finalGranule: UInt64 = 0
         var precedingMaxGranule: UInt64?
+        var sawEOS = false
 
         while offset < data.count {
             guard offset + 27 <= data.count, data[offset ..< offset + 4].elementsEqual("OggS".utf8) else {
@@ -118,6 +119,10 @@ enum OggOpusDecoder {
             guard data[offset + 4] == 0 else {
                 throw DecoderError.unsupportedStream("unsupported Ogg bitstream version.")
             }
+            guard !sawEOS else {
+                throw DecoderError.invalidContainer("data follows the EOS page.")
+            }
+            let headerType = data[offset + 5]
             let pageSegments = Int(data[offset + 26])
             guard offset + 27 + pageSegments <= data.count else {
                 throw DecoderError.invalidContainer("truncated segment table.")
@@ -135,6 +140,7 @@ enum OggOpusDecoder {
                 expectedSerial = serial
             }
             expectedSequence = sequence &+ 1
+            sawEOS = headerType & 0x04 != 0
             let pageGranule = self.uint64(data, at: offset + 6)
             if finalGranule != UInt64.max {
                 precedingMaxGranule = max(precedingMaxGranule ?? 0, finalGranule)
@@ -161,6 +167,7 @@ enum OggOpusDecoder {
         }
 
         guard packet.isEmpty else { throw DecoderError.invalidContainer("truncated packet.") }
+        guard sawEOS else { throw DecoderError.invalidContainer("stream ended before EOS.") }
         guard packets.count >= 2, packets[0].starts(with: Data("OpusHead".utf8)) else {
             throw DecoderError.unsupportedStream("the Ogg stream does not contain Opus audio.")
         }

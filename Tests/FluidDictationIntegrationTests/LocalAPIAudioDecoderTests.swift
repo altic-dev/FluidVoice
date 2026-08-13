@@ -14,6 +14,36 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         XCTAssertTrue(samples.contains { abs($0) > 0.001 })
     }
 
+    func testTranscribeAPIRejectsOggOpusTruncatedBeforeEOSPage() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        let data = try Data(contentsOf: fixtureURL)
+        let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
+        let truncated = Data(data[..<lastPage])
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: truncated)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: stream ended before EOS.")
+        }
+    }
+
+    func testTranscribeAPIRejectsOggOpusPagesAfterEOS() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
+        let precedingPages = Data(data[..<lastPage])
+        let precedingPage = try XCTUnwrap(
+            precedingPages.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound
+        )
+        data[precedingPage + 5] |= 0x04
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: data follows the EOS page.")
+        }
+    }
+
     func testTranscribeAPIRejectsInvalidOggWithClearError() {
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: Data("not ogg".utf8))) { error in
             XCTAssertEqual(error.localizedDescription, "Audio input is not an OGG/Opus stream.")
