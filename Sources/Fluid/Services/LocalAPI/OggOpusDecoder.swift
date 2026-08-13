@@ -37,6 +37,113 @@ enum OggOpusDecoder {
         data.starts(with: Data("OggS".utf8)) && data.range(of: Data("OpusHead".utf8)) != nil
     }
 
+    static func sampleCount(fromFileAt fileURL: URL) throws -> Int {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var expectedSerial: UInt32?
+        var expectedSequence: UInt32 = 0
+        var packet = Data()
+        var headers: [Data] = []
+        var finalGranule: UInt64 = 0
+        var precedingMaxGranule: UInt64?
+        var sawEOS = false
+
+        while true {
+            guard let fixedHeader = try handle.read(upToCount: 27), !fixedHeader.isEmpty else { break }
+            guard fixedHeader.count == 27, fixedHeader.starts(with: Data("OggS".utf8)) else {
+                throw DecoderError.invalidContainer("missing Ogg page header.")
+            }
+            guard fixedHeader[4] == 0 else {
+                throw DecoderError.unsupportedStream("unsupported Ogg bitstream version.")
+            }
+            guard !sawEOS else {
+                throw DecoderError.invalidContainer("data follows the EOS page.")
+            }
+
+            let pageSegments = Int(fixedHeader[26])
+            guard let segmentTable = try handle.read(upToCount: pageSegments), segmentTable.count == pageSegments else {
+                throw DecoderError.invalidContainer("truncated segment table.")
+            }
+            let payloadLength = segmentTable.reduce(0) { $0 + Int($1) }
+            guard let payload = try handle.read(upToCount: payloadLength), payload.count == payloadLength else {
+                throw DecoderError.invalidContainer("truncated page payload.")
+            }
+
+            var page = fixedHeader
+            page.append(segmentTable)
+            page.append(payload)
+            guard self.oggPageChecksum(page, range: 0 ..< page.count) == self.uint32(page, at: 22) else {
+                throw DecoderError.invalidContainer("Ogg page checksum mismatch.")
+            }
+
+            let serial = self.uint32(fixedHeader, at: 14)
+            let sequence = self.uint32(fixedHeader, at: 18)
+            if let expectedSerial {
+                guard serial == expectedSerial else {
+                    throw DecoderError.unsupportedStream("chained or multiplexed streams are not supported.")
+                }
+                guard sequence == expectedSequence else {
+                    throw DecoderError.invalidContainer("missing or reordered Ogg page.")
+                }
+            } else {
+                expectedSerial = serial
+            }
+            expectedSequence = sequence &+ 1
+            sawEOS = fixedHeader[5] & 0x04 != 0
+            let pageGranule = self.uint64(fixedHeader, at: 6)
+            if finalGranule != UInt64.max {
+                precedingMaxGranule = max(precedingMaxGranule ?? 0, finalGranule)
+            }
+            finalGranule = pageGranule
+
+            var cursor = 0
+            for lengthByte in segmentTable {
+                let length = Int(lengthByte)
+                if headers.count < 2 {
+                    packet.append(payload[cursor ..< cursor + length])
+                }
+                cursor += length
+                if length < 255, headers.count < 2 {
+                    headers.append(packet)
+                    packet.removeAll(keepingCapacity: true)
+                }
+            }
+        }
+
+        guard packet.isEmpty else { throw DecoderError.invalidContainer("truncated packet.") }
+        guard sawEOS else { throw DecoderError.invalidContainer("stream ended before EOS.") }
+        guard headers.count >= 2, headers[0].starts(with: Data("OpusHead".utf8)) else {
+            throw DecoderError.unsupportedStream("the Ogg stream does not contain Opus audio.")
+        }
+        let header = headers[0]
+        guard header.count >= 19 else { throw DecoderError.invalidContainer("truncated Opus header.") }
+        guard header[8] == 1 else { throw DecoderError.unsupportedStream("unsupported Opus header version.") }
+        guard header[9] == 1 || header[9] == 2 else {
+            throw DecoderError.unsupportedStream("only mono and stereo streams are supported.")
+        }
+        guard header[18] == 0 else {
+            throw DecoderError.unsupportedStream("channel-mapped Opus streams are not supported.")
+        }
+        guard headers[1].starts(with: Data("OpusTags".utf8)) else {
+            throw DecoderError.invalidContainer("missing OpusTags header.")
+        }
+        guard finalGranule != UInt64.max, finalGranule <= UInt64(Int.max) else {
+            throw DecoderError.invalidContainer("invalid final granule position.")
+        }
+        if let precedingMaxGranule, finalGranule < precedingMaxGranule {
+            throw DecoderError.invalidContainer("final granule trims previously completed audio.")
+        }
+        let preSkip = Int(self.uint16(header, at: 10))
+        let finalGranuleValue = Int(finalGranule)
+        guard finalGranuleValue >= preSkip else {
+            throw DecoderError.invalidContainer("final granule precedes Opus pre-skip.")
+        }
+        let streamFrames = finalGranuleValue - preSkip
+        guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
+        return streamFrames / 3
+    }
+
     static func samples(from data: Data) throws -> [Float] {
         let stream = try self.parse(data)
         let streamFrames = try self.validatedSampleCount(for: stream)

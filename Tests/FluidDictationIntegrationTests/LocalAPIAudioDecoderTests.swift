@@ -168,12 +168,41 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         }
     }
 
-    func testOggPathRequiresBufferedTranscription() throws {
+    func testOggPathPreparationUsesStreamingMetadataForBufferedTranscription() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
         )
 
-        XCTAssertTrue(try LocalAPIAudioDecoder.requiresBufferedTranscription(for: fixtureURL))
+        let prepared = try LocalAPIAudioDecoder.prepareForTranscription(fileURL: fixtureURL)
+
+        XCTAssertTrue(prepared.requiresBufferedTranscription)
+        XCTAssertGreaterThan(prepared.estimatedSamples, 16_000)
+        XCTAssertLessThan(prepared.estimatedSamples, 20_000)
+    }
+
+    func testOggPathPreparationRejectsOversizedFileBeforeDecoding() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        let oversizedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluidvoice-oversized-\(UUID().uuidString).ogg")
+        FileManager.default.createFile(atPath: oversizedURL.path, contents: try Data(contentsOf: fixtureURL))
+        let handle = try FileHandle(forWritingTo: oversizedURL)
+        try handle.truncate(atOffset: UInt64(LocalAPI.maxRequestBytes + 1))
+        try handle.close()
+        defer { try? FileManager.default.removeItem(at: oversizedURL) }
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.prepareForTranscription(fileURL: oversizedURL)) { error in
+            XCTAssertEqual(error.localizedDescription, "Audio input exceeds the 25 MB API limit.")
+        }
+    }
+
+    func testPathPreparationRejectsSpecialFilesBeforeReading() {
+        XCTAssertThrowsError(
+            try LocalAPIAudioDecoder.prepareForTranscription(fileURL: URL(fileURLWithPath: "/dev/zero"))
+        ) { error in
+            XCTAssertEqual(error.localizedDescription, "Audio path must reference a regular file.")
+        }
     }
 
     func testOggPathDurationValidationUsesStructuralSampleCount() throws {
