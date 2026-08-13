@@ -41,6 +41,10 @@ enum OggOpusDecoder {
         guard stream.channels == 1 || stream.channels == 2 else {
             throw DecoderError.unsupportedStream("only mono and stereo streams are supported.")
         }
+        guard stream.finalGranule != UInt64.max, stream.finalGranule <= UInt64(Int.max) else {
+            throw DecoderError.invalidContainer("invalid final granule position.")
+        }
+        let finalGranule = Int(stream.finalGranule)
 
         var error: Int32 = 0
         guard let decoder = opus_decoder_create(Int32(self.opusRate), Int32(stream.channels), &error), error == OPUS_OK else {
@@ -49,7 +53,7 @@ enum OggOpusDecoder {
         defer { opus_decoder_destroy(decoder) }
 
         var decoded: [Float] = []
-        decoded.reserveCapacity(min(self.maxDecodedFrames, Int(stream.finalGranule)) * stream.channels)
+        decoded.reserveCapacity(min(self.maxDecodedFrames, finalGranule) * stream.channels)
         var frameBuffer = [Float](repeating: 0, count: 5_760 * stream.channels)
 
         for packet in stream.packets {
@@ -70,8 +74,8 @@ enum OggOpusDecoder {
         }
 
         let decodedFrames = decoded.count / stream.channels
-        let streamFrames = stream.finalGranule > UInt64(stream.preSkip)
-            ? Int(stream.finalGranule) - stream.preSkip
+        let streamFrames = finalGranule > stream.preSkip
+            ? finalGranule - stream.preSkip
             : max(0, decodedFrames - stream.preSkip)
         guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
         let availableFrames = max(0, min(streamFrames, decodedFrames - stream.preSkip))

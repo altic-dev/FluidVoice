@@ -20,6 +20,27 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         }
     }
 
+    func testTranscribeAPIRejectsUnknownFinalOggGranuleWithoutTrapping() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
+        data.replaceSubrange(lastPage + 6 ..< lastPage + 14, with: repeatElement(UInt8.max, count: 8))
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: invalid final granule position.")
+        }
+    }
+
+    func testOggPathRequiresBufferedTranscription() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+
+        XCTAssertTrue(try LocalAPIAudioDecoder.requiresBufferedTranscription(for: fixtureURL))
+    }
+
     @MainActor
     func testTranscribeRouteAcceptsRawOggOpusBody() async throws {
         let fixtureURL = try XCTUnwrap(

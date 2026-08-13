@@ -5,6 +5,11 @@ enum LocalAPIAudioDecoder {
     static let sampleRate: Double = 16_000
     static let maxDurationSeconds: Double = 300
 
+    static func requiresBufferedTranscription(for fileURL: URL) throws -> Bool {
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        return OggOpusDecoder.isOggOpus(data)
+    }
+
     static func samples(from fileURL: URL) throws -> [Float] {
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         if OggOpusDecoder.isOggOpus(data) {

@@ -2429,7 +2429,8 @@ final class ASRService: ObservableObject {
             )
         }
 
-        guard provider.prefersNativeFileTranscription else {
+        let requiresBufferedTranscription = try LocalAPIAudioDecoder.requiresBufferedTranscription(for: fileURL)
+        guard provider.prefersNativeFileTranscription, !requiresBufferedTranscription else {
             let samples = try LocalAPIAudioDecoder.samples(from: fileURL)
             let result = try await self.transcribeSamplesForAPI(samples)
             return (result, samples.count)
