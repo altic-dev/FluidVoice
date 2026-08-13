@@ -2,6 +2,34 @@ import XCTest
 @testable import FluidVoice_Debug
 
 final class LocalAPIAudioDecoderTests: XCTestCase {
+    @MainActor
+    func testLocalAPIInFlightRequestCancellationStopsPendingWork() async {
+        let request = LocalAPIInFlightRequest()
+        let started = expectation(description: "request started")
+        let completed = expectation(description: "request completed")
+        completed.isInverted = true
+
+        request.start {
+            started.fulfill()
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            completed.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 1)
+
+        request.cancel()
+
+        await fulfillment(of: [completed], timeout: 0.1)
+        XCTAssertTrue(request.isCancelled)
+
+        let restarted = expectation(description: "cancelled request restarted")
+        restarted.isInverted = true
+        request.start {
+            restarted.fulfill()
+        }
+        await fulfillment(of: [restarted], timeout: 0.1)
+    }
+
     func testTranscribeAPIDecodesBundledOggOpusFixture() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")

@@ -2,6 +2,25 @@ import Foundation
 import Network
 
 @MainActor
+final class LocalAPIInFlightRequest {
+    private var task: Task<Void, Never>?
+    private(set) var isCancelled = false
+
+    func start(_ operation: @escaping @MainActor () async -> Void) {
+        guard !self.isCancelled, self.task == nil else { return }
+        self.task = Task { @MainActor in
+            await operation()
+        }
+    }
+
+    func cancel() {
+        self.task?.cancel()
+        self.task = nil
+        self.isCancelled = true
+    }
+}
+
+@MainActor
 final class LocalAPIServer {
     static let shared = LocalAPIServer()
 
@@ -131,6 +150,7 @@ final class LocalAPIServer {
 private final class LocalAPIConnectionHandler {
     private let connection: NWConnection
     private let router: LocalAPIRouter
+    private let inFlightRequest = LocalAPIInFlightRequest()
     private var buffer = Data()
     private var isClosed = false
     var onClose: (() -> Void)?
@@ -153,6 +173,7 @@ private final class LocalAPIConnectionHandler {
         self.connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, isComplete, error in
             Task { @MainActor in
                 guard let self else { return }
+                guard !self.isClosed else { return }
                 if error != nil || isComplete {
                     self.close()
                     return
@@ -169,8 +190,12 @@ private final class LocalAPIConnectionHandler {
 
                 switch self.parseRequestIfComplete() {
                 case let .request(request):
-                    let response = await self.router.route(request)
-                    self.send(response)
+                    self.inFlightRequest.start { [weak self] in
+                        guard let self else { return }
+                        let response = await self.router.route(request)
+                        guard !Task.isCancelled, !self.isClosed else { return }
+                        self.send(response)
+                    }
                 case let .failure(response):
                     self.send(response)
                 case .incomplete:
@@ -205,6 +230,7 @@ private final class LocalAPIConnectionHandler {
     private func close() {
         guard !self.isClosed else { return }
         self.isClosed = true
+        self.inFlightRequest.cancel()
         self.connection.cancel()
         self.onClose?()
     }
