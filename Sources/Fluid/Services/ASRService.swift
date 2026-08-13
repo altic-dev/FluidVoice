@@ -11,7 +11,7 @@ import AudioToolbox
 import CoreAudio
 
 /// Serializes transcription operations and lets teardown cancel the real queued work.
-private actor TranscriptionExecutor {
+actor TranscriptionExecutor {
     private var lastTask: Task<Void, Never>?
     private var operationCancellations: [UUID: () -> Void] = [:]
 
@@ -26,7 +26,11 @@ private actor TranscriptionExecutor {
         self.operationCancellations[operationID] = { task.cancel() }
         self.lastTask = Task { _ = try? await task.value }
         defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     func cancelAndAwaitPending() async {

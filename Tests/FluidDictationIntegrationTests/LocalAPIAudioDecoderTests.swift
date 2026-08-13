@@ -30,6 +30,29 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         await fulfillment(of: [restarted], timeout: 0.1)
     }
 
+    func testTranscriptionExecutorPropagatesCallerCancellation() async {
+        let executor = TranscriptionExecutor()
+        let started = expectation(description: "transcription started")
+        let cancelled = expectation(description: "transcription cancelled")
+        let task = Task {
+            try await executor.run {
+                started.fulfill()
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                } catch is CancellationError {
+                    cancelled.fulfill()
+                    throw CancellationError()
+                }
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+
+        task.cancel()
+
+        await fulfillment(of: [cancelled], timeout: 1)
+        _ = await task.result
+    }
+
     @MainActor
     func testLocalAPIRouterDoesNotInvokeHandlerForCancelledTask() async {
         let router = LocalAPIRouter(authToken: "test-token")
