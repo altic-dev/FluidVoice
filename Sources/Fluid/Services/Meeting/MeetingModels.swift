@@ -698,6 +698,7 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
     case segmentNotFound
     case cannotMergeSpeakerWithItself
     case cannotMergeSpeakers
+    case emptyMeetingTitle
 
     var errorDescription: String? {
         switch self {
@@ -711,6 +712,8 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
             return "A speaker can't be merged into itself."
         case .cannotMergeSpeakers:
             return "These speakers can't be merged."
+        case .emptyMeetingTitle:
+            return "Meeting title cannot be empty."
         }
     }
 }

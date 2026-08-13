@@ -1,9 +1,22 @@
 @testable import FluidVoice_Debug
 import Foundation
+import SwiftUI
 import XCTest
 
 @MainActor
 final class MeetingRecoveryTests: XCTestCase {
+    func testHistoryKeyboardTraversalWalksTheRenderedOrder() {
+        let ids = [UUID(), UUID(), UUID()]
+        func move(from current: UUID?, _ direction: MoveCommandDirection) -> UUID? {
+            MeetingHistoryTraversal.sessionID(movingFrom: current, direction: direction, ordered: ids)
+        }
+        XCTAssertEqual(move(from: nil, .down), ids[0], "no selection starts at the top")
+        XCTAssertEqual(move(from: ids[0], .down), ids[1])
+        XCTAssertEqual(move(from: ids[1], .up), ids[0])
+        XCTAssertNil(move(from: ids[0], .up), "stops at the first row")
+        XCTAssertNil(move(from: ids[2], .down), "stops at the last row")
+    }
+
     // MARK: - Fixtures
 
     private func makeTempDirectory() -> URL {
@@ -2339,6 +2352,108 @@ final class MeetingRecoveryTests: XCTestCase {
 
         let reloaded = try await store.load(id: session.id)
         XCTAssertEqual(reloaded, before)
+    }
+
+    // MARK: - Default meeting title
+
+    func testDefaultTitleUsesApplicationName() {
+        let title = MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: "Zoom")
+        XCTAssertEqual(title, "Zoom call")
+        let meetTitle = MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: "Google Meet")
+        XCTAssertEqual(meetTitle, "Google Meet call")
+    }
+
+    func testDefaultTitleForInRoomIgnoresApplicationName() {
+        XCTAssertEqual(
+            MeetingTranscriptionSetupDraft.defaultTitle(mode: .inRoom, applicationDisplayName: "Zoom"),
+            "In-room meeting"
+        )
+        XCTAssertEqual(
+            MeetingTranscriptionSetupDraft.defaultTitle(mode: .inRoom, applicationDisplayName: nil),
+            "In-room meeting"
+        )
+    }
+
+    func testDefaultTitleFallsBackWhenNoApplicationSelected() {
+        XCTAssertEqual(MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: nil), "Meeting")
+    }
+
+    // MARK: - Rename session
+
+    func testRenameSessionRejectsEmptyOrWhitespaceTitle() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        for invalidTitle in ["", "   ", "\n\t"] {
+            await XCTAssertThrowsErrorAsync(
+                try await coordinator.renameSession(sessionID: session.id, to: invalidTitle)
+            ) { error in
+                XCTAssertEqual(error as? MeetingDomainError, .emptyMeetingTitle)
+            }
+        }
+
+        let reloaded = try await store.load(id: session.id)
+        XCTAssertEqual(reloaded?.title, session.title)
+    }
+
+    func testRenameSessionTrimsAndPersistsWithoutTouchingUndoStack() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: "  Weekly Sync  ")
+        XCTAssertEqual(renamed.title, "Weekly Sync")
+
+        let reloaded = try await store.load(id: session.id)
+        XCTAssertEqual(reloaded?.title, "Weekly Sync")
+        // A title rename must not consume the transcript-correction undo stack.
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testRenameSessionNoOpWhenTitleIsIdentical() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let before = try await store.load(id: session.id)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let result = try await coordinator.renameSession(sessionID: session.id, to: session.title)
+        XCTAssertEqual(result, before)
+        let reloaded = try await store.load(id: session.id)
+        XCTAssertEqual(reloaded, before)
+    }
+}
+
+/// XCTAssertThrowsError has no async overload; this bridges an async throwing expression.
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void = { _ in },
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected an error to be thrown", file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }
 

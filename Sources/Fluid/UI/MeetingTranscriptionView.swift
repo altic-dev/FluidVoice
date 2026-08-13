@@ -25,22 +25,26 @@ struct MeetingMicrophoneOption: Identifiable, Equatable {
 
 struct MeetingTranscriptionSetupDraft: Equatable {
     var mode: MeetingCaptureMode = .onlineCall
-    var title: String = Self.defaultTitle()
+    var title: String = Self.defaultTitle(mode: .onlineCall, applicationDisplayName: nil)
     var selectedApplicationID: String?
     var selectedMicrophoneID: String?
     var microphoneRole: MeetingMicrophoneRole = .unknown
+    /// Once true, the default title stops following the selected application/mode.
+    var titleWasEdited = false
 
     init(settings: SettingsStore = .shared) {
         let defaults = settings.meetingRecordingDefaults
         self.mode = defaults.mode
-        self.title = Self.defaultTitle()
+        self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
         self.selectedMicrophoneID = defaults.microphoneCaptureDeviceID
         self.microphoneRole = defaults.microphoneRole
     }
 
-    static func defaultTitle(now: Date = Date()) -> String {
-        "Meeting · \(now.formatted(date: .abbreviated, time: .shortened))"
+    static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
+        guard mode == .onlineCall else { return "In-room meeting" }
+        guard let applicationDisplayName, !applicationDisplayName.isEmpty else { return "Meeting" }
+        return "\(applicationDisplayName) call"
     }
 }
 
@@ -164,10 +168,14 @@ struct MeetingTranscriptionView: View {
                     onRenameSpeaker: self.renameSpeaker,
                     onMergeSpeakers: self.mergeSpeakers,
                     onUndoCorrection: self.undoTranscriptCorrection,
+                    onRenameSession: self.renameMeetingSession,
                     canUndoCorrection: { self.coordinator.canUndoCorrection(sessionID: $0) },
                     isQuiescent: self.coordinator.isQuiescent,
                     onOpenMeetingSettings: self.openMeetingSettings,
-                    isRetrying: self.isRetrying
+                    isRetrying: self.isRetrying,
+                    onCloseSelection: self.selectedHistorySessionID == nil
+                        ? nil
+                        : { self.selectedHistorySessionID = nil }
                 )
 
                 if self.isMeetingHistoryVisible {
@@ -183,7 +191,8 @@ struct MeetingTranscriptionView: View {
                         onExportAudio: self.exportAudio,
                         onExportTranscript: { self.exportTranscript($0, format: $1, includeEchoes: false) },
                         onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
-                        onDeleteRequest: { self.pendingDeleteSessionID = $0 }
+                        onDeleteRequest: { self.pendingDeleteSessionID = $0 },
+                        onRecordAgain: self.recordAgain
                     )
                     .frame(width: 290)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -201,6 +210,10 @@ struct MeetingTranscriptionView: View {
         }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
+            self.regenerateDefaultTitleIfNeeded()
+        }
+        .onChange(of: self.setupDraft.selectedApplicationID) { _, _ in
+            self.regenerateDefaultTitleIfNeeded()
         }
         .onChange(of: self.asrService.isAsrReady) { _, isReady in
             self.cachedModelReady = isReady || self.asrService.modelsExistOnDisk
@@ -452,6 +465,21 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    /// Keeps the title following the selected app/mode until the user types their own.
+    private func regenerateDefaultTitleIfNeeded() {
+        guard !self.setupDraft.titleWasEdited else { return }
+        let applicationName = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })?.identity.displayName
+        self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle(
+            mode: self.setupDraft.mode,
+            applicationDisplayName: applicationName
+        )
+    }
+
+    private func resetDraftTitleToDefault() {
+        self.setupDraft.titleWasEdited = false
+        self.regenerateDefaultTitleIfNeeded()
+    }
+
     private func selectPreferredMicrophone(from identities: [MeetingMicrophoneIdentity]) {
         if let selectedID = setupDraft.selectedMicrophoneID,
            identities.contains(where: { $0.captureDeviceID == selectedID })
@@ -617,6 +645,18 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private func renameMeetingSession(sessionID: MeetingSessionID, to title: String) {
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.renameSession(sessionID: sessionID, to: title)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
     private func undoTranscriptCorrection(sessionID: MeetingSessionID) {
         self.actionErrorMessage = nil
         Task {
@@ -663,7 +703,7 @@ struct MeetingTranscriptionView: View {
             do {
                 _ = try await self.coordinator.recordAgain(from: session.id, configuration: configuration)
                 self.selectedHistorySessionID = nil
-                self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle()
+                self.resetDraftTitleToDefault()
                 await self.loadMeetingHistory()
             } catch {
                 self.actionErrorMessage = error.localizedDescription
@@ -829,7 +869,7 @@ struct MeetingTranscriptionView: View {
         do {
             try self.coordinator.resetForNewMeeting()
             self.selectedHistorySessionID = nil
-            self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle()
+            self.resetDraftTitleToDefault()
             self.actionErrorMessage = nil
         } catch {
             self.actionErrorMessage = error.localizedDescription
@@ -1043,10 +1083,12 @@ struct MeetingTranscriptionCanvas: View {
     let onRenameSpeaker: (MeetingSessionID, SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
     let onUndoCorrection: (MeetingSessionID) -> Void
+    let onRenameSession: (MeetingSessionID, String) -> Void
     let canUndoCorrection: (MeetingSessionID) -> Bool
     let isQuiescent: Bool
     let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
+    let onCloseSelection: (() -> Void)?
 
     @Environment(\.theme) private var theme
 
@@ -1099,7 +1141,9 @@ struct MeetingTranscriptionCanvas: View {
                         onMergeSpeakers: { source, target in
                             self.onMergeSpeakers(session.id, source, target)
                         },
-                        onUndo: { self.onUndoCorrection(session.id) }
+                        onUndo: { self.onUndoCorrection(session.id) },
+                        onRenameSession: { title in self.onRenameSession(session.id, title) },
+                        onClose: self.onCloseSelection
                     )
                 case let .failed(session, message):
                     MeetingFailureCanvas(
@@ -1108,7 +1152,8 @@ struct MeetingTranscriptionCanvas: View {
                         isRetrying: self.isRetrying,
                         onRetrySession: self.onRetrySession,
                         onRevealAudio: self.onRevealAudio,
-                        onRecordAgain: self.onRecordAgain
+                        onRecordAgain: self.onRecordAgain,
+                        onClose: self.onCloseSelection
                     )
                 }
             }
@@ -1238,6 +1283,7 @@ private struct MeetingHistoryInspector: View {
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
     let onDeleteAudioRequest: (MeetingSessionID) -> Void
     let onDeleteRequest: (MeetingSessionID) -> Void
+    let onRecordAgain: (MeetingSession) -> Void
 
     @Environment(\.theme) private var theme
     @State private var searchText = ""
@@ -1250,6 +1296,28 @@ private struct MeetingHistoryInspector: View {
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
                 session.activeSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
         }
+    }
+
+    /// Sessions arrive newest-first, so a first-seen-order bucket walk keeps groups chronological.
+    private var groupedSessions: [(key: String, sessions: [MeetingSession])] {
+        let calendar = Calendar.current
+        var order: [String] = []
+        var buckets: [String: [MeetingSession]] = [:]
+        for session in self.filteredSessions {
+            let key = Self.dayLabel(for: session.startedAt, calendar: calendar)
+            if buckets[key] == nil {
+                buckets[key] = []
+                order.append(key)
+            }
+            buckets[key]?.append(session)
+        }
+        return order.map { (key: $0, sessions: buckets[$0] ?? []) }
+    }
+
+    private static func dayLabel(for date: Date, calendar: Calendar) -> String {
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(date: .abbreviated, time: .omitted)
     }
 
     var body: some View {
@@ -1294,92 +1362,238 @@ private struct MeetingHistoryInspector: View {
                         : "Try a different title, app, or speaker.")
                 )
             } else {
-                List(selection: self.$selectedSessionID) {
-                    ForEach(self.filteredSessions) { session in
-                        MeetingHistoryRow(session: session)
-                            .tag(session.id)
-                            .contextMenu {
-                                if session.hasRetryableAudio, session.state == .failed || session.state == .interrupted {
-                                    Button("Retry Transcription", systemImage: "arrow.clockwise") {
-                                        self.onRetry(session.id)
-                                    }
-                                    .disabled(!self.isQuiescent)
+                // Rows draw their own selection/hover fill (never the saturated system blue),
+                // so a plain ScrollView replaces List here instead of fighting its native highlight.
+                ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                        ForEach(self.groupedSessions, id: \.key) { group in
+                            Section {
+                                ForEach(group.sessions) { session in
+                                    MeetingHistoryRow(
+                                        session: session,
+                                        isSelected: self.selectedSessionID == session.id,
+                                        isQuiescent: self.isQuiescent,
+                                        onRetry: { self.onRetry(session.id) },
+                                        onRecordAgain: { self.onRecordAgain(session) }
+                                    )
+                                    .id(session.id)
+                                    .onTapGesture { self.selectedSessionID = session.id }
+                                    .contextMenu { self.contextMenu(for: session) }
                                 }
-                                Button("Reveal Audio", systemImage: "folder") {
-                                    self.onRevealAudio(session)
-                                }
-                                Button("Export Audio…", systemImage: "square.and.arrow.up") {
-                                    self.onExportAudio(session)
-                                }
-                                .disabled(!session.hasFinalizedAudio)
-                                Button("Export Transcript (Text)…", systemImage: "doc.text") {
-                                    self.onExportTranscript(session, .text)
-                                }
-                                .disabled(!session.transcriptSegments.contains(where: { !$0.isEcho }))
-                                Button("Export Transcript (JSON)…", systemImage: "curlybraces") {
-                                    self.onExportTranscript(session, .json)
-                                }
-                                .disabled(session.transcriptSegments.isEmpty)
-                                if session.hasFinalizedAudio, session.retention.audioDeletedAt == nil, session.state == .completed {
-                                    Button("Delete Audio (Keep Transcript)…", systemImage: "waveform.slash") {
-                                        self.onDeleteAudioRequest(session.id)
-                                    }
-                                    .disabled(!self.isQuiescent)
-                                }
-                                Divider()
-                                Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
-                                    self.onDeleteRequest(session.id)
-                                }
-                                .disabled(!self.isQuiescent)
+                            } header: {
+                                Text(group.key)
+                                    .font(self.theme.typography.captionSmall)
+                                    .tracking(1.1)
+                                    .textCase(.uppercase)
+                                    .foregroundStyle(self.theme.palette.tertiaryText)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, self.theme.metrics.spacing.lg)
+                                    .padding(.top, self.theme.metrics.spacing.md)
+                                    .padding(.bottom, self.theme.metrics.spacing.xs)
+                                    .background(self.theme.palette.sidebarBackground)
                             }
+                        }
                     }
+                    .padding(.horizontal, self.theme.metrics.spacing.sm)
+                    .padding(.bottom, self.theme.metrics.spacing.md)
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
+                // Dropping List for a custom highlight also drops its arrow-key traversal.
+                .focusable()
+                .onMoveCommand { direction in
+                    guard let moved = self.sessionID(movingFrom: self.selectedSessionID, direction: direction)
+                    else { return }
+                    self.selectedSessionID = moved
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(moved, anchor: .center) }
+                }
+                }
             }
         }
         .background(self.theme.palette.sidebarBackground)
+    }
+
+    private func sessionID(
+        movingFrom current: MeetingSessionID?,
+        direction: MoveCommandDirection
+    ) -> MeetingSessionID? {
+        MeetingHistoryTraversal.sessionID(
+            movingFrom: current,
+            direction: direction,
+            ordered: self.groupedSessions.flatMap(\.sessions).map(\.id)
+        )
+    }
+
+    @ViewBuilder
+    private func contextMenu(for session: MeetingSession) -> some View {
+        if session.hasRetryableAudio, session.state == .failed || session.state == .interrupted {
+            Button("Retry Transcription", systemImage: "arrow.clockwise") {
+                self.onRetry(session.id)
+            }
+            .disabled(!self.isQuiescent)
+        }
+        Button("Reveal Audio", systemImage: "folder") {
+            self.onRevealAudio(session)
+        }
+        Button("Export Audio…", systemImage: "square.and.arrow.up") {
+            self.onExportAudio(session)
+        }
+        .disabled(!session.hasFinalizedAudio)
+        Button("Export Transcript (Text)…", systemImage: "doc.text") {
+            self.onExportTranscript(session, .text)
+        }
+        .disabled(!session.transcriptSegments.contains(where: { !$0.isEcho }))
+        Button("Export Transcript (JSON)…", systemImage: "curlybraces") {
+            self.onExportTranscript(session, .json)
+        }
+        .disabled(session.transcriptSegments.isEmpty)
+        if session.hasFinalizedAudio, session.retention.audioDeletedAt == nil, session.state == .completed {
+            Button("Delete Audio (Keep Transcript)…", systemImage: "waveform.slash") {
+                self.onDeleteAudioRequest(session.id)
+            }
+            .disabled(!self.isQuiescent)
+        }
+        Divider()
+        Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
+            self.onDeleteRequest(session.id)
+        }
+        .disabled(!self.isQuiescent)
+    }
+}
+
+nonisolated enum MeetingHistoryTraversal {
+    static func sessionID(
+        movingFrom current: MeetingSessionID?,
+        direction: MoveCommandDirection,
+        ordered: [MeetingSessionID]
+    ) -> MeetingSessionID? {
+        guard !ordered.isEmpty else { return nil }
+        guard let current, let index = ordered.firstIndex(of: current) else { return ordered.first }
+        switch direction {
+        case .up: return index > 0 ? ordered[index - 1] : nil
+        case .down: return index < ordered.count - 1 ? ordered[index + 1] : nil
+        default: return nil
+        }
     }
 }
 
 private struct MeetingHistoryRow: View {
     let session: MeetingSession
+    let isSelected: Bool
+    let isQuiescent: Bool
+    let onRetry: () -> Void
+    let onRecordAgain: () -> Void
 
     @Environment(\.theme) private var theme
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: self.statusIcon)
-                    .foregroundStyle(self.statusColor)
-                    .accessibilityHidden(true)
+        HStack(spacing: self.theme.metrics.spacing.md) {
+            self.tile
+            VStack(alignment: .leading, spacing: 2) {
                 Text(self.session.title)
-                    .font(self.theme.typography.bodySmallStrong)
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(1)
-                Spacer(minLength: 0)
+                    .truncationMode(.tail)
+                self.secondaryLine
             }
-
-            Text(self.session.startedAt.formatted(date: .abbreviated, time: .shortened))
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .lineLimit(1)
-
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Text(Self.durationText(self.session.duration))
-                Text("·")
-                Text(self.sourceName)
-                    .lineLimit(1)
-                if !self.session.activeSpeakers.isEmpty {
-                    Text("·")
-                    Text("\(self.session.activeSpeakers.count) speakers")
-                }
-            }
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.theme.palette.tertiaryText)
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, self.theme.metrics.spacing.xs)
+        .padding(.horizontal, self.theme.metrics.spacing.sm)
+        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .background(self.rowBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { self.isHovered = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
+        .accessibilityAddTraits(self.isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var tile: some View {
+        Image(systemName: self.tileIcon)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(self.tileIconColor)
+            .frame(width: 34, height: 34)
+            .background(self.theme.palette.contentBackground, in: RoundedRectangle(
+                cornerRadius: self.theme.metrics.corners.md,
+                style: .continuous
+            ))
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var secondaryLine: some View {
+        HStack(spacing: self.theme.metrics.spacing.xs) {
+            ForEach(Array(self.secondaryTextParts.enumerated()), id: \.offset) { index, part in
+                if index > 0 {
+                    Text("·").foregroundStyle(self.theme.palette.tertiaryText)
+                }
+                Text(part)
+            }
+            if let actionLabel {
+                Text("·").foregroundStyle(self.theme.palette.tertiaryText)
+                Button(actionLabel, action: self.performAction)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(self.actionColor)
+                    .disabled(!self.isQuiescent)
+            }
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.secondaryText)
+        .lineLimit(1)
+    }
+
+    private func performAction() {
+        switch self.session.state {
+        case .interrupted: self.onRetry()
+        case .failed: self.onRecordAgain()
+        default: break
+        }
+    }
+
+    private var timeText: String {
+        self.session.startedAt.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var secondaryTextParts: [String] {
+        switch self.session.state {
+        case .completed:
+            var parts = [self.timeText, Self.durationText(self.session.duration)]
+            if !self.session.activeSpeakers.isEmpty {
+                parts.append("\(self.session.activeSpeakers.count) speakers")
+            }
+            return parts
+        case .interrupted:
+            return [self.timeText, "Interrupted"]
+        case .failed:
+            return [self.timeText, self.session.failures.last?.message ?? "Failed"]
+        case .processing:
+            return [self.timeText, "Processing"]
+        case .recording, .recordingDegraded, .preparing, .stopping:
+            return [self.timeText, "Recording"]
+        }
+    }
+
+    private var actionLabel: String? {
+        switch self.session.state {
+        case .interrupted: return self.session.hasRetryableAudio ? "Retry transcription" : nil
+        case .failed: return "Record again"
+        default: return nil
+        }
+    }
+
+    private var actionColor: Color {
+        self.session.state == .interrupted ? self.theme.palette.warning : self.theme.palette.accent
+    }
+
+    private var rowBackground: Color {
+        if self.isSelected {
+            return self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
+        }
+        if self.isHovered {
+            return self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity * 0.4)
+        }
+        return .clear
     }
 
     private var sourceName: String {
@@ -1396,23 +1610,19 @@ private struct MeetingHistoryRow: View {
         }
     }
 
-    private var statusIcon: String {
+    private var tileIcon: String {
         switch self.session.state {
-        case .completed: "checkmark.circle.fill"
-        case .failed: "xmark.circle.fill"
-        case .interrupted: "exclamationmark.circle.fill"
-        case .processing: "ellipsis.circle.fill"
-        case .recording, .recordingDegraded, .preparing, .stopping: "record.circle.fill"
+        case .interrupted: "exclamationmark.triangle.fill"
+        case .failed: "xmark.circle"
+        default: "doc.text"
         }
     }
 
-    private var statusColor: Color {
+    private var tileIconColor: Color {
         switch self.session.state {
-        case .completed: self.theme.palette.success
-        case .failed: Color(nsColor: .systemRed)
         case .interrupted: self.theme.palette.warning
-        case .processing: self.theme.palette.accent
-        case .recording, .recordingDegraded, .preparing, .stopping: self.theme.palette.warning
+        case .failed: Color(nsColor: .systemRed)
+        default: self.theme.palette.secondaryText
         }
     }
 
@@ -1793,9 +2003,17 @@ private struct MeetingSetupCanvas: View {
                     Divider()
 
                     MeetingAdaptiveSetupRow(title: "Meeting title") {
-                        TextField("Meeting title", text: self.$draft.title)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Meeting title")
+                        // A plain $draft.title binding can't tell a user keystroke apart from
+                        // the programmatic default-title regeneration, so route edits through here.
+                        TextField("Meeting title", text: Binding(
+                            get: { self.draft.title },
+                            set: { newValue in
+                                self.draft.title = newValue
+                                self.draft.titleWasEdited = true
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Meeting title")
                     }
 
                     Divider()
@@ -2094,6 +2312,20 @@ private struct MeetingProcessingCanvas: View {
     }
 }
 
+/// Escape also dismisses: viewing a past meeting is a detail view, not a mode.
+private struct MeetingCloseTranscriptButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button("Close", systemImage: "xmark") { self.action() }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+            .help("Close this transcript")
+            .accessibilityLabel("Close transcript")
+    }
+}
+
 private struct MeetingResultCanvas: View {
     let session: MeetingSession
     let isQuiescent: Bool
@@ -2105,10 +2337,14 @@ private struct MeetingResultCanvas: View {
     let onRenameSpeaker: (SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
     let onUndo: () -> Void
+    let onRenameSession: (String) -> Void
+    let onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
     @State private var pendingRenameText = ""
+    @State private var isRenamingSession = false
+    @State private var pendingRenameSessionText = ""
 
     private var speakerNames: [SessionSpeakerID: String] {
         Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
@@ -2144,6 +2380,12 @@ private struct MeetingResultCanvas: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(self.session.title)
                     .font(self.theme.typography.title)
+                    .contextMenu {
+                        Button("Rename…", systemImage: "pencil") {
+                            self.pendingRenameSessionText = self.session.title
+                            self.isRenamingSession = true
+                        }
+                    }
                 Spacer()
                 if self.hasEchoSegments {
                     Toggle("Show probable echo", isOn: self.$showsProbableEchoes)
@@ -2153,6 +2395,9 @@ private struct MeetingResultCanvas: View {
                 Label(self.statusText, systemImage: self.statusIcon)
                     .font(self.theme.typography.badge)
                     .foregroundStyle(self.statusColor)
+                if let onClose {
+                    MeetingCloseTranscriptButton(action: onClose)
+                }
             }
 
             ViewThatFits(in: .horizontal) {
@@ -2249,6 +2494,13 @@ private struct MeetingResultCanvas: View {
             }
         } message: {
             Text("Enter a new name for this speaker.")
+        }
+        .alert("Rename Meeting", isPresented: self.$isRenamingSession) {
+            TextField("Meeting title", text: self.$pendingRenameSessionText)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { self.onRenameSession(self.pendingRenameSessionText) }
+        } message: {
+            Text("Enter a new title for this meeting.")
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
         .onChange(of: self.session.id) { _, _ in self.showsProbableEchoes = false }
@@ -2359,6 +2611,7 @@ private struct MeetingFailureCanvas: View {
     let onRetrySession: (MeetingSession) -> Void
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
+    let onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
 
@@ -2387,10 +2640,16 @@ private struct MeetingFailureCanvas: View {
     var body: some View {
         ThemedCard(style: .prominent) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                Label(self.title, systemImage: "exclamationmark.triangle.fill")
-                    .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.theme.palette.warning)
-                    .accessibilityAddTraits(.isHeader)
+                HStack(alignment: .firstTextBaseline) {
+                    Label(self.title, systemImage: "exclamationmark.triangle.fill")
+                        .font(self.theme.typography.sectionTitle)
+                        .foregroundStyle(self.theme.palette.warning)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 0)
+                    if let onClose {
+                        MeetingCloseTranscriptButton(action: onClose)
+                    }
+                }
                 Text(self.message)
                     .font(self.theme.typography.body)
                     .textSelection(.enabled)

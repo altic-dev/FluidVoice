@@ -686,6 +686,32 @@ final class MeetingSessionCoordinator: ObservableObject {
         !(self.correctionUndoStacks[sessionID]?.isEmpty ?? true)
     }
 
+    /// Not a transcript correction: does not push onto `correctionUndoStacks`.
+    @discardableResult
+    func renameSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+        guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+
+        await self.ensureRestored()
+        await self.flushQueuedPersistence()
+
+        var target = try await self.resolveSession(sessionID)
+
+        try self.assertSafeToMutate(sessionID: sessionID)
+
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
+        guard target.title != trimmed else { return target }
+
+        target.title = trimmed
+        target.updatedAt = Date()
+        try await self.store.save(target)
+
+        self.refreshSlots(with: target)
+        return target
+    }
+
     // MARK: - Audio retention
 
     /// Manifest-first: cleared manifest saved before file removal, so a crash between the two
