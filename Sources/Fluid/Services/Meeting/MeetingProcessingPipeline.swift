@@ -189,10 +189,10 @@ nonisolated enum MeetingTurnSelection {
 
 nonisolated enum MeetingLocalSpeakerEvidenceSelector {
     static func candidate(
-        cleanDurationByCluster: [SessionSpeakerID: TimeInterval],
+        evidenceDurationByCluster: [SessionSpeakerID: TimeInterval],
         prototypeSpeakerIDs: Set<SessionSpeakerID>
     ) -> SessionSpeakerID? {
-        let ranked = cleanDurationByCluster
+        let ranked = evidenceDurationByCluster
             .filter { $0.value >= 1 && prototypeSpeakerIDs.contains($0.key) }
             .sorted {
                 if $0.value == $1.value { return $0.key.uuidString < $1.key.uuidString }
@@ -297,6 +297,28 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         return false
     }
 
+    /// On speakers nearly everything overlaps, so overlap cannot identify the mic's owner.
+    /// What can: speech that is not the far end coming back.
+    nonisolated static func localSpeakerEvidence(
+        from turns: [(
+            clusterID: SessionSpeakerID, start: TimeInterval, end: TimeInterval,
+            overlapsRemote: Bool, echoScored: Bool, isEcho: Bool
+        )]
+    ) -> [SessionSpeakerID: TimeInterval] {
+        var supporting: [SessionSpeakerID: TimeInterval] = [:]
+        var echoed: [SessionSpeakerID: TimeInterval] = [:]
+        for turn in turns {
+            let duration = max(0, turn.end - turn.start)
+            if turn.isEcho {
+                echoed[turn.clusterID, default: 0] += duration
+                continue
+            }
+            guard !turn.overlapsRemote || turn.echoScored else { continue }
+            supporting[turn.clusterID, default: 0] += duration
+        }
+        return supporting.filter { $0.value > (echoed[$0.key] ?? 0) }
+    }
+
     nonisolated static func remoteFallbackIntervals(
         diarizedTurns: [(start: TimeInterval, end: TimeInterval)],
         chunkOffset: TimeInterval,
@@ -330,6 +352,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var text: String
         var overlapsRemote: Bool
         var isLikelyEcho = false
+        /// False when nothing scoreable overlapped: absence of a verdict is not evidence.
+        var echoScored = false
     }
 
     private struct Accumulator {
@@ -826,11 +850,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     ) async throws {
         let diarizer = SpeakerDiarizationService()
         var stagedTurns: [StagedMicrophoneTurn] = []
-        var cleanDurationByCluster: [SessionSpeakerID: TimeInterval] = [:]
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             let accumulatorSnapshot = accumulator
             let stagedTurnsSnapshot = stagedTurns
-            let cleanDurationByClusterSnapshot = cleanDurationByCluster
             do {
                 try await self.processMicrophoneChunk(
                     chunk,
@@ -839,15 +861,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     context: context,
                     remoteSpeech: remoteSpeech,
                     accumulator: &accumulator,
-                    stagedTurns: &stagedTurns,
-                    cleanDurationByCluster: &cleanDurationByCluster
+                    stagedTurns: &stagedTurns
                 )
             } catch {
                 if error is CancellationError { throw error }
                 guard case MeetingProcessingError.audioUnreadable = error else { throw error }
                 accumulator = accumulatorSnapshot
                 stagedTurns = stagedTurnsSnapshot
-                cleanDurationByCluster = cleanDurationByClusterSnapshot
                 skippedChunkIDs.append(chunk.id)
             }
         }
@@ -856,7 +876,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             track,
             session: session,
             stagedTurns: stagedTurns,
-            cleanDurationByCluster: cleanDurationByCluster,
             accumulator: &accumulator
         )
     }
@@ -868,8 +887,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         context: ProcessingContext,
         remoteSpeech: [TimelineInterval],
         accumulator: inout Accumulator,
-        stagedTurns: inout [StagedMicrophoneTurn],
-        cleanDurationByCluster: inout [SessionSpeakerID: TimeInterval]
+        stagedTurns: inout [StagedMicrophoneTurn]
     ) async throws {
         let url = chunk.fileURL(relativeTo: context.sessionDirectory)
         let chunkOffset = chunk.presentationStart.seconds - context.origin
@@ -924,9 +942,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             text: text,
                             overlapsRemote: overlapsRemote
                         ))
-                        if !overlapsRemote {
-                            cleanDurationByCluster[clusterID, default: 0] += max(0, end - start)
-                        }
                     }
                     return
                 }
@@ -971,7 +986,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         _ track: MeetingAudioTrack,
         session: MeetingSession,
         stagedTurns: [StagedMicrophoneTurn],
-        cleanDurationByCluster: [SessionSpeakerID: TimeInterval],
         accumulator: inout Accumulator
     ) {
         if session.mode == .inRoom {
@@ -1011,14 +1025,44 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             return
         }
 
+        let applicationTrackID = session.audioTracks.first(where: { $0.kind == .applicationAudio })?.id
+        // The 60s remote whole-chunk fallback is too coarse to score against; exclude its speaker.
+        let fallbackSpeakerID = accumulator.speakerIDByKey["meeting-audio"]
+        var classifiedTurns = stagedTurns
+        if let applicationTrackID {
+            for index in classifiedTurns.indices where classifiedTurns[index].overlapsRemote {
+                let turn = classifiedTurns[index]
+                let remoteText = Self.echoCandidateText(
+                    segments: accumulator.segments,
+                    speakerIDToExclude: fallbackSpeakerID,
+                    applicationTrackID: applicationTrackID,
+                    window: (turn.start, turn.end)
+                )
+                guard !remoteText.isEmpty else { continue }
+                classifiedTurns[index].echoScored = true
+                classifiedTurns[index].isLikelyEcho = MeetingEchoDetector.isLikelyEcho(
+                    micText: turn.text,
+                    remoteText: remoteText
+                )
+            }
+        }
+
         let localClusterID = session.selectedMicrophone.role == .personal
             ? MeetingLocalSpeakerEvidenceSelector.candidate(
-                cleanDurationByCluster: cleanDurationByCluster,
+                evidenceDurationByCluster: Self.localSpeakerEvidence(
+                    from: classifiedTurns.map {
+                        (
+                            clusterID: $0.clusterID, start: $0.start, end: $0.end,
+                            overlapsRemote: $0.overlapsRemote, echoScored: $0.echoScored,
+                            isEcho: $0.isLikelyEcho
+                        )
+                    }
+                ),
                 prototypeSpeakerIDs: accumulator.embeddingIndexByTrack[.microphone]?.speakerIDs ?? []
             )
             : nil
         if let localClusterID,
-           let evidenceTurn = stagedTurns.first(where: { $0.clusterID == localClusterID })
+           let evidenceTurn = classifiedTurns.first(where: { $0.clusterID == localClusterID })
         {
             accumulator.addResolvedSpeaker(
                 id: localClusterID,
@@ -1036,28 +1080,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             isLocalUser: false,
             clusterID: nil
         )
-        let applicationTrackID = session.audioTracks.first(where: { $0.kind == .applicationAudio })?.id
-        // The 60s remote whole-chunk fallback is too coarse to score against; exclude its speaker.
-        let fallbackSpeakerID = accumulator.speakerIDByKey["meeting-audio"]
-        var classifiedTurns = stagedTurns
-        if let applicationTrackID {
-            for index in classifiedTurns.indices where classifiedTurns[index].overlapsRemote {
-                let turn = classifiedTurns[index]
-                guard turn.clusterID != localClusterID else { continue }
-                let remoteText = Self.echoCandidateText(
-                    segments: accumulator.segments,
-                    speakerIDToExclude: fallbackSpeakerID,
-                    applicationTrackID: applicationTrackID,
-                    window: (turn.start, turn.end)
-                )
-                classifiedTurns[index].isLikelyEcho = MeetingEchoDetector.isLikelyEcho(
-                    micText: turn.text,
-                    remoteText: remoteText
-                )
-            }
-        }
         for turn in classifiedTurns {
-            let isCleanLocalTurn = turn.clusterID == localClusterID && !turn.overlapsRemote
+            let isLocalCluster = turn.clusterID == localClusterID
+            let isCleanLocalTurn = isLocalCluster && !turn.isLikelyEcho
             accumulator.segments.append(Self.segment(
                 key: "microphone:\(turn.chunkID.uuidString):\(turn.index)",
                 trackID: track.id,
@@ -1066,7 +1091,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 end: turn.end,
                 text: turn.text,
                 overlap: turn.overlapsRemote ? .overlapsOtherTrack : .none,
-                isLikelyEcho: turn.isLikelyEcho
+                isLikelyEcho: isLocalCluster ? false : turn.isLikelyEcho
             ))
         }
     }

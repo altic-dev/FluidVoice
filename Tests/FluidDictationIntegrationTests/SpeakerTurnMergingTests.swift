@@ -929,7 +929,7 @@ final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
         let localID = UUID()
         let secondaryID = UUID()
         let selected = MeetingLocalSpeakerEvidenceSelector.candidate(
-            cleanDurationByCluster: [localID: 12, secondaryID: 3],
+            evidenceDurationByCluster: [localID: 12, secondaryID: 3],
             prototypeSpeakerIDs: [localID, secondaryID]
         )
 
@@ -940,7 +940,7 @@ final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
         let firstID = UUID()
         let secondID = UUID()
         let selected = MeetingLocalSpeakerEvidenceSelector.candidate(
-            cleanDurationByCluster: [firstID: 8, secondID: 7],
+            evidenceDurationByCluster: [firstID: 8, secondID: 7],
             prototypeSpeakerIDs: [firstID, secondID]
         )
 
@@ -950,7 +950,7 @@ final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
     func testClusterWithoutPositiveEmbeddingEvidenceDoesNotSelectYou() {
         let clusterID = UUID()
         let selected = MeetingLocalSpeakerEvidenceSelector.candidate(
-            cleanDurationByCluster: [clusterID: 12],
+            evidenceDurationByCluster: [clusterID: 12],
             prototypeSpeakerIDs: []
         )
 
@@ -1410,6 +1410,61 @@ final class MeetingSessionModelTests: XCTestCase {
             toTurns: [(index: 0, start: 0, end: 5)]
         )
         XCTAssertEqual(result.byTurn[0], "one two three")
+    }
+
+    // MARK: - Identifying "You" when the far end bleeds into the microphone
+
+    private func micTurn(
+        _ cluster: UUID, _ start: Double, _ end: Double,
+        overlapsRemote: Bool = true, echoScored: Bool = true, isEcho: Bool = false
+    ) -> (clusterID: UUID, start: Double, end: Double, overlapsRemote: Bool, echoScored: Bool, isEcho: Bool) {
+        (cluster, start, end, overlapsRemote, echoScored, isEcho)
+    }
+
+    func testSpeakingOverTheFarEndCountsAsEvidence() {
+        // Measured on a real Meet call: 83% of mic time overlapped remote speech.
+        let you = UUID(), bleed = UUID()
+        let evidence = MeetingProcessingPipeline.localSpeakerEvidence(from: [
+            self.micTurn(you, 0, 12),
+            self.micTurn(bleed, 12, 40, isEcho: true),
+            self.micTurn(you, 40, 46),
+        ])
+        XCTAssertEqual(evidence[you], 18)
+        XCTAssertNil(evidence[bleed], "the far end coming back is never evidence of the mic owner")
+    }
+
+    func testClusterThatIsMostlyEchoIsNeverACandidate() {
+        // A sole candidate skips the margin rule entirely, so purity must stop it earlier.
+        let bleed = UUID()
+        let evidence = MeetingProcessingPipeline.localSpeakerEvidence(from: [
+            self.micTurn(bleed, 0, 200, isEcho: true),
+            self.micTurn(bleed, 200, 240),
+        ])
+        XCTAssertTrue(evidence.isEmpty)
+        XCTAssertNil(
+            MeetingLocalSpeakerEvidenceSelector.candidate(
+                evidenceDurationByCluster: evidence,
+                prototypeSpeakerIDs: [bleed]
+            ),
+            "a sole candidate skips the margin rule, so purity has to stop it earlier"
+        )
+    }
+
+    func testUnscoreableOverlapProvesNothingEitherWay() {
+        // A remote fallback chunk is excluded from scoring, so its window yields no verdict.
+        let bleed = UUID()
+        let evidence = MeetingProcessingPipeline.localSpeakerEvidence(from: [
+            self.micTurn(bleed, 0, 600, echoScored: false),
+        ])
+        XCTAssertTrue(evidence.isEmpty, "no remote text to score against is unknown, not clean")
+    }
+
+    func testSpeechWithNoRemoteOverlapRemainsEvidenceWithoutScoring() {
+        let you = UUID()
+        let evidence = MeetingProcessingPipeline.localSpeakerEvidence(from: [
+            self.micTurn(you, 0, 9, overlapsRemote: false, echoScored: false),
+        ])
+        XCTAssertEqual(evidence[you], 9, "the original physical signal still counts")
     }
 
     // MARK: - Per-turn engines: merge gap, and fallbacks that must not erase "You"
