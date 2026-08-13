@@ -26,6 +26,7 @@ enum OggOpusDecoder {
         let channels: Int
         let preSkip: Int
         let finalGranule: UInt64
+        let precedingMaxGranule: UInt64?
         let packets: [Data]
     }
 
@@ -77,6 +78,9 @@ enum OggOpusDecoder {
         guard finalGranule >= stream.preSkip else {
             throw DecoderError.invalidContainer("final granule precedes Opus pre-skip.")
         }
+        if let precedingMaxGranule = stream.precedingMaxGranule, stream.finalGranule < precedingMaxGranule {
+            throw DecoderError.invalidContainer("final granule trims previously completed audio.")
+        }
         let streamFrames = finalGranule - stream.preSkip
         guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
         guard decodedFrames >= stream.preSkip, streamFrames <= decodedFrames - stream.preSkip else {
@@ -105,6 +109,7 @@ enum OggOpusDecoder {
         var packet = Data()
         var packets: [Data] = []
         var finalGranule: UInt64 = 0
+        var precedingMaxGranule: UInt64?
 
         while offset < data.count {
             guard offset + 27 <= data.count, data[offset ..< offset + 4].elementsEqual("OggS".utf8) else {
@@ -130,7 +135,11 @@ enum OggOpusDecoder {
                 expectedSerial = serial
             }
             expectedSequence = sequence &+ 1
-            finalGranule = self.uint64(data, at: offset + 6)
+            let pageGranule = self.uint64(data, at: offset + 6)
+            if finalGranule != UInt64.max {
+                precedingMaxGranule = max(precedingMaxGranule ?? 0, finalGranule)
+            }
+            finalGranule = pageGranule
 
             let payloadOffset = offset + 27 + pageSegments
             let payloadLength = data[offset + 27 ..< payloadOffset].reduce(0) { $0 + Int($1) }
@@ -169,6 +178,7 @@ enum OggOpusDecoder {
             channels: Int(header[9]),
             preSkip: Int(self.uint16(header, at: 10)),
             finalGranule: finalGranule,
+            precedingMaxGranule: precedingMaxGranule,
             packets: Array(packets.dropFirst(2))
         )
     }
