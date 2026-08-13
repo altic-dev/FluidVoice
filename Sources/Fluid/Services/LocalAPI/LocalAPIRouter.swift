@@ -31,6 +31,10 @@ final class LocalAPIRouter {
     }
 
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        guard !Task.isCancelled else {
+            return LocalAPI.error("Request cancelled.", status: 503)
+        }
+
         let key = RouteKey(method: request.method.uppercased(), path: request.path)
         guard let handler = self.routes[key] else {
             if self.routes.keys.contains(where: { $0.path == request.path }) {
@@ -38,7 +42,11 @@ final class LocalAPIRouter {
             }
             return LocalAPI.error("Route not found.", status: 404)
         }
-        return await handler.handle(request)
+        let response = await handler.handle(request)
+        guard !Task.isCancelled else {
+            return LocalAPI.error("Request cancelled.", status: 503)
+        }
+        return response
     }
 }
 

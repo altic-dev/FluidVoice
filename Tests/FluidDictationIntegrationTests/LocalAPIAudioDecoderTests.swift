@@ -30,6 +30,27 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         await fulfillment(of: [restarted], timeout: 0.1)
     }
 
+    @MainActor
+    func testLocalAPIRouterDoesNotInvokeHandlerForCancelledTask() async {
+        let router = LocalAPIRouter()
+        var invocationCount = 0
+        router.register(method: "GET", path: "/cancelled") { _ in
+            invocationCount += 1
+            return LocalAPI.empty()
+        }
+        let request = LocalAPI.Request(method: "GET", path: "/cancelled", query: [:], headers: [:], body: Data())
+
+        let task = Task { @MainActor in
+            await Task.yield()
+            return await router.route(request)
+        }
+        task.cancel()
+        let response = await task.value
+
+        XCTAssertEqual(response.status, 503)
+        XCTAssertEqual(invocationCount, 0)
+    }
+
     func testTranscribeAPIDecodesBundledOggOpusFixture() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
@@ -359,5 +380,23 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             offset = payloadOffset + payloadLength
         }
         return offsets
+    }
+}
+
+private struct ClosureLocalAPIRouteHandler: LocalAPIRouteHandler {
+    let operation: @MainActor (LocalAPI.Request) async -> LocalAPI.Response
+
+    func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        await self.operation(request)
+    }
+}
+
+private extension LocalAPIRouter {
+    func register(
+        method: String,
+        path: String,
+        operation: @escaping @MainActor (LocalAPI.Request) async -> LocalAPI.Response
+    ) {
+        self.register(method: method, path: path, handler: ClosureLocalAPIRouteHandler(operation: operation))
     }
 }
