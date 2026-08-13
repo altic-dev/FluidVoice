@@ -24,7 +24,7 @@ final class LocalAPIInFlightRequest {
 final class LocalAPIServer {
     static let shared = LocalAPIServer()
 
-    private let router = LocalAPIRouter()
+    private lazy var router = LocalAPIRouter()
     private let queue = DispatchQueue(label: "fluidvoice.local-api", qos: .utility)
     private var listener: NWListener?
     private var activeConnections: [ObjectIdentifier: LocalAPIConnectionHandler] = [:]

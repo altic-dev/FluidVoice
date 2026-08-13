@@ -32,13 +32,19 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
 
     @MainActor
     func testLocalAPIRouterDoesNotInvokeHandlerForCancelledTask() async {
-        let router = LocalAPIRouter()
+        let router = LocalAPIRouter(authToken: "test-token")
         var invocationCount = 0
         router.register(method: "GET", path: "/cancelled") { _ in
             invocationCount += 1
             return LocalAPI.empty()
         }
-        let request = LocalAPI.Request(method: "GET", path: "/cancelled", query: [:], headers: [:], body: Data())
+        let request = LocalAPI.Request(
+            method: "GET",
+            path: "/cancelled",
+            query: [:],
+            headers: ["authorization": "Bearer test-token"],
+            body: Data()
+        )
 
         let task = Task { @MainActor in
             await Task.yield()
@@ -48,6 +54,23 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         let response = await task.value
 
         XCTAssertEqual(response.status, 503)
+        XCTAssertEqual(invocationCount, 0)
+    }
+
+    @MainActor
+    func testLocalAPIRouterRejectsRequestsWithoutBearerToken() async {
+        let router = LocalAPIRouter(authToken: "test-token")
+        var invocationCount = 0
+        router.register(method: "POST", path: "/protected") { _ in
+            invocationCount += 1
+            return LocalAPI.empty()
+        }
+        let request = LocalAPI.Request(method: "POST", path: "/protected", query: [:], headers: [:], body: Data())
+
+        let response = await router.route(request)
+
+        XCTAssertEqual(response.status, 401)
+        XCTAssertEqual(response.headers["WWW-Authenticate"], "Bearer")
         XCTAssertEqual(invocationCount, 0)
     }
 

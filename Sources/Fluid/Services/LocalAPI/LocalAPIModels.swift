@@ -7,6 +7,7 @@ enum LocalAPI {
     struct Configuration {
         let enabled: Bool
         let port: UInt16
+        let authToken: String
 
         static var current: Configuration {
             let defaults = UserDefaults.standard
@@ -19,7 +20,14 @@ enum LocalAPI {
 
             let rawPort = defaults.integer(forKey: "LocalAPIPort")
             let port = rawPort > 0 && rawPort <= Int(UInt16.max) ? UInt16(rawPort) : LocalAPI.defaultPort
-            return Configuration(enabled: enabled, port: port)
+            let authToken: String
+            if let storedToken = defaults.string(forKey: "LocalAPIAuthToken"), !storedToken.isEmpty {
+                authToken = storedToken
+            } else {
+                authToken = UUID().uuidString + UUID().uuidString
+                defaults.set(authToken, forKey: "LocalAPIAuthToken")
+            }
+            return Configuration(enabled: enabled, port: port, authToken: authToken)
         }
     }
 

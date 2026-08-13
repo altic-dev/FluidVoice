@@ -7,8 +7,10 @@ final class LocalAPIRouter {
     }
 
     private var routes: [RouteKey: LocalAPIRouteHandler] = [:]
+    private let authToken: String
 
-    init() {
+    init(authToken: String = LocalAPI.Configuration.current.authToken) {
+        self.authToken = authToken
         self.register(method: "GET", path: "/v1/health", handler: HealthController())
 
         let history = HistoryAPIController()
@@ -33,6 +35,14 @@ final class LocalAPIRouter {
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         guard !Task.isCancelled else {
             return LocalAPI.error("Request cancelled.", status: 503)
+        }
+        guard request.headers["authorization"] == "Bearer \(self.authToken)" else {
+            let response = LocalAPI.error("Authentication required.", status: 401)
+            return LocalAPI.Response(
+                status: response.status,
+                headers: response.headers.merging(["WWW-Authenticate": "Bearer"]) { current, _ in current },
+                body: response.body
+            )
         }
 
         let key = RouteKey(method: request.method.uppercased(), path: request.path)

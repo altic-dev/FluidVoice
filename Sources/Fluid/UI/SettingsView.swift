@@ -267,7 +267,7 @@ struct SettingsView: View {
                             self.settingsToggleRow(
                                 title: "Local API (on-device agents)",
                                 description: "Loopback-only HTTP API for local agents. Also permits history access and dictionary changes.",
-                                footnote: "Port \(LocalAPI.Configuration.current.port), off by default. No authentication; /v1/postprocess may use a remote provider.",
+                                footnote: "Port \(LocalAPI.Configuration.current.port), off by default. Bearer token required; /v1/postprocess may use a remote provider.",
                                 isOn: Binding(
                                     get: { SettingsStore.shared.localAPIEnabled },
                                     set: { newValue in
