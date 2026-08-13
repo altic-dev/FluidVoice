@@ -29,10 +29,10 @@ it to take effect, since the server is otherwise started only at app launch.
   process that can connect may use every route, including reading transcription history and changing
   dictionary entries. Enable it only on a trusted Mac and turn it off when it is not needed.
 - It is opt-in and off by default.
-- Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request. For file-`path`
-  input, audio longer than the limit is **rejected**; for inline `audioBase64` input it is currently
-  **truncated to the first 300 s**. These caps are independent — compressed audio can satisfy the byte
-  limit yet still hit the duration limit.
+- Limits: request body **25 MB**; transcription audio **300 s (5 min)** per request. File-`path` input
+  and inline OGG/Opus `audioBase64` input longer than the limit are **rejected**; other inline formats
+  are currently **truncated to the first 300 s**. These caps are independent — compressed audio can
+  satisfy the byte limit yet still hit the duration limit.
 - **Locality caveat:** `/v1/transcribe` runs fully on-device. `/v1/postprocess` runs your configured
   post-processing provider (Settings → AI Enhancement); if that provider is a remote API
   (OpenAI/Groq/Anthropic/…), the submitted text is sent there. Only the HTTP listener and transcription
