@@ -152,6 +152,10 @@ enum OggOpusDecoder {
             guard payloadOffset + payloadLength <= data.count else {
                 throw DecoderError.invalidContainer("truncated page payload.")
             }
+            let pageEnd = payloadOffset + payloadLength
+            guard self.oggPageChecksum(data, range: offset ..< pageEnd) == self.uint32(data, at: offset + 22) else {
+                throw DecoderError.invalidContainer("Ogg page checksum mismatch.")
+            }
 
             var cursor = payloadOffset
             for lengthByte in data[offset + 27 ..< payloadOffset] {
@@ -163,7 +167,7 @@ enum OggOpusDecoder {
                     packet.removeAll(keepingCapacity: true)
                 }
             }
-            offset = payloadOffset + payloadLength
+            offset = pageEnd
         }
 
         guard packet.isEmpty else { throw DecoderError.invalidContainer("truncated packet.") }
@@ -200,5 +204,20 @@ enum OggOpusDecoder {
 
     private static func uint64(_ data: Data, at offset: Int) -> UInt64 {
         (0 ..< 8).reduce(0) { $0 | (UInt64(data[offset + $1]) << UInt64($1 * 8)) }
+    }
+
+    private static func oggPageChecksum(_ data: Data, range: Range<Int>) -> UInt32 {
+        var checksum: UInt32 = 0
+        let checksumRange = range.lowerBound + 22 ..< range.lowerBound + 26
+        for index in range {
+            let byte = checksumRange.contains(index) ? UInt8.zero : data[index]
+            checksum ^= UInt32(byte) << 24
+            for _ in 0 ..< 8 {
+                checksum = checksum & 0x8000_0000 != 0
+                    ? (checksum &<< 1) ^ 0x04C1_1DB7
+                    : checksum &<< 1
+            }
+        }
+        return checksum
     }
 }

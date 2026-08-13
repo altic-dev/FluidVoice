@@ -14,6 +14,20 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         XCTAssertTrue(samples.contains { abs($0) > 0.001 })
     }
 
+    func testTranscribeAPIRejectsOggOpusPageWithCorruptPayload() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var data = try Data(contentsOf: fixtureURL)
+        let tagsPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: [], in: 1 ..< data.count)?.lowerBound)
+        let payloadOffset = tagsPage + 27 + Int(data[tagsPage + 26])
+        data[payloadOffset + 8] ^= 0x01
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
+            XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: Ogg page checksum mismatch.")
+        }
+    }
+
     func testTranscribeAPIRejectsOggOpusTruncatedBeforeEOSPage() throws {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
@@ -38,6 +52,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             precedingPages.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound
         )
         data[precedingPage + 5] |= 0x04
+        self.updateOggPageChecksum(in: &data, pageOffset: precedingPage)
 
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
             XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: data follows the EOS page.")
@@ -57,6 +72,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         var data = try Data(contentsOf: fixtureURL)
         let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
         data.replaceSubrange(lastPage + 6 ..< lastPage + 14, with: repeatElement(UInt8.max, count: 8))
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
             XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: invalid final granule position.")
@@ -74,6 +90,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             lastPage + 6 ..< lastPage + 14,
             with: (0 ..< 8).map { UInt8(truncatingIfNeeded: impossibleGranule >> UInt64($0 * 8)) }
         )
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
             XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: final granule exceeds decoded audio.")
@@ -91,6 +108,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             lastPage + 6 ..< lastPage + 14,
             with: (0 ..< 8).map { UInt8(truncatingIfNeeded: impossibleGranule >> UInt64($0 * 8)) }
         )
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
             XCTAssertEqual(
@@ -111,6 +129,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             lastPage + 6 ..< lastPage + 14,
             with: (0 ..< 8).map { UInt8(truncatingIfNeeded: trimmedGranule >> UInt64($0 * 8)) }
         )
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         let samples = try LocalAPIAudioDecoder.oggOpusSamples(from: data)
 
@@ -128,6 +147,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
             lastPage + 6 ..< lastPage + 14,
             with: (0 ..< 8).map { UInt8(truncatingIfNeeded: previousPageGranule >> UInt64($0 * 8)) }
         )
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         let samples = try LocalAPIAudioDecoder.oggOpusSamples(from: data)
 
@@ -141,6 +161,7 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         var data = try Data(contentsOf: fixtureURL)
         let lastPage = try XCTUnwrap(data.range(of: Data("OggS".utf8), options: .backwards)?.lowerBound)
         data.replaceSubrange(lastPage + 6 ..< lastPage + 14, with: repeatElement(UInt8.zero, count: 8))
+        self.updateOggPageChecksum(in: &data, pageOffset: lastPage)
 
         XCTAssertThrowsError(try LocalAPIAudioDecoder.oggOpusSamples(from: data)) { error in
             XCTAssertEqual(error.localizedDescription, "Invalid OGG/Opus audio: final granule precedes Opus pre-skip.")
@@ -178,5 +199,27 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
         XCTAssertEqual(json["text"] as? String, "fixture transcript")
         XCTAssertEqual(json["provider"] as? String, "test provider")
+    }
+
+    private func updateOggPageChecksum(in data: inout Data, pageOffset: Int) {
+        let segmentCount = Int(data[pageOffset + 26])
+        let payloadOffset = pageOffset + 27 + segmentCount
+        let payloadLength = data[pageOffset + 27 ..< payloadOffset].reduce(0) { $0 + Int($1) }
+        let pageEnd = payloadOffset + payloadLength
+        data.replaceSubrange(pageOffset + 22 ..< pageOffset + 26, with: repeatElement(UInt8.zero, count: 4))
+
+        var checksum: UInt32 = 0
+        for byte in data[pageOffset ..< pageEnd] {
+            checksum ^= UInt32(byte) << 24
+            for _ in 0 ..< 8 {
+                checksum = checksum & 0x8000_0000 != 0
+                    ? (checksum &<< 1) ^ 0x04C1_1DB7
+                    : checksum &<< 1
+            }
+        }
+        data.replaceSubrange(
+            pageOffset + 22 ..< pageOffset + 26,
+            with: (0 ..< 4).map { UInt8(truncatingIfNeeded: checksum >> UInt32($0 * 8)) }
+        )
     }
 }
