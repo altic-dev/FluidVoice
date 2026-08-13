@@ -28,6 +28,9 @@
 		803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803000000000000000000001 /* MediaPlaybackServiceTests.swift */; };
 		803000000000000000000003 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 803000000000000000000004 /* MediaRemoteAdapter */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
+		0GG000000000000000000001 /* LocalAPIAudioDecoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0GG000000000000000000002 /* LocalAPIAudioDecoderTests.swift */; };
+		0GG000000000000000000003 /* dictation_fixture.ogg in Resources */ = {isa = PBXBuildFile; fileRef = 0GG000000000000000000004 /* dictation_fixture.ogg */; };
+		0GG000000000000000000005 /* Opus.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0GG000000000000000000006 /* Opus.xcframework */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
@@ -75,6 +78,9 @@
 		803000000000000000000001 /* MediaPlaybackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackServiceTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
+		0GG000000000000000000002 /* LocalAPIAudioDecoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAPIAudioDecoderTests.swift; sourceTree = "<group>"; };
+		0GG000000000000000000004 /* dictation_fixture.ogg */ = {isa = PBXFileReference; lastKnownFileType = file; path = dictation_fixture.ogg; sourceTree = "<group>"; };
+		0GG000000000000000000006 /* Opus.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/Opus.xcframework; sourceTree = SOURCE_ROOT; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
@@ -91,6 +97,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0GG000000000000000000005 /* Opus.xcframework in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
@@ -155,6 +162,7 @@
 				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
 				7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */,
 				803000000000000000000001 /* MediaPlaybackServiceTests.swift */,
+				0GG000000000000000000002 /* LocalAPIAudioDecoderTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -171,6 +179,7 @@
 			isa = PBXGroup;
 			children = (
 				7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */,
+				0GG000000000000000000004 /* dictation_fixture.ogg */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -178,6 +187,7 @@
 		7CDB0A282F3C4D5600FB7CAD /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				0GG000000000000000000006 /* Opus.xcframework */,
 				7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */,
 			);
 			name = Frameworks;
@@ -293,6 +303,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */,
+				0GG000000000000000000003 /* dictation_fixture.ogg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -324,6 +335,7 @@
 				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
 				7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */,
 				803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */,
+				0GG000000000000000000001 /* LocalAPIAudioDecoderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

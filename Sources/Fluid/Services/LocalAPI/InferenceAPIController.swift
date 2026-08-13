@@ -2,6 +2,17 @@ import Foundation
 
 @MainActor
 final class InferenceAPIController: LocalAPIRouteHandler {
+    typealias SampleTranscriber = ([Float]) async throws -> (text: String, confidence: Float, provider: String)
+
+    private let sampleTranscriber: SampleTranscriber
+
+    init(sampleTranscriber: @escaping SampleTranscriber = { samples in
+        let result = try await AppServices.shared.asr.transcribeSamplesForAPI(samples)
+        return (result.text, result.confidence, SettingsStore.shared.selectedSpeechModel.displayName)
+    }) {
+        self.sampleTranscriber = sampleTranscriber
+    }
+
     struct TranscribeJSONRequest: Decodable {
         let path: String?
         let audioBase64: String?
@@ -55,13 +66,13 @@ final class InferenceAPIController: LocalAPIRouteHandler {
             }
 
             let samples = try self.decodeAudioSamples(from: request)
-            let result = try await AppServices.shared.asr.transcribeSamplesForAPI(samples)
+            let result = try await self.sampleTranscriber(samples)
             return LocalAPI.json(
                 TranscribeResponse(
                     text: result.text,
                     confidence: result.confidence,
                     sampleCount: samples.count,
-                    provider: SettingsStore.shared.selectedSpeechModel.displayName
+                    provider: result.provider
                 )
             )
         } catch {

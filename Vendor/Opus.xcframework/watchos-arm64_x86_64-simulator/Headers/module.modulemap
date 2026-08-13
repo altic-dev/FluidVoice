@@ -1,0 +1,7 @@
+module Opus [system] {
+  header "opus.h"
+  header "opus_types.h"
+  header "opus_defines.h"
+  header "opus_multistream.h"
+  export *
+}

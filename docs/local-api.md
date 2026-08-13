@@ -58,7 +58,10 @@ Request body (JSON), one of:
 { "audioBase64": "<base64>", "filename": "clip.wav" } // or inline audio (extension hint)
 ```
 
-Supported inputs include WAV, MP3, M4A, OGG and other common formats (decoded internally).
+Supported inputs include WAV, MP3, M4A, OGG/Opus and other common formats. OGG/Opus has an
+embedded libopus fallback, so it does not depend on Homebrew, ffmpeg, or a system media extension.
+The OGG fallback supports the mono/stereo Opus mapping used by Telegram voice messages; malformed,
+chained, multiplexed, or other channel-mapped OGG streams return a clear `400` error.
 
 Response:
 

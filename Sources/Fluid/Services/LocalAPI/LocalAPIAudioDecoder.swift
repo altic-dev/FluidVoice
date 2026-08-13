@@ -6,6 +6,22 @@ enum LocalAPIAudioDecoder {
     static let maxDurationSeconds: Double = 300
 
     static func samples(from fileURL: URL) throws -> [Float] {
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        if OggOpusDecoder.isOggOpus(data) {
+            return try self.oggOpusSamples(from: data)
+        }
+        do {
+            return try self.samplesUsingAVFoundation(from: fileURL)
+        } catch {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported or invalid audio file: \(error.localizedDescription)"]
+            )
+        }
+    }
+
+    private static func samplesUsingAVFoundation(from fileURL: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: fileURL)
         let sourceFormat = file.processingFormat
         let maxFrames = AVAudioFramePosition(sourceFormat.sampleRate * self.maxDurationSeconds)
@@ -39,7 +55,23 @@ enum LocalAPIAudioDecoder {
     }
 
     static func validateDurationWithinLimit(for fileURL: URL) throws -> Int {
-        let file = try AVAudioFile(forReading: fileURL)
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        if OggOpusDecoder.isOggOpus(data) {
+            return try OggOpusDecoder.samples(from: data).count / 3
+        }
+        do {
+            let file = try AVAudioFile(forReading: fileURL)
+            return try self.validateDurationWithinLimit(for: file)
+        } catch {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported or invalid audio file: \(error.localizedDescription)"]
+            )
+        }
+    }
+
+    private static func validateDurationWithinLimit(for file: AVAudioFile) throws -> Int {
         let sourceFormat = file.processingFormat
         guard sourceFormat.sampleRate > 0 else {
             throw NSError(domain: "LocalAPIAudioDecoder", code: -6, userInfo: [NSLocalizedDescriptionKey: "Audio file has an invalid sample rate."])
@@ -55,5 +87,33 @@ enum LocalAPIAudioDecoder {
         }
 
         return Int((Double(file.length) * self.sampleRate / sourceFormat.sampleRate).rounded())
+    }
+
+    private static func downsampleOpusTo16k(_ samples: [Float]) -> [Float] {
+        guard samples.count >= 3 else { return [] }
+        var output = [Float]()
+        output.reserveCapacity(samples.count / 3)
+        for index in stride(from: 0, through: samples.count - 3, by: 3) {
+            output.append((samples[index] + samples[index + 1] + samples[index + 2]) / 3)
+        }
+        return output
+    }
+
+    static func oggOpusSamples(from data: Data) throws -> [Float] {
+        guard data.count <= LocalAPI.maxRequestBytes else {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -8,
+                userInfo: [NSLocalizedDescriptionKey: "Audio input exceeds the 25 MB API limit."]
+            )
+        }
+        guard OggOpusDecoder.isOggOpus(data) else {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -9,
+                userInfo: [NSLocalizedDescriptionKey: "Audio input is not an OGG/Opus stream."]
+            )
+        }
+        return self.downsampleOpusTo16k(try OggOpusDecoder.samples(from: data))
     }
 }
