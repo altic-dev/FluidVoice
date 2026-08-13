@@ -62,7 +62,8 @@ enum LocalAPIAudioDecoder {
     static func validateDurationWithinLimit(for fileURL: URL) throws -> Int {
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         if OggOpusDecoder.isOggOpus(data) {
-            return try OggOpusDecoder.samples(from: data).count / 3
+            try self.validateRequestSize(data)
+            return try OggOpusDecoder.sampleCount(from: data) / 3
         }
         do {
             let file = try AVAudioFile(forReading: fileURL)
@@ -105,13 +106,7 @@ enum LocalAPIAudioDecoder {
     }
 
     static func oggOpusSamples(from data: Data) throws -> [Float] {
-        guard data.count <= LocalAPI.maxRequestBytes else {
-            throw NSError(
-                domain: "LocalAPIAudioDecoder",
-                code: -8,
-                userInfo: [NSLocalizedDescriptionKey: "Audio input exceeds the 25 MB API limit."]
-            )
-        }
+        try self.validateRequestSize(data)
         guard OggOpusDecoder.isOggOpus(data) else {
             throw NSError(
                 domain: "LocalAPIAudioDecoder",
@@ -120,5 +115,15 @@ enum LocalAPIAudioDecoder {
             )
         }
         return self.downsampleOpusTo16k(try OggOpusDecoder.samples(from: data))
+    }
+
+    private static func validateRequestSize(_ data: Data) throws {
+        guard data.count <= LocalAPI.maxRequestBytes else {
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -8,
+                userInfo: [NSLocalizedDescriptionKey: "Audio input exceeds the 25 MB API limit."]
+            )
+        }
     }
 }

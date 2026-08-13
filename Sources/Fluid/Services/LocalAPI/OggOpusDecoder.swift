@@ -39,13 +39,7 @@ enum OggOpusDecoder {
 
     static func samples(from data: Data) throws -> [Float] {
         let stream = try self.parse(data)
-        guard stream.channels == 1 || stream.channels == 2 else {
-            throw DecoderError.unsupportedStream("only mono and stereo streams are supported.")
-        }
-        guard stream.finalGranule != UInt64.max, stream.finalGranule <= UInt64(Int.max) else {
-            throw DecoderError.invalidContainer("invalid final granule position.")
-        }
-        let finalGranule = Int(stream.finalGranule)
+        let streamFrames = try self.validatedSampleCount(for: stream)
 
         var error: Int32 = 0
         guard let decoder = opus_decoder_create(Int32(self.opusRate), Int32(stream.channels), &error), error == OPUS_OK else {
@@ -54,7 +48,7 @@ enum OggOpusDecoder {
         defer { opus_decoder_destroy(decoder) }
 
         var decoded: [Float] = []
-        decoded.reserveCapacity(min(self.maxDecodedFrames, finalGranule) * stream.channels)
+        decoded.reserveCapacity(min(self.maxDecodedFrames, streamFrames + stream.preSkip) * stream.channels)
         var frameBuffer = [Float](repeating: 0, count: 5_760 * stream.channels)
 
         for packet in stream.packets {
@@ -75,14 +69,6 @@ enum OggOpusDecoder {
         }
 
         let decodedFrames = decoded.count / stream.channels
-        guard finalGranule >= stream.preSkip else {
-            throw DecoderError.invalidContainer("final granule precedes Opus pre-skip.")
-        }
-        if let precedingMaxGranule = stream.precedingMaxGranule, stream.finalGranule < precedingMaxGranule {
-            throw DecoderError.invalidContainer("final granule trims previously completed audio.")
-        }
-        let streamFrames = finalGranule - stream.preSkip
-        guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
         guard decodedFrames >= stream.preSkip, streamFrames <= decodedFrames - stream.preSkip else {
             throw DecoderError.invalidContainer("final granule exceeds decoded audio.")
         }
@@ -100,6 +86,29 @@ enum OggOpusDecoder {
             mono.append((decoded[offset] + decoded[offset + 1]) * 0.5)
         }
         return mono
+    }
+
+    static func sampleCount(from data: Data) throws -> Int {
+        try self.validatedSampleCount(for: self.parse(data))
+    }
+
+    private static func validatedSampleCount(for stream: Stream) throws -> Int {
+        guard stream.channels == 1 || stream.channels == 2 else {
+            throw DecoderError.unsupportedStream("only mono and stereo streams are supported.")
+        }
+        guard stream.finalGranule != UInt64.max, stream.finalGranule <= UInt64(Int.max) else {
+            throw DecoderError.invalidContainer("invalid final granule position.")
+        }
+        let finalGranule = Int(stream.finalGranule)
+        guard finalGranule >= stream.preSkip else {
+            throw DecoderError.invalidContainer("final granule precedes Opus pre-skip.")
+        }
+        if let precedingMaxGranule = stream.precedingMaxGranule, stream.finalGranule < precedingMaxGranule {
+            throw DecoderError.invalidContainer("final granule trims previously completed audio.")
+        }
+        let streamFrames = finalGranule - stream.preSkip
+        guard streamFrames <= self.maxDecodedFrames else { throw DecoderError.durationLimit }
+        return streamFrames
     }
 
     private static func parse(_ data: Data) throws -> Stream {

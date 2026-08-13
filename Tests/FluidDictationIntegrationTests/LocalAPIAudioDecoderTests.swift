@@ -176,6 +176,32 @@ final class LocalAPIAudioDecoderTests: XCTestCase {
         XCTAssertTrue(try LocalAPIAudioDecoder.requiresBufferedTranscription(for: fixtureURL))
     }
 
+    func testOggPathDurationValidationUsesStructuralSampleCount() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        let data = try Data(contentsOf: fixtureURL)
+
+        XCTAssertEqual(try OggOpusDecoder.sampleCount(from: data), 55_572)
+        XCTAssertEqual(try LocalAPIAudioDecoder.validateDurationWithinLimit(for: fixtureURL), 18_524)
+    }
+
+    func testOggPathDurationValidationEnforcesRequestSizeLimitBeforeParsing() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "dictation_fixture", withExtension: "ogg")
+        )
+        var oversizedData = try Data(contentsOf: fixtureURL)
+        oversizedData.append(Data(repeating: 0, count: LocalAPI.maxRequestBytes - oversizedData.count + 1))
+        let oversizedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluidvoice-oversized-\(UUID().uuidString).ogg")
+        try oversizedData.write(to: oversizedURL)
+        defer { try? FileManager.default.removeItem(at: oversizedURL) }
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.validateDurationWithinLimit(for: oversizedURL)) { error in
+            XCTAssertEqual(error.localizedDescription, "Audio input exceeds the 25 MB API limit.")
+        }
+    }
+
     @MainActor
     func testTranscribeRouteAcceptsRawOggOpusBody() async throws {
         let fixtureURL = try XCTUnwrap(
