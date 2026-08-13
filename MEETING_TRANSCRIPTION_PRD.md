@@ -203,11 +203,23 @@ Written 2026-08-10 per DELIVERY-001, before M2 implementation. Numeric budgets r
 - Retry restarts processing from preserved audio; it resumes only at the application-audio track boundary (checkpoint), not mid-track.
 - Audio deletion is best-effort on APFS; no secure-erase claim (PRIV-015).
 
-### Milestone 3 — Remembered speaker identities
+### Milestone 3 — Speaker identity
 
-- [ ] **[MUST · M3] M3-EXIT-001** Explicit opt-in voice profiles store only confirmed clean samples.
-- [ ] **[MUST · M3] M3-EXIT-002** Future meetings produce conservative name candidates with **Yes/No** confirmation.
-- [ ] **[MUST · M3] M3-EXIT-003** Rename, unlink, forget-one-person, and delete-all-profile controls pass.
+**Direction changed 2026-08-12 — voice profiles withdrawn.** See `MEETING_M3_SPEAKER_IDENTITY.md`
+for the research and the revised design. Voiceprints are a biometric identifier under Illinois BIPA
+(private right of action, statutory damages) and GDPR Article 9; two directly comparable products
+(Fireflies, Otter) are in active litigation for profiling non-consenting meeting participants, and
+on-device storage is not an established safe harbour. Identity now comes from calendar attendees
+plus transcript inference, which is not biometric data.
+
+- [ ] **[MUST · M3] M3-EXIT-001** Sessions match a calendar event where one exists, producing a
+      closed candidate set of attendee names; no invite falls back cleanly to manual naming.
+- [ ] **[MUST · M3] M3-EXIT-002** 1:1 meetings auto-assign the single remaining speaker, and any
+      proposed name — auto-assigned or inferred — requires **Yes/No** confirmation before it sticks.
+- [ ] **[MUST · M3] M3-EXIT-003** Rename, reassign, merge and undo pass (shipped in M2); no name is
+      ever applied without confirmation, and an attendee list is never assumed to be a speaker list.
+- [ ] **[MUST · M3] M3-EXIT-004** Diarization embeddings are no longer persisted to disk;
+      within-session clustering keeps them in memory only.
 
 ### Milestone 4 — Platform intelligence and meeting suggestions
 
