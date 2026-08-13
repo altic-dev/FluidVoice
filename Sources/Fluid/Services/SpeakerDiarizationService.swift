@@ -52,7 +52,11 @@ actor SpeakerDiarizationService {
     /// Includes one bounded centroid per local cluster so callers can stitch the
     /// same voice across independently processed files without retaining audio.
     /// - Parameter maxGapSeconds: file transcription keeps the 1.0s default; meetings pass wider.
-    func diarizeWithProfiles(fileURL: URL, maxGapSeconds: Double = 1.0) async throws -> DiarizationOutput {
+    func diarizeWithProfiles(
+        fileURL: URL,
+        maxGapSeconds: Double = 1.0,
+        maxTurnSeconds: Double = 20 * 60
+    ) async throws -> DiarizationOutput {
         if !self.modelsReady {
             await MainActor.run {
                 DebugLogger.shared.info(
@@ -111,7 +115,7 @@ actor SpeakerDiarizationService {
         }
 
         return DiarizationOutput(
-            turns: Self.mergeAdjacentTurns(turns, maxGapSeconds: maxGapSeconds),
+            turns: Self.mergeAdjacentTurns(turns, maxGapSeconds: maxGapSeconds, maxTurnSeconds: maxTurnSeconds),
             profilesByLabel: profilesByLabel
         )
     }
@@ -187,7 +191,11 @@ actor SpeakerDiarizationService {
         try await self.diarizeWithProfiles(fileURL: fileURL).turns
     }
 
-    func diarizeWithProfiles(fileURL: URL, maxGapSeconds: Double = 1.0) async throws -> DiarizationOutput {
+    func diarizeWithProfiles(
+        fileURL: URL,
+        maxGapSeconds: Double = 1.0,
+        maxTurnSeconds: Double = 20 * 60
+    ) async throws -> DiarizationOutput {
         throw NSError(
             domain: "SpeakerDiarizationService",
             code: -1,

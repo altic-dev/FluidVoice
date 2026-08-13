@@ -4,7 +4,11 @@ import Foundation
 nonisolated enum MeetingEchoDetector {
     static let minimumMicWords = 4
     static let minimumMatchedContentWords = 2
-    static let containmentThreshold = 0.75
+    /// Measured on one real call: echo 0.65-1.00 at any length, non-echo 0.00-0.33.
+    static let containmentThreshold = 0.5
+
+    /// Below this the ratio quantises too coarsely to trust a partial hit; demand a total match.
+    static let minimumContentWordsForPartialMatch = 4
 
     private static let stopwords: Set<String> = [
         "the", "a", "an", "and", "or", "but", "so", "to", "of", "in", "on", "it", "is",
@@ -32,10 +36,13 @@ nonisolated enum MeetingEchoDetector {
     }
 
     static func isLikelyEcho(micText: String, remoteText: String) -> Bool {
-        let micWords = Set(self.normalizedWords(micText))
-        guard micWords.count >= self.minimumMicWords else { return false }
+        guard self.normalizedWords(micText).count >= self.minimumMicWords else { return false }
         let matchedContentWords = self.contentWords(micText).intersection(self.contentWords(remoteText)).count
         guard matchedContentWords >= self.minimumMatchedContentWords else { return false }
-        return self.containment(micText: micText, remoteText: remoteText) >= self.containmentThreshold
+        let score = self.containment(micText: micText, remoteText: remoteText)
+        if self.contentWords(micText).count < self.minimumContentWordsForPartialMatch {
+            return score >= 1
+        }
+        return score >= self.containmentThreshold
     }
 }

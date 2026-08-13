@@ -279,6 +279,35 @@ private final class MeetingProviderLanguagePin {
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     static let pipelineVersion = 3
+    /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
+    static let perTurnTurnMergeGapSeconds = 5.0
+
+    /// Gap alone produced ~59s turns, too coarse to attribute. Bound the length as well.
+    static let meetingTurnMaxSeconds = 30.0
+
+
+    nonisolated static func turnMergeGapSeconds(supportsWordTimings: Bool) -> TimeInterval {
+        supportsWordTimings ? Self.meetingTurnMergeGapSeconds : Self.perTurnTurnMergeGapSeconds
+    }
+
+    /// Claiming the whole chunk marks every concurrent mic turn as overlapping remote, erasing
+    /// the clean-speech evidence that identifies "You".
+    nonisolated static func isEmptyTurnFallback(_ error: Error) -> Bool {
+        if case LabeledPassError.emptyTurn = error { return true }
+        return false
+    }
+
+    nonisolated static func remoteFallbackIntervals(
+        diarizedTurns: [(start: TimeInterval, end: TimeInterval)],
+        chunkOffset: TimeInterval,
+        chunkDuration: TimeInterval
+    ) -> [(start: TimeInterval, end: TimeInterval)] {
+        guard !diarizedTurns.isEmpty else {
+            return [(start: chunkOffset, end: chunkOffset + chunkDuration)]
+        }
+        return diarizedTurns.map { (start: chunkOffset + $0.start, end: chunkOffset + $0.end) }
+    }
+
     /// Conversational pauses run to a few seconds; 1.0s fragmented turns and starved the ASR.
     static let meetingTurnMergeGapSeconds = 3.0
 
@@ -674,10 +703,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let chunkDuration = try await Task.detached(priority: .userInitiated) {
             try Self.audioDuration(url)
         }.value
+        var diarizedSpans: [(start: TimeInterval, end: TimeInterval)] = []
         if SpeakerDiarizationService.isSupported {
             do {
-                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
+                let diarization = try await diarizer.diarizeWithProfiles(
+                    fileURL: url,
+                    maxGapSeconds: Self.turnMergeGapSeconds(supportsWordTimings: context.provider.supportsWordTimings),
+                    maxTurnSeconds: Self.meetingTurnMaxSeconds
+                )
                 let turns = diarization.turns
+                diarizedSpans = turns.map { (start: $0.startSeconds, end: $0.endSeconds) }
                 if !turns.isEmpty {
                     let allTurns = try await self.transcribeTurns(turns, chunkID: chunk.id, trackKind: .applicationAudio, fileURL: url, context: context)
                     guard let transcribedTurns = MeetingTurnSelection.keepingNonEmpty(allTurns) else {
@@ -742,8 +777,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             } catch {
                 if error is CancellationError { throw error }
                 if case MeetingProcessingError.audioUnreadable = error { throw error }
+                let reason = Self.isEmptyTurnFallback(error) ? "every turn transcribed empty" : "diarization failed"
                 DebugLogger.shared.warning(
-                    "Meeting remote diarization failed; preserving an unlabeled track transcript: \(error)",
+                    "Meeting remote chunk \(chunk.id) fell back to an unlabeled transcript (\(reason)): \(error)",
                     source: "MeetingProcessingPipeline"
                 )
             }
@@ -763,7 +799,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 isLocalUser: false,
                 clusterID: nil
             )
-            remoteSpeech.append(TimelineInterval(start: chunkOffset, end: chunkOffset + chunkDuration))
+            remoteSpeech.append(contentsOf: Self.remoteFallbackIntervals(
+                diarizedTurns: diarizedSpans,
+                chunkOffset: chunkOffset,
+                chunkDuration: chunkDuration
+            ).map { TimelineInterval(start: $0.start, end: $0.end) })
             accumulator.segments.append(Self.segment(
                 key: "remote-fallback:\(chunk.id.uuidString)",
                 trackID: track.id,
@@ -838,7 +878,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }.value
         if SpeakerDiarizationService.isSupported {
             do {
-                let diarization = try await diarizer.diarizeWithProfiles(fileURL: url, maxGapSeconds: Self.meetingTurnMergeGapSeconds)
+                let diarization = try await diarizer.diarizeWithProfiles(
+                    fileURL: url,
+                    maxGapSeconds: Self.turnMergeGapSeconds(supportsWordTimings: context.provider.supportsWordTimings),
+                    maxTurnSeconds: Self.meetingTurnMaxSeconds
+                )
                 let turns = diarization.turns
                 if !turns.isEmpty {
                     let allTurns = try await self.transcribeTurns(turns, chunkID: chunk.id, trackKind: .microphone, fileURL: url, context: context)
@@ -889,8 +933,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             } catch {
                 if error is CancellationError { throw error }
                 if case MeetingProcessingError.audioUnreadable = error { throw error }
+                let reason = Self.isEmptyTurnFallback(error) ? "every turn transcribed empty" : "diarization failed"
                 DebugLogger.shared.warning(
-                    "Meeting microphone speech detection failed; preserving an unlabeled track transcript: \(error)",
+                    "Meeting microphone chunk \(chunk.id) fell back to an unlabeled transcript (\(reason)): \(error)",
                     source: "MeetingProcessingPipeline"
                 )
             }

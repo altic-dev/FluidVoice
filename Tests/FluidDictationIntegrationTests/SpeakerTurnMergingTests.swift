@@ -1412,6 +1412,88 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(result.byTurn[0], "one two three")
     }
 
+    // MARK: - Per-turn engines: merge gap, and fallbacks that must not erase "You"
+
+    // Real pairs from one Zoom recording. A user talking alone scores 0 at any length.
+
+    func testLongEchoSegmentIsStillFlagged() {
+        let mic = "I'm sure you remember this time at these days. If I get something wrong. myself. you know. did I sign a lucron? The need to verify the work"
+        let remote = "I'm sure you remember this time at these days. If I get something wrong, are usually question myself? You know, did I sign a look wrong? Did I not give my agent everything? The need. To verify their work."
+        XCTAssertTrue(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: remote))
+    }
+
+    func testUserSpeakingAloneIsNeverFlaggedRegardlessOfLength() {
+        let mic = "This is a test for fluid voice app. Meeting captured. The meeting is getting captured on my machine and I am checking whether the transcript comes out right."
+        XCTAssertEqual(MeetingEchoDetector.containment(micText: mic, remoteText: ""), 0)
+        XCTAssertFalse(MeetingEchoDetector.isLikelyEcho(micText: mic, remoteText: ""))
+    }
+
+    func testOnTopicButDistinctSpeechStaysBelowThreshold() {
+        let mic = "I felt it was not terminal. It drops consistent"
+        let remote = "the terminal session dropped again and I had to restart the whole thing from scratch"
+        XCTAssertLessThan(MeetingEchoDetector.containment(micText: mic, remoteText: remote), MeetingEchoDetector.containmentThreshold)
+    }
+
+    func testRepetitiveShortUtteranceIsNotRejectedByTheWordFloor() {
+        let mic = "you know you know you know you know"
+        XCTAssertTrue(MeetingEchoDetector.normalizedWords(mic).count >= MeetingEchoDetector.minimumMicWords)
+    }
+
+    func testMergedTurnsAreLengthCappedNotJustGapMerged() {
+        let turns = (0..<20).map {
+            SpeakerDiarizationService.SpeakerTurn(
+                speakerLabel: "Speaker 1",
+                startSeconds: Double($0) * 4,
+                endSeconds: Double($0) * 4 + 3.5
+            )
+        }
+        let merged = SpeakerDiarizationService.mergeAdjacentTurns(
+            turns,
+            maxGapSeconds: MeetingProcessingPipeline.perTurnTurnMergeGapSeconds,
+            maxTurnSeconds: MeetingProcessingPipeline.meetingTurnMaxSeconds
+        )
+        XCTAssertGreaterThan(merged.count, 1, "the cap must break up an unbroken monologue")
+        for turn in merged {
+            XCTAssertLessThanOrEqual(
+                turn.endSeconds - turn.startSeconds,
+                MeetingProcessingPipeline.meetingTurnMaxSeconds
+            )
+        }
+    }
+
+    func testMergeGapIsWiderForEnginesWithoutWordTimings() {
+        let aligned = MeetingProcessingPipeline.turnMergeGapSeconds(supportsWordTimings: true)
+        let perTurn = MeetingProcessingPipeline.turnMergeGapSeconds(supportsWordTimings: false)
+        XCTAssertEqual(aligned, MeetingProcessingPipeline.meetingTurnMergeGapSeconds, "aligned path must be unchanged")
+        XCTAssertGreaterThan(perTurn, aligned, "per-turn engines merge harder to avoid starved turns")
+    }
+
+    func testRemoteFallbackUsesDiarizedSpansWhenAvailable() {
+        let intervals = MeetingProcessingPipeline.remoteFallbackIntervals(
+            diarizedTurns: [(start: 2, end: 5), (start: 40, end: 44)],
+            chunkOffset: 60,
+            chunkDuration: 60
+        )
+        XCTAssertEqual(intervals.count, 2)
+        XCTAssertEqual(intervals[0].start, 62)
+        XCTAssertEqual(intervals[0].end, 65)
+        XCTAssertEqual(intervals[1].start, 100)
+        XCTAssertEqual(intervals[1].end, 104)
+        let claimed = intervals.reduce(0.0) { $0 + ($1.end - $1.start) }
+        XCTAssertLessThan(claimed, 60, "must not claim the whole chunk when spans are known")
+    }
+
+    func testRemoteFallbackClaimsWholeChunkWhenDiarizationProducedNothing() {
+        let intervals = MeetingProcessingPipeline.remoteFallbackIntervals(
+            diarizedTurns: [],
+            chunkOffset: 60,
+            chunkDuration: 60
+        )
+        XCTAssertEqual(intervals.count, 1)
+        XCTAssertEqual(intervals[0].start, 60)
+        XCTAssertEqual(intervals[0].end, 120)
+    }
+
     // MARK: - Speaker bleed must never be attached to a local turn
 
     func testWordAttachmentToleranceIsZeroOnTheMicrophoneTrack() {
