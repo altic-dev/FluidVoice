@@ -26,6 +26,14 @@ final class KeychainService {
     private let service = "com.fluidvoice.provider-api-keys"
     private let account = "fluidApiKeys"
 
+    /// Under XCTest every SecItem call must be bypassed: the unsigned test host is
+    /// not in the keychain item's ACL, so the first SecItemCopyMatching blocks the
+    /// main thread on an authorization prompt and the test runner hangs before it
+    /// can connect. Tests get an in-memory store instead — they must never read or
+    /// write the user's real keys anyway.
+    private static let isRunningUnderXCTest = NSClassFromString("XCTestCase") != nil
+    private var inMemoryKeys: [String: String] = [:]
+
     private init() {}
 
     // MARK: - Public API
@@ -66,6 +74,7 @@ final class KeychainService {
     }
 
     func legacyProviderEntries() throws -> [String: String] {
+        guard !Self.isRunningUnderXCTest else { return [:] }
         var result: [String: String] = [:]
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -113,6 +122,7 @@ final class KeychainService {
     }
 
     func removeLegacyEntries(providerIDs: [String] = []) throws {
+        guard !Self.isRunningUnderXCTest else { return }
         let targets: [String]
         if !providerIDs.isEmpty {
             targets = providerIDs
@@ -131,6 +141,7 @@ final class KeychainService {
     // MARK: - Private helpers
 
     private func loadStoredKeys() throws -> [String: String] {
+        guard !Self.isRunningUnderXCTest else { return self.inMemoryKeys }
         var query = self.aggregatedQuery()
         query[kSecReturnData as String] = kCFBooleanTrue
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -159,6 +170,10 @@ final class KeychainService {
     }
 
     private func saveStoredKeys(_ keys: [String: String]) throws {
+        guard !Self.isRunningUnderXCTest else {
+            self.inMemoryKeys = keys
+            return
+        }
         let data = try JSONEncoder().encode(keys)
 
         var attributes = self.aggregatedQuery()
