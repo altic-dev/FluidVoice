@@ -30,5 +30,6 @@ describe('Regression Test Suite', () => {
 
     // Assert
     expect(result.name).toBe('John Doe');
+    expect(result).toBeTruthy(); // Ensure result is not null or undefined
   });
 });

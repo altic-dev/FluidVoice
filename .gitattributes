@@ -2,3 +2,8 @@
 *.xcodeproj merge=union
 *.xcworkspace merge=union
 *.gitattributes merge=union
+
+*.gitattributes -merge
+*.pbxproj -merge
+*.xcodeproj -merge
+*.xcworkspace -merge
