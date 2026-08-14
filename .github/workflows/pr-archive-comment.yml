@@ -20,6 +20,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RUN_ID: ${{ github.event.workflow_run.id }}
       EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
       # This trusted workflow reads artifact metadata only. Never download or
@@ -27,6 +28,20 @@ jobs:
       - name: Post archive download link
         run: |
           set -euo pipefail
+
+          # workflow_run.pull_requests is populated only for same-repository pull
+          # requests and is empty for pull requests from forks, so fork builds never
+          # got past the check below. Match the head SHA from the trusted event
+          # payload against the open pull requests instead. The artifact name also
+          # encodes the number, but it is produced by the untrusted pull_request
+          # workflow, so it is not trusted to select the comment target here.
+          if [[ ! "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            EVENT_PR_NUMBER=$(
+              gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --paginate \
+                --jq '.[] | select(.head.sha == env.HEAD_SHA) | .number' \
+                | sed -n '1p'
+            )
+          fi
 
           if [[ ! "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "The completed workflow run is not associated with a pull request." >&2
