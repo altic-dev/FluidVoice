@@ -437,7 +437,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Check if we need confirmation for destructive commands
-                if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
+                if SettingsStore.shared.commandModeConfirmBeforeExecute, Self.isDestructiveCommand(tc.command) {
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
@@ -559,7 +559,7 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func isDestructiveCommand(_ command: String) -> Bool {
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
         let cmd = command.lowercased()
 
         // Commands that start with these are destructive
@@ -596,6 +596,49 @@ final class CommandModeService: ObservableObject {
         // rm with flags like -rf, -r, -f anywhere
         if cmd.contains("rm -") {
             return true
+        }
+
+        // The prefix list above only matches a bare command name. A model
+        // that reaches for `/bin/rm`, `/usr/bin/sudo`, etc. (not unusual —
+        // absolute paths are a normal way to disambiguate a binary) skips
+        // every check above except the `rm -` fallback, which only happens
+        // to catch `rm` and only when it carries a `-` flag. Resolve the
+        // leading token to its bare command name the same way a shell would
+        // (last path component) so `/bin/rm`, `/usr/bin/rm`, and bare `rm`
+        // are all recognized as the same command regardless of how the
+        // model referenced it.
+        let leadingToken = cmd
+            .drop(while: { $0 == " " || $0 == "\t" })
+            .prefix(while: { $0 != " " && $0 != "\t" })
+        let commandName = (leadingToken as NSString).lastPathComponent
+        let destructiveCommandNames: Set = [
+            "rm", "rmdir", "mv", "sudo", "kill", "pkill", "killall",
+            "chmod", "chown", "chgrp", "dd", "mkfs", "shred", "truncate",
+        ]
+        if destructiveCommandNames.contains(commandName) {
+            return true
+        }
+
+        // `find -delete` / `find ... -exec rm ...` deletes without ever
+        // matching "rm -" or any `|`/`;`/`&&` pattern above, since `rm`
+        // inside `-exec` never sits next to a matched separator.
+        if commandName == "find", cmd.contains(" -delete") || (cmd.contains("-exec") && cmd.contains("rm ")) {
+            return true
+        }
+
+        // diskutil's erase/reformat/partition subcommands are as destructive
+        // as `dd`/`mkfs`/`format` but are a different binary entirely and
+        // weren't covered by any check above. Scoped to the destructive
+        // subcommands specifically so read-only uses (`diskutil list`,
+        // `diskutil info`) are not flagged.
+        if commandName == "diskutil" {
+            let destructiveDiskutilSubcommands = [
+                "erasedisk", "erasevolume", "secureerase",
+                "reformat", "partitiondisk", "zerodisk", "unmountdisk",
+            ]
+            if destructiveDiskutilSubcommands.contains(where: { cmd.contains($0) }) {
+                return true
+            }
         }
 
         return false
