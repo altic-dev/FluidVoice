@@ -2838,7 +2838,9 @@ final class SettingsStore: ObservableObject {
     var rewriteModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
-            return value as? Bool ?? true
+            // Off by default: a coaching app must not silently own a global
+            // Option+R text-rewrite chord in every application.
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()

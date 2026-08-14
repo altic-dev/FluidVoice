@@ -135,10 +135,10 @@ struct WelcomeView: View {
 
                                 SetupStepView(
                                     step: 3,
-                                    title: self.accessibilityEnabled ? "Accessibility Access Enabled" : "Enable Accessibility Access",
+                                    title: self.accessibilityEnabled ? "Accessibility Access Enabled" : "Enable Accessibility Access (Optional)",
                                     description: self.accessibilityEnabled
                                         ? "Accessibility permission granted for typing into apps"
-                                        : "Drag \(self.appDisplayName) into the Accessibility apps list as shown",
+                                        : "Only needed for global dictation hotkeys — practice works without it",
                                     status: self.accessibilityEnabled ? .completed : .pending,
                                     action: {
                                         self.openAccessibilitySettings()
@@ -860,7 +860,10 @@ struct OnboardingFlowView: View {
     }
 
     private var isPermissionsReady: Bool {
-        self.isMicrophoneReady && self.isAccessibilityReady
+        // Accessibility is deliberately not required: practice sessions record via
+        // the in-app button and never type into other apps. AX only powers the
+        // optional dictation hotkeys, so it must not gate onboarding.
+        self.isMicrophoneReady
     }
 
     private var isAIReady: Bool {
@@ -901,7 +904,9 @@ struct OnboardingFlowView: View {
         case .aiEnhancement:
             return self.isAIReady
         case .playground:
-            return self.isPlaygroundReady && !self.asr.isRunning && !self.isRecordingAnyShortcut
+            // The playground demonstrates the dictation hotkey — optional for a
+            // practice-first app, so it never blocks Continue.
+            return !self.asr.isRunning && !self.isRecordingAnyShortcut
         }
     }
 
@@ -1873,7 +1878,7 @@ struct OnboardingFlowView: View {
         if self.isAccessibilityReady {
             return "Typing access is ready"
         }
-        return self.accessibilitySetupInProgress ? "Finish Accessibility Access" : "Enable Accessibility Access"
+        return self.accessibilitySetupInProgress ? "Finish Accessibility Access" : "Enable Accessibility Access (Optional)"
     }
 
     private var accessibilityPermissionSubtitle: String {
@@ -1883,7 +1888,7 @@ struct OnboardingFlowView: View {
         if self.accessibilitySetupInProgress {
             return "Use the floating guide to drag \(self.appDisplayName) into the Accessibility apps list."
         }
-        return "Open Settings, then use the floating guide to add \(self.appDisplayName)."
+        return "Only needed for global dictation hotkeys. Practice sessions work without it."
     }
 
     private var appDisplayName: String {
@@ -1894,7 +1899,7 @@ struct OnboardingFlowView: View {
         if self.isAccessibilityReady {
             return "Ready"
         }
-        return self.accessibilitySetupInProgress ? "In Settings" : "Needed"
+        return self.accessibilitySetupInProgress ? "In Settings" : "Optional"
     }
 
     private var accessibilityPermissionActionTitle: String {

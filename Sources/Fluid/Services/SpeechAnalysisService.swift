@@ -212,6 +212,40 @@ nonisolated struct DeliveryMetrics: Codable, Equatable {
     }
 }
 
+/// Manual decode in an extension (so the memberwise init survives) solely to give
+/// `quality` a fallback: session files written before the signal-quality gate
+/// existed lack the field, and wiping every measurement in them over one missing
+/// key is worse than admitting the quality was never assessed.
+nonisolated extension DeliveryMetrics {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            durationSeconds: try c.decode(Double.self, forKey: .durationSeconds),
+            speechSpanSeconds: try c.decode(Double.self, forKey: .speechSpanSeconds),
+            speakingSeconds: try c.decode(Double.self, forKey: .speakingSeconds),
+            totalWords: try c.decode(Int.self, forKey: .totalWords),
+            pauses: try c.decode([Pause].self, forKey: .pauses),
+            totalPauseSeconds: try c.decode(Double.self, forKey: .totalPauseSeconds),
+            longestPauseSeconds: try c.decode(Double.self, forKey: .longestPauseSeconds),
+            speakingRatio: try c.decode(Double.self, forKey: .speakingRatio),
+            wordsPerMinute: try c.decode(Double.self, forKey: .wordsPerMinute),
+            articulationRate: try c.decode(Double.self, forKey: .articulationRate),
+            fillerCounts: try c.decode([String: Int].self, forKey: .fillerCounts),
+            fillersPerMinute: try c.decode(Double.self, forKey: .fillersPerMinute),
+            meanPitchHz: try c.decode(Double.self, forKey: .meanPitchHz),
+            pitchRangeHz: try c.decode(Double.self, forKey: .pitchRangeHz),
+            pitchStdDevHz: try c.decode(Double.self, forKey: .pitchStdDevHz),
+            pitchContour: try c.decode([Double].self, forKey: .pitchContour),
+            meanLevelDb: try c.decode(Double.self, forKey: .meanLevelDb),
+            dynamicRangeDb: try c.decode(Double.self, forKey: .dynamicRangeDb),
+            levelStdDevDb: try c.decode(Double.self, forKey: .levelStdDevDb),
+            energyContour: try c.decode([Double].self, forKey: .energyContour),
+            contourIntervalSeconds: try c.decode(Double.self, forKey: .contourIntervalSeconds),
+            quality: try c.decodeIfPresent(SignalQuality.self, forKey: .quality) ?? .unknown
+        )
+    }
+}
+
 /// Acoustic analysis over the 16 kHz mono PCM that `ASRService` already accumulates.
 ///
 /// Pure and synchronous by design: no singletons, no settings reads, no actor

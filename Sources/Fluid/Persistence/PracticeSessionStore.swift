@@ -124,14 +124,29 @@ final class PracticeSessionStore: ObservableObject {
 
         do {
             let data = try Data(contentsOf: url)
-            self.sessions = try Self.decoder.decode([PracticeSession].self, from: data)
+            self.sessions = try Self.decodeSessions(from: data)
         } catch {
-            // A corrupt or older-shaped file must not take the app down with it.
+            // A file that isn't even valid JSON must not take the app down with it.
             DebugLogger.shared.error(
                 "Failed to load practice sessions: \(error.localizedDescription)",
                 source: "PracticeSessionStore"
             )
             self.sessions = []
+        }
+    }
+
+    /// Entry-by-entry decode so one undecodable session (schema drift, partial
+    /// corruption) drops that session instead of wiping the whole history.
+    /// Internal rather than private so the migration behavior is testable.
+    nonisolated static func decodeSessions(from data: Data) throws -> [PracticeSession] {
+        try self.decoder.decode([LossySession].self, from: data).compactMap(\.session)
+    }
+
+    private nonisolated struct LossySession: Decodable {
+        let session: PracticeSession?
+
+        init(from decoder: Decoder) {
+            self.session = try? PracticeSession(from: decoder)
         }
     }
 

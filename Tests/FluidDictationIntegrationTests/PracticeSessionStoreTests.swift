@@ -51,6 +51,46 @@ final class PracticeSessionStoreTests: XCTestCase {
         XCTAssertTrue(decoded[0].feedback.isEmpty)
     }
 
+    /// Files written before the signal-quality gate lack `metrics.quality`. They
+    /// must load with their measurements intact, flagged as never-assessed —
+    /// not be wiped for missing one key.
+    func testPreGateFileLoadsWithQualityDefaultingToUnknown() throws {
+        let session = self.makeSession(transcript: "the plan")
+        let data = try PracticeSessionStore.encoder.encode([session])
+
+        var json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        var metrics = try XCTUnwrap(json[0]["metrics"] as? [String: Any])
+        metrics.removeValue(forKey: "quality")
+        json[0]["metrics"] = metrics
+        let preGateData = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try PracticeSessionStore.decodeSessions(from: preGateData)
+
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertEqual(decoded[0].metrics.wordsPerMinute, session.metrics.wordsPerMinute)
+        XCTAssertEqual(decoded[0].metrics.pitchContour, session.metrics.pitchContour)
+        XCTAssertEqual(decoded[0].metrics.quality, .unknown)
+    }
+
+    /// One mangled entry drops that entry, never the neighbors around it.
+    func testCorruptEntryIsDroppedWithoutWipingTheRest() throws {
+        let keeper = self.makeSession(transcript: "the plan")
+        let data = try PracticeSessionStore.encoder.encode([keeper, keeper])
+
+        var json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        json[0]["date"] = "not a date"
+        let corruptData = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try PracticeSessionStore.decodeSessions(from: corruptData)
+
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertEqual(decoded[0].transcript, keeper.transcript)
+    }
+
     func testFormattedDurationRendersMinutesAndSeconds() {
         XCTAssertEqual(self.makeSession(duration: 0).formattedDuration, "0:00")
         XCTAssertEqual(self.makeSession(duration: 9).formattedDuration, "0:09")
