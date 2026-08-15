@@ -162,11 +162,34 @@ design:
   buffers (device-clock vs mach jitter); widen it — corrections are currently telemetry noise, though
   emitted PTS stayed monotonic and the writer accepted everything.
 
-**Phase 2 — timeline.** *Gate:* drift within Phase 0's bound over 30 minutes. **Absolute offset cannot
-be measured with an acoustic click** — AEC removes it, so a failed correlation would mean cancellation
-worked. Use a loud chirp and matched-filter the ~33 dB residual; if the residual is unrecoverable,
-record that absolute offset is unmeasured, accept ordering-tolerance validation on a real call, and
-say so rather than reporting a number.
+**Phase 2 — timeline. DONE, 2026-08-15, gate honestly FAILED — with the remedy designed.**
+
+The Phase 1 "corrections on 97% of buffers" finding was a **misdiagnosis**: not HAL jitter but a
+latch bug — the correction re-baselined one full accumulation window off (post- vs pre-increment
+frame count), so every subsequent stamp re-corrected forever. Reproduced by simulation (drift-only
+run predicts first fire at window ~32; field data showed 31 and 34), fixed with one line, and the
+first-fire index back-derives the built-in mic's drift as ~6.4 ppm — matching the repo's old
+echo-path measurement from an entirely different method.
+
+Cross-path drift gate (8 min, dual capture, guards all zero):
+`mic +6.693 ppm (CI ±0.635) | app −0.081 ppm (CI ±0.627) | Δ 6.774, CI_Δ 0.892` → the
+budget-derived gate (Δ+CI < 6.9 ppm = ±50 ms over 2 h) **failed by 0.77 ppm**. The mic's sample
+clock genuinely runs ~6.7 ppm fast vs mach: 24 ms/hour of skew, 48.8 ms at 2 h — inside budget at
+the point estimate, over it with CI, and per-device physics that another machine or a USB mic could
+triple.
+
+**Remedy (Phase 3, consumer side):** the clock's correction stream is now a live drift meter
+(`cumulativeAbsorbedCorrectionSeconds`, one correction per ~3.2 s, each ≤20.8 µs). The batch
+pipeline applies a linear de-drift to mic PTS when mapping onto the shared timeline — one multiply —
+holding the budget with ~10× margin for **any** device, which also retires the USB-microphone
+concern structurally. Capture-side PTS stays sample-count truth (the invariant: `anchorPTS` is never
+moved mid-stream; corrections adjust only the divergence reference and are a no-op on output).
+
+Also built: divergence **step detector** (10 ms threshold; drift moves 0.64 ns/window and cannot
+fire it — verified over a simulated 2 h), resync clamp so a backlogged invalid burst can never step
+PTS behind emitted audio, timeline reset on `AVAudioEngineConfigurationChange`, and real timebase
+values in the probe's track metadata. Absolute cross-path offset remains unmeasured (AEC removes
+acoustic stimuli, as reviewed) and is Phase 3's first real-call validation item.
 
 **Phase 3 — integrate behind a flag, default off.** *Gate:* a real call whose transcript ordering is
 compared turn-by-turn against a human-checked reference. Not a simultaneous old-path capture — two

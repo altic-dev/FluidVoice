@@ -402,3 +402,89 @@ final class MeetingMicrophoneCaptureTests: XCTestCase {
         XCTAssertEqual(track.chunks.first?.discontinuities.map(\.kind), [.sourceLost])
     }
 }
+
+// MARK: - Phase 2: correction latch, step detector, resync clamp
+
+extension MeetingMicrophoneCaptureTests {
+    /// The Phase 1 field data (corrections on ~97% of buffers) was a latch: the correction
+    /// re-baselined one full window off, so every subsequent stamp re-corrected forever.
+    func testCorrectionDoesNotLatchAcrossSubsequentStamps() {
+        var clock = self.makeClock()
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 0), frameCount: 4_800)
+        // Force one genuine correction with a 5ms excursion…
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 0.105), frameCount: 4_800)
+        // …then five contiguous jitter-free stamps on the shifted timeline: zero further corrections.
+        for i in 2...6 {
+            let outcome = clock.stamp(hostTime: self.hostTime(seconds: 0.005 + Double(i) * 0.1), frameCount: 4_800)
+            guard case let .emitted(_, _, corrected, _) = outcome else { return XCTFail("expected emission") }
+            XCTAssertFalse(corrected, "stamp \(i) re-corrected: the latch is back")
+        }
+    }
+
+    /// A correction is a no-op on output: the next buffer's PTS continues exactly from the
+    /// previous end.
+    func testCorrectionLeavesEmittedPTSContinuous() {
+        var clock = self.makeClock()
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 0), frameCount: 4_800)
+        guard case let .emitted(before, _, corrected1, _) = clock.stamp(hostTime: self.hostTime(seconds: 0.108), frameCount: 4_800) else {
+            return XCTFail("expected emission")
+        }
+        XCTAssertTrue(corrected1)
+        guard case let .emitted(after, _, _, _) = clock.stamp(hostTime: self.hostTime(seconds: 0.208), frameCount: 4_800) else {
+            return XCTFail("expected emission")
+        }
+        XCTAssertEqual(after.seconds - before.seconds, 0.1, accuracy: 1.0 / 48_000)
+    }
+
+    /// Drift must never fire the step detector: 6.4 ppm over a simulated two hours.
+    func testSlowDriftNeverFiresTheStepDetector() {
+        var clock = self.makeClock()
+        let windows = 72_000 // 2h of 100ms windows
+        for i in 0..<windows {
+            let actual = Double(i) * 0.1 * (1 + 6.4e-6)
+            _ = clock.stamp(hostTime: self.hostTime(seconds: actual), frameCount: 4_800)
+        }
+        XCTAssertEqual(clock.divergenceStepEventCount, 0)
+        XCTAssertGreaterThan(clock.cumulativeAbsorbedCorrectionSeconds, 0, "drift shows up as absorbed corrections")
+    }
+
+    func testSingleJumpFiresExactlyOneStepEvent() {
+        var clock = self.makeClock()
+        for i in 0..<10 {
+            _ = clock.stamp(hostTime: self.hostTime(seconds: Double(i) * 0.1), frameCount: 4_800)
+        }
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 1.0 + 0.050), frameCount: 4_800) // 50ms step
+        for i in 11..<20 {
+            _ = clock.stamp(hostTime: self.hostTime(seconds: 0.050 + Double(i) * 0.1), frameCount: 4_800)
+        }
+        XCTAssertEqual(clock.divergenceStepEventCount, 1)
+        XCTAssertEqual(clock.maxDivergenceStepSeconds, 0.050, accuracy: 0.001)
+    }
+
+    /// A backlogged invalid burst can synthesize more timeline than elapsed host time; the resync
+    /// anchor clamps forward so PTS never steps behind emitted audio.
+    func testResyncNeverStepsBehindEmittedAudio() {
+        var clock = self.makeClock()
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 0), frameCount: 4_800)
+        // 500ms of synthesized emission (cap-inclusive), delivered as a burst…
+        for _ in 0..<5 { _ = clock.stamp(hostTime: nil, frameCount: 4_800) }
+        _ = clock.stamp(hostTime: nil, frameCount: 4_800) // over cap → dropping
+        // …then a valid stamp whose host time is EARLIER than the emitted end (0.6s emitted, 0.3s wall).
+        guard case let .emitted(pts, _, _, resynced) = clock.stamp(hostTime: self.hostTime(seconds: 0.3), frameCount: 4_800) else {
+            return XCTFail("expected resync emission")
+        }
+        XCTAssertTrue(resynced)
+        XCTAssertGreaterThanOrEqual(pts.seconds, 0.6 - 1.0 / 48_000, "resync anchored behind already-emitted audio")
+        XCTAssertEqual(clock.resyncClampCount, 1)
+    }
+
+    func testTimelineResetReanchorsOnNextValidStamp() {
+        var clock = self.makeClock()
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 5), frameCount: 4_800)
+        clock.requestTimelineReset()
+        guard case let .emitted(pts, _, _, _) = clock.stamp(hostTime: self.hostTime(seconds: 9), frameCount: 4_800) else {
+            return XCTFail("expected emission after reset")
+        }
+        XCTAssertEqual(pts.seconds, 9.0, accuracy: 1.0 / 48_000)
+    }
+}

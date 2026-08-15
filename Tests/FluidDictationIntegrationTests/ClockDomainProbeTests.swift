@@ -74,61 +74,6 @@ final class ClockDomainProbeTests: XCTestCase {
     }
 }
 
-/// Records (mach seconds, SCStream PTS seconds) pairs and fits PTS = a + b·mach by least squares.
-private actor ClockPairRecorder {
-    struct Fit {
-        let count: Int
-        let slopePPM: Double
-        let slopeCI95PPM: Double
-        let residualStdMs: Double
-        let ptsSpanSeconds: Double
-    }
-
-    private var machTimes: [Double] = []
-    private var ptsTimes: [Double] = []
-
-    func record(mach: Double, pts: Double) {
-        self.machTimes.append(mach)
-        self.ptsTimes.append(pts)
-    }
-
-    func regression() -> Fit? {
-        let n = self.machTimes.count
-        guard n > 10 else { return nil }
-        let x0 = self.machTimes[0]
-        let y0 = self.ptsTimes[0]
-        let xs = self.machTimes.map { $0 - x0 }
-        let ys = self.ptsTimes.map { $0 - y0 }
-        let sumX = xs.reduce(0, +)
-        let sumY = ys.reduce(0, +)
-        let meanX = sumX / Double(n)
-        let meanY = sumY / Double(n)
-        var sxx = 0.0
-        var sxy = 0.0
-        for i in 0..<n {
-            let dx = xs[i] - meanX
-            sxx += dx * dx
-            sxy += dx * (ys[i] - meanY)
-        }
-        guard sxx > 0 else { return nil }
-        let slope = sxy / sxx
-        var sse = 0.0
-        let intercept = meanY - slope * meanX
-        for i in 0..<n {
-            let r = ys[i] - (intercept + slope * xs[i])
-            sse += r * r
-        }
-        let residualVariance = sse / Double(max(1, n - 2))
-        let slopeStdErr = (residualVariance / sxx).squareRoot()
-        return Fit(
-            count: n,
-            slopePPM: (slope - 1) * 1_000_000,
-            slopeCI95PPM: 1.96 * slopeStdErr * 1_000_000,
-            residualStdMs: residualVariance.squareRoot() * 1_000,
-            ptsSpanSeconds: ys.last ?? 0
-        )
-    }
-}
 
 private final class ClockProbeOutput: NSObject, SCStreamOutput {
     private let recorder: ClockPairRecorder

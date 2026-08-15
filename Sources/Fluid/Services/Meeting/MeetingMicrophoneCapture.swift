@@ -8,9 +8,9 @@ import os
 
 // MARK: - PTS clock
 
-/// Anchor-and-count acquisition PTS: per-buffer `hostTime` conversion rounds ±½ tick against exact
-/// durations, firing the writer's zero-tolerance backwards check on rounding alone. A valid
-/// `hostTime` only corrects the anchor when it diverges by more than one frame.
+/// Anchor-and-count acquisition PTS. INVARIANT: emitted PTS is sample-count truth — corrections
+/// adjust only the divergence reference, never `anchorPTS`, so they are a no-op on output and
+/// double as a drift meter (~one per 3.2 s at the mic's measured ~6.7 ppm).
 nonisolated struct MeetingMicrophonePTSClock {
     enum Outcome: Equatable {
         /// `resynced` is true when this valid stamp follows a post-cap dropped run.
@@ -18,6 +18,17 @@ nonisolated struct MeetingMicrophonePTSClock {
         /// Cap exceeded: don't emit — the writer must see the gap, not a flawless silent track.
         case droppedPostCap
     }
+
+    /// Genuine steps only: drift moves 0.64 ns/window, jitter stays in the µs.
+    static let divergenceStepThresholdSeconds: Double = 0.010
+
+    private(set) var cumulativeAbsorbedCorrectionSeconds: Double = 0
+    private(set) var maxAbsDivergenceSeconds: Double = 0
+    private(set) var divergenceStepEventCount = 0
+    private(set) var maxDivergenceStepSeconds: Double = 0
+    private(set) var resyncClampCount = 0
+    private var lastDivergenceSeconds: Double = 0
+    private var lastEmittedEnd: CMTime = .invalid
 
     /// Deliberately equal to the writer's 0.5 s gap threshold (`MeetingAudioChunkWriter.swift:181`).
     static let synthesisCapSeconds: Double = 0.5
@@ -30,8 +41,7 @@ nonisolated struct MeetingMicrophonePTSClock {
     private var anchorHostSeconds: Double?
     private var anchorPTS: CMTime = .zero
     private var framesSinceAnchor: Int64 = 0
-    /// Integer frames, not summed seconds — repeated `Double` addition drifts the cap boundary.
-    private var synthesizedRunFrames: Int64 = 0
+    private var synthesizedRunFrames: Int64 = 0 // integer frames: summed Doubles drift the cap
     private var isDroppingInvalidRun = false
 
     init(sampleRate: Double = Double(Self.timescale), timebase: mach_timebase_info_data_t = Self.machTimebase()) {
@@ -60,7 +70,7 @@ nonisolated struct MeetingMicrophonePTSClock {
         self.framesSinceAnchor = 0
     }
 
-    /// `nil` iff `isHostTimeValid` is false; 0 is a legitimate mach tick, not a sentinel.
+    // hostTime nil iff isHostTimeValid false; 0 is a legitimate mach tick, not a sentinel
     mutating func stamp(hostTime: UInt64?, frameCount: Int) -> Outcome {
         guard let hostTime else {
             return self.stampInvalid(frameCount: frameCount)
@@ -69,8 +79,7 @@ nonisolated struct MeetingMicrophonePTSClock {
     }
 
     private mutating func stampInvalid(frameCount: Int) -> Outcome {
-        // No anchor yet: a zero anchor would park the track at epoch 0 vs SCStream's mach stamps.
-        guard self.anchorHostSeconds != nil else {
+        guard self.anchorHostSeconds != nil else { // no anchor: epoch-0 PTS would poison origins
             return .droppedPostCap
         }
         if self.isDroppingInvalidRun {
@@ -83,6 +92,7 @@ nonisolated struct MeetingMicrophonePTSClock {
             self.isDroppingInvalidRun = true
             return .droppedPostCap
         }
+        self.noteEmitted(pts: pts, frameCount: frameCount)
         return .emitted(pts: pts, synthesized: true, anchorCorrected: false, resynced: false)
     }
 
@@ -93,23 +103,54 @@ nonisolated struct MeetingMicrophonePTSClock {
         self.synthesizedRunFrames = 0
 
         if self.anchorHostSeconds == nil || wasDropping {
-            self.resetAnchor(hostSeconds: actualSeconds)
+            // A backlogged invalid burst can synthesize more timeline than elapsed host time;
+            // anchoring behind emitted audio would trip the writer's backwards check.
+            var resyncSeconds = actualSeconds
+            if self.lastEmittedEnd.isValid, self.lastEmittedEnd.seconds > resyncSeconds {
+                resyncSeconds = self.lastEmittedEnd.seconds
+                self.resyncClampCount += 1
+            }
+            self.resetAnchor(hostSeconds: resyncSeconds)
+            self.lastDivergenceSeconds = 0
             let pts = self.currentPTS()
             self.framesSinceAnchor += Int64(frameCount)
+            self.noteEmitted(pts: pts, frameCount: frameCount)
             return .emitted(pts: pts, synthesized: false, anchorCorrected: wasDropping, resynced: wasDropping)
         }
 
         let expectedSeconds = self.anchorHostSeconds! + Double(self.framesSinceAnchor) / self.sampleRate
         let divergence = actualSeconds - expectedSeconds
+        self.maxAbsDivergenceSeconds = max(self.maxAbsDivergenceSeconds, abs(divergence))
+        let step = abs(divergence - self.lastDivergenceSeconds)
+        if step > Self.divergenceStepThresholdSeconds {
+            self.divergenceStepEventCount += 1
+            self.maxDivergenceStepSeconds = max(self.maxDivergenceStepSeconds, step)
+        }
+        self.lastDivergenceSeconds = divergence
         let pts = self.currentPTS()
         self.framesSinceAnchor += Int64(frameCount)
+        self.noteEmitted(pts: pts, frameCount: frameCount)
 
         var corrected = false
         if abs(divergence) > 1.0 / self.sampleRate {
-            self.anchorHostSeconds = actualSeconds - Double(self.framesSinceAnchor) / self.sampleRate
+            // += divergence; using the post-increment count latches one window off (97% bug).
+            self.anchorHostSeconds! += divergence
+            self.cumulativeAbsorbedCorrectionSeconds += divergence
+            self.lastDivergenceSeconds = 0
             corrected = true
         }
         return .emitted(pts: pts, synthesized: false, anchorCorrected: corrected, resynced: false)
+    }
+
+    private mutating func noteEmitted(pts: CMTime, frameCount: Int) {
+        self.lastEmittedEnd = CMTimeAdd(pts, CMTime(value: Int64(frameCount), timescale: Self.timescale))
+    }
+
+    mutating func requestTimelineReset() {
+        self.anchorHostSeconds = nil
+        self.isDroppingInvalidRun = false
+        self.synthesizedRunFrames = 0
+        self.lastDivergenceSeconds = 0
     }
 }
 
@@ -302,6 +343,11 @@ final class MeetingMicrophoneCaptureStats: @unchecked Sendable {
         var defaultInputChangeEvents = 0
         var tapCallbackMaxDurationSeconds: Double = 0
         var tapCallbackP99DurationSeconds: Double = 0
+        var cumulativeAbsorbedCorrectionSeconds: Double = 0
+        var maxAbsDivergenceSeconds: Double = 0
+        var divergenceStepEventCount = 0
+        var maxDivergenceStepSeconds: Double = 0
+        var resyncClampCount = 0
 
         /// The Phase 1 gate's headline number: ≥99% valid hostTime over the run.
         var validHostTimeFraction: Double {
@@ -396,6 +442,7 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
         let start = DispatchTime.now()
         defer { self.statsBox.recordCallbackDuration(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000) }
 
+        self.consumePendingResetIfNeeded()
         self.checkSequenceContinuity(time: time, frameCount: Int(buffer.frameLength))
 
         let converted = self.convertToMono(buffer)
@@ -442,13 +489,42 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             return
         }
 
+        let clock = self.clock
         self.statsBox.mutate { stats in
             stats.buffersEmitted += 1
             if synthesized { stats.synthesizedCount += 1 } else { stats.validHostTimeCount += 1 }
             if anchorCorrected { stats.anchorCorrectionCount += 1 }
             if resynced { stats.resyncCount += 1 }
+            stats.cumulativeAbsorbedCorrectionSeconds = clock.cumulativeAbsorbedCorrectionSeconds
+            stats.maxAbsDivergenceSeconds = clock.maxAbsDivergenceSeconds
+            stats.divergenceStepEventCount = clock.divergenceStepEventCount
+            stats.maxDivergenceStepSeconds = clock.maxDivergenceStepSeconds
+            stats.resyncClampCount = clock.resyncClampCount
         }
         self.onSample(sampleBuffer)
+    }
+
+    /// Set off the tap thread; consumed at the next callback so the clock re-anchors.
+    func requestTimelineReset() {
+        self.pendingTimelineReset.withLock { $0 = true }
+    }
+
+    private let pendingTimelineReset = OSAllocatedUnfairLock(initialState: false)
+
+    private func consumePendingResetIfNeeded() {
+        let pending = self.pendingTimelineReset.withLock { flag -> Bool in
+            defer { flag = false }
+            return flag
+        }
+        if pending {
+            self.clock.requestTimelineReset()
+            self.accumulated.removeAll(keepingCapacity: true)
+            self.windowHostTime = nil
+            self.windowHostTimeValid = false
+            self.lastExpectedSampleTime = nil
+            self.converter = nil
+            self.converterSourceFormat = nil
+        }
     }
 
     /// Resample first, then downmix explicitly — converter channel mapping may drop, not mix.
@@ -537,6 +613,7 @@ actor MeetingMicrophoneCapture {
     private let generationBox = MeetingMicrophoneGenerationBox()
 
     private var engine: AVAudioEngine?
+    private var tapState: MeetingMicrophoneTapState?
     private var isRunning = false
     private var settled: MeetingMicrophoneSettledConfig?
     private var configObserver: NSObjectProtocol?
@@ -584,14 +661,14 @@ actor MeetingMicrophoneCapture {
         // TODO(probe): bind order is a Phase-1 measurement; this hard-codes one attempt.
         let bindStatus = Self.bindInputDevice(audioUnit, to: requestedDeviceID)
 
-        // The tap must exist before start(): the active graph is built at start, and a tap added to
-        // a node with no connections afterwards sits on an inactive node — measured as 10 minutes of
-        // zero callbacks while everything else reported healthy.
+        // Tap before start(): added afterwards it sits on an inactive node — measured as
+        // 10 minutes of zero callbacks with healthy telemetry.
         let preStartFormat = input.outputFormat(forBus: 0)
         guard preStartFormat.sampleRate > 0, preStartFormat.channelCount > 0 else {
             return self.fail(microphone: microphone, reason: "Input format invalid before start (\(preStartFormat)).")
         }
         let tapState = MeetingMicrophoneTapState(statsBox: self.statsBox, canonicalFormat: Self.canonicalFormat, onSample: onSample)
+        self.tapState = tapState
         let generationBox = self.generationBox
         input.installTap(onBus: 0, bufferSize: 4_800, format: preStartFormat) { buffer, time in
             guard generationBox.isCurrent(currentGeneration) else { return }
@@ -660,6 +737,7 @@ actor MeetingMicrophoneCapture {
             engine.stop()
         }
         self.engine = nil
+        self.tapState = nil
         self.tearDownEventObservers()
     }
 
@@ -711,8 +789,9 @@ actor MeetingMicrophoneCapture {
         // delivery is load-bearing (avoids a deadlock against the engine's own serial queue).
         self.configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { _ in
+        ) { [weak tapState = self.tapState] _ in
             statsBox.mutate { $0.configurationChangeEvents += 1 }
+            tapState?.requestTimelineReset()
             onEvent(.configurationChanged)
         }
 
@@ -774,9 +853,8 @@ actor MeetingMicrophoneCapture {
         }
     }
 
-    /// On an I/O unit element 1 is the input side and element 0 the render side. Element 0 here
-    /// would set — and read back — the OUTPUT device: measured as "bound 85 (AirPods output) does
-    /// not match requested 78 (built-in mic)" while VPIO's echo reference silently stayed put.
+    /// Element 1 is the input side; element 0 would set/read the OUTPUT device (measured: read-back
+    /// returned the AirPods output against a requested built-in mic).
     private static let inputElement: AudioUnitElement = 1
     private static let outputElement: AudioUnitElement = 0
 
@@ -813,8 +891,7 @@ actor MeetingMicrophoneCapture {
 
 // MARK: - Opt-in hardware probe
 
-/// Real-hardware Phase 1 gate (plan §9), foreground only. `FLUIDVOICE_MIC_PHASE1=<minutes>`;
-/// `FLUIDVOICE_MIC_PHASE1_DEVICE` selects the Bluetooth leg.
+/// Real-hardware Phase 1 gate (plan §9), foreground only; env FLUIDVOICE_MIC_PHASE1[_DEVICE].
 enum MeetingMicrophonePhase1Probe {
     struct Result: Sendable {
         var minutes: Double
@@ -851,8 +928,12 @@ enum MeetingMicrophonePhase1Probe {
             format: nil,
             timebase: MeetingTimebaseMetadata(
                 startedHostTime: mach_absolute_time(),
-                machTimebaseNumerator: 0,
-                machTimebaseDenominator: 0,
+                machTimebaseNumerator: {
+                    var info = mach_timebase_info_data_t(); mach_timebase_info(&info); return info.numer
+                }(),
+                machTimebaseDenominator: {
+                    var info = mach_timebase_info_data_t(); mach_timebase_info(&info); return info.denom
+                }(),
                 firstPresentationTime: nil
             ),
             health: .waiting,
