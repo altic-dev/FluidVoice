@@ -73,6 +73,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var activeSession: MeetingSession?
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
+    @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
 
     /// Sustained application-audio silence, in seconds, before the silence watchdog degrades the session.
     private static let silenceWatchdogThresholdSeconds: TimeInterval = 90
@@ -90,6 +91,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var degradeReason: DegradeReason?
     private var activityLease: MeetingAudioActivityLease?
+    private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
     private var captureGeneration: UUID?
     private var operationGeneration: UUID?
     private var stopTask: Task<MeetingSession, Error>? {
@@ -117,6 +119,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         case reassign(segmentID: MeetingTranscriptSegmentID, previousSpeakerID: SessionSpeakerID?, previousRevision: Int)
         case merge(sourceID: SessionSpeakerID, targetID: SessionSpeakerID,
                    movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int)])
+        case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
     }
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
     private static let correctionUndoStackCap = 50
@@ -244,6 +247,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         var captureStarted = false
         var captureStartAttempted = false
 
+        let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator { [weak self] snapshot in
+            Task { @MainActor [weak self] in
+                self?.liveTranscript = snapshot
+            }
+        }
+        self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
+        self.liveTranscript = .empty
+        liveTranscriptionCoordinator.start(mode: configuration.mode)
+
         do {
             try await self.store.create(session)
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
@@ -251,12 +263,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             let startResult = try await self.capture.start(
                 session: session,
                 configuration: configuration,
-                sessionDirectory: sessionDirectory
-            ) { [weak self] event in
-                Task { @MainActor [weak self] in
-                    self?.handleCaptureEvent(event, generation: generation)
+                sessionDirectory: sessionDirectory,
+                eventHandler: { [weak self] event in
+                    Task { @MainActor [weak self] in
+                        self?.handleCaptureEvent(event, generation: generation)
+                    }
+                },
+                liveAudioHandler: { [weak liveTranscriptionCoordinator] kind, sampleBuffer in
+                    liveTranscriptionCoordinator?.offer(kind: kind, sampleBuffer: sampleBuffer)
                 }
-            }
+            )
             captureStarted = true
             guard self.operationGeneration == generation, !Task.isCancelled else {
                 throw CancellationError()
@@ -274,6 +290,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
             return session
         } catch {
+            await self.tearDownLiveTranscription()
             if self.operationGeneration != generation {
                 if captureStarted {
                     _ = try? await self.capture.stop(sessionID: session.id)
@@ -617,6 +634,22 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
+    func renameSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID) { session in
+            var applied: [(speakerID: SessionSpeakerID, previousName: String)] = []
+            for (speakerID, name) in names {
+                guard let existing = session.speakers.first(where: { $0.id == speakerID }),
+                      existing.mergedIntoSpeakerID == nil else { continue }
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed != existing.displayName else { continue }
+                try session.renameSpeaker(id: speakerID, to: trimmed)
+                applied.append((speakerID, existing.displayName))
+            }
+            return .renameBatch(applied)
+        }
+    }
+
+    @discardableResult
     func reassignSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
@@ -892,6 +925,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.transcriptSegments[segmentIndex].revision = previousRevision
             }
             return true
+        case let .renameBatch(entries):
+            var restored = false
+            for entry in entries {
+                guard let index = session.speakers.firstIndex(where: { $0.id == entry.speakerID }) else { continue }
+                session.speakers[index].displayName = entry.previousName
+                restored = true
+            }
+            return restored
         }
     }
 
@@ -1049,6 +1090,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard var session = self.activeSession else {
             await self.flushQueuedPersistence()
             await self.capture.shutdownForTermination()
+            await self.tearDownLiveTranscription()
             self.releaseActivityLease()
             return
         }
@@ -1071,6 +1113,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         } else {
             await self.capture.shutdownForTermination()
         }
+        await self.tearDownLiveTranscription()
 
         session.state = .interrupted
         if !session.events.contains(where: { $0.kind == .appTermination }) {
@@ -1123,6 +1166,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.handleStopFailure(error, session: session, generation: generation)
             throw error
         }
+        await self.tearDownLiveTranscription()
         guard self.operationGeneration == generation, !Task.isCancelled else {
             throw CancellationError()
         }
@@ -1340,6 +1384,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.failures.append(Self.failure(from: error, domain: .capture, recoverable: true))
         }
+        await self.tearDownLiveTranscription()
         guard self.terminationTask == nil, !Task.isCancelled else { return }
 
         session.state = .interrupted
@@ -1372,6 +1417,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.capture.shutdownForTermination()
             session.endedAt = session.endedAt ?? Date()
         }
+        await self.tearDownLiveTranscription()
         let failure = Self.failure(from: error, domain: .capture, recoverable: true)
         session.failures.append(failure)
         session.events.append(MeetingSessionEvent(
@@ -1413,6 +1459,15 @@ final class MeetingSessionCoordinator: ObservableObject {
                 return
             }
         }
+    }
+
+    /// Must complete before any code path that calls into `processing.process`, so both live
+    /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
+    private func tearDownLiveTranscription() async {
+        guard let coordinator = self.liveTranscriptionCoordinator else { return }
+        self.liveTranscriptionCoordinator = nil
+        await coordinator.stop()
+        self.liveTranscript = .empty
     }
 
     private func releaseActivityLease() {

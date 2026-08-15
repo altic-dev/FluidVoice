@@ -169,6 +169,7 @@ struct MeetingTranscriptionView: View {
                     onMergeSpeakers: self.mergeSpeakers,
                     onUndoCorrection: self.undoTranscriptCorrection,
                     onRenameSession: self.renameMeetingSession,
+                    onAssignSpeakers: self.assignSpeakers,
                     canUndoCorrection: { self.coordinator.canUndoCorrection(sessionID: $0) },
                     isQuiescent: self.coordinator.isQuiescent,
                     onOpenMeetingSettings: self.openMeetingSettings,
@@ -308,14 +309,14 @@ struct MeetingTranscriptionView: View {
                 return .failed(session: nil, message: "The active meeting could not be loaded.")
             }
             if self.isStopping {
-                return .stopping(session: session, trackHealth: self.coordinator.trackHealth)
+                return .stopping(session: session, trackHealth: self.coordinator.trackHealth, liveTranscript: self.coordinator.liveTranscript)
             }
-            return .recording(session: session, trackHealth: self.coordinator.trackHealth)
+            return .recording(session: session, trackHealth: self.coordinator.trackHealth, liveTranscript: self.coordinator.liveTranscript)
         case .stopping:
             guard let session = self.coordinator.activeSession else {
                 return .failed(session: nil, message: "The meeting is stopping, but its session could not be loaded.")
             }
-            return .stopping(session: session, trackHealth: self.coordinator.trackHealth)
+            return .stopping(session: session, trackHealth: self.coordinator.trackHealth, liveTranscript: self.coordinator.liveTranscript)
         case let .processing(_, stage):
             guard let session = self.coordinator.activeSession else {
                 return .failed(session: nil, message: "The meeting is processing, but its session could not be loaded.")
@@ -631,6 +632,18 @@ struct MeetingTranscriptionView: View {
             }
             await self.loadMeetingHistory()
         }
+    }
+
+    private func assignSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async -> String? {
+        self.actionErrorMessage = nil
+        var errorMessage: String?
+        do {
+            _ = try await self.coordinator.renameSpeakers(sessionID: sessionID, names: names)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await self.loadMeetingHistory()
+        return errorMessage
     }
 
     private func mergeSpeakers(sessionID: MeetingSessionID, source: SessionSpeakerID, into targetID: SessionSpeakerID) {
@@ -1056,8 +1069,16 @@ enum MeetingTranscriptExportFormat {
 
 enum MeetingTranscriptionCanvasState {
     case setup(isStarting: Bool, recentSession: MeetingSession?)
-    case recording(session: MeetingSession, trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth])
-    case stopping(session: MeetingSession, trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth])
+    case recording(
+        session: MeetingSession,
+        trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth],
+        liveTranscript: MeetingLiveTranscriptSnapshot
+    )
+    case stopping(
+        session: MeetingSession,
+        trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth],
+        liveTranscript: MeetingLiveTranscriptSnapshot
+    )
     case processing(session: MeetingSession, stage: MeetingProcessingStage)
     case result(MeetingSession)
     case failed(session: MeetingSession?, message: String)
@@ -1084,6 +1105,7 @@ struct MeetingTranscriptionCanvas: View {
     let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
     let onUndoCorrection: (MeetingSessionID) -> Void
     let onRenameSession: (MeetingSessionID, String) -> Void
+    let onAssignSpeakers: (MeetingSessionID, [SessionSpeakerID: String]) async -> String?
     let canUndoCorrection: (MeetingSessionID) -> Bool
     let isQuiescent: Bool
     let onOpenMeetingSettings: () -> Void
@@ -1109,17 +1131,19 @@ struct MeetingTranscriptionCanvas: View {
                         onStart: self.onStart,
                         onOpenMeetingSettings: self.onOpenMeetingSettings
                     )
-                case let .recording(session, trackHealth):
+                case let .recording(session, trackHealth, liveTranscript):
                     MeetingRecordingCanvas(
                         session: session,
                         trackHealth: trackHealth,
+                        liveTranscript: liveTranscript,
                         isStopping: false,
                         onStop: self.onStop
                     )
-                case let .stopping(session, trackHealth):
+                case let .stopping(session, trackHealth, liveTranscript):
                     MeetingRecordingCanvas(
                         session: session,
                         trackHealth: trackHealth,
+                        liveTranscript: liveTranscript,
                         isStopping: true,
                         onStop: self.onStop
                     )
@@ -1143,6 +1167,7 @@ struct MeetingTranscriptionCanvas: View {
                         },
                         onUndo: { self.onUndoCorrection(session.id) },
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
+                        onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection
                     )
                 case let .failed(session, message):
@@ -1536,6 +1561,7 @@ private struct MeetingHistoryRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(self.actionColor)
                     .disabled(!self.isQuiescent)
+                    .accessibilityLabel(self.actionAccessibilityLabel ?? actionLabel)
             }
         }
         .font(self.theme.typography.caption)
@@ -1575,6 +1601,15 @@ private struct MeetingHistoryRow: View {
     }
 
     private var actionLabel: String? {
+        switch self.session.state {
+        case .interrupted: return self.session.hasRetryableAudio ? "Retry" : nil
+        case .failed: return "Record again"
+        default: return nil
+        }
+    }
+
+    /// The row shows "Retry" to fit a narrow sidebar; spoken output keeps the full sentence.
+    private var actionAccessibilityLabel: String? {
         switch self.session.state {
         case .interrupted: return self.session.hasRetryableAudio ? "Retry transcription" : nil
         case .failed: return "Record again"
@@ -2127,6 +2162,7 @@ private struct MeetingSetupCanvas: View {
 private struct MeetingRecordingCanvas: View {
     let session: MeetingSession
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
+    let liveTranscript: MeetingLiveTranscriptSnapshot
     let isStopping: Bool
     let onStop: () -> Void
 
@@ -2177,13 +2213,16 @@ private struct MeetingRecordingCanvas: View {
                 }
             }
 
-            Text(
-                self.isStopping
-                    ? "Saving captured audio before offline transcription begins…"
-                    : "When the meeting ends, stop recording to transcribe it offline."
-            )
-            .font(self.theme.typography.body)
-            .foregroundStyle(self.theme.palette.secondaryText)
+            if self.isStopping {
+                Text("Saving captured audio before offline transcription begins…")
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            } else {
+                MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
+                Text("When the meeting ends, stop recording to transcribe it offline.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
 
             HStack {
                 Spacer()
@@ -2222,6 +2261,93 @@ private struct MeetingRecordingCanvas: View {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+/// Live captions during recording only — speaker identity is unresolved here (You/Them by track,
+/// not by diarization); the offline pipeline replaces this view's content entirely on completion.
+private struct MeetingLiveTranscriptCard: View {
+    let snapshot: MeetingLiveTranscriptSnapshot
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        ThemedCard(style: .subtle) {
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                HStack {
+                    Text("Live captions")
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                    Spacer()
+                    if let indicator = self.availabilityIndicator {
+                        Label(indicator, systemImage: "exclamationmark.circle")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+
+                if self.lines.isEmpty {
+                    Text("Listening…")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                                ForEach(Array(self.lines.enumerated()), id: \.offset) { index, line in
+                                    self.lineView(line)
+                                        .id(index)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 160)
+                        .onChange(of: self.lines.count) {
+                            proxy.scrollTo(self.lines.count - 1, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private struct Line {
+        let speaker: MeetingLiveSpeaker
+        let text: String
+        let isPartial: Bool
+    }
+
+    /// Newest at the bottom; each engine's partial replaces in place rather than appending.
+    private var lines: [Line] {
+        var lines = self.snapshot.utterances.map { Line(speaker: $0.speaker, text: $0.text, isPartial: false) }
+        for speaker: MeetingLiveSpeaker in [.you, .them] {
+            if let partial = self.snapshot.partials[speaker], !partial.isEmpty {
+                lines.append(Line(speaker: speaker, text: partial, isPartial: true))
+            }
+        }
+        return lines
+    }
+
+    private var availabilityIndicator: String? {
+        switch self.snapshot.availability {
+        case .available:
+            return nil
+        case let .unavailable(reason), let .degraded(reason):
+            return reason
+        }
+    }
+
+    private func lineView(_ line: Line) -> some View {
+        HStack(alignment: .top, spacing: self.theme.metrics.spacing.xs) {
+            Text(line.speaker == .you ? "You" : "Them")
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .frame(width: 44, alignment: .leading)
+            Text(line.text)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(line.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
+                .italic(line.isPartial)
+        }
     }
 }
 
@@ -2338,6 +2464,7 @@ private struct MeetingResultCanvas: View {
     let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
     let onUndo: () -> Void
     let onRenameSession: (String) -> Void
+    let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
     let onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
@@ -2345,9 +2472,26 @@ private struct MeetingResultCanvas: View {
     @State private var pendingRenameText = ""
     @State private var isRenamingSession = false
     @State private var pendingRenameSessionText = ""
+    @State private var isShowingAssignSpeakers = false
+    @State private var assignSpeakersFocus: SessionSpeakerID?
+
+    /// Naming is reached by clicking a speaker's name, so the sheet opens on the one clicked.
+    private func presentAssignSpeakers(focusing speakerID: SessionSpeakerID?) {
+        guard self.isQuiescent, !self.session.activeSpeakers.isEmpty else { return }
+        self.assignSpeakersFocus = speakerID
+        self.isShowingAssignSpeakers = true
+    }
 
     private var speakerNames: [SessionSpeakerID: String] {
         Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
+    }
+
+    private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
+        speaker.isLocalUser ? self.theme.palette.accent : self.speakerTints[speaker.id]
+    }
+
+    private var speakerTints: [SessionSpeakerID: Color] {
+        MeetingSpeakerPalette.tints(for: self.session.activeSpeakers)
     }
 
     private var hasEchoSegments: Bool {
@@ -2415,14 +2559,14 @@ private struct MeetingResultCanvas: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
                         ForEach(activeSpeakers) { speaker in
-                            Label(
-                                self.displayName(for: speaker),
-                                systemImage: speaker.isLocalUser ? "person.crop.circle.badge.checkmark" : "person.crop.circle"
+                            MeetingSpeakerChip(
+                                title: self.displayName(for: speaker),
+                                systemImage: speaker.isLocalUser
+                                    ? "person.crop.circle.badge.checkmark" : "person.crop.circle",
+                                tint: self.chipTint(for: speaker) ?? self.theme.palette.primaryText,
+                                action: { self.presentAssignSpeakers(focusing: speaker.id) }
                             )
-                            .font(self.theme.typography.badge)
-                            .padding(.horizontal, self.theme.metrics.spacing.md)
-                            .padding(.vertical, self.theme.metrics.spacing.sm)
-                            .background(self.theme.palette.contentBackground, in: Capsule())
+                            .disabled(!self.isQuiescent)
                             .contextMenu { self.speakerChipMenu(for: speaker) }
                         }
                     }
@@ -2442,6 +2586,10 @@ private struct MeetingResultCanvas: View {
                         MeetingTranscriptSegmentRow(
                             segment: row.segment,
                             speakerName: row.segment.speakerID.flatMap { speakerNames[$0] } ?? "Unknown speaker",
+                            speakerTint: row.segment.speakerID.flatMap { speakerTints[$0] },
+                            onRenameSpeakerTapped: row.segment.speakerID.map { speakerID in
+                                { self.presentAssignSpeakers(focusing: speakerID) }
+                            },
                             isLocalUser: row.isLocal,
                             showsSpeakerLabel: row.showsLabel,
                             reassignTargets: activeSpeakers.filter { $0.id != row.segment.speakerID },
@@ -2503,7 +2651,23 @@ private struct MeetingResultCanvas: View {
             Text("Enter a new title for this meeting.")
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
-        .onChange(of: self.session.id) { _, _ in self.showsProbableEchoes = false }
+        .onChange(of: self.session.id) { _, _ in
+            self.showsProbableEchoes = false
+            self.isShowingAssignSpeakers = false
+        }
+        .sheet(isPresented: self.$isShowingAssignSpeakers) {
+            MeetingAssignSpeakersSheet(
+                speakers: self.session.activeSpeakers,
+                quotesBySpeaker: Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map {
+                    ($0.id, MeetingAssignSpeakersQuoteSource.sampleQuotes(for: $0.id, in: self.session.transcriptSegments))
+                }),
+                tints: self.speakerTints,
+                accentColor: self.theme.palette.accent,
+                focusedSpeakerID: self.assignSpeakersFocus,
+                onSave: self.onAssignSpeakers,
+                onCancel: { self.isShowingAssignSpeakers = false }
+            )
+        }
     }
 
     @ViewBuilder
@@ -2815,9 +2979,44 @@ private struct MeetingTrackHealthRow: View {
     }
 }
 
+private struct MeetingSpeakerChip: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: self.action) {
+            HStack(spacing: 3) {
+                Label(self.title, systemImage: self.systemImage)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .opacity(self.isHovering ? 1 : 0.45)
+            }
+            .font(self.theme.typography.badge)
+            .foregroundStyle(self.tint)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.vertical, self.theme.metrics.spacing.sm)
+            .background(self.tint.opacity(self.isHovering ? 0.20 : 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(self.tint.opacity(self.isHovering ? 0.45 : 0.22)))
+        }
+        .buttonStyle(.plain)
+        .help("Rename this speaker")
+        .accessibilityLabel("Rename \(self.title)")
+        .pointerStyle(self.isEnabled ? .link : nil)
+        .onHover { self.isHovering = self.isEnabled && $0 }
+    }
+}
+
 private struct MeetingTranscriptSegmentRow: View {
     let segment: MeetingTranscriptSegment
     let speakerName: String
+    let speakerTint: Color?
+    let onRenameSpeakerTapped: (() -> Void)?
     let isLocalUser: Bool
     let showsSpeakerLabel: Bool
     let reassignTargets: [MeetingSessionSpeaker]
@@ -2825,6 +3024,7 @@ private struct MeetingTranscriptSegmentRow: View {
     let onReassign: (SessionSpeakerID) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var isHoveringSpeaker = false
 
     var body: some View {
         Group {
@@ -2851,12 +3051,53 @@ private struct MeetingTranscriptSegmentRow: View {
         )
     }
 
+    /// A wash of the speaker's own tint, faint enough that a wall of turns still reads as text.
+    private var bubbleFill: Color {
+        (self.isLocalUser ? self.theme.palette.accent : self.speakerTint)?.opacity(0.10)
+            ?? self.theme.palette.contentBackground
+    }
+
+    private var speakerLabel: some View {
+        let name = Text(self.speakerName)
+            .foregroundColor(self.nameColor)
+            .fontWeight(.semibold)
+            .font(.system(size: 14, design: .monospaced))
+
+        return HStack(spacing: 8) {
+            if let onRenameSpeakerTapped = self.onRenameSpeakerTapped {
+                Button(action: onRenameSpeakerTapped) {
+                    HStack(spacing: 3) {
+                        name
+                        // Always shown, not hover-only, so the affordance survives an unfocused window.
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(self.nameColor)
+                            .opacity(self.isHoveringSpeaker ? 1 : 0.45)
+                    }
+                }
+                .buttonStyle(.plain)
+                // No .help here: the tooltip lands on top of the turn's first line of text.
+                .accessibilityLabel("Rename \(self.speakerName)")
+                .pointerStyle(.link)
+                .onHover { self.isHoveringSpeaker = $0 }
+            } else {
+                name
+            }
+            Text(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))
+                .font(.system(size: 14, design: .monospaced))
+                .foregroundColor(self.theme.palette.tertiaryText)
+        }
+    }
+
+    private var nameColor: Color {
+        if self.isLocalUser { return self.theme.palette.accent }
+        return self.speakerTint ?? self.theme.palette.tertiaryText
+    }
+
     private var localBubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
             if self.showsSpeakerLabel {
-                Text("\(self.speakerName)  ·  \(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                self.speakerLabel
             }
             Text(self.segment.text)
                 .font(.system(size: 15, design: .monospaced))
@@ -2865,10 +3106,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 .textSelection(.enabled)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(
-                    self.theme.palette.contentBackground,
-                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                )
+                .background(self.bubbleFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             if self.segment.isEcho {
                 Text("probable echo")
                     .font(self.theme.typography.caption)
@@ -2882,15 +3120,16 @@ private struct MeetingTranscriptSegmentRow: View {
     private var remoteMessage: some View {
         VStack(alignment: .leading, spacing: 6) {
             if self.showsSpeakerLabel {
-                Text("\(self.speakerName)  ·  \(MeetingTranscriptExporter.timestampText(self.segment.start.seconds))")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                self.speakerLabel
             }
             Text(self.segment.text)
                 .font(.system(size: 15, design: .monospaced))
                 .lineSpacing(5)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(self.bubbleFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             if self.segment.isEcho {
                 Text("probable echo")
                     .font(self.theme.typography.caption)

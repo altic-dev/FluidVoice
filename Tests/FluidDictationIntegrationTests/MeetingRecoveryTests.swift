@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CoreMedia
 import Foundation
 import SwiftUI
 import XCTest
@@ -1657,6 +1658,252 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(undoCount, 50)
     }
 
+    // MARK: - Batched speaker rename (Assign speakers sheet)
+
+    func testRenameSpeakersAppliesEveryChangedNameInOneCall() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let result = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "Erik", speakerB: "Maya"]
+        )
+
+        let namesByID = Dictionary(uniqueKeysWithValues: result.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Erik")
+        XCTAssertEqual(namesByID[speakerB], "Maya")
+    }
+
+    func testRenameSpeakersSkipsBlankAndUnchangedAndNoOpsIfAllSkipped() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        // Every entry is either blank or equal to the current name: nothing should change or save.
+        _ = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "  ", speakerB: "Speaker B"]
+        )
+
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+        let reloaded = try await store.load(id: session.id)
+        let namesByID = Dictionary(uniqueKeysWithValues: reloaded?.speakers.map { ($0.id, $0.displayName) } ?? [])
+        XCTAssertEqual(namesByID[speakerA], "Speaker A")
+        XCTAssertEqual(namesByID[speakerB], "Speaker B")
+    }
+
+    func testRenameSpeakersSkipsBlankPartiallyAndAppliesTheRest() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let result = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "Erik", speakerB: ""]
+        )
+
+        let namesByID = Dictionary(uniqueKeysWithValues: result.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Erik")
+        XCTAssertEqual(namesByID[speakerB], "Speaker B")
+        XCTAssertTrue(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testUndoAfterBatchRenameRestoresAllPreviousNames() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        _ = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "Erik", speakerB: "Maya"]
+        )
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+
+        let namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Speaker A")
+        XCTAssertEqual(namesByID[speakerB], "Speaker B")
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testRenameSpeakersIgnoresAMergedSpeakerInTheMap() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        _ = try await coordinator.mergeSpeakers(sessionID: session.id, source: speakerB, into: speakerA)
+
+        let result = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "Erik", speakerB: "ShouldBeIgnored"]
+        )
+
+        let namesByID = Dictionary(uniqueKeysWithValues: result.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Erik")
+        XCTAssertEqual(namesByID[speakerB], "Speaker B")
+    }
+
+    func testBatchRenameThenSingleRenameThenTwoUndosRestoreInLIFOOrder() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        _ = try await coordinator.renameSpeakers(
+            sessionID: session.id,
+            names: [speakerA: "Erik", speakerB: "Maya"]
+        )
+        _ = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speakerA, to: "Erik II")
+
+        var undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        var namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Erik")
+        XCTAssertEqual(namesByID[speakerB], "Maya")
+
+        undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })
+        XCTAssertEqual(namesByID[speakerA], "Speaker A")
+        XCTAssertEqual(namesByID[speakerB], "Speaker B")
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    // MARK: - MeetingSpeakerPalette.tintIndices
+
+    func testTintIndicesRenamingUnknownMicPlaceholderDoesNotShiftOtherIndices() {
+        let speakerA = self.makeSpeaker(name: "Speaker A")
+        let placeholder = self.makeSpeaker(name: MeetingSpeakerPalette.unknownMicrophoneSpeakerName)
+        let speakerC = self.makeSpeaker(name: "Speaker C")
+
+        let before = MeetingSpeakerPalette.tintIndices(for: [speakerA, placeholder, speakerC])
+        XCTAssertEqual(before[speakerA.id], 0)
+        XCTAssertNil(before[placeholder.id])
+        XCTAssertEqual(before[speakerC.id], 2)
+        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC])[placeholder.id])
+
+        var renamedPlaceholder = placeholder
+        renamedPlaceholder.displayName = "Jordan"
+        let after = MeetingSpeakerPalette.tintIndices(for: [speakerA, renamedPlaceholder, speakerC])
+        XCTAssertEqual(after[speakerA.id], 0)
+        XCTAssertEqual(after[renamedPlaceholder.id], 1)
+        XCTAssertEqual(after[speakerC.id], 2)
+        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC])[renamedPlaceholder.id])
+    }
+
+    // MARK: - MeetingAssignSpeakersValidation.duplicateName
+
+    func testDuplicateNameIgnoresACollisionTheUserDidNotCreate() {
+        let first = self.makeSpeaker(name: "Speaker")
+        let second = self.makeSpeaker(name: "Speaker")
+        let current = [(id: first.id, displayName: first.displayName), (id: second.id, displayName: second.displayName)]
+
+        XCTAssertNil(MeetingAssignSpeakersValidation.duplicateName(current: current, drafts: [:]))
+        XCTAssertNil(
+            MeetingAssignSpeakersValidation.duplicateName(
+                current: current,
+                drafts: [first.id: "Speaker", second.id: "   "]
+            ),
+            "a blank draft means leave unchanged, so the pre-existing collision must stay savable"
+        )
+        XCTAssertNil(
+            MeetingAssignSpeakersValidation.duplicateName(
+                current: current,
+                drafts: [first.id: "Erik"]
+            ),
+            "resolving one half of a pre-existing collision must not be blocked by the other half"
+        )
+    }
+
+    func testDuplicateNameFlagsACollisionTheUserCreatedRegardlessOfCaseOrPadding() {
+        let first = self.makeSpeaker(name: "Erik")
+        let second = self.makeSpeaker(name: "Speaker 2")
+        let current = [(id: first.id, displayName: first.displayName), (id: second.id, displayName: second.displayName)]
+
+        XCTAssertEqual(
+            MeetingAssignSpeakersValidation.duplicateName(current: current, drafts: [second.id: "  erik "]),
+            "erik"
+        )
+    }
+
+    // MARK: - MeetingAssignSpeakersQuoteSource.sampleQuotes
+
+    func testSampleQuotesExcludesEchoAndNonFinalOrdersByStartTimeCapsAtTwo() {
+        let track = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        let speakerID = SessionSpeakerID()
+
+        func segment(
+            text: String,
+            startSeconds: Int64,
+            status: MeetingTranscriptStatus = .final,
+            isEcho: Bool = false
+        ) -> MeetingTranscriptSegment {
+            var segment = self.makeTranscriptSegment(sourceTrackID: track.id, speakerID: speakerID)
+            segment.text = text
+            segment.start = MeetingMediaTime(value: startSeconds, timescale: 1)
+            segment.status = status
+            segment.isLikelyEcho = isEcho
+            return segment
+        }
+
+        let segments = [
+            segment(text: "Third, out of order", startSeconds: 30),
+            segment(text: "An echoed line", startSeconds: 5, isEcho: true),
+            segment(text: "A provisional line", startSeconds: 8, status: .provisional),
+            segment(text: "First thing said", startSeconds: 10),
+            segment(text: "Second thing said", startSeconds: 20),
+        ]
+
+        let quotes = MeetingAssignSpeakersQuoteSource.sampleQuotes(for: speakerID, in: segments)
+        XCTAssertEqual(quotes, ["First thing said", "Second thing said"])
+    }
+
+    func testSampleQuotesTruncatesLongTextOnAWordBoundary() {
+        let track = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])
+        let speakerID = SessionSpeakerID()
+        var segment = self.makeTranscriptSegment(sourceTrackID: track.id, speakerID: speakerID)
+        segment.text = Array(repeating: "word", count: 60).joined(separator: " ")
+
+        let quotes = MeetingAssignSpeakersQuoteSource.sampleQuotes(for: speakerID, in: [segment])
+        XCTAssertEqual(quotes.count, 1)
+        XCTAssertTrue(quotes[0].hasSuffix("…"))
+        XCTAssertLessThanOrEqual(quotes[0].count, 181)
+        XCTAssertFalse(quotes[0].dropLast().contains(" …"))
+    }
+
     // MARK: - Audio retention & delete audio
 
     private func withRetentionPolicy<T>(
@@ -2495,7 +2742,8 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
         session: MeetingSession,
         configuration: MeetingCaptureConfiguration,
         sessionDirectory: URL,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> MeetingCaptureStartResult {
         await self.onStart?()
         if let startError { throw startError }

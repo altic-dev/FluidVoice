@@ -10,7 +10,8 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
         session: MeetingSession,
         configuration: MeetingCaptureConfiguration,
         sessionDirectory: URL,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> MeetingCaptureStartResult
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
@@ -34,7 +35,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         session: MeetingSession,
         configuration: MeetingCaptureConfiguration,
         sessionDirectory: URL,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
         try configuration.validate()
         guard self.activeCapture == nil, self.startingSessionID == nil, self.stopTask == nil else {
@@ -68,7 +70,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 microphone: configuration.microphone,
                 applicationWriter: applicationWriter,
                 microphoneWriter: microphoneWriter,
-                eventHandler: eventHandler
+                eventHandler: eventHandler,
+                liveAudioHandler: liveAudioHandler
             )
         case .inRoom:
             guard let microphoneWriter = writersByKind[.microphone] else {
@@ -77,7 +80,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             runtime = try InRoomMicrophoneCaptureRuntime(
                 microphone: configuration.microphone,
                 writer: microphoneWriter,
-                eventHandler: eventHandler
+                eventHandler: eventHandler,
+                liveAudioHandler: liveAudioHandler
             )
         }
 
@@ -307,6 +311,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private let stateLock = NSLock()
     private var stream: SCStream
     private var scope: MeetingCaptureScope
@@ -327,7 +332,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) {
         self.stream = stream
         self.scope = scope
@@ -336,6 +342,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
+        self.liveAudioHandler = liveAudioHandler
         super.init()
     }
 
@@ -344,7 +351,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> ScreenCaptureMeetingRuntime {
         let built = try await Self.buildStream(application: application, microphone: microphone)
         let runtime = ScreenCaptureMeetingRuntime(
@@ -354,7 +362,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             microphone: microphone,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
-            eventHandler: eventHandler
+            eventHandler: eventHandler,
+            liveAudioHandler: liveAudioHandler
         )
         built.delegateProxy.owner = runtime
         runtime.delegateProxy = built.delegateProxy
@@ -504,8 +513,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         switch outputType {
         case .audio:
             self.applicationWriter.enqueue(sampleBuffer)
+            self.liveAudioHandler?(.applicationAudio, sampleBuffer)
         case .microphone:
             self.microphoneWriter.enqueue(sampleBuffer)
+            self.liveAudioHandler?(.microphone, sampleBuffer)
         case .screen:
             break
         @unknown default:
@@ -621,6 +632,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.inroom.control")
     private let stateLock = NSLock()
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private var stopping = false
     private var emittedUnexpectedStop = false
     private var notificationObservers: [NSObjectProtocol] = []
@@ -628,10 +640,12 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     init(
         microphone: MeetingMicrophoneIdentity,
         writer: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) throws {
         self.writer = writer
         self.eventHandler = eventHandler
+        self.liveAudioHandler = liveAudioHandler
         super.init()
         guard let device = AVCaptureDevice(uniqueID: microphone.captureDeviceID) else {
             throw MeetingCaptureError.microphoneUnavailable
@@ -694,6 +708,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         self.stateLock.unlock()
         guard shouldAccept else { return }
         self.writer.enqueue(sampleBuffer)
+        self.liveAudioHandler?(.microphone, sampleBuffer)
     }
 
     private func observeSessionLifecycle() {
