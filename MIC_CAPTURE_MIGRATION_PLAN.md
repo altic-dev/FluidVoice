@@ -118,21 +118,24 @@ establishment. Echo reference alignment is gone.
   does (`ASRService.swift:4617-4620`). Never `mach_absolute_time()` at callback time.
 - Invalid `hostTime`: extrapolate from the last valid stamp plus output duration, **capped at 500 ms**;
   beyond that, record a discontinuity and resync.
-- **The constant-offset model is contingent.** This repo measured ~6.4 ppm drift, ~23 ms/hour
-  (`MeetingProcessingPipeline.swift:722-724`); a fixed offset is ~46 ms wrong at two hours, consuming
-  the whole budget. Phase 0 decides: same clock domain ⇒ offset is identity and no model is needed;
-  different domains ⇒ a linear model with periodic re-measurement, not a constant.
+- **Resolved by Phase 0 (see §9): same clock domain.** SCStream PTS regressed against mach at
+  −0.133 ppm ± 0.628 over 24k samples — the offset is effectively identity and no drift model is
+  needed. The ~6.4 ppm drift this repo previously measured (`MeetingProcessingPipeline.swift:722-724`)
+  was between the two *audio device* clocks through their samples, not between SCStream's stamps and
+  mach; it remains real for echo-reference alignment, which VPIO sessions no longer perform.
 
 **Budget: ±50 ms**, justified by turn ordering alone. Stated as a claim to be tested, not derived —
 v3 wrongly cited the 0.15 s `overlapsRemote` threshold, which is a minimum-overlap predicate.
 
 ## 9. Phases and gates
 
-**Phase 0 — clock domain (unattended).** Compare *rates*, not arrival deltas: regress SCStream PTS
-against wall time and microphone PTS against wall time over 30 minutes. *Gate:* report both slopes in
-ppm with confidence intervals. |slope difference| < 20 ppm ⇒ constant offset acceptable; ≥ 20 ppm ⇒
-§8's linear model is mandatory. Subtracting `mach_absolute_time()` at arrival is **not** the test — it
-conflates queueing jitter with clock domain.
+**Phase 0 — clock domain. DONE, 2026-08-15.** Regressed SCStream audio PTS against mach host time
+over 8 minutes, 24,027 samples (`ClockDomainProbeTests`, `FLUIDVOICE_CLOCK_PROBE`): slope
+**−0.133 ppm, 95% CI ±0.628** — statistically zero, 150× inside the 20 ppm gate. SCStream PTS is
+mach-anchored, so both capture paths already share a clock domain: **constant offset only; the
+linear model in §8 is not needed.** Residual std 6.9 ms is arrival jitter, confirming that per-sample
+arrival deltas would have been the wrong instrument. Caveats: one machine, and the probe needs an
+unlocked display in a foreground session (`SCShareableContent` reports zero displays otherwise).
 
 **Phase 1 — `MeetingMicrophoneCapture`, standalone.** *Gate*, over 10 minutes on the built-in mic
 **and** one Bluetooth device: valid `hostTime` on ≥99% of buffers; output Float32 LPCM (else the

@@ -34,6 +34,7 @@
 		E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */; };
 		E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */; };
 		E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */; };
+		E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000071 /* ClockDomainProbeTests.swift */; };
 		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
 		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
@@ -92,6 +93,7 @@
 		E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingDuckingProbeTests.swift; sourceTree = "<group>"; };
 		E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingSpeechDuckingTests.swift; sourceTree = "<group>"; };
 		E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingAsrQualityTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000071 /* ClockDomainProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockDomainProbeTests.swift; sourceTree = "<group>"; };
 		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
 		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
@@ -198,6 +200,7 @@
 				E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */,
 				E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */,
 				E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */,
+				E5EC00000000000000000071 /* ClockDomainProbeTests.swift */,
 				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
 				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
@@ -386,6 +389,7 @@
 				E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */,
 				E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */,
 				E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */,
+				E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */,
 				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
 				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
