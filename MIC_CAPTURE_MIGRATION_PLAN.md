@@ -137,12 +137,30 @@ linear model in §8 is not needed.** Residual std 6.9 ms is arrival jitter, conf
 arrival deltas would have been the wrong instrument. Caveats: one machine, and the probe needs an
 unlocked display in a foreground session (`SCShareableContent` reports zero displays otherwise).
 
-**Phase 1 — `MeetingMicrophoneCapture`, standalone.** *Gate*, over 10 minutes on the built-in mic
-**and** one Bluetooth device: valid `hostTime` on ≥99% of buffers; output Float32 LPCM (else the
-writer's telemetry silently dies, `MeetingAudioChunkWriter.swift:499-505`); buffers accepted by
-`MeetingLiveSampleCopy.copy` and by the writer with zero unexpected rotations
-(`MeetingAudioChunkWriter.swift:177-193`); read-back device equals requested, or §6.2/§6.3 fires;
-binding order recorded.
+**Phase 1 — `MeetingMicrophoneCapture`, standalone. DONE, 2026-08-15.** Formal gate passed on the
+built-in mic, 8 minutes: 4800 buffers, **100%** valid `hostTime`, 48 kHz mono Float32 delivered,
+8 chunks at exact 60 s cadence, zero discontinuities / backpressure / live-copy rejections, device
+bound and read back verified, non-silence confirmed. Measured findings, each of which changed the
+design:
+
+- **Binding and read-back live on element 1.** `kAudioOutputUnitProperty_CurrentDevice` on element 0
+  addresses the I/O unit's *render* side — read-back returned the AirPods output (85) against a
+  requested built-in mic (78). Element 0 would also have *moved the AEC reference*.
+- **The tap must be installed before `start()`.** A tap added to an unconnected input node after the
+  active graph is built sits on an inactive node: measured as 10 minutes of zero callbacks with all
+  other telemetry healthy. Post-start format renegotiation is handled by reinstalling the tap.
+- **VPIO delivers no input when its render route is Bluetooth.** AirPods as output: zero callbacks;
+  speakers: perfect stream, same code and mic. §3.2 (VPIO only on speaker routes) is therefore
+  enforced by the hardware, not just chosen — and the Bluetooth-mic leg resolves to "structurally
+  unsupported; such sessions use the SCStream path".
+- The §6.2 escape hatch fired correctly in production (`defaultMatchesRequested` when the AirPods
+  bind failed), and `AVCaptureDevice.uniqueID` **equals** the CoreAudio UID for Bluetooth devices
+  (`EC-46-54-41-33-11:input`) — the name-collision mapping problem largely retires.
+- VPIO exposes a **9-channel** input format on the built-in mic; explicit downmix (never converter
+  channel mapping) handled it.
+- Open tuning note for Phase 2: the PTS clock's 1-frame anchor-correction tolerance trips on ~97% of
+  buffers (device-clock vs mach jitter); widen it — corrections are currently telemetry noise, though
+  emitted PTS stayed monotonic and the writer accepted everything.
 
 **Phase 2 — timeline.** *Gate:* drift within Phase 0's bound over 30 minutes. **Absolute offset cannot
 be measured with an acoustic click** — AEC removes it, so a failed correlation would mean cancellation
