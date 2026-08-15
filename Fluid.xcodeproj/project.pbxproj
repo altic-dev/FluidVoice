@@ -26,6 +26,16 @@
 		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
 		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
 		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
+		7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */; };
+		E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */; };
+		E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */; };
+		E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */; };
+		E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */; };
+		E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */; };
+		E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */; };
+		E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */; };
+		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
+		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
 		DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */; };
 		7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */; };
@@ -74,6 +84,16 @@
 		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
+		B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoSignalScorerTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoVetoTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingFallbackEchoProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNearFieldGateTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveSilenceEndpointTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingDuckingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingSpeechDuckingTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingAsrQualityTests.swift; sourceTree = "<group>"; };
+		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
+		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
 		DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAudioReliabilityTests.swift; sourceTree = "<group>"; };
 		B51800000000000000000001 /* SpokenSendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenSendTests.swift; sourceTree = "<group>"; };
@@ -170,6 +190,16 @@
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
 				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
+				B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */,
+				E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */,
+				E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */,
+				E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */,
+				E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */,
+				E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */,
+				E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */,
+				E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */,
+				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
+				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
 				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
 				7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */,
@@ -348,6 +378,16 @@
 				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
 				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
 				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
+				7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */,
+				E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */,
+				E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */,
+				E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */,
+				E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */,
+				E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */,
+				E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */,
+				E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */,
+				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
+				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
 				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
 				7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */,
