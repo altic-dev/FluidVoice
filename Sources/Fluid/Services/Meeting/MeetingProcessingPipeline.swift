@@ -187,6 +187,46 @@ nonisolated enum MeetingTurnSelection {
     }
 }
 
+/// Separates near-field speech (the user, inches from a personal mic) from far-field sound the same
+/// mic also hears — a TV across the room, the laptop speakers. Both are real speech, so a VAD passes
+/// both; only level separates them. Measured on a real session: user 0.0287 RMS (-30.8 dBFS) against
+/// room audio at 0.0023 (-52.4 dBFS).
+///
+/// The reference is the track's own loud end rather than an absolute dBFS value, so the rule travels
+/// across microphones and gain settings. It degrades safely: when a track holds nothing but distant
+/// audio the reference anchors on that audio and nothing is gated.
+nonisolated enum MeetingNearFieldGate {
+    /// Far enough below the user's own voice to clear room audio, with room to spare for their
+    /// quieter moments — the measured gap is 22 dB.
+    static let rejectionDepthDB: Double = 15
+    /// Nothing this quiet is intelligible near-field speech on any hardware; a backstop for tracks
+    /// whose loud end is itself noise.
+    static let absoluteFloorRMS: Double = 0.0015
+    /// Below this the reference is not a reliable picture of how loud the user gets.
+    static let minimumReferenceSeconds: TimeInterval = 3
+
+    /// Duration-weighted 75th percentile of turn loudness: robust to a handful of loud transients
+    /// without being dragged down by long stretches of quiet.
+    static func referenceRMS(turns: [(rms: Double, duration: TimeInterval)]) -> Double? {
+        let usable = turns.filter { $0.rms > 0 && $0.duration > 0 }
+        guard usable.reduce(0, { $0 + $1.duration }) >= Self.minimumReferenceSeconds else { return nil }
+        let sorted = usable.sorted { $0.rms < $1.rms }
+        let total = sorted.reduce(0) { $0 + $1.duration }
+        var accumulated: TimeInterval = 0
+        for entry in sorted {
+            accumulated += entry.duration
+            if accumulated >= total * 0.75 { return entry.rms }
+        }
+        return sorted.last?.rms
+    }
+
+    static func isNearField(rms: Double, reference: Double?) -> Bool {
+        guard rms >= Self.absoluteFloorRMS else { return false }
+        guard let reference, reference > 0 else { return true }
+        return rms >= reference * pow(10, -Self.rejectionDepthDB / 20)
+    }
+}
+
 nonisolated enum MeetingLocalSpeakerEvidenceSelector {
     static func candidate(
         evidenceDurationByCluster: [SessionSpeakerID: TimeInterval],
@@ -278,7 +318,8 @@ private final class MeetingProviderLanguagePin {
 
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
-    static let pipelineVersion = 3
+    /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
+    static let pipelineVersion = 6
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -319,6 +360,139 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         return supporting.filter { $0.value > (echoed[$0.key] ?? 0) }
     }
 
+    /// Reads `isLikelyEcho` (text-only), never `effectiveEcho`: signal evidence must not
+    /// influence which cluster gets elected "You".
+    nonisolated static func selectLocalCluster(
+        from turns: [StagedMicrophoneTurn],
+        prototypeSpeakerIDs: Set<SessionSpeakerID>
+    ) -> SessionSpeakerID? {
+        MeetingLocalSpeakerEvidenceSelector.candidate(
+            evidenceDurationByCluster: Self.localSpeakerEvidence(
+                from: turns.map {
+                    (
+                        clusterID: $0.clusterID, start: $0.start, end: $0.end,
+                        overlapsRemote: $0.overlapsRemote, echoScored: $0.echoScored,
+                        isEcho: $0.isLikelyEcho
+                    )
+                }
+            ),
+            prototypeSpeakerIDs: prototypeSpeakerIDs
+        )
+    }
+
+    /// Why "You" was or was not elected. Without this the only visible symptom is an entire
+    /// microphone track collapsing to "Microphone / Unknown", which has several distinct causes.
+    nonisolated static func logLocalSpeakerElection(
+        turns: [StagedMicrophoneTurn],
+        prototypeSpeakerIDs: Set<SessionSpeakerID>,
+        index: MeetingSpeakerEmbeddingIndex?,
+        role: MeetingMicrophoneRole,
+        elected: SessionSpeakerID?
+    ) {
+        var supporting: [SessionSpeakerID: TimeInterval] = [:]
+        var echoed: [SessionSpeakerID: TimeInterval] = [:]
+        var skipped: [SessionSpeakerID: TimeInterval] = [:]
+        for turn in turns {
+            let duration = max(0, turn.end - turn.start)
+            if turn.isLikelyEcho {
+                echoed[turn.clusterID, default: 0] += duration
+            } else if turn.overlapsRemote, !turn.echoScored {
+                skipped[turn.clusterID, default: 0] += duration
+            } else {
+                supporting[turn.clusterID, default: 0] += duration
+            }
+        }
+        let clusters = Set(supporting.keys).union(echoed.keys).union(skipped.keys)
+        let rows = clusters
+            .map { id -> String in
+                let s = supporting[id] ?? 0, e = echoed[id] ?? 0, k = skipped[id] ?? 0
+                let proto = prototypeSpeakerIDs.contains(id) ? "yes" : "NO"
+                return String(
+                    format: "%@ supporting=%.1fs echoed=%.1fs unscoredOverlap=%.1fs prototype=%@ netEvidence=%@",
+                    id.uuidString.prefix(8).description, s, e, k, proto, s > e ? "counts" : "DROPPED"
+                )
+            }
+            .sorted()
+        // Pairwise prototype distance across the clusters that survived the echo filter: two
+        // fragments of one voice are what blocks the winner-margin rule from electing "You".
+        var distances: [String] = []
+        if let index {
+            let survivors = clusters.filter { (supporting[$0] ?? 0) > (echoed[$0] ?? 0) }.sorted {
+                $0.uuidString < $1.uuidString
+            }
+            for (offset, left) in survivors.enumerated() {
+                for right in survivors.dropFirst(offset + 1) {
+                    guard let a = index.prototypes[left]?.embedding,
+                          let b = index.prototypes[right]?.embedding,
+                          let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(a, b)
+                    else { continue }
+                    distances.append(String(
+                        format: "%@↔%@ cosineDistance=%.3f (mergeThreshold=%.2f) %@",
+                        left.uuidString.prefix(8).description, right.uuidString.prefix(8).description,
+                        distance, index.maximumCosineDistance,
+                        distance <= index.maximumCosineDistance ? "SAME VOICE" : "different"
+                    ))
+                }
+            }
+        }
+        DebugLogger.shared.info(
+            "Local speaker election (role=\(role), elected=\(elected?.uuidString.prefix(8).description ?? "none")):\n  "
+                + rows.joined(separator: "\n  ")
+                + (distances.isEmpty ? "" : "\n  " + distances.joined(separator: "\n  ")),
+            source: "MeetingProcessingPipeline"
+        )
+    }
+
+    /// Drops turns the microphone only heard at a distance. They are not echo — a TV or another
+    /// room never matches the far end's words — so nothing downstream can catch them, and left in
+    /// they form a rival cluster that outweighs the user and blocks the "You" election entirely.
+    nonisolated static func rejectingFarField(_ turns: [StagedMicrophoneTurn]) -> [StagedMicrophoneTurn] {
+        let measured = turns.filter { $0.rms > 0 }
+        guard !measured.isEmpty else { return turns }
+        let reference = MeetingNearFieldGate.referenceRMS(
+            turns: measured.map { (rms: $0.rms, duration: max(0, $0.end - $0.start)) }
+        )
+        var kept: [StagedMicrophoneTurn] = []
+        var rejected: [StagedMicrophoneTurn] = []
+        for turn in turns {
+            // An unmeasured turn is kept: absence of a measurement is not evidence of distance.
+            if turn.rms <= 0 || MeetingNearFieldGate.isNearField(rms: turn.rms, reference: reference) {
+                kept.append(turn)
+            } else {
+                rejected.append(turn)
+            }
+        }
+        guard !rejected.isEmpty else { return turns }
+        let rejectedSeconds = rejected.reduce(0.0) { $0 + max(0, $1.end - $1.start) }
+        DebugLogger.shared.info(
+            String(
+                format: "Near-field gate: dropped %d of %d microphone turns (%.1fs) below reference %.5f RMS − %.0f dB",
+                rejected.count, turns.count, rejectedSeconds, reference ?? 0, MeetingNearFieldGate.rejectionDepthDB
+            ),
+            source: "MeetingProcessingPipeline"
+        )
+        return kept
+    }
+
+    /// Reads the chunk once and measures each turn's RMS. Failure degrades to zeros, which the gate
+    /// treats as unmeasured rather than as silence.
+    nonisolated static func turnLoudness(
+        fileURL: URL,
+        turns: [(start: TimeInterval, end: TimeInterval)]
+    ) -> [Double] {
+        guard let samples = try? Self.readSamples(fileURL: fileURL, startSeconds: 0, endSeconds: nil),
+              !samples.isEmpty
+        else { return Array(repeating: 0, count: turns.count) }
+        let sampleRate = 16_000.0
+        return turns.map { turn in
+            let first = max(0, Int(turn.start * sampleRate))
+            let last = min(samples.count, Int(turn.end * sampleRate))
+            guard last > first else { return 0 }
+            let sum = samples[first..<last].reduce(0.0) { $0 + Double($1) * Double($1) }
+            return (sum / Double(last - first)).squareRoot()
+        }
+    }
+
     nonisolated static func remoteFallbackIntervals(
         diarizedTurns: [(start: TimeInterval, end: TimeInterval)],
         chunkOffset: TimeInterval,
@@ -342,7 +516,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var end: TimeInterval
     }
 
-    private struct StagedMicrophoneTurn {
+    /// Internal (not private) so tests can exercise `effectiveEcho` and local-speaker selection
+    /// directly against the pure helpers below.
+    struct StagedMicrophoneTurn {
         var chunkID: MeetingAudioChunkID
         var index: Int
         var clusterID: SessionSpeakerID
@@ -351,9 +527,306 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var end: TimeInterval
         var text: String
         var overlapsRemote: Bool
+        /// Loudness of this turn's microphone audio, for the near-field gate. Zero when unmeasured.
+        var rms: Double = 0
+        /// Text-only, from `MeetingEchoDetector`. `localSpeakerEvidence` must keep reading this
+        /// field, never `effectiveEcho` — signal evidence must not influence local-speaker
+        /// election, or a misclassification could elect the far-end cluster as "You".
         var isLikelyEcho = false
         /// False when nothing scoreable overlapped: absence of a verdict is not evidence.
         var echoScored = false
+        var signalVerdict: TurnEchoVerdict = .unknown
+        /// What the UI and exporter hide. Text and signal each get to say "echo", because they fail
+        /// independently: ASR garbles bleed differently from the far end's own transcript, defeating
+        /// text matching, while the signal reads it plainly (measured median 0.91 explained). Either
+        /// one is then vetoed by evidence of genuine local speech in the same turn.
+        ///
+        /// `isLikelyEcho` stays text-only and remains the sole input to the local-speaker election —
+        /// signal evidence must never reach it, or a misclassification could elect the far-end
+        /// cluster as "You" through the 1.75x winner rule.
+        var effectiveEcho: Bool {
+            (self.isLikelyEcho || self.signalVerdict == .echo) && self.signalVerdict != .containsLocalSpeech
+        }
+    }
+
+    // MARK: - Echo signal veto
+
+    nonisolated struct ReferenceSpan: Equatable {
+        var chunk: MeetingAudioChunk
+        var localRange: Range<TimeInterval>
+        var outputOffset: TimeInterval
+    }
+
+    /// Session time -> each app chunk's own decoded coordinates, keyed off `presentationStart`.
+    /// The two writers rotate independently and diverge permanently after a discontinuity on
+    /// either track, so app chunk N never lines up with mic chunk N.
+    nonisolated static func referenceSpans(
+        micSessionRange: (start: TimeInterval, end: TimeInterval),
+        appChunks: [MeetingAudioChunk],
+        origin: TimeInterval
+    ) -> [ReferenceSpan] {
+        appChunks.compactMap { chunk in
+            let chunkStart = chunk.presentationStart.seconds - origin
+            let chunkEnd = chunk.presentationEnd.seconds - origin
+            let overlapStart = max(chunkStart, micSessionRange.start)
+            let overlapEnd = min(chunkEnd, micSessionRange.end)
+            guard overlapEnd > overlapStart else { return nil }
+            return ReferenceSpan(
+                chunk: chunk,
+                localRange: (overlapStart - chunkStart)..<(overlapEnd - chunkStart),
+                outputOffset: overlapStart - micSessionRange.start
+            )
+        }
+    }
+
+    /// Concatenates the decoded slices for a mic chunk's time range, zero-filling any gap
+    /// (missing chunk, failed chunk, or a hole between chunks). Zero-fill is self-masking: a
+    /// zero-filled block has no reference energy, so the scorer's own floor already forces
+    /// those frames to NaN — no separate validity mask is needed.
+    nonisolated static func gatherReferenceAudio(
+        micSessionRange: (start: TimeInterval, end: TimeInterval),
+        appChunks: [MeetingAudioChunk],
+        origin: TimeInterval,
+        sessionDirectory: URL,
+        sampleRate: Double
+    ) -> [Float] {
+        let totalSamples = max(0, Int(((micSessionRange.end - micSessionRange.start) * sampleRate).rounded()))
+        guard totalSamples > 0 else { return [] }
+        var output = [Float](repeating: 0, count: totalSamples)
+        for span in Self.referenceSpans(micSessionRange: micSessionRange, appChunks: appChunks, origin: origin) {
+            guard let samples = try? Self.readSamples(
+                fileURL: span.chunk.fileURL(relativeTo: sessionDirectory),
+                startSeconds: span.localRange.lowerBound,
+                endSeconds: span.localRange.upperBound
+            ) else { continue }
+            let outStart = Int((span.outputOffset * sampleRate).rounded())
+            for (offset, sample) in samples.enumerated() {
+                let index = outStart + offset
+                guard index >= 0, index < output.count else { break }
+                output[index] = sample
+            }
+        }
+        return output
+    }
+
+    /// Guard interval around each recorded discontinuity on either track, excluded from both
+    /// delay estimation and scoring so a clock jump isn't read as correlated (or decorrelated) audio.
+    nonisolated static func discontinuityGuardIntervals(
+        micChunk: MeetingAudioChunk,
+        overlappingAppChunks: [MeetingAudioChunk],
+        origin: TimeInterval,
+        guardSeconds: TimeInterval
+    ) -> [(start: TimeInterval, end: TimeInterval)] {
+        (micChunk.discontinuities + overlappingAppChunks.flatMap(\.discontinuities)).compactMap { discontinuity in
+            guard let presentationTime = discontinuity.presentationTime else { return nil }
+            let time = presentationTime.seconds - origin
+            return (time - guardSeconds, time + guardSeconds)
+        }
+    }
+
+    nonisolated static func zeroingGuardedSamples(
+        _ samples: [Float],
+        chunkOffset: TimeInterval,
+        sampleRate: Double,
+        guardIntervals: [(start: TimeInterval, end: TimeInterval)]
+    ) -> [Float] {
+        guard !guardIntervals.isEmpty else { return samples }
+        var result = samples
+        for interval in guardIntervals {
+            let startIndex = max(0, Int(((interval.start - chunkOffset) * sampleRate).rounded()))
+            let endIndex = min(samples.count, Int(((interval.end - chunkOffset) * sampleRate).rounded()))
+            guard startIndex < endIndex else { continue }
+            for index in startIndex..<endIndex { result[index] = 0 }
+        }
+        return result
+    }
+
+    /// Post-hoc NaN mask rather than zeroing the scorer's inputs: zeroing would corrupt the
+    /// block-level fit for the valid frames sharing a block with a guarded one.
+    nonisolated static func maskingGuardedFrames(
+        _ scores: EchoFrameScores,
+        chunkOffset: TimeInterval,
+        sampleRate: Double,
+        guardIntervals: [(start: TimeInterval, end: TimeInterval)]
+    ) -> EchoFrameScores {
+        guard !guardIntervals.isEmpty else { return scores }
+        let frameSeconds = Double(MeetingEchoSignalScorer.frameLength) / sampleRate
+        var fractions = scores.fractions
+        for index in fractions.indices {
+            let frameStart = chunkOffset + Double(index) * scores.hopSeconds
+            let frameEnd = frameStart + frameSeconds
+            if guardIntervals.contains(where: { max($0.start, frameStart) < min($0.end, frameEnd) }) {
+                fractions[index] = .nan
+            }
+        }
+        return EchoFrameScores(fractions: fractions, hopSeconds: scores.hopSeconds)
+    }
+
+    /// Frames whose window overlaps the turn's span; the result is contiguous because frame
+    /// time is monotonic in index.
+    nonisolated static func turnVerdict(
+        _ scores: EchoFrameScores,
+        chunkOffset: TimeInterval,
+        turnStart: TimeInterval,
+        turnEnd: TimeInterval,
+        sampleRate: Double
+    ) -> TurnEchoVerdict {
+        let frameSeconds = Double(MeetingEchoSignalScorer.frameLength) / sampleRate
+        let overlapping = scores.fractions.indices.filter { index in
+            let frameStart = chunkOffset + Double(index) * scores.hopSeconds
+            let frameEnd = frameStart + frameSeconds
+            return frameEnd > turnStart && frameStart < turnEnd
+        }
+        guard !overlapping.isEmpty else { return .unknown }
+        let subset = EchoFrameScores(fractions: overlapping.map { scores.fractions[$0] }, hopSeconds: scores.hopSeconds)
+        let result = MeetingEchoSignalScorer.verdict(subset)
+        Self.logTurnFrameStats(subset, turnStart: turnStart, turnEnd: turnEnd, verdict: result)
+        return result
+    }
+
+    /// Frame-level picture behind a turn's verdict. The rescue rule uses an absolute low-run
+    /// threshold, so long turns need their run length read as a share of the turn, not in seconds.
+    nonisolated static func logTurnFrameStats(
+        _ scores: EchoFrameScores,
+        turnStart: TimeInterval,
+        turnEnd: TimeInterval,
+        verdict: TurnEchoVerdict
+    ) {
+        let scoreable = scores.fractions.filter { !$0.isNaN }
+        guard !scoreable.isEmpty else { return }
+        let sorted = scoreable.sorted()
+        let median = sorted[sorted.count / 2]
+        var longestLowRun = 0
+        var currentRun = 0
+        for value in scores.fractions {
+            if !value.isNaN, value < MeetingEchoSignalScorer.localSpeechFractionThreshold {
+                currentRun += 1
+                longestLowRun = max(longestLowRun, currentRun)
+            } else if !value.isNaN {
+                currentRun = 0
+            }
+        }
+        let turnSeconds = max(0.001, turnEnd - turnStart)
+        let lowRunSeconds = Double(longestLowRun) * scores.hopSeconds
+        DebugLogger.shared.info(
+            String(
+                format: "[echoframes] turn=[%.1f-%.1f] %.1fs median=%.2f scoreable=%.0f%% lowRun=%.2fs (%.1f%% of turn) verdict=%@",
+                turnStart, turnEnd, turnSeconds, median,
+                100 * Double(scoreable.count) / Double(scores.fractions.count),
+                lowRunSeconds, 100 * lowRunSeconds / turnSeconds, String(describing: verdict)
+            ),
+            source: "MeetingProcessingPipeline"
+        )
+    }
+
+    /// A capture epoch ends at any discontinuity on either track; a rolling delay consensus must
+    /// never survive one — measured drift (~6.4 ppm, ~23ms/hour) makes a stale offset wrong on
+    /// the far side of a jump.
+    nonisolated static func epochBoundaries(
+        micChunks: [MeetingAudioChunk],
+        appChunks: [MeetingAudioChunk],
+        origin: TimeInterval
+    ) -> [TimeInterval] {
+        (micChunks + appChunks).flatMap { chunk in
+            chunk.discontinuities.compactMap { $0.presentationTime.map { $0.seconds - origin } }
+        }.sorted()
+    }
+
+    private struct EchoDelayEpochState {
+        var boundaries: [TimeInterval]
+        var boundaryIndex = 0
+        var acceptedDelays: [TimeInterval] = []
+
+        mutating func advance(toChunkEnd chunkEnd: TimeInterval) {
+            while self.boundaryIndex < self.boundaries.count, self.boundaries[self.boundaryIndex] <= chunkEnd {
+                self.acceptedDelays.removeAll()
+                self.boundaryIndex += 1
+            }
+        }
+    }
+
+    /// No confident per-chunk estimate and no consensus yet (e.g. the first chunks of a quiet
+    /// meeting) leaves the verdict `.unknown` for that chunk — acceptable, since `.unknown`
+    /// never vetoes.
+    nonisolated static func resolvedDelay(
+        estimate: DelayEstimate?,
+        acceptedDelaysInEpoch: [TimeInterval]
+    ) -> TimeInterval? {
+        if let estimate, estimate.confidence >= MeetingEchoSignalScorer.minimumDelayConfidence {
+            return estimate.seconds
+        }
+        guard !acceptedDelaysInEpoch.isEmpty else { return nil }
+        return MeetingEchoSignalScorer.median(acceptedDelaysInEpoch)
+    }
+
+    nonisolated struct EchoScoringOutcome {
+        var verdicts: [Int: TurnEchoVerdict]
+        var acceptedDelaySeconds: TimeInterval?
+    }
+
+    /// Every failure here (missing/corrupt reference audio, decode errors, bad timing math, ...)
+    /// degrades to `.unknown` rather than propagating: a sick application-audio track must never
+    /// take down an otherwise-healthy microphone chunk.
+    nonisolated static func computeEchoVerdicts(
+        micChunk: MeetingAudioChunk,
+        micChunkURL: URL,
+        chunkOffset: TimeInterval,
+        chunkDuration: TimeInterval,
+        turns: [(index: Int, start: TimeInterval, end: TimeInterval)],
+        applicationTrack: MeetingAudioTrack,
+        origin: TimeInterval,
+        sessionDirectory: URL,
+        acceptedDelaysInEpoch: [TimeInterval]
+    ) throws -> EchoScoringOutcome {
+        let sampleRate = 16_000.0
+        let micSamples = try Self.readSamples(fileURL: micChunkURL, startSeconds: 0, endSeconds: nil)
+        guard !micSamples.isEmpty else { return EchoScoringOutcome(verdicts: [:], acceptedDelaySeconds: nil) }
+
+        let micSessionRange = (start: chunkOffset, end: chunkOffset + chunkDuration)
+        let referenceSamples = Self.gatherReferenceAudio(
+            micSessionRange: micSessionRange,
+            appChunks: applicationTrack.chunks,
+            origin: origin,
+            sessionDirectory: sessionDirectory,
+            sampleRate: sampleRate
+        )
+
+        let overlappingAppChunks = applicationTrack.chunks.filter { appChunk in
+            let start = appChunk.presentationStart.seconds - origin
+            let end = appChunk.presentationEnd.seconds - origin
+            return end > micSessionRange.start && start < micSessionRange.end
+        }
+        let guardIntervals = Self.discontinuityGuardIntervals(
+            micChunk: micChunk,
+            overlappingAppChunks: overlappingAppChunks,
+            origin: origin,
+            guardSeconds: MeetingEchoSignalScorer.blockSeconds
+        )
+
+        let guardedMic = Self.zeroingGuardedSamples(micSamples, chunkOffset: chunkOffset, sampleRate: sampleRate, guardIntervals: guardIntervals)
+        let guardedReference = Self.zeroingGuardedSamples(referenceSamples, chunkOffset: chunkOffset, sampleRate: sampleRate, guardIntervals: guardIntervals)
+        let estimate = MeetingEchoSignalScorer.estimateDelay(
+            mic: guardedMic, reference: guardedReference, sampleRate: sampleRate, maxLagSeconds: 0.5
+        )
+        guard let delaySeconds = Self.resolvedDelay(estimate: estimate, acceptedDelaysInEpoch: acceptedDelaysInEpoch) else {
+            return EchoScoringOutcome(verdicts: [:], acceptedDelaySeconds: nil)
+        }
+        let acceptedDelaySeconds = (estimate?.confidence ?? 0) >= MeetingEchoSignalScorer.minimumDelayConfidence
+            ? estimate?.seconds
+            : nil
+
+        let rawScores = MeetingEchoSignalScorer.explainedFractions(
+            mic: micSamples, reference: referenceSamples, sampleRate: sampleRate, delaySeconds: delaySeconds
+        )
+        let scores = Self.maskingGuardedFrames(rawScores, chunkOffset: chunkOffset, sampleRate: sampleRate, guardIntervals: guardIntervals)
+
+        var verdicts: [Int: TurnEchoVerdict] = [:]
+        for turn in turns {
+            verdicts[turn.index] = Self.turnVerdict(
+                scores, chunkOffset: chunkOffset, turnStart: turn.start, turnEnd: turn.end, sampleRate: sampleRate
+            )
+        }
+        return EchoScoringOutcome(verdicts: verdicts, acceptedDelaySeconds: acceptedDelaySeconds)
     }
 
     private struct Accumulator {
@@ -849,6 +1322,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         skippedChunkIDs: inout [MeetingAudioChunkID]
     ) async throws {
         let diarizer = SpeakerDiarizationService()
+        let applicationTrack = session.audioTracks.first(where: { $0.kind == .applicationAudio })
+        var epochState = EchoDelayEpochState(
+            boundaries: Self.epochBoundaries(
+                micChunks: track.chunks,
+                appChunks: applicationTrack?.chunks ?? [],
+                origin: context.origin
+            )
+        )
         var stagedTurns: [StagedMicrophoneTurn] = []
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             let accumulatorSnapshot = accumulator
@@ -860,6 +1341,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     diarizer: diarizer,
                     context: context,
                     remoteSpeech: remoteSpeech,
+                    applicationTrack: applicationTrack,
+                    epochState: &epochState,
                     accumulator: &accumulator,
                     stagedTurns: &stagedTurns
                 )
@@ -886,6 +1369,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         diarizer: SpeakerDiarizationService,
         context: ProcessingContext,
         remoteSpeech: [TimelineInterval],
+        applicationTrack: MeetingAudioTrack?,
+        epochState: inout EchoDelayEpochState,
         accumulator: inout Accumulator,
         stagedTurns: inout [StagedMicrophoneTurn]
     ) async throws {
@@ -894,6 +1379,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let chunkDuration = try await Task.detached(priority: .userInitiated) {
             try Self.audioDuration(url)
         }.value
+        epochState.advance(toChunkEnd: chunkOffset + chunkDuration)
         if SpeakerDiarizationService.isSupported {
             do {
                 let diarization = try await diarizer.diarizeWithProfiles(
@@ -925,7 +1411,46 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         clusterIDByLabel[turn.speakerLabel] = resolved.speakerID
                         usedClusterIDs.insert(resolved.speakerID)
                     }
-                    for (index, turn, text) in transcribedTurns {
+
+                    var signalVerdictByIndex: [Int: TurnEchoVerdict] = [:]
+                    if let applicationTrack {
+                        let turnRanges = transcribedTurns.map {
+                            (index: $0.index, start: chunkOffset + $0.turn.startSeconds, end: chunkOffset + $0.turn.endSeconds)
+                        }
+                        let acceptedDelaysInEpoch = epochState.acceptedDelays
+                        do {
+                            let outcome = try await Task.detached(priority: .userInitiated) {
+                                try Self.computeEchoVerdicts(
+                                    micChunk: chunk,
+                                    micChunkURL: url,
+                                    chunkOffset: chunkOffset,
+                                    chunkDuration: chunkDuration,
+                                    turns: turnRanges,
+                                    applicationTrack: applicationTrack,
+                                    origin: context.origin,
+                                    sessionDirectory: context.sessionDirectory,
+                                    acceptedDelaysInEpoch: acceptedDelaysInEpoch
+                                )
+                            }.value
+                            signalVerdictByIndex = outcome.verdicts
+                            if let acceptedDelaySeconds = outcome.acceptedDelaySeconds {
+                                epochState.acceptedDelays.append(acceptedDelaySeconds)
+                            }
+                        } catch {
+                            if error is CancellationError { throw error }
+                            DebugLogger.shared.warning(
+                                "Meeting echo signal scoring chunk \(chunk.id) failed; leaving turns unscored: \(error)",
+                                source: "MeetingProcessingPipeline"
+                            )
+                        }
+                    }
+
+                    let turnLoudness = Self.turnLoudness(
+                        fileURL: url,
+                        turns: transcribedTurns.map { (start: $0.turn.startSeconds, end: $0.turn.endSeconds) }
+                    )
+                    for (offset, element) in transcribedTurns.enumerated() {
+                        let (index, turn, text) = element
                         let start = chunkOffset + turn.startSeconds
                         let end = chunkOffset + turn.endSeconds
                         let overlapsRemote = remoteSpeech.contains {
@@ -940,7 +1465,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             start: start,
                             end: end,
                             text: text,
-                            overlapsRemote: overlapsRemote
+                            overlapsRemote: overlapsRemote,
+                            rms: turnLoudness.indices.contains(offset) ? turnLoudness[offset] : 0,
+                            signalVerdict: signalVerdictByIndex[index] ?? .unknown
                         ))
                     }
                     return
@@ -948,9 +1475,19 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             } catch {
                 if error is CancellationError { throw error }
                 if case MeetingProcessingError.audioUnreadable = error { throw error }
-                let reason = Self.isEmptyTurnFallback(error) ? "every turn transcribed empty" : "diarization failed"
+                // Diarization worked and every turn still came back empty: the microphone holds no
+                // intelligible speech here. Re-transcribing the whole chunk only coaxes the
+                // recognizer into hallucinating over near-silence, and that text lands unattributed
+                // and unscoreable — measured at 0.31 text containment and no signal verdict at all.
+                if Self.isEmptyTurnFallback(error) {
+                    DebugLogger.shared.warning(
+                        "Meeting microphone chunk \(chunk.id): no intelligible speech, emitting nothing",
+                        source: "MeetingProcessingPipeline"
+                    )
+                    return
+                }
                 DebugLogger.shared.warning(
-                    "Meeting microphone chunk \(chunk.id) fell back to an unlabeled transcript (\(reason)): \(error)",
+                    "Meeting microphone chunk \(chunk.id) fell back to an unlabeled transcript (diarization failed): \(error)",
                     source: "MeetingProcessingPipeline"
                 )
             }
@@ -985,9 +1522,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func finishMicrophoneTrack(
         _ track: MeetingAudioTrack,
         session: MeetingSession,
-        stagedTurns: [StagedMicrophoneTurn],
+        stagedTurns allStagedTurns: [StagedMicrophoneTurn],
         accumulator: inout Accumulator
     ) {
+        // Session-wide, never per chunk: a chunk holding only distant audio would otherwise take
+        // that audio as its own reference and gate nothing.
+        let stagedTurns = session.selectedMicrophone.role == .personal
+            ? Self.rejectingFarField(allStagedTurns)
+            : allStagedTurns
+
         if session.mode == .inRoom {
             for turn in stagedTurns {
                 let isNewSpeaker = !accumulator.speakers.contains { $0.id == turn.clusterID }
@@ -1047,20 +1590,17 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
 
+        let prototypeSpeakerIDs = accumulator.embeddingIndexByTrack[.microphone]?.speakerIDs ?? []
         let localClusterID = session.selectedMicrophone.role == .personal
-            ? MeetingLocalSpeakerEvidenceSelector.candidate(
-                evidenceDurationByCluster: Self.localSpeakerEvidence(
-                    from: classifiedTurns.map {
-                        (
-                            clusterID: $0.clusterID, start: $0.start, end: $0.end,
-                            overlapsRemote: $0.overlapsRemote, echoScored: $0.echoScored,
-                            isEcho: $0.isLikelyEcho
-                        )
-                    }
-                ),
-                prototypeSpeakerIDs: accumulator.embeddingIndexByTrack[.microphone]?.speakerIDs ?? []
-            )
+            ? Self.selectLocalCluster(from: classifiedTurns, prototypeSpeakerIDs: prototypeSpeakerIDs)
             : nil
+        Self.logLocalSpeakerElection(
+            turns: classifiedTurns,
+            prototypeSpeakerIDs: prototypeSpeakerIDs,
+            index: accumulator.embeddingIndexByTrack[.microphone],
+            role: session.selectedMicrophone.role,
+            elected: localClusterID
+        )
         if let localClusterID,
            let evidenceTurn = classifiedTurns.first(where: { $0.clusterID == localClusterID })
         {
@@ -1082,7 +1622,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
         for turn in classifiedTurns {
             let isLocalCluster = turn.clusterID == localClusterID
-            let isCleanLocalTurn = isLocalCluster && !turn.isLikelyEcho
+            let isCleanLocalTurn = isLocalCluster && !turn.effectiveEcho
             accumulator.segments.append(Self.segment(
                 key: "microphone:\(turn.chunkID.uuidString):\(turn.index)",
                 trackID: track.id,
@@ -1091,7 +1631,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 end: turn.end,
                 text: turn.text,
                 overlap: turn.overlapsRemote ? .overlapsOtherTrack : .none,
-                isLikelyEcho: isLocalCluster ? false : turn.isLikelyEcho
+                isLikelyEcho: isLocalCluster ? false : turn.effectiveEcho
             ))
         }
     }

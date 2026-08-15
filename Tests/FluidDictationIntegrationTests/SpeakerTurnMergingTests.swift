@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CoreMedia
 import Foundation
 import XCTest
 
@@ -1467,6 +1468,30 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(evidence[you], 9, "the original physical signal still counts")
     }
 
+    // MARK: - Speaker tints
+
+    func testSpeakerTintsAreStableAndWrapWithoutCrashing() {
+        func rgb(_ index: Int) -> [Int] {
+            let value = MeetingSpeakerPalette.rgb(forSpeakerIndex: index, isDark: false)
+            return [value.red, value.green, value.blue]
+        }
+        XCTAssertEqual(rgb(0), rgb(0))
+        XCTAssertNotEqual(rgb(0), rgb(1))
+        // A long meeting out-runs the palette, and a negative index must wrap rather than trap.
+        XCTAssertEqual(rgb(6), rgb(0))
+        XCTAssertEqual(rgb(-1), rgb(5))
+    }
+
+    func testSpeakerTintsLiftInDarkMode() {
+        for index in 0..<6 {
+            let light = MeetingSpeakerPalette.rgb(forSpeakerIndex: index, isDark: false)
+            let dark = MeetingSpeakerPalette.rgb(forSpeakerIndex: index, isDark: true)
+            let lightSum = light.red + light.green + light.blue
+            let darkSum = dark.red + dark.green + dark.blue
+            XCTAssertGreaterThan(darkSum, lightSum, "tint \(index) must lift for a dark ground")
+        }
+    }
+
     // MARK: - Per-turn engines: merge gap, and fallbacks that must not erase "You"
 
     // Real pairs from one Zoom recording. A user talking alone scores 0 at any length.
@@ -2283,7 +2308,8 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         session _: MeetingSession,
         configuration _: MeetingCaptureConfiguration,
         sessionDirectory _: URL,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler _: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async -> MeetingCaptureStartResult {
         self.startCallCount += 1
         self.eventHandlers.append(eventHandler)
