@@ -35,7 +35,42 @@ struct PasteboardSnapshot {
     /// different one — the loop would then treat the newer write as already handled and could
     /// overwrite it. Unlike `PasteboardObservation`, this works for any contents, readable or not,
     /// because the pre-operation clipboard has to be preserved whether or not it is text.
+    /// A capture with no items at all. Ambiguous: either a genuinely empty clipboard, or a writer
+    /// that has called `clearContents()` and not yet published its payload.
+    var isEmpty: Bool { self.items.isEmpty }
+
     static func captureStable(
+        from pasteboard: NSPasteboard,
+        emptySettleMicros: useconds_t = emptyContentsSettleMicros
+    ) -> (snapshot: PasteboardSnapshot, generation: Int)? {
+        // An itemless capture is the dangerous ambiguity. `clearContents()` advances the generation
+        // and empties the pasteboard, and the writer's `setString`/`writeObjects` that follows does
+        // NOT advance it again, so a capture taken inside that window is internally consistent,
+        // passes the generation guard, and is empty. Adopting it as the pre-operation restore target
+        // means our restore later wipes whatever that writer published.
+        //
+        // Rejecting empty outright would be wrong: a genuinely empty clipboard has to be preserved
+        // as empty. Only time separates the two, so re-poll for a bounded interval and accept an
+        // itemless result once the bound expires.
+        //
+        // Note the gate is on ITEM COUNT, not readability. A non-text clipboard (image, file list)
+        // has items and is returned immediately, which is exactly the case this helper exists to
+        // serve and which a readability gate would have broken.
+        let deadline = DispatchTime.now() + .microseconds(Int(emptySettleMicros))
+        while DispatchTime.now() < deadline {
+            if let captured = self.captureStableOnce(from: pasteboard), !captured.snapshot.isEmpty {
+                return captured
+            }
+            usleep(2_000)
+        }
+
+        // Terminal capture is authoritative, including when it is still empty or unstable. Never
+        // resurrect an earlier one: the same discipline the payload-settle helper follows.
+        return self.captureStableOnce(from: pasteboard)
+    }
+
+    /// One coherent snapshot/generation pair, or `nil` if the pasteboard moved mid-capture.
+    private static func captureStableOnce(
         from pasteboard: NSPasteboard
     ) -> (snapshot: PasteboardSnapshot, generation: Int)? {
         let generationBefore = pasteboard.changeCount
@@ -43,6 +78,10 @@ struct PasteboardSnapshot {
         guard pasteboard.changeCount == generationBefore else { return nil }
         return (snapshot, generationBefore)
     }
+
+    /// How long to keep re-polling an itemless capture before accepting it as genuinely empty.
+    /// Matched to the payload-settle bound, since it covers the same clear-then-publish gap.
+    static let emptyContentsSettleMicros: useconds_t = 30_000
 
     /// The plain-text projection of these captured bytes, or `nil` if none of the captured items
     /// carries readable UTF-8 text.

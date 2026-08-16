@@ -21,19 +21,43 @@ enum LayoutAwareKeyCode {
     /// Re-evaluated on every call so a runtime keyboard-layout switch is picked up
     /// immediately. The underlying TIS API must run on the main thread, so the lookup is
     /// dispatched there when called from a background thread.
-    static func virtualKeyCode(for character: Character, qwertyFallback: CGKeyCode) -> CGKeyCode {
+    /// - Parameter carbonModifierState: the modifier state the emitted shortcut will actually carry,
+    ///   in the format `UCKeyTranslate` expects (Carbon modifier bits shifted right by 8). This
+    ///   matters on modifier-dependent layouts: under macOS's built-in "Dvorak - QWERTY ⌘" the key
+    ///   that produces `c` unmodified is not the key that produces `c` with Command held, so
+    ///   resolving with no modifier yields a key code that invokes a different shortcut entirely.
+    static func virtualKeyCode(
+        for character: Character,
+        qwertyFallback: CGKeyCode,
+        carbonModifierState: UInt32 = 0
+    ) -> CGKeyCode {
         if Thread.isMainThread {
-            return self.tisLookup(for: character, qwertyFallback: qwertyFallback)
+            return self.tisLookup(
+                for: character,
+                qwertyFallback: qwertyFallback,
+                carbonModifierState: carbonModifierState
+            )
         }
         var result = qwertyFallback
         DispatchQueue.main.sync {
-            result = self.tisLookup(for: character, qwertyFallback: qwertyFallback)
+            result = self.tisLookup(
+                for: character,
+                qwertyFallback: qwertyFallback,
+                carbonModifierState: carbonModifierState
+            )
         }
         return result
     }
 
+    /// The `UCKeyTranslate` modifier state for a Command-held shortcut.
+    static let commandModifierState = UInt32(cmdKey >> 8)
+
     /// Performs the actual TIS + `UCKeyTranslate` scan. Must be called on the main thread.
-    private static func tisLookup(for character: Character, qwertyFallback: CGKeyCode) -> CGKeyCode {
+    private static func tisLookup(
+        for character: Character,
+        qwertyFallback: CGKeyCode,
+        carbonModifierState: UInt32
+    ) -> CGKeyCode {
         guard let targetScalar = character.unicodeScalars.first else { return qwertyFallback }
 
         guard let sourceRef = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
@@ -59,7 +83,7 @@ enum LayoutAwareKeyCode {
                     layoutPtr,
                     keyCode,
                     UInt16(kUCKeyActionDisplay),
-                    0,
+                    carbonModifierState,
                     kbType,
                     UInt32(kUCKeyTranslateNoDeadKeysMask),
                     &deadKeyState,

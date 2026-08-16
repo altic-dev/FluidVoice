@@ -162,7 +162,11 @@ final class TextSelectionService {
     /// key on non-QWERTY layouts (Dvorak/AZERTY/...). Falls back to the ANSI "c" key code
     /// only when the layout data is unavailable.
     private func postSyntheticCopy() -> Bool {
-        let cKeyCode = LayoutAwareKeyCode.virtualKeyCode(for: "c", qwertyFallback: CGKeyCode(kVK_ANSI_C))
+        let cKeyCode = LayoutAwareKeyCode.virtualKeyCode(
+            for: "c",
+            qwertyFallback: CGKeyCode(kVK_ANSI_C),
+            carbonModifierState: LayoutAwareKeyCode.commandModifierState
+        )
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: cKeyCode, keyDown: false)
         else {
@@ -318,9 +322,12 @@ final class TextSelectionService {
     /// pre-operation state. See `LateWriteArbiter` for the rule and for the residuals it does not
     /// solve.
     ///
-    /// Internal rather than private so the settle loop's wiring — that it and the final-edge
-    /// reconciliation both route through the arbiter — is covered by a test rather than merely
-    /// asserted.
+    /// Internal rather than private so the settle loop's wiring can be driven from tests.
+    /// `testDefensiveRestore_finalEdgeReconcilesAWriteTheLoopNeverSaw` pins the final-edge
+    /// reconciliation by giving the loop no horizon to run in, and
+    /// `testDefensiveRestore_initialBaselineComesFromTheRestoreNotALiveReread` pins the initial
+    /// baseline. That the loop and the final edge call one routine rather than two is established by
+    /// reading the code, not by a test.
     ///
     /// Runs synchronously on the caller's thread (the main thread for Write/Rewrite mode),
     /// consistent with the copy-wait above, and only on this last-resort fallback path.
@@ -651,7 +658,11 @@ final class TextSelectionService {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &value)
 
-        if result == .success, let text = value as? String {
+        // An empty string is NOT a selection. Some AX-opaque editors answer this attribute with ""
+        // rather than an error, and treating that as success terminates selection capture before the
+        // clipboard fallback runs, leaving exactly the apps this fallback exists for still broken.
+        // Fall through to the range fallback, and then to the clipboard, instead.
+        if result == .success, let text = value as? String, !text.isEmpty {
             self.diag("kAXSelectedTextAttribute succeeded (chars=\(text.count))")
             return text
         }

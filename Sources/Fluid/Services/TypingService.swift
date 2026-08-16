@@ -56,7 +56,11 @@ final class TypingService {
     /// Re-evaluated on every call so runtime keyboard layout switches are picked up immediately.
     /// Falls back to the ANSI "v" key code when the layout data is unavailable.
     private static var pasteVirtualKeyCode: CGKeyCode {
-        LayoutAwareKeyCode.virtualKeyCode(for: "v", qwertyFallback: CGKeyCode(kVK_ANSI_V))
+        LayoutAwareKeyCode.virtualKeyCode(
+            for: "v",
+            qwertyFallback: CGKeyCode(kVK_ANSI_V),
+            carbonModifierState: LayoutAwareKeyCode.commandModifierState
+        )
     }
 
     // MARK: - Focus helpers (shared)

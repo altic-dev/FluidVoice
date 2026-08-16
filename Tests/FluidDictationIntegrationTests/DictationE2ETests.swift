@@ -3237,6 +3237,159 @@ extension DictationE2ETests {
         )
     }
 
+    /// A capture taken while a foreign writer sits between `clearContents()` and its payload must
+    /// not be adopted as the pre-operation restore target.
+    ///
+    /// That window is internally consistent (the generation does not move when the payload lands),
+    /// so the generation guard alone passes it, and the empty snapshot it yields would later be
+    /// restored over the writer's content. Fails closed: a scheduler stall makes it fail, never pass.
+    func testCaptureStable_waitsOutAWriterCaughtBetweenClearAndPublish() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("clear-then-publish")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+
+        // The foreign writer clears, advancing the generation, and publishes shortly after. The
+        // publish does NOT advance the generation again.
+        pasteboard.clearContents()
+        let generationAfterClear = pasteboard.changeCount
+
+        let pasteboardName = pasteboard.name.rawValue
+        let didPublish = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.005) {
+            NSPasteboard(name: NSPasteboard.Name(pasteboardName))
+                .setString("their content", forType: .string)
+            didPublish.signal()
+        }
+
+        let captured = PasteboardSnapshot.captureStable(from: pasteboard)
+
+        XCTAssertEqual(
+            didPublish.wait(timeout: .now() + 1.0),
+            .success,
+            "The writer must have published, otherwise this test proves nothing"
+        )
+        XCTAssertEqual(
+            pasteboard.changeCount,
+            generationAfterClear,
+            "The publish must not have advanced the generation, or the premise does not hold"
+        )
+        XCTAssertEqual(
+            captured?.snapshot.plainText,
+            "their content",
+            "An itemless capture must be re-polled, not adopted as the restore target"
+        )
+    }
+
+    /// A genuinely empty clipboard is still captured as empty once the bound expires.
+    func testCaptureStable_acceptsAGenuinelyEmptyClipboard() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("genuinely-empty")
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        let captured = PasteboardSnapshot.captureStable(from: pasteboard)
+
+        XCTAssertNotNil(captured, "An empty clipboard must still produce a capture")
+        XCTAssertTrue(
+            captured?.snapshot.isEmpty ?? false,
+            "Waiting out the ambiguity must not turn an empty clipboard into a failure"
+        )
+    }
+
+    /// A non-text clipboard is returned immediately and is never treated as the ambiguous case.
+    func testCaptureStable_returnsANonTextClipboardWithoutWaiting() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("non-text-stable")
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data([0x01, 0x02, 0x03]), forType: .png)
+        pasteboard.writeObjects([item])
+
+        let captured = PasteboardSnapshot.captureStable(from: pasteboard)
+        XCTAssertNotNil(captured)
+        XCTAssertFalse(
+            captured?.snapshot.isEmpty ?? true,
+            "A non-text clipboard has items and must be adopted, not waited out"
+        )
+        XCTAssertNil(captured?.snapshot.plainText, "The fixture is deliberately non-text")
+    }
+
+    /// A rejected restore write must be reported as a failure, never as a restore.
+    func testLateWriteArbiter_reportsRestoreFailureRatherThanSuccess() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("restore-failure")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+
+        self.writeText("selected text", to: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true,
+            performRestore: { _, pasteboard in
+                // The clear lands, the write back does not. AppKit surfaces this as a false result.
+                PasteboardSnapshot.RestoreResult(
+                    generation: pasteboard.clearContents(),
+                    didRestoreContents: false
+                )
+            }
+        )
+
+        let synthetic = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(synthetic, on: pasteboard),
+            .restoreFailed,
+            "A rejected write must not be reported as a completed restore"
+        )
+    }
+
+    /// The settle loop keeps watching after a restore, so the restore budget is real.
+    ///
+    /// Two matching writes land in sequence; both must be reverted. Stopping after the first would
+    /// make `maxLateCopyRestores` dead code.
+    func testDefensiveRestore_keepsWatchingAfterARestore() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("multi-restore")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        let changeCountBeforeCopy = pasteboard.changeCount
+
+        let pasteboardName = pasteboard.name.rawValue
+        let didWriteBoth = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.02) {
+            let writer = NSPasteboard(name: NSPasteboard.Name(pasteboardName))
+            writer.clearContents()
+            writer.setString("late copy", forType: .string)
+            Thread.sleep(forTimeInterval: 0.04)
+            writer.clearContents()
+            writer.setString("late copy", forType: .string)
+            didWriteBoth.signal()
+        }
+
+        TextSelectionService.shared.restoreClipboardDefensively(
+            snapshot,
+            to: pasteboard,
+            changeCountBeforeCopy: changeCountBeforeCopy,
+            didObserveCopyWrite: false,
+            syntheticCopyText: "late copy"
+        )
+
+        XCTAssertEqual(
+            didWriteBoth.wait(timeout: .now() + 1.0),
+            .success,
+            "Both writes must have run, otherwise this test proves nothing"
+        )
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "The loop must keep watching after the first restore and revert the second write too"
+        )
+    }
+
     /// The final-edge reconciliation exists and does the work.
     ///
     /// The settle window is set to zero so the poll loop cannot run at all, leaving the final edge as
@@ -3334,8 +3487,9 @@ extension DictationE2ETests {
     /// Smoke coverage only, and deliberately labelled as such: it shows that *some* production path
     /// observed and reverted a scheduled write. It cannot separate the loop from the final edge —
     /// removing either still leaves schedules under which this passes — so it is not evidence for
-    /// final-edge behaviour. That both paths call one routine is established by reading the code,
-    /// not by this test.
+    /// final-edge behaviour; `testDefensiveRestore_finalEdgeReconcilesAWriteTheLoopNeverSaw` does
+    /// that separately. That both paths call one routine rather than two is established by reading
+    /// the code, not by any test.
     func testDefensiveRestore_revertsADelayedSyntheticCopyThroughTheSettleLoop() {
         let pasteboard = self.makeClipboardFallbackPasteboard("settle-loop")
         defer { pasteboard.releaseGlobally() }
