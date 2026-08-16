@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/altic-dev/FluidVoice/stargazers"><img src="https://img.shields.io/github/stars/altic-dev/FluidVoice?style=social" alt="GitHub stars"/></a>
   <a href="https://github.com/sponsors/altic-dev"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor FluidVoice"/></a>
-  <a href="https://github.com/altic-dev"><img src="https://img.shields.io/badge/X-%40ALTIC__DEV-black?logo=x&logoColor=white" alt="X @ALTIC_DEV"/></a>
+  <a href="https://x.com/fluidvoiceapp"><img src="https://img.shields.io/badge/X-%40fluidvoiceapp-black?logo=x&logoColor=white" alt="X @fluidvoiceapp"/></a>
   <br />
   <a href="https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1"><img src="https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue" alt="Supported Models"/></a>
   <br /><br />
@@ -286,7 +286,7 @@ Anonymous analytics are enabled by default to track app health and feature usage
 
 Join our Discord: https://discord.gg/VUPHaKSvYV
 
-Follow development on X: [@ALTIC_DEV](https://github.com/altic-dev)
+Follow development on X: [@fluidvoiceapp](https://x.com/fluidvoiceapp)
 
 ---
 
