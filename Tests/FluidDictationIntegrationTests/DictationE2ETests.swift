@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 @testable import FluidVoice_Debug
@@ -2652,5 +2653,732 @@ final class SimpleUpdaterTests: XCTestCase {
 
         XCTAssertFalse(gate.isActive)
         XCTAssertTrue(gate.begin())
+    }
+}
+
+// MARK: - Write Mode clipboard fallback: coherent observations and the moving restore target
+
+/// Coverage for the defensive restore's settle window (issue #259).
+///
+/// These drive `TextSelectionService.LateWriteArbiter` directly with constructed observations
+/// rather than racing a background writer against the live settle loop. That is deliberate: the
+/// arbiter returns an `Outcome` describing which branch it took, so each test asserts both the
+/// resulting clipboard state AND that the branch it targets actually executed. A timing-based test
+/// can only prove that a queued writer eventually ran, which is how an earlier revision of this fix
+/// shipped tests that passed against a broken implementation.
+extension DictationE2ETests {
+    /// A named pasteboard so these tests never touch the user's real clipboard.
+    private func makeClipboardFallbackPasteboard(_ suffix: String) -> NSPasteboard {
+        NSPasteboard(name: NSPasteboard.Name("com.FluidApp.app.tests.clipboard-fallback.\(suffix)"))
+    }
+
+    private func writeText(_ text: String, to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Writes a single item carrying a second representation alongside its text, so a test can tell
+    /// a full-snapshot restore apart from one that only round-tripped the plain text.
+    private func writeRichItem(text: String, html: String, to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data(text.utf8), forType: .string)
+        item.setData(Data(html.utf8), forType: .html)
+        pasteboard.writeObjects([item])
+    }
+
+    /// Writes one item per element, which is what makes a pasteboard multi-item.
+    private func writeItems(texts: [String?], to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let items = texts.map { text -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            if let text {
+                item.setData(Data(text.utf8), forType: .string)
+            } else {
+                item.setData(Data([0x01, 0x02]), forType: .png)
+            }
+            return item
+        }
+        pasteboard.writeObjects(items)
+    }
+
+    private func htmlString(on pasteboard: NSPasteboard) -> String? {
+        guard let data = pasteboard.data(forType: .html) else { return nil }
+        return String(bytes: data, encoding: .utf8)
+    }
+
+    private func makeLateWriteArbiter(
+        restoreTarget: PasteboardSnapshot,
+        baselineChangeCount: Int,
+        syntheticCopyText: String?,
+        didObserveCopyWrite: Bool,
+        restoresRemaining: Int = 3,
+        performRestore: ((PasteboardSnapshot, NSPasteboard) -> PasteboardSnapshot.RestoreResult)? = nil
+    ) -> TextSelectionService.LateWriteArbiter {
+        TextSelectionService.LateWriteArbiter(
+            restoreTarget: restoreTarget,
+            baselineChangeCount: baselineChangeCount,
+            restoresRemaining: restoresRemaining,
+            syntheticCopyText: syntheticCopyText,
+            didObserveCopyWrite: didObserveCopyWrite,
+            performRestore: performRestore
+        )
+    }
+
+    /// A restore that lands an external write immediately afterwards, reproducing the interleave
+    /// where a writer publishes between our restore and any hypothetical post-restore `changeCount`
+    /// re-read. The write is deliberately NOT reflected in the restore's own returned generation.
+    ///
+    /// One-shot: the interfering write happens after the FIRST restore only. The seam is threaded
+    /// through both the initial restore and the arbiter's, and a write on every restore would just
+    /// re-clobber the clipboard and prove nothing.
+    private func restoreThenExternalWrite(
+        _ text: String
+    ) -> (PasteboardSnapshot, NSPasteboard) -> PasteboardSnapshot.RestoreResult {
+        var fired = false
+        return { snapshot, pasteboard in
+            let result = snapshot.restore(to: pasteboard)
+            guard !fired else { return result }
+            fired = true
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            return result
+        }
+    }
+
+    /// The moving-target invariant, and the negative control for it: a settled external write
+    /// survives a later synthetic restore instead of being reverted to the older clipboard.
+    func testLateWriteArbiter_movesTheRestoreTargetOntoASettledExternalWrite() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("moving-target")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true
+        )
+
+        // A multi-representation write, so the assertions below prove the FULL snapshot moved
+        // rather than only its plain text.
+        self.writeRichItem(
+            text: "clipboard manager contents",
+            html: "<p>clipboard manager contents</p>",
+            to: pasteboard
+        )
+        let external = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(external, on: pasteboard),
+            .retargeted,
+            "A readable write that is not the recorded payload must become the new restore target"
+        )
+
+        self.writeText("selected text", to: pasteboard)
+        let synthetic = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(synthetic, on: pasteboard),
+            .restored,
+            "A write carrying the recorded synthetic payload must be reverted"
+        )
+
+        // NEGATIVE CONTROL. Remove the retarget assignment in `handle` and this reads
+        // "user clipboard": the moving target is the only thing keeping the external write alive
+        // across the synthetic restore.
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "clipboard manager contents",
+            "The restore must revert to the external write, not to the older pre-operation clipboard"
+        )
+        XCTAssertEqual(
+            self.htmlString(on: pasteboard),
+            "<p>clipboard manager contents</p>",
+            "The moving target must be the full snapshot, not a plain-text reduction of it"
+        )
+    }
+
+    /// The coherence invariant, and the negative control for it: the branch acts on the observation
+    /// it was handed, never on whatever the live pasteboard happens to hold by the time it runs.
+    func testLateWriteArbiter_usesTheObservedPayloadAndNotTheLivePasteboard() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("coherence")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true
+        )
+
+        self.writeText("external write", to: pasteboard)
+        let external = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+
+        // Only now does the synthetic copy land. An implementation that re-read the live pasteboard
+        // inside the branch would classify "selected text" here, or capture it as the restore
+        // target. A rejected earlier revision of this fix failed at exactly this point.
+        self.writeText("selected text", to: pasteboard)
+
+        XCTAssertEqual(
+            arbiter.handle(external, on: pasteboard),
+            .retargeted,
+            "Classification must come from the observation, which carried the external write"
+        )
+
+        // Deliberately the arbiter's own entry point rather than a hand-captured observation, so
+        // this also pins the OTHER half of the invariant: the baseline recorded by the retarget
+        // must be the observed generation, not a live re-read. A baseline taken live would have
+        // absorbed the synthetic write's generation as "already handled" and this returns
+        // `.unchanged` — the synthetic payload would then sit on the user's clipboard forever.
+        XCTAssertEqual(
+            arbiter.observeAndHandle(pasteboard),
+            .restored,
+            "The synthetic write must still be observable, so the retarget's baseline must be the observed generation"
+        )
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "external write",
+            "The adopted target must be the observed external write, not the live contents"
+        )
+    }
+
+    /// An unreadable generation must not advance the baseline, because the payload can become
+    /// readable inside that same generation with no second change to notice it by.
+    func testLateWriteArbiter_keepsTheBaselineOnAnUnreadableGeneration() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("unsettled")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true
+        )
+
+        // A writer caught between clearContents() and its payload write.
+        pasteboard.clearContents()
+        let unreadable = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertNil(unreadable.string, "A cleared pasteboard must produce an unreadable observation")
+        XCTAssertEqual(
+            arbiter.handle(unreadable, on: pasteboard),
+            .unsettled,
+            "An unreadable generation must not be classified or adopted"
+        )
+
+        // The writer now publishes into that same generation. Only an unadvanced baseline lets the
+        // loop see it at all.
+        pasteboard.setString("selected text", forType: .string)
+        XCTAssertEqual(
+            arbiter.observeAndHandle(pasteboard),
+            .restored,
+            "The re-read of the same generation must find the published payload"
+        )
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "The delayed synthetic payload must be reverted to the restore target"
+        )
+    }
+
+    /// An observation whose generation moves mid-capture must be thrown away rather than used.
+    func testPasteboardObservation_discardsAnObservationWhoseGenerationMoved() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("torn")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("stable text", to: pasteboard)
+
+        var reads = 0
+        let torn = PasteboardObservation.capture(from: pasteboard) {
+            reads += 1
+            // Simulates a write landing between the pre-read and the post-read.
+            return reads == 1 ? 100 : 101
+        }
+        XCTAssertNil(torn, "An observation whose generation moved mid-capture must be discarded")
+        XCTAssertEqual(reads, 2, "The generation must be read both before and after the capture")
+
+        let stable = PasteboardObservation.capture(from: pasteboard) { 100 }
+        XCTAssertNotNil(stable, "A stable generation must still produce an observation")
+        XCTAssertEqual(stable?.changeCount, 100, "The observation must report the generation it bound to")
+    }
+
+    /// A capture bound to a triggering generation must refuse a different one, so a poll woken by
+    /// one write cannot commit a decision about a later one.
+    func testPasteboardObservation_refusesAGenerationOtherThanTheExpectedOne() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("expected-generation")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("stable text", to: pasteboard)
+        let live = pasteboard.changeCount
+
+        XCTAssertNil(
+            PasteboardObservation.capture(from: pasteboard, expectedGeneration: live - 1),
+            "An observation of a generation other than the triggering one must be discarded"
+        )
+        XCTAssertNotNil(
+            PasteboardObservation.capture(from: pasteboard, expectedGeneration: live),
+            "The triggering generation itself must still be observable"
+        )
+    }
+
+    /// The projection must reproduce `NSPasteboard.stringForType:`, which combines the text of
+    /// every item with newlines. A first-item-wins projection would change the selection this
+    /// fallback returns AND make two different multi-item clipboards compare equal.
+    func testPasteboardSnapshotPlainText_matchesPasteboardLevelTextSemantics() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("text-parity")
+        defer { pasteboard.releaseGlobally() }
+
+        let fixtures: [(name: String, texts: [String?])] = [
+            ("single item", ["only"]),
+            ("two items", ["first", "second"]),
+            ("three items", ["a", "b", "c"]),
+            ("empty first", ["", "second"]),
+            ("empty last", ["first", ""]),
+            ("non-text between", ["first", nil, "third"]),
+            ("no text at all", [nil, nil]),
+        ]
+
+        for fixture in fixtures {
+            self.writeItems(texts: fixture.texts, to: pasteboard)
+            let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+            XCTAssertEqual(
+                snapshot.plainText,
+                pasteboard.string(forType: .string).flatMap { $0.isEmpty ? nil : $0 },
+                "Projection must match pasteboard-level text semantics for: \(fixture.name)"
+            )
+        }
+    }
+
+    /// The collision that a first-item-wins projection would create: two clipboards sharing only
+    /// their first item must not be classified as the same payload.
+    func testLateWriteArbiter_distinguishesMultiItemWritesSharingAFirstItem() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("multi-item-collision")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+
+        // The synthetic copy was a two-item selection.
+        self.writeItems(texts: ["shared", "synthetic"], to: pasteboard)
+        let syntheticPayload = try XCTUnwrap(PasteboardSnapshot.capture(from: pasteboard).plainText)
+        XCTAssertEqual(syntheticPayload, "shared\nsynthetic")
+
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: syntheticPayload,
+            didObserveCopyWrite: true
+        )
+
+        // An unrelated two-item write that merely shares the first item.
+        self.writeItems(texts: ["shared", "external"], to: pasteboard)
+        let external = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(external, on: pasteboard),
+            .retargeted,
+            "Clipboards differing past their first item must not be classified as the same payload"
+        )
+    }
+
+    /// ACCEPTED LIMITATION, pinned deliberately. The test is exact string equality, not authorship:
+    /// the pasteboard carries no writer provenance, so an external write that happens to carry the
+    /// same text as the synthetic copy is indistinguishable from it and is restored over. This
+    /// records the behaviour rather than endorsing it.
+    func testLateWriteArbiter_restoresOverASameTextExternalWrite_acceptedLimitation() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("same-text")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true
+        )
+
+        // Somebody else's write. Its plain text collides with the synthetic payload, but the item
+        // is demonstrably NOT the same clipboard: it carries rich text the synthetic copy never
+        // had. The classifier compares text, so the difference is invisible to it.
+        self.writeRichItem(
+            text: "selected text",
+            html: "<b>selected text</b>",
+            to: pasteboard
+        )
+        XCTAssertNotNil(self.htmlString(on: pasteboard), "The fixture must be distinguishable")
+
+        let ambiguous = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(ambiguous, on: pasteboard),
+            .restored,
+            "Same-text external writes are indistinguishable from the synthetic copy and are reverted"
+        )
+        XCTAssertEqual(pasteboard.string(forType: .string), "user clipboard")
+        XCTAssertNil(
+            self.htmlString(on: pasteboard),
+            "The external item's rich text is lost — this is the accepted cost of text-only comparison"
+        )
+    }
+
+    /// The two halves of the no-recorded-payload rule, which `didObserveCopyWrite` decides.
+    func testLateWriteArbiter_appliesTheNoRecordedPayloadPolicy() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("no-payload")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        let baseline = pasteboard.changeCount
+
+        // Cmd+C timed out: nothing was restored, so a write in this window is taken for the
+        // delayed copy. This is a known false-positive path, kept because there is no provenance.
+        var timedOut = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: baseline,
+            syntheticCopyText: nil,
+            didObserveCopyWrite: false
+        )
+        self.writeText("delayed selection", to: pasteboard)
+        let afterTimeout = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            timedOut.handle(afterTimeout, on: pasteboard),
+            .restored,
+            "With no recorded payload and no observed copy, a late write is treated as the delayed copy"
+        )
+        XCTAssertEqual(pasteboard.string(forType: .string), "user clipboard")
+
+        // The copy DID land but carried no readable text (a non-text selection). The target is
+        // already back in place, so a further unidentifiable write belongs to somebody else.
+        var nonTextSelection = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: nil,
+            didObserveCopyWrite: true
+        )
+        self.writeText("somebody else's clipboard", to: pasteboard)
+        let external = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            nonTextSelection.handle(external, on: pasteboard),
+            .retargeted,
+            "With the copy observed but unreadable, a later readable write is somebody else's"
+        )
+        XCTAssertEqual(pasteboard.string(forType: .string), "somebody else's clipboard")
+    }
+
+    /// The restore budget stops the loop rather than letting it fight a repeating writer forever.
+    func testLateWriteArbiter_stopsRestoringOnceTheBudgetIsExhausted() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("budget")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true,
+            restoresRemaining: 1
+        )
+
+        self.writeText("selected text", to: pasteboard)
+        let first = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(arbiter.handle(first, on: pasteboard), .restored)
+
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "The first restore must actually have written, not merely reported success"
+        )
+
+        self.writeText("selected text", to: pasteboard)
+        let generationBeforeExhaustion = pasteboard.changeCount
+        let second = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(
+            arbiter.handle(second, on: pasteboard),
+            .budgetExhausted,
+            "Past the budget the arbiter must stop rather than restore again"
+        )
+        XCTAssertEqual(
+            pasteboard.changeCount,
+            generationBeforeExhaustion,
+            "An exhausted budget must not write at all, not merely write the same value back"
+        )
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "selected text",
+            "An exhausted budget leaves the last write in place rather than looping"
+        )
+    }
+
+    /// The observation's classification payload is a projection of its own snapshot, not a second
+    /// read that happens to agree with it.
+    func testPasteboardObservation_derivesItsStringFromItsOwnSnapshot() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("derivation")
+        let mirror = self.makeClipboardFallbackPasteboard("derivation-mirror")
+        defer {
+            pasteboard.releaseGlobally()
+            mirror.releaseGlobally()
+        }
+
+        self.writeText("selected text", to: pasteboard)
+        let observation = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        guard case let .readable(_, snapshot) = observation else {
+            return XCTFail("A pasteboard carrying text must produce a readable observation")
+        }
+
+        let string = try XCTUnwrap(observation.string)
+        XCTAssertEqual(string, "selected text")
+        XCTAssertEqual(
+            string,
+            snapshot.plainText,
+            "The classified text must be a projection of the snapshot, not an independent read"
+        )
+        snapshot.restore(to: mirror)
+        XCTAssertEqual(
+            mirror.string(forType: .string),
+            string,
+            "The classified text and the restore target must be the same bytes"
+        )
+    }
+
+    /// `restore(to:)` hands back the generation its own write created, so a caller can baseline on
+    /// it without re-reading `changeCount`. A re-read is what lets an external write that lands
+    /// immediately after the restore be recorded as "already handled" and then overwritten.
+    ///
+    /// This pins the contract rather than reproducing the race, which cannot be forced
+    /// deterministically. The defect is closed by construction: the baseline is now produced inside
+    /// the write, so no code path exists between the two.
+    func testPasteboardSnapshotRestore_reportsTheGenerationItCreated() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("restore-generation")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+
+        self.writeText("selected text", to: pasteboard)
+        let restored = snapshot.restore(to: pasteboard)
+        let restoredGeneration = restored.generation
+        XCTAssertTrue(restored.didRestoreContents, "The pasteboard must have accepted the write")
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "The restore must have put the snapshot back"
+        )
+
+        // A writer lands right after our restore — the race the returned generation exists for.
+        self.writeText("external write", to: pasteboard)
+        XCTAssertLessThan(
+            restoredGeneration,
+            pasteboard.changeCount,
+            "The reported generation must be our own restore's, not a later writer's"
+        )
+
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: snapshot,
+            baselineChangeCount: restoredGeneration,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true
+        )
+        XCTAssertEqual(
+            arbiter.observeAndHandle(pasteboard),
+            .retargeted,
+            "A write landing after our restore must still be observed rather than skipped"
+        )
+    }
+
+    /// A generation with no readable text carries no restore target at all, so it cannot be adopted
+    /// by accident and costs no full snapshot on the polls that re-observe it.
+    func testPasteboardObservation_treatsANonTextGenerationAsUnreadable() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("non-text")
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data([0x01, 0x02, 0x03]), forType: .png)
+        pasteboard.writeObjects([item])
+
+        let observation = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        guard case .unreadable = observation else {
+            return XCTFail("A generation with no readable text must not carry a restore target")
+        }
+        XCTAssertNil(observation.string)
+    }
+
+    /// The payload-settle helper must not return an observation it already has evidence is stale.
+    ///
+    /// Scope note: with readable observations returning immediately, the removed fallback could only
+    /// ever have resurrected an *unreadable* one, so this pins a contract rather than closing a
+    /// user-visible defect. It still discriminates — the previous `?? latest` form returns the
+    /// earlier observation here where this returns nothing.
+    func testReadSettledObservation_returnsNothingWhenTheFinalCaptureIsUnstable() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("no-resurrection")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("stale text", to: pasteboard)
+
+        // Stable-but-unreadable while the window is open, then unstable at the terminal capture.
+        var sawUnreadable = false
+        let cutoff = DispatchTime.now() + .microseconds(20_000)
+        let settled = TextSelectionService.shared.readSettledObservation(from: pasteboard) {
+            guard DispatchTime.now() < cutoff else { return nil }
+            sawUnreadable = true
+            return .unreadable(changeCount: 7)
+        }
+
+        XCTAssertTrue(
+            sawUnreadable,
+            "The helper must have polled unreadable observations first, otherwise this proves nothing"
+        )
+        XCTAssertNil(
+            settled,
+            "An unstable terminal capture must yield no observation, never the earlier stale one"
+        )
+    }
+
+    /// The final-edge reconciliation exists and does the work.
+    ///
+    /// The settle window is set to zero so the poll loop cannot run at all, leaving the final edge as
+    /// the only thing that can act. Delete it and a delayed copy that lands after the last poll is
+    /// never reverted, which is precisely the edge case it was added for.
+    func testDefensiveRestore_finalEdgeReconcilesAWriteTheLoopNeverSaw() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("final-edge")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        let changeCountBeforeCopy = pasteboard.changeCount
+
+        // The delayed copy is already on the clipboard before the settle watch begins.
+        self.writeText("delayed selection", to: pasteboard)
+
+        TextSelectionService.shared.restoreClipboardDefensively(
+            snapshot,
+            to: pasteboard,
+            changeCountBeforeCopy: changeCountBeforeCopy,
+            didObserveCopyWrite: false,
+            syntheticCopyText: nil,
+            settleWindowMicros: 0
+        )
+
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "With no polling horizon, only the final-edge reconciliation can revert the delayed copy"
+        )
+    }
+
+    /// The initial restore must baseline on the generation the restore itself created.
+    ///
+    /// A post-restore live re-read samples a count an external writer may already have advanced,
+    /// recording that generation as handled without ever observing its contents.
+    func testDefensiveRestore_initialBaselineComesFromTheRestoreNotALiveReread() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("initial-baseline")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        let changeCountBeforeCopy = pasteboard.changeCount
+
+        // The app's delayed copy lands immediately after our restore. Its text matches the recorded
+        // payload, so a correctly-baselined loop must still see that generation and revert it.
+        TextSelectionService.shared.restoreClipboardDefensively(
+            snapshot,
+            to: pasteboard,
+            changeCountBeforeCopy: changeCountBeforeCopy,
+            didObserveCopyWrite: true,
+            syntheticCopyText: "late copy",
+            settleWindowMicros: 0,
+            performRestore: self.restoreThenExternalWrite("late copy")
+        )
+
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "A write landing right after the restore must still be observed, not swallowed by the baseline"
+        )
+    }
+
+    /// The arbiter's synthetic branch must baseline on the restore's own generation too.
+    func testLateWriteArbiter_syntheticBaselineComesFromTheRestoreNotALiveReread() throws {
+        let pasteboard = self.makeClipboardFallbackPasteboard("arbiter-baseline")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let preOperation = PasteboardSnapshot.capture(from: pasteboard)
+
+        self.writeText("selected text", to: pasteboard)
+        var arbiter = self.makeLateWriteArbiter(
+            restoreTarget: preOperation,
+            baselineChangeCount: pasteboard.changeCount,
+            syntheticCopyText: "selected text",
+            didObserveCopyWrite: true,
+            performRestore: self.restoreThenExternalWrite("external write")
+        )
+
+        let synthetic = try XCTUnwrap(PasteboardObservation.capture(from: pasteboard))
+        XCTAssertEqual(arbiter.handle(synthetic, on: pasteboard), .restored)
+
+        // The external write landed immediately after that restore. Only a baseline taken from the
+        // restore's own generation leaves it observable.
+        XCTAssertEqual(
+            arbiter.observeAndHandle(pasteboard),
+            .retargeted,
+            "A write landing right after the restore must still be observed, not recorded as handled"
+        )
+    }
+
+    /// The settle loop and its final-edge reconciliation actually route through the arbiter.
+    ///
+    /// Smoke coverage only, and deliberately labelled as such: it shows that *some* production path
+    /// observed and reverted a scheduled write. It cannot separate the loop from the final edge —
+    /// removing either still leaves schedules under which this passes — so it is not evidence for
+    /// final-edge behaviour. That both paths call one routine is established by reading the code,
+    /// not by this test.
+    func testDefensiveRestore_revertsADelayedSyntheticCopyThroughTheSettleLoop() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("settle-loop")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        let changeCountBeforeCopy = pasteboard.changeCount
+
+        // Resolve the pasteboard by name inside the closure rather than capturing the non-Sendable
+        // NSPasteboard across the concurrency boundary.
+        let pasteboardName = pasteboard.name.rawValue
+        let didWrite = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
+            let writer = NSPasteboard(name: NSPasteboard.Name(pasteboardName))
+            writer.clearContents()
+            writer.setString("delayed selection", forType: .string)
+            didWrite.signal()
+        }
+
+        TextSelectionService.shared.restoreClipboardDefensively(
+            snapshot,
+            to: pasteboard,
+            changeCountBeforeCopy: changeCountBeforeCopy,
+            didObserveCopyWrite: false,
+            syntheticCopyText: nil
+        )
+
+        XCTAssertEqual(
+            didWrite.wait(timeout: .now() + 1.0),
+            .success,
+            "The delayed copy must have run, otherwise this test proves nothing"
+        )
+        // The user's text alone is not proof: it is also the starting state. Requiring the change
+        // count to advance past the delayed write proves a restore actually happened.
+        XCTAssertGreaterThan(
+            pasteboard.changeCount,
+            changeCountBeforeCopy + 1,
+            "The delayed write must have been observed and reverted, not merely never seen"
+        )
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "user clipboard",
+            "A delayed synthetic copy must still be reverted to the user's clipboard"
+        )
     }
 }
