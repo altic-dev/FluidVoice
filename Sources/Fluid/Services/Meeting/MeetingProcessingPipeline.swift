@@ -1451,8 +1451,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     )
                     for (offset, element) in transcribedTurns.enumerated() {
                         let (index, turn, text) = element
-                        let start = chunkOffset + turn.startSeconds
-                        let end = chunkOffset + turn.endSeconds
+                        // De-drift applies ONLY here — echo verdicts below keep consuming raw chunkOffset.
+                        let start = MeetingMicrophoneDeDrift.correct(chunkOffset + turn.startSeconds, track: track, origin: context.origin)
+                        let end = MeetingMicrophoneDeDrift.correct(chunkOffset + turn.endSeconds, track: track, origin: context.origin)
                         let overlapsRemote = remoteSpeech.contains {
                             min(end, $0.end) - max(start, $0.start) > 0.15
                         }

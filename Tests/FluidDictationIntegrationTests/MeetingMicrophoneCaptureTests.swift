@@ -478,6 +478,23 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(clock.resyncClampCount, 1)
     }
 
+    // MARK: - Phase 3: valid-host-seconds bounds for the de-drift elapsed term
+
+    func testValidHostSecondsBoundsTrackFirstAndLastValidStamp() throws {
+        var clock = self.makeClock()
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 5), frameCount: 4_800)
+        _ = clock.stamp(hostTime: nil, frameCount: 4_800) // synthesized: must not move the bounds
+        _ = clock.stamp(hostTime: self.hostTime(seconds: 5.3), frameCount: 4_800)
+        XCTAssertEqual(try XCTUnwrap(clock.firstValidHostSeconds), 5.0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(clock.lastValidHostSeconds), 5.3, accuracy: 1e-9)
+    }
+
+    func testValidHostSecondsAreNilBeforeAnyValidStamp() {
+        let clock = self.makeClock()
+        XCTAssertNil(clock.firstValidHostSeconds)
+        XCTAssertNil(clock.lastValidHostSeconds)
+    }
+
     func testTimelineResetReanchorsOnNextValidStamp() {
         var clock = self.makeClock()
         _ = clock.stamp(hostTime: self.hostTime(seconds: 5), frameCount: 4_800)

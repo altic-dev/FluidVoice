@@ -191,9 +191,28 @@ PTS behind emitted audio, timeline reset on `AVAudioEngineConfigurationChange`, 
 values in the probe's track metadata. Absolute cross-path offset remains unmeasured (AEC removes
 acoustic stimuli, as reviewed) and is Phase 3's first real-call validation item.
 
-**Phase 3 — integrate behind a flag, default off.** *Gate:* a real call whose transcript ordering is
+**Phase 3 — integrate behind a flag, default off. BUILT 2026-08-15, gate pending (needs a real call).**
+Shipped behind `meetingVPIOMicCapture` (Settings → experimental, off): pre-flight capability
+decision (pure decision table; flag + `.onlineCall` + CoreAudio UID + built-in-speaker output route,
+every decline reason logged to session events); `VoiceProcessingMeetingRuntime` with a commit gate —
+mic audio and events buffer in a ring until viability + first-buffer-within-2s + app-only SCStream
+are all confirmed, so an aborted attempt leaves writers byte-clean and the fallback needs no
+re-stamp (provenance is pessimistic `.screenCaptureKit`, durably promoted to `.voiceProcessing`
+before the first flushed byte; flush is serialized ahead of passthrough so PTS order holds); one
+10s total start deadline, expiry during fallback fails cleanly; mid-session surface = emitted-only
+10s watchdog + output-route listener (same predicate as pre-flight, service-restart re-registration)
++ defaultInputChanged UID check, all mapping to the existing interruption flow. Batch de-drift
+(`MeetingMicrophoneDeDrift`, k = 1 + cumulative/elapsed — sign verified against the clock: a fast
+mic accumulates NEGATIVE corrections) applies to emitted turn boundaries only, gated on a persisted
+eligibility bit (zero resyncs/steps/config-changes), 5ms materiality, 100ppm sanity. No
+pipelineVersion bump (no pre-flag `.voiceProcessing` tracks can exist; checkpoints snapshot the
+application pass only). Live echo filter untouched — deferred to Phase 4 as an attribution change.
+Reviewed adversarially over three rounds (two independent reviewers from BLOCK to PROCEED /
+PROCEED WITH CHANGES, all findings folded); 36 new unit tests.
+*Gate (open):* a real call ≥15 min (materiality must actually cross) whose transcript ordering is
 compared turn-by-turn against a human-checked reference. Not a simultaneous old-path capture — two
-microphone clients with one enabling VPIO perturbs the system under test.
+microphone clients with one enabling VPIO perturbs the system under test. Also: start latency
+p50/p95 both paths, `silentForSeconds` under AGC, meeting→dictation teardown, flag-off byte-identical.
 
 **Phase 4 — attribution.** One change: mark VPIO turns scored-clean and let the existing election run.
 *Gate:* a single-voice VPIO session elects "You" with no `Microphone / Unknown`; a **two-voice**

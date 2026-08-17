@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import AVFoundation
+import CoreAudio
 import CoreMedia
 import Foundation
 import IOKit.pwr_mgt
@@ -65,14 +66,42 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                   let applicationWriter = writersByKind[.applicationAudio],
                   let microphoneWriter = writersByKind[.microphone]
             else { throw MeetingCaptureError.applicationNotSelected }
-            runtime = try await ScreenCaptureMeetingRuntime.make(
-                application: application,
+
+            let flag = SettingsStore.shared.meetingVPIOMicCapture
+            let decision = MeetingCapturePathDecider.decide(
+                flag: flag,
+                mode: configuration.mode,
                 microphone: configuration.microphone,
-                applicationWriter: applicationWriter,
-                microphoneWriter: microphoneWriter,
-                eventHandler: eventHandler,
-                liveAudioHandler: liveAudioHandler
+                outputRoute: Self.currentOutputRouteSnapshot()
             )
+            switch decision {
+            case let .screenCaptureKit(reason):
+                if flag {
+                    DebugLogger.shared.log(
+                        "Meeting voice-processing capture declined: \(reason)",
+                        source: "MeetingCaptureEngine"
+                    )
+                    eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
+                }
+                runtime = try await ScreenCaptureMeetingRuntime.make(
+                    application: application,
+                    microphone: configuration.microphone,
+                    includeMicrophone: true,
+                    applicationWriter: applicationWriter,
+                    microphoneWriter: microphoneWriter,
+                    eventHandler: eventHandler,
+                    liveAudioHandler: liveAudioHandler
+                )
+            case .voiceProcessing:
+                runtime = try await VoiceProcessingMeetingRuntime.make(
+                    application: application,
+                    microphone: configuration.microphone,
+                    applicationWriter: applicationWriter,
+                    microphoneWriter: microphoneWriter,
+                    eventHandler: eventHandler,
+                    liveAudioHandler: liveAudioHandler
+                )
+            }
         case .inRoom:
             guard let microphoneWriter = writersByKind[.microphone] else {
                 throw MeetingCaptureError.microphoneUnavailable
@@ -105,8 +134,17 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             runtime: runtime,
             writers: writers
         )
+        // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
+        let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
+            for writer in writers {
+                group.addTask { await writer.snapshot() }
+            }
+            var result: [MeetingAudioTrack] = []
+            for await track in group { result.append(track) }
+            return result.sorted { $0.kind.rawValue < $1.kind.rawValue }
+        }
         return MeetingCaptureStartResult(
-            tracks: tracks,
+            tracks: settledTracks,
             firstPresentationTime: nil,
             captureScope: runtime.captureScope
         )
@@ -209,7 +247,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 format: nil,
                 timebase: session.timebase,
                 health: .waiting,
-                chunks: []
+                chunks: [],
+                captureMethod: .screenCaptureKit
             ))
         }
         tracks.append(MeetingAudioTrack(
@@ -220,7 +259,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             format: nil,
             timebase: session.timebase,
             health: .waiting,
-            chunks: []
+            chunks: [],
+            captureMethod: configuration.mode == .onlineCall ? .screenCaptureKit : .avCaptureSession
         ))
         return tracks
     }
@@ -241,6 +281,18 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         }
     }
 
+    static func currentOutputRouteSnapshot() -> MeetingOutputRouteSnapshot {
+        guard let device = AudioDevice.getDefaultOutputDevice() else {
+            return MeetingOutputRouteSnapshot(deviceExists: false, isBluetooth: false, isBuiltIn: false, isHeadphonesDataSource: false)
+        }
+        return MeetingOutputRouteSnapshot(
+            deviceExists: true,
+            isBluetooth: device.isBluetooth,
+            isBuiltIn: device.isBuiltIn,
+            isHeadphonesDataSource: AudioDevice.outputDataSourceIsHeadphones(device.id)
+        )
+    }
+
     private nonisolated static func preflightStorage(at directory: URL) throws {
         let values = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         if let capacity = values.volumeAvailableCapacityForImportantUsage, capacity < 512 * 1024 * 1024 {
@@ -249,7 +301,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
     }
 }
 
-private nonisolated protocol MeetingCaptureRuntime: AnyObject, Sendable {
+nonisolated protocol MeetingCaptureRuntime: AnyObject, Sendable {
     /// The ScreenCaptureKit scope actually in effect. `nil` for runtimes with no SCK stream.
     var captureScope: MeetingCaptureScope? { get }
     func start() async throws
@@ -308,6 +360,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
     private let application: MeetingApplicationIdentity
     private let microphone: MeetingMicrophoneIdentity
+    /// Immutable for the runtime's lifetime: a mid-run flag flip never drops/adds the mic.
+    private let includeMicrophone: Bool
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
@@ -330,6 +384,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         scope: MeetingCaptureScope,
         application: MeetingApplicationIdentity,
         microphone: MeetingMicrophoneIdentity,
+        includeMicrophone: Bool,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
@@ -339,6 +394,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         self.scope = scope
         self.application = application
         self.microphone = microphone
+        self.includeMicrophone = includeMicrophone
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
@@ -349,17 +405,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     static func make(
         application: MeetingApplicationIdentity,
         microphone: MeetingMicrophoneIdentity,
+        includeMicrophone: Bool = true,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> ScreenCaptureMeetingRuntime {
-        let built = try await Self.buildStream(application: application, microphone: microphone)
+        let built = try await Self.buildStream(application: application, microphone: microphone, includeMicrophone: includeMicrophone)
         let runtime = ScreenCaptureMeetingRuntime(
             stream: built.stream,
             scope: built.scope,
             application: application,
             microphone: microphone,
+            includeMicrophone: includeMicrophone,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
             eventHandler: eventHandler,
@@ -375,7 +433,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// initial `make` and for every rebuild attempt after an unexpected stream stop.
     private static func buildStream(
         application: MeetingApplicationIdentity,
-        microphone: MeetingMicrophoneIdentity
+        microphone: MeetingMicrophoneIdentity,
+        includeMicrophone: Bool
     ) async throws -> BuiltStream {
         let content: SCShareableContent
         do {
@@ -413,12 +472,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         configuration.queueDepth = 3
         configuration.showsCursor = false
-        configuration.capturesAudio = true
-        configuration.sampleRate = 48_000
-        configuration.channelCount = 2
-        configuration.excludesCurrentProcessAudio = true
-        configuration.captureMicrophone = true
-        configuration.microphoneCaptureDeviceID = microphone.captureDeviceID
+        MeetingScreenCaptureAudioSettings.apply(to: configuration, microphone: microphone, includeMicrophone: includeMicrophone)
 
         let delegateProxy = ScreenCaptureRuntimeDelegateProxy()
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegateProxy)
@@ -457,6 +511,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 qos: .userInteractive
             )
         )
+        guard self.includeMicrophone else { return }
         try stream.addStreamOutput(
             self,
             type: .microphone,
@@ -554,7 +609,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 if self.stateLock.withLock({ self.stopping }) { self.finishRebuilding(); return }
 
                 do {
-                    let built = try await Self.buildStream(application: self.application, microphone: self.microphone)
+                    let built = try await Self.buildStream(
+                        application: self.application, microphone: self.microphone, includeMicrophone: self.includeMicrophone
+                    )
                     if self.stateLock.withLock({ self.stopping }) { self.finishRebuilding(); return }
                     built.delegateProxy.owner = self
                     try self.attachOutputs(to: built.stream)
@@ -886,5 +943,640 @@ private extension CGRect {
     var area: CGFloat {
         guard !self.isNull, !self.isInfinite else { return 0 }
         return max(0, self.width) * max(0, self.height)
+    }
+}
+
+nonisolated enum MeetingCapturePathDecision: Sendable, Equatable {
+    case voiceProcessing
+    case screenCaptureKit(reason: String)
+}
+
+/// Output-route facts the decision needs, as a plain value so `decide` is unit-testable headless.
+nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
+    var deviceExists: Bool
+    var isBluetooth: Bool
+    var isBuiltIn: Bool
+    var isHeadphonesDataSource: Bool
+}
+
+/// Pure decision table. Role is deliberately NOT consulted — `.unknown` everywhere on this branch.
+nonisolated enum MeetingCapturePathDecider {
+    static func decide(
+        flag: Bool,
+        mode: MeetingCaptureMode,
+        microphone: MeetingMicrophoneIdentity,
+        outputRoute: MeetingOutputRouteSnapshot
+    ) -> MeetingCapturePathDecision {
+        guard flag else {
+            return .screenCaptureKit(reason: "Voice-processing meeting capture is disabled in Settings.")
+        }
+        guard mode == .onlineCall else {
+            return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
+        }
+        guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
+            return .screenCaptureKit(reason: "The selected microphone has no CoreAudio device UID.")
+        }
+        if let reason = Self.outputRouteDeclineReason(outputRoute) {
+            return .screenCaptureKit(reason: reason)
+        }
+        return .voiceProcessing
+    }
+
+    /// Shared with the mid-session output-route listener so the two never diverge.
+    static func outputRouteDeclineReason(_ outputRoute: MeetingOutputRouteSnapshot) -> String? {
+        guard outputRoute.deviceExists else { return "No default output device is available." }
+        guard !outputRoute.isBluetooth else { return "The output device is Bluetooth." }
+        guard outputRoute.isBuiltIn else { return "The output device is not the built-in speakers." }
+        guard !outputRoute.isHeadphonesDataSource else { return "The output route is headphones." }
+        return nil
+    }
+}
+
+nonisolated enum MeetingScreenCaptureAudioSettings {
+    static func apply(
+        to configuration: SCStreamConfiguration,
+        microphone: MeetingMicrophoneIdentity,
+        includeMicrophone: Bool
+    ) {
+        configuration.capturesAudio = true
+        configuration.sampleRate = 48_000
+        configuration.channelCount = 2
+        configuration.excludesCurrentProcessAudio = true
+        configuration.captureMicrophone = includeMicrophone
+        if includeMicrophone {
+            configuration.microphoneCaptureDeviceID = microphone.captureDeviceID
+        }
+    }
+}
+
+/// Buffers mic audio pre-commit; ring-cap exhaustion ABORTS rather than evicting-and-committing.
+final nonisolated class MeetingVoiceProcessingCommitGate: @unchecked Sendable {
+    enum SampleOutcome { case buffered, passthrough, aborted }
+
+    private enum State { case buffering, flushing, committed, aborted }
+
+    static let defaultRingCapBytes = 1_048_576 // ~5s of mono float32 @ 48kHz
+
+    private let lock = NSLock()
+    private var state: State = .buffering
+    private var ring: [CMSampleBuffer] = []
+    private var ringBytes = 0
+    private let ringCapBytes: Int
+
+    init(ringCapBytes: Int = MeetingVoiceProcessingCommitGate.defaultRingCapBytes) {
+        self.ringCapBytes = ringCapBytes
+    }
+
+    func offer(_ sampleBuffer: CMSampleBuffer) -> SampleOutcome {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        switch self.state {
+        case .committed: return .passthrough
+        case .aborted: return .aborted
+        case .flushing:
+            // Uncapped: aborting mid-flush would strand already-promoted provenance.
+            self.ring.append(sampleBuffer)
+            return .buffered
+        case .buffering:
+            // GetTotalSampleSize returns 0 without a per-sample size table; use the block buffer.
+            let size = CMSampleBufferGetDataBuffer(sampleBuffer).map(CMBlockBufferGetDataLength) ?? 0
+            guard self.ringBytes + size <= self.ringCapBytes else {
+                self.state = .aborted
+                self.ring.removeAll()
+                self.ringBytes = 0
+                return .aborted
+            }
+            self.ring.append(sampleBuffer)
+            self.ringBytes += size
+            return .buffered
+        }
+    }
+
+    @discardableResult
+    func offerTerminalEventPreCommit() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.state == .buffering else { return false }
+        self.state = .aborted
+        self.ring.removeAll()
+        self.ringBytes = 0
+        return true
+    }
+
+    /// Point of no return: after this, terminal events and abort() are no-ops.
+    func beginCommitFlush() -> [CMSampleBuffer]? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.state == .buffering else { return nil }
+        self.state = .flushing
+        return self.takeRing()
+    }
+
+    /// nil means the ring drained and passthrough is live; else the next batch to flush in order.
+    /// Serialized handoff: passthrough never starts while older buffers wait, so PTS order holds.
+    func continueCommitFlush() -> [CMSampleBuffer]? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.state == .flushing else { return nil }
+        if self.ring.isEmpty {
+            self.state = .committed
+            return nil
+        }
+        return self.takeRing()
+    }
+
+    private func takeRing() -> [CMSampleBuffer] {
+        let taken = self.ring
+        self.ring.removeAll()
+        self.ringBytes = 0
+        return taken
+    }
+
+    func abort() {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.state == .buffering || self.state == .aborted else { return }
+        self.state = .aborted
+        self.ring.removeAll()
+        self.ringBytes = 0
+    }
+
+    var isCommitted: Bool { self.lock.withLock { self.state == .committed } }
+}
+
+/// Emitted-only progress: dropped/failed buffers deliver no audio, so a dropped run trips this too.
+nonisolated enum MeetingVoiceProcessingWatchdog {
+    static let stalledThresholdSeconds: Double = 10
+
+    static func isStalled(secondsSinceLastEmittedBuffer: Double) -> Bool {
+        secondsSinceLastEmittedBuffer >= Self.stalledThresholdSeconds
+    }
+}
+
+/// Re-evaluates the output-route predicate on default-output-device or data-source change.
+/// Registration failure at init means VPIO is not viable — fail closed. Re-registers everything on
+/// `kAudioHardwarePropertyServiceRestarted`, since CoreAudio discards all prior listeners on reset.
+private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable {
+    private let onViolation: @Sendable () -> Void
+    private let lock = NSLock()
+    private var defaultOutputToken: AudioObjectPropertyListenerBlock?
+    private var serviceRestartedToken: AudioObjectPropertyListenerBlock?
+    private var dataSourceToken: AudioObjectPropertyListenerBlock?
+    private var dataSourceDeviceID: AudioObjectID?
+
+    init?(onViolation: @escaping @Sendable () -> Void) {
+        self.onViolation = onViolation
+        guard self.register() else { return nil }
+    }
+
+    deinit {
+        self.unregister()
+    }
+
+    private func predicateFails() -> Bool {
+        MeetingCapturePathDecider.outputRouteDeclineReason(MeetingCaptureEngine.currentOutputRouteSnapshot()) != nil
+    }
+
+    private func reevaluate() {
+        if self.predicateFails() { self.onViolation() }
+    }
+
+    @discardableResult
+    private func register() -> Bool {
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+        var defaultOutAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var restartedAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyServiceRestarted,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultOutToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.reattachDataSourceListener()
+            self?.reevaluate()
+        }
+        let restartedToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.reregisterAfterServiceRestart()
+        }
+        guard AudioObjectAddPropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken) == noErr else {
+            return false
+        }
+        guard AudioObjectAddPropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, restartedToken) == noErr else {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
+            return false
+        }
+        self.defaultOutputToken = defaultOutToken
+        self.serviceRestartedToken = restartedToken
+        guard self.attachDataSourceListener() else {
+            self.unregister()
+            return false
+        }
+        return true
+    }
+
+    private func attachDataSourceListener() -> Bool {
+        guard let device = AudioDevice.getDefaultOutputDevice() else { return false }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.reevaluate() }
+        guard AudioObjectAddPropertyListenerBlock(device.id, &address, DispatchQueue.main, token) == noErr else { return false }
+        self.dataSourceToken = token
+        self.dataSourceDeviceID = device.id
+        return true
+    }
+
+    private func detachDataSourceListener() {
+        guard let deviceID = self.dataSourceDeviceID, let token = self.dataSourceToken else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+        self.dataSourceToken = nil
+        self.dataSourceDeviceID = nil
+    }
+
+    private func reattachDataSourceListener() {
+        self.detachDataSourceListener()
+        _ = self.attachDataSourceListener()
+    }
+
+    private func reregisterAfterServiceRestart() {
+        self.unregister()
+        guard self.register() else {
+            self.onViolation()
+            return
+        }
+        self.reevaluate()
+    }
+
+    private func unregister() {
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+        var defaultOutAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var restartedAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyServiceRestarted,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        if let token = self.defaultOutputToken {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, token)
+        }
+        if let token = self.serviceRestartedToken {
+            _ = AudioObjectRemovePropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, token)
+        }
+        self.defaultOutputToken = nil
+        self.serviceRestartedToken = nil
+        self.detachDataSourceListener()
+    }
+}
+
+nonisolated enum MeetingVoiceProcessingDriftSnapshot {
+    static func elapsedValidHostSeconds(_ stats: MeetingMicrophoneCaptureStats.Snapshot) -> Double {
+        guard let first = stats.firstValidHostSeconds, let last = stats.lastValidHostSeconds, last > first else { return 0 }
+        return last - first
+    }
+
+    /// Any re-anchor/step/config-change/dropped-run invalidates the single-epoch linear model.
+    static func isEligible(_ stats: MeetingMicrophoneCaptureStats.Snapshot) -> Bool {
+        stats.resyncCount == 0
+            && stats.resyncClampCount == 0
+            && stats.divergenceStepEventCount == 0
+            && stats.configurationChangeEvents == 0
+            && stats.droppedPostCapCount == 0
+    }
+}
+
+/// Owns a VPIO `MeetingMicrophoneCapture` plus an app-audio-only `ScreenCaptureMeetingRuntime`.
+/// On any failure before commit, aborts cleanly and falls back to today's app+mic SCStream path
+/// using the SAME writers — the fallback never sees a byte or event from the aborted attempt.
+private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRuntime, @unchecked Sendable {
+    private static let totalStartDeadlineSeconds: Double = 10
+    private static let firstBufferDeadlineSeconds: Double = 2
+
+    private let application: MeetingApplicationIdentity
+    private let microphone: MeetingMicrophoneIdentity
+    private let applicationWriter: MeetingAudioChunkWriter
+    private let microphoneWriter: MeetingAudioChunkWriter
+    private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    private let micCapture = MeetingMicrophoneCapture()
+    private let gate = MeetingVoiceProcessingCommitGate()
+    private let stateLock = NSLock()
+
+    private var appOnlyRuntime: ScreenCaptureMeetingRuntime?
+    private var fallbackRuntime: ScreenCaptureMeetingRuntime?
+    private var promoted = false
+    private var committed = false
+    private var interrupted = false
+    private var watchdogTask: Task<Void, Never>?
+    private var outputRouteListener: MeetingOutputRouteListener?
+
+    var captureScope: MeetingCaptureScope? {
+        if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) { return fallback.captureScope }
+        return self.stateLock.withLock { self.appOnlyRuntime?.captureScope }
+    }
+
+    private init(
+        application: MeetingApplicationIdentity,
+        microphone: MeetingMicrophoneIdentity,
+        applicationWriter: MeetingAudioChunkWriter,
+        microphoneWriter: MeetingAudioChunkWriter,
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    ) {
+        self.application = application
+        self.microphone = microphone
+        self.applicationWriter = applicationWriter
+        self.microphoneWriter = microphoneWriter
+        self.eventHandler = eventHandler
+        self.liveAudioHandler = liveAudioHandler
+    }
+
+    static func make(
+        application: MeetingApplicationIdentity,
+        microphone: MeetingMicrophoneIdentity,
+        applicationWriter: MeetingAudioChunkWriter,
+        microphoneWriter: MeetingAudioChunkWriter,
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    ) async throws -> VoiceProcessingMeetingRuntime {
+        VoiceProcessingMeetingRuntime(
+            application: application,
+            microphone: microphone,
+            applicationWriter: applicationWriter,
+            microphoneWriter: microphoneWriter,
+            eventHandler: eventHandler,
+            liveAudioHandler: liveAudioHandler
+        )
+    }
+
+    func start() async throws {
+        do {
+            try await Self.withDeadline(seconds: Self.totalStartDeadlineSeconds) { [self] in
+                try await self.runStartSequence()
+            }
+        } catch {
+            // Deadline expiry during the fallback leg fails cleanly; never begin a further attempt.
+            await self.cleanupAfterStartFailure()
+            throw error
+        }
+    }
+
+    private func runStartSequence() async throws {
+        do {
+            try await self.attemptVoiceProcessingStart()
+        } catch {
+            if error is CancellationError { throw error }
+            if self.stateLock.withLock({ self.promoted }) { throw error }
+            self.gate.abort()
+            self.outputRouteListener = nil
+            await self.micCapture.stop()
+            await self.stopAppOnlyIfStarted()
+            let fallback = try await ScreenCaptureMeetingRuntime.make(
+                application: self.application,
+                microphone: self.microphone,
+                includeMicrophone: true,
+                applicationWriter: self.applicationWriter,
+                microphoneWriter: self.microphoneWriter,
+                eventHandler: self.eventHandler,
+                liveAudioHandler: self.liveAudioHandler
+            )
+            // Assigned before start() so a cancelled/failed start can still be found and stopped.
+            self.stateLock.withLock { self.fallbackRuntime = fallback }
+            try await fallback.start()
+        }
+    }
+
+    private func attemptVoiceProcessingStart() async throws {
+        let microphoneWriter = self.microphoneWriter
+        let liveAudioHandler = self.liveAudioHandler
+        let gate = self.gate
+        let outcome = try await self.micCapture.start(
+            microphone: self.microphone,
+            onSample: { sample in
+                switch gate.offer(sample) {
+                case .passthrough:
+                    microphoneWriter.enqueue(sample)
+                    liveAudioHandler?(.microphone, sample)
+                case .buffered, .aborted:
+                    break
+                }
+            },
+            onEvent: { [weak self] event in
+                self?.handleMicEvent(event)
+            }
+        )
+        if case .unavailable = outcome {
+            throw MeetingCaptureError.captureStartFailed("Voice-processing microphone capture was unavailable.")
+        }
+
+        guard await self.waitForBufferProgress(timeoutSeconds: Self.firstBufferDeadlineSeconds) else {
+            throw MeetingCaptureError.captureStartFailed("No microphone audio was captured within 2s.")
+        }
+
+        let appOnly = try await ScreenCaptureMeetingRuntime.make(
+            application: self.application,
+            microphone: self.microphone,
+            includeMicrophone: false,
+            applicationWriter: self.applicationWriter,
+            microphoneWriter: self.microphoneWriter,
+            eventHandler: self.eventHandler,
+            liveAudioHandler: self.liveAudioHandler
+        )
+        try await appOnly.start()
+        self.stateLock.withLock { self.appOnlyRuntime = appOnly }
+
+        self.outputRouteListener = MeetingOutputRouteListener { [weak self] in
+            self?.interrupt(detail: "Output switched to Bluetooth/headphones — voice-processing capture cannot continue.")
+        }
+        guard self.outputRouteListener != nil else {
+            throw MeetingCaptureError.captureStartFailed("Could not register the output-route listener.")
+        }
+
+        guard var batch = self.gate.beginCommitFlush() else {
+            throw MeetingCaptureError.captureStartFailed("Voice-processing commit gate aborted before commit.")
+        }
+        // Promote provenance BEFORE the gate flushes a single VPIO byte; after this point a failure
+        // must fail the start outright — falling back would mix provenance on promoted writers.
+        self.stateLock.withLock { self.promoted = true }
+        let settled = await self.micCapture.settledConfiguration()
+        try await self.microphoneWriter.updateTrackMetadata { track in
+            track.captureMethod = .voiceProcessing
+            track.voiceProcessingConfig = settled
+        }
+        while true {
+            await self.flushBatch(batch)
+            guard let next = self.gate.continueCommitFlush() else { break }
+            batch = next
+        }
+        self.stateLock.withLock { self.committed = true }
+        self.startWatchdog()
+    }
+
+    private func stopAppOnlyIfStarted() async {
+        if let appOnly = self.stateLock.withLock({ self.appOnlyRuntime }) {
+            try? await appOnly.stop()
+            self.stateLock.withLock { self.appOnlyRuntime = nil }
+        }
+    }
+
+    private func cleanupAfterStartFailure() async {
+        if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) {
+            try? await fallback.stop()
+        }
+        await self.micCapture.stop()
+        await self.stopAppOnlyIfStarted()
+    }
+
+    /// Paced flush: the writer's pending budget is 24 slots, a full 5s ring is ~50 buffers.
+    private func flushBatch(_ samples: [CMSampleBuffer]) async {
+        for (index, sample) in samples.enumerated() {
+            self.microphoneWriter.enqueue(sample)
+            self.liveAudioHandler?(.microphone, sample)
+            if index % 4 == 3 {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+    }
+
+    private func waitForBufferProgress(timeoutSeconds: Double) async -> Bool {
+        let baseline = await self.micCapture.statistics().buffersEmitted
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if await self.micCapture.statistics().buffersEmitted > baseline { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
+    }
+
+    private func startWatchdog() {
+        self.watchdogTask = Task { [weak self] in
+            guard let self else { return }
+            var lastCount = await self.micCapture.statistics().buffersEmitted
+            var lastProgress = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                let current = await self.micCapture.statistics()
+                if current.buffersEmitted != lastCount {
+                    lastCount = current.buffersEmitted
+                    lastProgress = Date()
+                    continue
+                }
+                if MeetingVoiceProcessingWatchdog.isStalled(secondsSinceLastEmittedBuffer: Date().timeIntervalSince(lastProgress)) {
+                    self.interrupt(detail: "No microphone audio emitted for 10s (drops=\(current.droppedPostCapCount), conversionFailures=\(current.conversionFailures)).")
+                    return
+                }
+            }
+        }
+    }
+
+    /// Terminal pre-commit events abort the attempt; non-terminal ones are swallowed by the gate.
+    private func handleMicEvent(_ event: MeetingMicrophoneCaptureEvent) {
+        guard self.gate.isCommitted else {
+            switch event {
+            case .engineStopped:
+                self.gate.offerTerminalEventPreCommit()
+            case .defaultInputChanged:
+                if let requestedUID = self.microphone.coreAudioUID,
+                   AudioDevice.getDefaultInputDevice()?.uid != requestedUID
+                {
+                    self.gate.offerTerminalEventPreCommit()
+                }
+            case .configurationChanged, .overload:
+                break
+            }
+            return
+        }
+        switch event {
+        case .configurationChanged:
+            self.eventHandler(.interrupted(
+                kind: .voiceProcessingConfigurationChanged, trackID: nil,
+                detail: "Voice-processing engine configuration changed."
+            ))
+            Task { [weak self] in
+                guard let self else { return }
+                if await !self.waitForBufferProgress(timeoutSeconds: Self.firstBufferDeadlineSeconds) {
+                    self.interrupt(detail: "No microphone audio resumed after a configuration change.")
+                }
+            }
+        case .defaultInputChanged:
+            guard let requestedUID = self.microphone.coreAudioUID else { return }
+            if AudioDevice.getDefaultInputDevice()?.uid != requestedUID {
+                self.interrupt(detail: "The default input device changed away from the requested microphone.")
+            }
+        case .overload:
+            self.eventHandler(.interrupted(kind: .voiceProcessingOverload, trackID: nil, detail: "Voice-processing microphone reported an overload."))
+        case .engineStopped:
+            self.interrupt(detail: "The voice-processing microphone engine stopped unexpectedly.")
+        }
+    }
+
+    private func interrupt(detail: String) {
+        let shouldEmit = self.stateLock.withLock { () -> Bool in
+            guard self.committed, !self.interrupted else { return false }
+            self.interrupted = true
+            return true
+        }
+        guard shouldEmit else { return }
+        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+    }
+
+    func stop() async throws {
+        self.watchdogTask?.cancel()
+        self.watchdogTask = nil
+        self.outputRouteListener = nil
+
+        if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) {
+            try await fallback.stop()
+            return
+        }
+        guard self.stateLock.withLock({ self.committed }) else {
+            self.gate.abort()
+            await self.micCapture.stop()
+            await self.stopAppOnlyIfStarted()
+            return
+        }
+
+        // Quiesce first: stats must not be snapshotted while the tap can still emit, and stop-time
+        // churn must not poison the drift record (capture.stop tears down observers before the tap).
+        await self.micCapture.stop()
+        let statsSnapshot = await self.micCapture.statistics()
+        let drift = MeetingClockDriftRecord(
+            cumulativeAbsorbedSeconds: statsSnapshot.cumulativeAbsorbedCorrectionSeconds,
+            elapsedValidHostSeconds: MeetingVoiceProcessingDriftSnapshot.elapsedValidHostSeconds(statsSnapshot),
+            eligible: MeetingVoiceProcessingDriftSnapshot.isEligible(statsSnapshot)
+        )
+        try await self.microphoneWriter.updateTrackMetadata { track in track.clockDrift = drift }
+
+        if let appOnly = self.stateLock.withLock({ self.appOnlyRuntime }) {
+            try await appOnly.stop()
+        }
+    }
+
+    private static func withDeadline<T>(seconds: Double, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw MeetingCaptureError.captureStartFailed("Voice-processing capture start exceeded \(Int(seconds))s.")
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw MeetingCaptureError.captureStartFailed("Voice-processing capture start produced no result.")
+            }
+            return result
+        }
     }
 }

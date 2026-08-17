@@ -27,6 +27,8 @@ nonisolated struct MeetingMicrophonePTSClock {
     private(set) var divergenceStepEventCount = 0
     private(set) var maxDivergenceStepSeconds: Double = 0
     private(set) var resyncClampCount = 0
+    private(set) var firstValidHostSeconds: Double?
+    private(set) var lastValidHostSeconds: Double?
     private var lastDivergenceSeconds: Double = 0
     private var lastEmittedEnd: CMTime = .invalid
 
@@ -101,6 +103,8 @@ nonisolated struct MeetingMicrophonePTSClock {
         let wasDropping = self.isDroppingInvalidRun
         self.isDroppingInvalidRun = false
         self.synthesizedRunFrames = 0
+        if self.firstValidHostSeconds == nil { self.firstValidHostSeconds = actualSeconds }
+        self.lastValidHostSeconds = actualSeconds
 
         if self.anchorHostSeconds == nil || wasDropping {
             // A backlogged invalid burst can synthesize more timeline than elapsed host time;
@@ -348,6 +352,8 @@ final class MeetingMicrophoneCaptureStats: @unchecked Sendable {
         var divergenceStepEventCount = 0
         var maxDivergenceStepSeconds: Double = 0
         var resyncClampCount = 0
+        var firstValidHostSeconds: Double?
+        var lastValidHostSeconds: Double?
 
         /// The Phase 1 gate's headline number: ≥99% valid hostTime over the run.
         var validHostTimeFraction: Double {
@@ -500,6 +506,8 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             stats.divergenceStepEventCount = clock.divergenceStepEventCount
             stats.maxDivergenceStepSeconds = clock.maxDivergenceStepSeconds
             stats.resyncClampCount = clock.resyncClampCount
+            stats.firstValidHostSeconds = clock.firstValidHostSeconds
+            stats.lastValidHostSeconds = clock.lastValidHostSeconds
         }
         self.onSample(sampleBuffer)
     }
@@ -730,6 +738,7 @@ actor MeetingMicrophoneCapture {
     func stop() async {
         guard self.isRunning else { return }
         self.isRunning = false
+        self.tearDownEventObservers() // first: stop-time churn must not poison a stats snapshot
         self.generationBox.advance()
 
         if let engine = self.engine {
@@ -738,7 +747,6 @@ actor MeetingMicrophoneCapture {
         }
         self.engine = nil
         self.tapState = nil
-        self.tearDownEventObservers()
     }
 
     func statistics() -> Stats {

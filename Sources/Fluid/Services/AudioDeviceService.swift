@@ -363,6 +363,23 @@ nonisolated enum AudioDevice {
         return status == noErr ? value : nil
     }
 
+    /// 'hdpn' — kAudioDevicePropertyDataSource's headphones value, output scope.
+    private static let headphonesDataSource: UInt32 = 0x6864_706E
+
+    static func outputDataSourceIsHeadphones(_ deviceID: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectHasProperty(deviceID, &address) else { return true }
+        var dataSource: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &dataSource)
+        guard status == noErr else { return true }
+        return dataSource == Self.headphonesDataSource
+    }
+
     private static func hasChannels(_ devId: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,

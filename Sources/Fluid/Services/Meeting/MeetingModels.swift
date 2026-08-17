@@ -51,6 +51,9 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case captureStoppedUnexpectedly
     case writerBackpressure
     case writerFailure
+    case voiceProcessingDeclined
+    case voiceProcessingConfigurationChanged
+    case voiceProcessingOverload
 }
 
 nonisolated enum MeetingFailureDomain: String, Codable, Sendable {
@@ -303,7 +306,40 @@ nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
     )
 }
 
-nonisolated struct MeetingAudioTrack: Codable, Identifiable, Equatable, Sendable {
+nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
+    case screenCaptureKit
+    case avCaptureSession
+    case voiceProcessing
+}
+
+nonisolated struct MeetingClockDriftRecord: Codable, Equatable, Sendable {
+    var cumulativeAbsorbedSeconds: Double
+    var elapsedValidHostSeconds: Double
+    var eligible: Bool
+}
+
+/// Applied ONLY to emitted turn boundaries, never to raw `chunkOffset`. `k = 1 + cumulative/elapsed`:
+/// for a fast mic `cumulativeAbsorbedSeconds` is negative, so `k < 1` compresses the timeline.
+nonisolated enum MeetingMicrophoneDeDrift {
+    static let materialityThresholdSeconds: Double = 0.005
+    static let maxAbsolutePPM: Double = 100
+
+    static func correct(_ t: Double, track: MeetingAudioTrack, origin: Double) -> Double {
+        guard track.captureMethod == .voiceProcessing,
+              let drift = track.clockDrift, drift.eligible,
+              drift.elapsedValidHostSeconds > 0
+        else { return t }
+        let fraction = drift.cumulativeAbsorbedSeconds / drift.elapsedValidHostSeconds
+        guard abs(drift.cumulativeAbsorbedSeconds) > Self.materialityThresholdSeconds,
+              abs(fraction) * 1_000_000 < Self.maxAbsolutePPM,
+              let micFirstPTS = track.chunks.map(\.presentationStart.seconds).min()
+        else { return t }
+        let micFirstRelative = micFirstPTS - origin
+        return micFirstRelative + (t - micFirstRelative) * (1 + fraction)
+    }
+}
+
+nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
     var id: MeetingAudioTrackID
     var kind: MeetingAudioTrackKind
     var sourceIdentifier: String
@@ -312,6 +348,74 @@ nonisolated struct MeetingAudioTrack: Codable, Identifiable, Equatable, Sendable
     var timebase: MeetingTimebaseMetadata
     var health: MeetingTrackHealth
     var chunks: [MeetingAudioChunk]
+    var captureMethod: MeetingAudioTrackCaptureMethod? = nil
+    var voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil
+    var clockDrift: MeetingClockDriftRecord? = nil
+
+    init(
+        id: MeetingAudioTrackID,
+        kind: MeetingAudioTrackKind,
+        sourceIdentifier: String,
+        sourceDisplayName: String,
+        format: MeetingAudioFormat?,
+        timebase: MeetingTimebaseMetadata,
+        health: MeetingTrackHealth,
+        chunks: [MeetingAudioChunk],
+        captureMethod: MeetingAudioTrackCaptureMethod? = nil,
+        voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil,
+        clockDrift: MeetingClockDriftRecord? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.sourceIdentifier = sourceIdentifier
+        self.sourceDisplayName = sourceDisplayName
+        self.format = format
+        self.timebase = timebase
+        self.health = health
+        self.chunks = chunks
+        self.captureMethod = captureMethod
+        self.voiceProcessingConfig = voiceProcessingConfig
+        self.clockDrift = clockDrift
+    }
+}
+
+extension MeetingAudioTrack: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, sourceIdentifier, sourceDisplayName, format, timebase, health, chunks
+        case captureMethod, voiceProcessingConfig, clockDrift
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(MeetingAudioTrackID.self, forKey: .id)
+        self.kind = try container.decode(MeetingAudioTrackKind.self, forKey: .kind)
+        self.sourceIdentifier = try container.decode(String.self, forKey: .sourceIdentifier)
+        self.sourceDisplayName = try container.decode(String.self, forKey: .sourceDisplayName)
+        self.format = try container.decodeIfPresent(MeetingAudioFormat.self, forKey: .format)
+        self.timebase = try container.decode(MeetingTimebaseMetadata.self, forKey: .timebase)
+        self.health = try container.decode(MeetingTrackHealth.self, forKey: .health)
+        self.chunks = try container.decode([MeetingAudioChunk].self, forKey: .chunks)
+        // Tolerant: an unrecognized raw value decodes to nil instead of failing the whole session.
+        let captureMethodRaw = try container.decodeIfPresent(String.self, forKey: .captureMethod)
+        self.captureMethod = captureMethodRaw.flatMap(MeetingAudioTrackCaptureMethod.init(rawValue:))
+        self.voiceProcessingConfig = try container.decodeIfPresent(MeetingMicrophoneSettledConfig.self, forKey: .voiceProcessingConfig)
+        self.clockDrift = try container.decodeIfPresent(MeetingClockDriftRecord.self, forKey: .clockDrift)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.kind, forKey: .kind)
+        try container.encode(self.sourceIdentifier, forKey: .sourceIdentifier)
+        try container.encode(self.sourceDisplayName, forKey: .sourceDisplayName)
+        try container.encodeIfPresent(self.format, forKey: .format)
+        try container.encode(self.timebase, forKey: .timebase)
+        try container.encode(self.health, forKey: .health)
+        try container.encode(self.chunks, forKey: .chunks)
+        try container.encodeIfPresent(self.captureMethod, forKey: .captureMethod)
+        try container.encodeIfPresent(self.voiceProcessingConfig, forKey: .voiceProcessingConfig)
+        try container.encodeIfPresent(self.clockDrift, forKey: .clockDrift)
+    }
 }
 
 nonisolated struct MeetingSessionEvent: Codable, Identifiable, Equatable, Sendable {
@@ -799,6 +903,8 @@ nonisolated struct MeetingProcessingResult: Sendable {
 /// chunks (origin depends on all chunks), but deliberately NOT `embeddingIndexByTrack`: only the
 /// microphone pass reads `embeddingIndexByTrack[.microphone]`, so a resumed run keeps the
 /// embeddings already stored on `MeetingSessionSpeaker` instead of rebuilding that index.
+/// No pipelineVersion bump for batch de-drift: this checkpoint snapshots only the application-audio
+/// pass; the mic pass re-derives its correction deterministically from `clockDrift` every run.
 nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
     static let currentVersion = 1
 

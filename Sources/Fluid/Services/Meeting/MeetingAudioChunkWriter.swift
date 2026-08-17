@@ -155,6 +155,21 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
     }
 
+    /// Unlike the `try?` writes elsewhere here, a persist failure propagates to the caller.
+    func updateTrackMetadata(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.queue.async { [self] in
+                mutate(&self.track)
+                do {
+                    try self.persistTrackManifest()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func snapshot() async -> MeetingAudioTrack {
         await withCheckedContinuation { continuation in
             self.queue.async { [self] in
