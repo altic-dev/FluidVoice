@@ -19,36 +19,89 @@ final class TextSelectionService {
             return nil
         }
 
-        // 1. Try to get the system-wide focused element
-        if let focusedElement = getFocusedElement() {
-            if let text = getSelectedText(from: focusedElement) {
-                self.diag("Selection capture success via system focused element (chars=\(text.count))")
-                return text
-            }
-            self.diag("System focused element returned no selected text")
-        }
-
-        // 2. Fallback: Try to find focused element in frontmost app
-        if let frontmostApp = NSWorkspace.shared.frontmostApplication {
-            self.diag("Trying frontmost app fallback: \(frontmostApp.bundleIdentifier ?? frontmostApp.localizedName ?? "unknown") pid=\(frontmostApp.processIdentifier)")
-            let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
-            if let focusedElement = getFocusedElement(from: appElement) {
-                if let text = getSelectedText(from: focusedElement) {
-                    self.diag("Selection capture success via frontmost app focused element (chars=\(text.count))")
-                    return text
+        return self.resolveSelection(
+            // 1. Try to get the system-wide focused element
+            systemWide: { confirmedNoSelection in
+                guard let focusedElement = self.getFocusedElement() else { return nil }
+                return self.getSelectedText(from: focusedElement, confirmedNoSelection: &confirmedNoSelection)
+            },
+            // 2. Fallback: Try to find focused element in frontmost app
+            frontmost: { confirmedNoSelection in
+                guard let frontmostApp = NSWorkspace.shared.frontmostApplication else { return nil }
+                self.diag("Trying frontmost app fallback: \(frontmostApp.bundleIdentifier ?? frontmostApp.localizedName ?? "unknown") pid=\(frontmostApp.processIdentifier)")
+                let appElement = AXUIElementCreateApplication(frontmostApp.processIdentifier)
+                guard let focusedElement = self.getFocusedElement(from: appElement) else {
+                    self.diag("Frontmost app fallback could not resolve focused element")
+                    return nil
                 }
-                self.diag("Frontmost app focused element returned no selected text")
-            } else {
-                self.diag("Frontmost app fallback could not resolve focused element")
-            }
+                return self.getSelectedText(from: focusedElement, confirmedNoSelection: &confirmedNoSelection)
+            },
+            // 3. Final fallback: synthetic Cmd+C, read the pasteboard, restore it.
+            // Electron / GPU-rendered editors (Zed, VS Code, Obsidian, web editors in Chrome)
+            // frequently don't expose the focused element or selection through the AX tree, so
+            // both AX strategies above return nothing. Copying the live selection is the only
+            // reliable way to read it from those apps (issue #259).
+            clipboardFallback: { self.getSelectedTextViaClipboard() }
+        )
+    }
+
+    /// Runs the two accessibility strategies in order, then decides whether the clipboard fallback
+    /// is warranted. Split out from `getSelectedText()` so that decision has a seam a test can drive
+    /// without a live accessibility tree.
+    ///
+    /// Each strategy reports a selection, or nothing plus a `confirmedNoSelection` flag saying
+    /// whether "nothing" was an ANSWER (a caret sitting in a field with nothing selected) rather
+    /// than a failure to read one. The flags are folded only AFTER both strategies have run: a
+    /// confirmation from strategy 1 must not stop strategy 2, because the system-wide focused
+    /// element and the frontmost app's focused element can resolve to different elements and
+    /// strategy 2 may hold the selection strategy 1 could not see.
+    ///
+    /// Returns `""` when EITHER strategy affirmatively reported an empty selection and neither found
+    /// text. That suppresses the clipboard fallback, which is a synchronous ~500ms Cmd+C on the main
+    /// thread and would otherwise fire on every no-selection Edit-mode hotkey press.
+    ///
+    /// Either, not both — and this is a judgment call on an underdetermined trade, not a proof. A
+    /// confirmation is ELEMENT-SCOPED: strategy 1 reporting "this element holds a caret and no
+    /// selection" is evidence about THAT element and says nothing about the element strategy 2 would
+    /// have resolved. `||` therefore does not establish that nothing is selected anywhere. What
+    /// decides it is the cost of being wrong in the mixed state, where one strategy confirms a caret
+    /// and the other cannot resolve an element at all:
+    ///
+    /// - Suppressing (`||`) means Write Mode does not engage, which is exactly what upstream does
+    ///   today — upstream has no clipboard fallback at all, so this is an unrealized opportunity
+    ///   rather than a regression.
+    /// - Falling through (`&&`) fires a real Cmd+C. Editors that treat Cmd+C with a bare caret as
+    ///   "copy the current line" (VS Code among them) would hand back a line the user never
+    ///   selected, and Write Mode would then rewrite it.
+    ///
+    /// Fabricating a selection is an active wrong action the user has to notice and undo; failing to
+    /// engage is the status quo. Prefer the status quo. `nil` still means "nobody could tell", which
+    /// is what keeps AX-opaque editors reaching the fallback.
+    func resolveSelection(
+        systemWide: (inout Bool) -> String?,
+        frontmost: (inout Bool) -> String?,
+        clipboardFallback: () -> String?
+    ) -> String? {
+        var systemWideConfirmedNoSelection = false
+        if let text = systemWide(&systemWideConfirmedNoSelection) {
+            self.diag("Selection capture success via system focused element (chars=\(text.count))")
+            return text
+        }
+        self.diag("System focused element yielded no selected text")
+
+        var frontmostConfirmedNoSelection = false
+        if let text = frontmost(&frontmostConfirmedNoSelection) {
+            self.diag("Selection capture success via frontmost app focused element (chars=\(text.count))")
+            return text
+        }
+        self.diag("Frontmost app focused element yielded no selected text")
+
+        if systemWideConfirmedNoSelection || frontmostConfirmedNoSelection {
+            self.diag("Selection capture: focused element reports a caret with nothing selected - skipping clipboard fallback")
+            return ""
         }
 
-        // 3. Final fallback: synthetic Cmd+C, read the pasteboard, restore it.
-        // Electron / GPU-rendered editors (Zed, VS Code, Obsidian, web editors in Chrome)
-        // frequently don't expose the focused element or selection through the AX tree, so
-        // both AX strategies above return nothing. Copying the live selection is the only
-        // reliable way to read it from those apps (issue #259).
-        if let text = getSelectedTextViaClipboard() {
+        if let text = clipboardFallback() {
             return text
         }
 
@@ -115,8 +168,10 @@ final class TextSelectionService {
         }
 
         // Cmd+C is delivered asynchronously; wait for the target app to write the selection
-        // to the pasteboard. The change-count increments on any write, even if the copied
-        // text equals the prior contents, so this reliably detects a successful copy.
+        // to the pasteboard. The change-count increments on any write, even if the copied text
+        // equals the prior contents. A changed generation proves only that some writer changed the
+        // pasteboard; attribution to the synthetic copy remains ambiguous, which is exactly what the
+        // arbitration below exists to resolve.
         let didChange = self.waitForPasteboardChange(
             pasteboard,
             since: changeCountBeforeCopy,
@@ -299,8 +354,13 @@ final class TextSelectionService {
     /// clipboard fallback is skipped rather than run without the session guard.
     private static let pasteboardSessionWaitMicros: useconds_t = 250_000
 
-    /// Restores `snapshot` onto `pasteboard` only after observing a pasteboard write, then
-    /// briefly watches for a *late* pasteboard write and re-restores if one lands.
+    /// Restores `snapshot` onto `pasteboard` only after observing a pasteboard write, then briefly
+    /// watches for a *late* pasteboard write and MAY restore again.
+    ///
+    /// Whether that further restore happens is conditional on all of: the observation being
+    /// readable, its payload classifying as our recorded synthetic copy rather than someone else's
+    /// write, the restore budget not being exhausted, and AppKit accepting the write back. Any one
+    /// of those failing means no further restore occurs.
     ///
     /// The hazard: our synthetic Cmd+C is delivered asynchronously. If the target app is
     /// slow/busy it may process the copy *after* `clipboardCopyTimeoutMicros` has elapsed and
@@ -311,10 +371,10 @@ final class TextSelectionService {
     /// pasteboard untouched. Then poll for a short, bounded settle window, handing each observed
     /// generation to `LateWriteArbiter`, which decides whether it is our delayed copy (restore it,
     /// capped at `maxLateCopyRestores` within `lateCopySettleMicros`) or somebody else's clipboard
-    /// (adopt it as the new restore target). The loop is doubly bounded (time and retry count) so
-    /// it cannot hang. Crucially, a timed-out Cmd+C with no late write never clears and rewrites
-    /// the pasteboard, preserving complex clipboard contents that a snapshot may only partially
-    /// capture.
+    /// (adopt it as the new restore target). The control loop has bounded scheduling and restore
+    /// counts; pasteboard reads and lazy providers are not wall-clock bounded. Crucially, a
+    /// timed-out Cmd+C with no late write never clears and rewrites the pasteboard, preserving
+    /// complex clipboard contents that a snapshot may only partially capture.
     ///
     /// The restore target MOVES. `snapshot` is only the starting target: once a late write has been
     /// positively distinguished from the recorded synthetic payload it is the user's current
@@ -654,9 +714,55 @@ final class TextSelectionService {
         return nil
     }
 
-    private func getSelectedText(from element: AXUIElement) -> String? {
+    /// Whether a successfully-read selected range names text to extract.
+    ///
+    /// Sets `confirmedNoSelection` for the one shape that is an ANSWER rather than a failed read:
+    /// a valid location with zero length, which is a caret sitting in a field with nothing
+    /// selected. `NSTextView` reports exactly that — `.success` with `""` for the selected-text
+    /// attribute and a range like `{3, 0}` — so this covers every ordinary Cocoa text field, not
+    /// just AX-opaque editors, and it is what stops a no-selection Edit-mode press from firing a
+    /// real Cmd+C into the focused app.
+    ///
+    /// A location that is not a plausible index is the element declining to answer, and it must stay
+    /// indistinguishable from unavailable so AX-opaque editors keep reaching the clipboard fallback.
+    /// Two different sentinels arrive here and they are NOT the same value: `kCFNotFound` is `-1`,
+    /// `NSNotFound` is `Int.max`. Neither can be evidence of a caret, and neither can a negative
+    /// location — a value that is not a valid index says nothing about where a cursor sits. Issue
+    /// #319 is where a macOS 26 AX report of `{location: NSNotFound, length: 0}` for an element with
+    /// no valid caret was raised. `!= NSNotFound` is the guard idiom already used elsewhere in this
+    /// repo: `AutomaticDictionaryCorrectionTracker.isChangeInsideInsertedRange` (:68) and
+    /// `FluidAudioProvider.applyingPronunciationReplacements` (:423).
+    ///
+    /// The hole this closes is one this PR opened. Upstream's guard is
+    /// `location != kCFNotFound, length > 0`, and its `length > 0` clause rejects `{NSNotFound, 0}`
+    /// incidentally — the sentinel only became reachable once this branch started reading
+    /// `length == 0` as a meaningful answer rather than a failed read.
+    static func hasSelectedRange(_ range: CFRange, confirmedNoSelection: inout Bool) -> Bool {
+        guard range.location >= 0, range.location != NSNotFound else { return false }
+        if range.length == 0 {
+            confirmedNoSelection = true
+            return false
+        }
+        return range.length > 0
+    }
+
+    /// One live accessibility attribute read. The default `readAttribute` below; a seam only.
+    static func copyAXAttribute(_ element: AXUIElement, _ attribute: CFString) -> (AXError, CFTypeRef?) {
         var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &value)
+        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
+        return (result, value)
+    }
+
+    /// `readAttribute` exists so this function can be driven without a focused element: every branch
+    /// below turns on values the accessibility tree hands back, and a test can hand back the same
+    /// values (genuine `AXValue`s included) without one. Production passes the default and reads
+    /// identically to before the parameter existed.
+    func getSelectedText(
+        from element: AXUIElement,
+        confirmedNoSelection: inout Bool,
+        readAttribute: (AXUIElement, CFString) -> (AXError, CFTypeRef?) = TextSelectionService.copyAXAttribute
+    ) -> String? {
+        let (result, value) = readAttribute(element, kAXSelectedTextAttribute as CFString)
 
         // An empty string is NOT a selection. Some AX-opaque editors answer this attribute with ""
         // rather than an error, and treating that as success terminates selection capture before the
@@ -671,8 +777,7 @@ final class TextSelectionService {
 
         // Fallback: reconstruct selected text from selected range + full value for apps
         // that don't expose kAXSelectedTextAttribute directly.
-        var selectedRangeRef: CFTypeRef?
-        let rangeResult = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &selectedRangeRef)
+        let (rangeResult, selectedRangeRef) = readAttribute(element, kAXSelectedTextRangeAttribute as CFString)
         guard rangeResult == .success, let axRange = selectedRangeRef else {
             self.diag("kAXSelectedTextRangeAttribute unavailable (\(self.describe(rangeResult)))")
             return nil
@@ -692,13 +797,18 @@ final class TextSelectionService {
             return nil
         }
 
-        guard range.location != kCFNotFound, range.length > 0 else {
-            self.diag("Selected range empty (location=\(range.location), length=\(range.length))")
+        var rangeConfirmsNoSelection = false
+        guard Self.hasSelectedRange(range, confirmedNoSelection: &rangeConfirmsNoSelection) else {
+            if rangeConfirmsNoSelection {
+                confirmedNoSelection = true
+                self.diag("Selected range is a collapsed caret (location=\(range.location)) - nothing is selected")
+            } else {
+                self.diag("Selected range unusable (location=\(range.location), length=\(range.length))")
+            }
             return nil
         }
 
-        var fullValueRef: CFTypeRef?
-        let valueResult = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &fullValueRef)
+        let (valueResult, fullValueRef) = readAttribute(element, kAXValueAttribute as CFString)
         guard valueResult == .success, let fullText = fullValueRef as? String else {
             self.diag("kAXValueAttribute unavailable for range extraction (\(self.describe(valueResult)))")
             return nil

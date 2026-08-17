@@ -35,7 +35,8 @@ enum PasteboardObservation {
     ///
     /// Computing it rather than storing it is the point. A stored copy could be assigned from
     /// somewhere else by a later edit and nothing would catch it; a projection of the snapshot's own
-    /// bytes cannot disagree with the snapshot, because there is only one value involved. That is
+    /// captured `Data` representations cannot disagree with the snapshot, because there is only one
+    /// value involved. That is
     /// the property the whole redesign turns on: the text a write is classified by and the state
     /// that would be restored are the same observation.
     var string: String? {

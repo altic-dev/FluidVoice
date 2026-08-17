@@ -3139,7 +3139,7 @@ extension DictationE2ETests {
         XCTAssertEqual(
             mirror.string(forType: .string),
             string,
-            "The classified text and the restore target must be the same bytes"
+            "The classified text and the restore target must be the same text"
         )
     }
 
@@ -3291,7 +3291,7 @@ extension DictationE2ETests {
 
         XCTAssertNotNil(captured, "An empty clipboard must still produce a capture")
         XCTAssertTrue(
-            captured?.snapshot.isEmpty ?? false,
+            captured?.snapshot.hasNoCapturedRepresentations ?? false,
             "Waiting out the ambiguity must not turn an empty clipboard into a failure"
         )
     }
@@ -3309,7 +3309,7 @@ extension DictationE2ETests {
         let captured = PasteboardSnapshot.captureStable(from: pasteboard)
         XCTAssertNotNil(captured)
         XCTAssertFalse(
-            captured?.snapshot.isEmpty ?? true,
+            captured?.snapshot.hasNoCapturedRepresentations ?? true,
             "A non-text clipboard has items and must be adopted, not waited out"
         )
         XCTAssertNil(captured?.snapshot.plainText, "The fixture is deliberately non-text")
@@ -3534,5 +3534,442 @@ extension DictationE2ETests {
             "user clipboard",
             "A delayed synthetic copy must still be reverted to the user's clipboard"
         )
+    }
+}
+
+// MARK: - Write Mode selection capture: the empty restore target and the confirmed caret
+
+extension DictationE2ETests {
+    /// The standard rich-text copy path must be waited out, not adopted as an empty restore
+    /// target.
+    ///
+    /// `declareTypes(_:owner:)` — a common rich-text declare-then-publish path used by applications
+    /// that expose multiple promised pasteboard representations — advances the generation and leaves
+    /// ONE item whose every `data(forType:)` is nil until the payload lands. An item-count test sees a
+    /// non-empty snapshot, returns immediately, and the later restore puts back nothing.
+    /// Fails closed: a scheduler stall makes it fail, never pass.
+    func testCaptureStable_waitsOutARichTextCopyThatDeclaredTypesButHasNotPublished() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("declared-not-published")
+        defer { pasteboard.releaseGlobally() }
+
+        self.writeText("user clipboard", to: pasteboard)
+
+        pasteboard.declareTypes([.rtf, .string], owner: nil)
+        let generationAfterDeclare = pasteboard.changeCount
+
+        XCTAssertEqual(
+            pasteboard.pasteboardItems?.count,
+            1,
+            "The premise is one item present, so an item-count gate would call this non-empty"
+        )
+        XCTAssertNil(
+            pasteboard.data(forType: .string),
+            "The premise is that no declared representation has produced a value yet"
+        )
+
+        let pasteboardName = pasteboard.name.rawValue
+        let didPublish = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.005) {
+            NSPasteboard(name: NSPasteboard.Name(pasteboardName))
+                .setData(Data("their content".utf8), forType: .string)
+            didPublish.signal()
+        }
+
+        let captured = PasteboardSnapshot.captureStable(from: pasteboard)
+
+        XCTAssertEqual(
+            didPublish.wait(timeout: .now() + 1.0),
+            .success,
+            "The writer must have published, otherwise this test proves nothing"
+        )
+        XCTAssertEqual(
+            pasteboard.changeCount,
+            generationAfterDeclare,
+            "The publish must not have advanced the generation, or the premise does not hold"
+        )
+        XCTAssertEqual(
+            captured?.snapshot.plainText,
+            "their content",
+            "A capture with no representations must be re-polled, not adopted as the restore target"
+        )
+    }
+
+    /// A clipboard whose items produced representations is adopted at once, and this asserts timing
+    /// rather than only the value.
+    ///
+    /// The emptiness gate has three plausible shapes — item count, representations captured, text —
+    /// and only a timing assertion tells them apart, because all three return the same snapshot
+    /// here and differ solely in whether they burn the settling window first. `emptySettleMicros`
+    /// is driven far above its default so a readability gate would be caught by an unmissable
+    /// margin. Fails closed: a stall makes it fail, never pass.
+    func testCaptureStable_returnsADataBearingClipboardBeforeTheSettlingHorizon() {
+        let pasteboard = self.makeClipboardFallbackPasteboard("data-bearing-fast-path")
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data([0x01, 0x02, 0x03]), forType: .png)
+        pasteboard.writeObjects([item])
+
+        let horizonMicros: useconds_t = 500_000
+        let started = DispatchTime.now()
+        let captured = PasteboardSnapshot.captureStable(from: pasteboard, emptySettleMicros: horizonMicros)
+        let elapsedNanos = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+
+        XCTAssertNotNil(captured, "A clipboard with captured representations must still produce a capture")
+        XCTAssertNil(captured?.snapshot.plainText, "The fixture is deliberately non-text")
+        XCTAssertLessThan(
+            elapsedNanos,
+            UInt64(horizonMicros) * 1_000 / 4,
+            "Captured representations must be adopted at once, never held for the settling horizon"
+        )
+    }
+
+    /// Only a valid, zero-length range is an affirmative "nothing is selected".
+    ///
+    /// A `kCFNotFound` location is the element declining to answer, and it must stay
+    /// indistinguishable from unavailable or AX-opaque editors stop reaching the clipboard
+    /// fallback this whole path exists for.
+    func testHasSelectedRange_confirmsNoSelectionOnlyForAValidZeroLengthRange() {
+        var caretConfirmed = false
+        XCTAssertFalse(TextSelectionService.hasSelectedRange(
+            CFRange(location: 3, length: 0),
+            confirmedNoSelection: &caretConfirmed
+        ))
+        XCTAssertTrue(caretConfirmed, "A caret at a valid location with nothing selected is an answer")
+
+        var unavailableConfirmed = false
+        XCTAssertFalse(TextSelectionService.hasSelectedRange(
+            CFRange(location: kCFNotFound, length: 0),
+            confirmedNoSelection: &unavailableConfirmed
+        ))
+        XCTAssertFalse(
+            unavailableConfirmed,
+            "kCFNotFound is a refusal to answer and must keep the clipboard fallback reachable"
+        )
+
+        var selectionConfirmed = false
+        XCTAssertTrue(TextSelectionService.hasSelectedRange(
+            CFRange(location: 3, length: 5),
+            confirmedNoSelection: &selectionConfirmed
+        ))
+        XCTAssertFalse(selectionConfirmed, "A real selection is not a confirmed absence of one")
+
+        // A negative length is malformed, not a caret. Only length ZERO is the affirmative answer.
+        var negativeLengthConfirmed = false
+        XCTAssertFalse(TextSelectionService.hasSelectedRange(
+            CFRange(location: 3, length: -1),
+            confirmedNoSelection: &negativeLengthConfirmed
+        ))
+        XCTAssertFalse(negativeLengthConfirmed, "A malformed negative length is not a confirmed caret")
+    }
+
+    /// The two sentinels this attribute reports are DIFFERENT VALUES, and only one of them is
+    /// `kCFNotFound`.
+    ///
+    /// `kCFNotFound` is `-1`; `NSNotFound` is `Int.max`. A `kCFNotFound`-only guard reads
+    /// `{NSNotFound, 0}` as a caret and suppresses the clipboard fallback for exactly the AX-opaque
+    /// editors this path exists to serve; a negative location is the same hole one step over.
+    /// Neither value is an index, so neither can be evidence of a caret. Issue #319 is where a
+    /// macOS 26 AX report of `{location: NSNotFound, length: 0}` was raised. The premise assertions
+    /// below fail loudly if either constant is not what this reasoning assumes.
+    func testHasSelectedRange_treatsNSNotFoundAndNegativeLocationsAsUnavailable() {
+        XCTAssertEqual(kCFNotFound, -1, "The premise is that the two sentinels are different values")
+        XCTAssertEqual(NSNotFound, Int.max, "The premise is that NSNotFound is Int.max, not -1")
+
+        var nsNotFoundConfirmed = false
+        XCTAssertFalse(TextSelectionService.hasSelectedRange(
+            CFRange(location: NSNotFound, length: 0),
+            confirmedNoSelection: &nsNotFoundConfirmed
+        ))
+        XCTAssertFalse(
+            nsNotFoundConfirmed,
+            "macOS 26's {NSNotFound, 0} is no valid caret at all and must keep the fallback reachable"
+        )
+
+        var negativeLocationConfirmed = false
+        XCTAssertFalse(TextSelectionService.hasSelectedRange(
+            CFRange(location: -5, length: 0),
+            confirmedNoSelection: &negativeLocationConfirmed
+        ))
+        XCTAssertFalse(negativeLocationConfirmed, "A negative location is not an index, so it is no caret")
+    }
+
+    /// Whether the clipboard fallback ran for a given pair of confirmation signals. The subject
+    /// here is the FOLD, so the flags are set directly rather than through the range classifier.
+    private func clipboardFallbackRuns(systemWideConfirms: Bool, frontmostConfirms: Bool) -> Bool {
+        var ran = false
+        _ = TextSelectionService.shared.resolveSelection(
+            systemWide: { $0 = systemWideConfirms; return nil },
+            frontmost: { $0 = frontmostConfirms; return nil },
+            clipboardFallback: { ran = true; return "selection read by synthetic copy" }
+        )
+        return ran
+    }
+
+    /// One strategy confirming a caret while the other cannot resolve an element at all must STILL
+    /// suppress the fallback.
+    ///
+    /// The confirmation is element-scoped, so this pins a chosen failure mode rather than a proof.
+    /// Falling through here would fire a real Cmd+C, and an editor that treats Cmd+C with a bare
+    /// caret as "copy the current line" would hand back text the user never selected for Write Mode
+    /// to rewrite. Not engaging matches upstream, which has no clipboard fallback at all.
+    func testResolveSelection_suppressesTheClipboardFallbackWhenOnlySystemWideConfirms() {
+        XCTAssertFalse(
+            self.clipboardFallbackRuns(systemWideConfirms: true, frontmostConfirms: false),
+            "A confirmed caret must not fire a synthetic Cmd+C because the other strategy failed"
+        )
+    }
+
+    /// The other direction. The two strategies obtain their elements differently and are not
+    /// interchangeable, so each order needs its own pin.
+    func testResolveSelection_suppressesTheClipboardFallbackWhenOnlyFrontmostConfirms() {
+        XCTAssertFalse(
+            self.clipboardFallbackRuns(systemWideConfirms: false, frontmostConfirms: true),
+            "A confirmed caret must not fire a synthetic Cmd+C because the other strategy failed"
+        )
+    }
+
+    /// The regression, at the decision seam rather than the classifier: an element reporting
+    /// macOS 26's `{NSNotFound, 0}` must still reach the clipboard fallback.
+    ///
+    /// Deliberately fold-agnostic — neither strategy confirms anything, so this asserts the same
+    /// thing whether the confirmation fold is `||` or `&&`.
+    func testResolveSelection_stillReachesTheClipboardFallbackForANSNotFoundRange() {
+        var clipboardFallbackRan = false
+        let resolved = TextSelectionService.shared.resolveSelection(
+            systemWide: { confirmedNoSelection in
+                _ = TextSelectionService.hasSelectedRange(
+                    CFRange(location: NSNotFound, length: 0),
+                    confirmedNoSelection: &confirmedNoSelection
+                )
+                return nil
+            },
+            frontmost: { confirmedNoSelection in
+                _ = TextSelectionService.hasSelectedRange(
+                    CFRange(location: NSNotFound, length: 0),
+                    confirmedNoSelection: &confirmedNoSelection
+                )
+                return nil
+            },
+            clipboardFallback: {
+                clipboardFallbackRan = true
+                return "selection read by synthetic copy"
+            }
+        )
+
+        XCTAssertTrue(
+            clipboardFallbackRan,
+            "macOS 26's no-caret sentinel must not suppress the fallback this path exists to provide"
+        )
+        XCTAssertEqual(resolved, "selection read by synthetic copy")
+    }
+
+    /// A confirmed caret suppresses the clipboard fallback.
+    ///
+    /// Post-change that fallback runs synchronously on the main thread from the hotkey callback:
+    /// roughly a 500ms beachball on every no-selection Edit-mode press, a real Cmd+C fired into
+    /// the focused app, and a window where a background write gets misclassified.
+    func testResolveSelection_suppressesTheClipboardFallbackWhenARangeConfirmsNoSelection() {
+        var clipboardFallbackRan = false
+        let resolved = TextSelectionService.shared.resolveSelection(
+            systemWide: { confirmedNoSelection in
+                // Drives the production classifier, not a hand-set flag, so the wiring is covered.
+                _ = TextSelectionService.hasSelectedRange(
+                    CFRange(location: 3, length: 0),
+                    confirmedNoSelection: &confirmedNoSelection
+                )
+                return nil
+            },
+            frontmost: { confirmedNoSelection in
+                _ = TextSelectionService.hasSelectedRange(
+                    CFRange(location: 3, length: 0),
+                    confirmedNoSelection: &confirmedNoSelection
+                )
+                return nil
+            },
+            clipboardFallback: {
+                clipboardFallbackRan = true
+                return "the user's clipboard, not their selection"
+            }
+        )
+
+        XCTAssertFalse(
+            clipboardFallbackRan,
+            "A confirmed caret must not fire a synthetic Cmd+C into the focused app"
+        )
+        XCTAssertEqual(resolved, "", "A confirmed empty selection resolves to empty, not to nothing")
+    }
+
+    /// The side effect the suppression must not have: strategy 1 confirming an empty selection
+    /// must not stop strategy 2 from running.
+    ///
+    /// The system-wide focused element and the frontmost app's focused element can resolve
+    /// differently — that is why both strategies exist — so returning on strategy 1's confirmation
+    /// would lose a selection strategy 2 would have found.
+    func testResolveSelection_stillRunsTheFrontmostStrategyAfterSystemWideConfirmsNoSelection() {
+        var frontmostStrategyRan = false
+        var clipboardFallbackRan = false
+        let resolved = TextSelectionService.shared.resolveSelection(
+            systemWide: { confirmedNoSelection in
+                _ = TextSelectionService.hasSelectedRange(
+                    CFRange(location: 3, length: 0),
+                    confirmedNoSelection: &confirmedNoSelection
+                )
+                return nil
+            },
+            frontmost: { _ in
+                frontmostStrategyRan = true
+                return "selection only the frontmost app could see"
+            },
+            clipboardFallback: {
+                clipboardFallbackRan = true
+                return "the user's clipboard, not their selection"
+            }
+        )
+
+        XCTAssertTrue(
+            frontmostStrategyRan,
+            "A confirmed caret on the system-wide element must not short-circuit the second strategy"
+        )
+        XCTAssertEqual(
+            resolved,
+            "selection only the frontmost app could see",
+            "The second strategy's selection must win over the first strategy's confirmed absence"
+        )
+        XCTAssertFalse(clipboardFallbackRan, "A found selection never needs the clipboard fallback")
+    }
+
+    /// The negative control: with no strategy able to tell, the clipboard fallback still runs.
+    /// This is the AX-opaque editor case the fallback was built for.
+    func testResolveSelection_reachesTheClipboardFallbackWhenNoStrategyCouldTell() {
+        var clipboardFallbackRan = false
+        let resolved = TextSelectionService.shared.resolveSelection(
+            systemWide: { _ in nil },
+            frontmost: { _ in nil },
+            clipboardFallback: {
+                clipboardFallbackRan = true
+                return "selection read by synthetic copy"
+            }
+        )
+
+        XCTAssertTrue(clipboardFallbackRan, "An unreadable accessibility tree must reach the fallback")
+        XCTAssertEqual(resolved, "selection read by synthetic copy")
+    }
+}
+
+// MARK: - Write Mode selection capture: driving getSelectedText(from:) without a focused element
+
+/// These drive the REAL `getSelectedText(from:)` through its injected attribute reader, handing back
+/// genuine `AXValue`s minted with `AXValueCreate`. That covers the flag-propagation path — the
+/// classifier setting its own local is not enough, the signal has to leave the function through the
+/// caller's `inout` — which no test could reach while the only route in was a live focused element.
+extension DictationE2ETests {
+    /// A stand-in element. The injected reader never dereferences it.
+    private var unusedAXElement: AXUIElement { AXUIElementCreateSystemWide() }
+
+    /// A genuine `AXValue` carrying `{location, length}`, exactly what the AX tree hands back.
+    private func axRange(_ location: Int, _ length: Int) throws -> CFTypeRef {
+        var range = CFRange(location: location, length: length)
+        return try XCTUnwrap(AXValueCreate(.cfRange, &range)) as CFTypeRef
+    }
+
+    /// Answers the three attributes `getSelectedText(from:)` asks for. The defaults are the
+    /// AX-opaque-editor baseline: an empty selected-text answer and nothing else available.
+    private func axReader(
+        selectedText: (AXError, CFTypeRef?) = (.success, "" as CFTypeRef),
+        selectedRange: (AXError, CFTypeRef?) = (.attributeUnsupported, nil),
+        fullValue: (AXError, CFTypeRef?) = (.attributeUnsupported, nil)
+    ) -> (AXUIElement, CFString) -> (AXError, CFTypeRef?) {
+        { _, attribute in
+            switch attribute as String {
+            case kAXSelectedTextAttribute: return selectedText
+            case kAXSelectedTextRangeAttribute: return selectedRange
+            default: return fullValue
+            }
+        }
+    }
+
+    /// A collapsed caret must report itself to the CALLER, not just to a local inside the function.
+    func testGetSelectedTextFromElement_reportsAConfirmedCaretToItsCaller() throws {
+        var confirmedNoSelection = false
+        let selected = TextSelectionService.shared.getSelectedText(
+            from: self.unusedAXElement,
+            confirmedNoSelection: &confirmedNoSelection,
+            readAttribute: self.axReader(selectedRange: (.success, try self.axRange(3, 0)))
+        )
+
+        XCTAssertNil(selected, "A caret selects nothing, so there is no text to return")
+        XCTAssertTrue(
+            confirmedNoSelection,
+            "The caret signal must reach the caller's flag, not die inside the function"
+        )
+    }
+
+    /// Every way the range read can fail must leave the caller's flag alone, so the clipboard
+    /// fallback stays reachable for the AX-opaque editors it exists to serve.
+    func testGetSelectedTextFromElement_leavesTheFlagUntouchedForEveryUnreadableRange() throws {
+        var wrongKind = CGPoint(x: 1, y: 2)
+        let unreadable: [(String, (AXError, CFTypeRef?))] = [
+            ("attribute unavailable", (.attributeUnsupported, nil)),
+            ("non-AXValue", (.success, "not an AXValue" as CFTypeRef)),
+            ("AXValueGetValue failure", (.success, try XCTUnwrap(AXValueCreate(.cgPoint, &wrongKind)))),
+            ("macOS 26 {NSNotFound, 0}", (.success, try self.axRange(NSNotFound, 0)))
+        ]
+
+        for (name, selectedRange) in unreadable {
+            var confirmedNoSelection = false
+            let selected = TextSelectionService.shared.getSelectedText(
+                from: self.unusedAXElement,
+                confirmedNoSelection: &confirmedNoSelection,
+                readAttribute: self.axReader(selectedRange: selectedRange)
+            )
+            XCTAssertNil(selected, "\(name) yields no selection")
+            XCTAssertFalse(confirmedNoSelection, "\(name) is not evidence of a caret")
+        }
+    }
+
+    /// The success paths, and the bounds rejection that must not be mistaken for a caret.
+    func testGetSelectedTextFromElement_extractsInBoundsSelectionsAndRejectsOutOfBoundsOnes() throws {
+        var direct = false
+        XCTAssertEqual(
+            TextSelectionService.shared.getSelectedText(
+                from: self.unusedAXElement,
+                confirmedNoSelection: &direct,
+                readAttribute: self.axReader(selectedText: (.success, "picked" as CFTypeRef))
+            ),
+            "picked",
+            "A non-empty kAXSelectedText answer short-circuits before the range fallback"
+        )
+        XCTAssertFalse(direct, "A real selection is not a confirmed absence of one")
+
+        var extracted = false
+        XCTAssertEqual(
+            TextSelectionService.shared.getSelectedText(
+                from: self.unusedAXElement,
+                confirmedNoSelection: &extracted,
+                readAttribute: self.axReader(
+                    selectedRange: (.success, try self.axRange(3, 5)),
+                    fullValue: (.success, "0123456789" as CFTypeRef)
+                )
+            ),
+            "34567",
+            "An in-bounds range is extracted from the element's full value"
+        )
+        XCTAssertFalse(extracted, "A real selection is not a confirmed absence of one")
+
+        var outOfBounds = false
+        XCTAssertNil(
+            TextSelectionService.shared.getSelectedText(
+                from: self.unusedAXElement,
+                confirmedNoSelection: &outOfBounds,
+                readAttribute: self.axReader(
+                    selectedRange: (.success, try self.axRange(8, 5)),
+                    fullValue: (.success, "0123456789" as CFTypeRef)
+                )
+            ),
+            "A range past the end of the value must not be extracted"
+        )
+        XCTAssertFalse(outOfBounds, "An out-of-bounds range is not a caret")
     }
 }
