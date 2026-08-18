@@ -1225,7 +1225,7 @@ final class DictationE2ETests: XCTestCase {
         let modelDirectory = Self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
-        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny, languageCodeOverride: "en")
 
         // Act
         try await provider.prepare()
