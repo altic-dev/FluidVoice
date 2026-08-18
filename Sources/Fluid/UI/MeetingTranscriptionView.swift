@@ -37,8 +37,9 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
-        self.selectedMicrophoneID = defaults.microphoneCaptureDeviceID
-        self.microphoneRole = defaults.microphoneRole
+        // Left unset here: selectPreferredMicrophone decides once identities load.
+        self.selectedMicrophoneID = nil
+        self.microphoneRole = .unknown
     }
 
     static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
@@ -488,19 +489,19 @@ struct MeetingTranscriptionView: View {
             return
         }
 
-        let settings = SettingsStore.shared
-        let defaults = settings.meetingRecordingDefaults
-        let preferredCoreAudioUID = defaults.microphoneCoreAudioUID ?? settings.preferredInputDeviceUID
+        let defaults = SettingsStore.shared.meetingRecordingDefaults
         let savedMicrophone = defaults.savedMicrophone(in: identities)
-        if defaults.isConfigured {
-            self.setupDraft.selectedMicrophoneID = savedMicrophone?.captureDeviceID
-            return
-        }
-
-        let preferred = savedMicrophone ?? (try? MeetingCaptureSourceCatalog.defaultMicrophone(
-            preferredCoreAudioUID: preferredCoreAudioUID
-        ))
-        self.setupDraft.selectedMicrophoneID = preferred?.captureDeviceID ?? identities.first?.captureDeviceID
+        // Default preselection follows the system's current input, not the remembered device.
+        let selection = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: savedMicrophone?.captureDeviceID,
+            savedRole: defaults.microphoneRole,
+            systemDefaultUID: AudioDevice.getDefaultInputDevice()?.uid,
+            preferredInputUID: SettingsStore.shared.preferredInputDeviceUID,
+            systemDefaultCaptureID: AVCaptureDevice.default(for: .audio)?.uniqueID
+        )
+        self.setupDraft.selectedMicrophoneID = selection.deviceID
+        self.setupDraft.microphoneRole = selection.role
     }
 
     private func selectPreferredApplication(from identities: [MeetingApplicationIdentity]) {

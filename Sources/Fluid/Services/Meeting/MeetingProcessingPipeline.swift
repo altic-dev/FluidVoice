@@ -319,6 +319,7 @@ private final class MeetingProviderLanguagePin {
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
+    /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
     static let pipelineVersion = 7
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
@@ -390,7 +391,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         elected: SessionSpeakerID?,
         captureMethod: MeetingAudioTrackCaptureMethod?,
         // `unscoredOverlap` pins to 0.0s under VPIO; this carries the widening delta instead.
-        widenedIndices: Set<Int> = []
+        widenedIndices: Set<Int> = [],
+        captureEras: [MeetingCaptureEra]? = nil
     ) {
         let widenedSeconds = widenedIndices.reduce(0.0) { total, offset in
             guard turns.indices.contains(offset) else { return total }
@@ -443,8 +445,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
         let captureMethodDescription = captureMethod.map(String.init(describing:)) ?? "nil"
+        let eraDescription = captureEras.map { eras in
+            ", eras=[" + eras.map { String(format: "%@@%.1fs", String(describing: $0.method), $0.startSeconds) }.joined(separator: ", ") + "]"
+        } ?? ""
         DebugLogger.shared.info(
-            "Local speaker election (role=\(role), captureMethod=\(captureMethodDescription), "
+            "Local speaker election (role=\(role), captureMethod=\(captureMethodDescription)\(eraDescription), "
                 + "elected=\(elected?.uuidString.prefix(8).description ?? "none"), "
                 + "widened=\(widenedIndices.count)/\(String(format: "%.1f", widenedSeconds))s):\n  "
                 + rows.joined(separator: "\n  ")
@@ -456,32 +461,42 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Drops turns the microphone only heard at a distance. They are not echo — a TV or another
     /// room never matches the far end's words — so nothing downstream can catch them, and left in
     /// they form a rival cluster that outweighs the user and blocks the "You" election entirely.
-    nonisolated static func rejectingFarField(_ turns: [StagedMicrophoneTurn]) -> [StagedMicrophoneTurn] {
-        let measured = turns.filter { $0.rms > 0 }
-        guard !measured.isEmpty else { return turns }
-        let reference = MeetingNearFieldGate.referenceRMS(
-            turns: measured.map { (rms: $0.rms, duration: max(0, $0.end - $0.start)) }
-        )
-        var kept: [StagedMicrophoneTurn] = []
-        var rejected: [StagedMicrophoneTurn] = []
-        for turn in turns {
-            // An unmeasured turn is kept: absence of a measurement is not evidence of distance.
-            if turn.rms <= 0 || MeetingNearFieldGate.isNearField(rms: turn.rms, reference: reference) {
-                kept.append(turn)
-            } else {
-                rejected.append(turn)
-            }
+    /// Gates each turn against its own era's reference (VPIO runs hotter via AGC).
+    nonisolated static func rejectingFarField(
+        _ turns: [StagedMicrophoneTurn],
+        eras: [MeetingCaptureEra]
+    ) -> [StagedMicrophoneTurn] {
+        guard !turns.isEmpty else { return turns }
+        var indicesByEra: [Int: [Int]] = [:]
+        for (offset, turn) in turns.enumerated() {
+            indicesByEra[Self.eraIndex(containing: turn.start, eras: eras), default: []].append(offset)
         }
-        guard !rejected.isEmpty else { return turns }
-        let rejectedSeconds = rejected.reduce(0.0) { $0 + max(0, $1.end - $1.start) }
-        DebugLogger.shared.info(
-            String(
-                format: "Near-field gate: dropped %d of %d microphone turns (%.1fs) below reference %.5f RMS − %.0f dB",
-                rejected.count, turns.count, rejectedSeconds, reference ?? 0, MeetingNearFieldGate.rejectionDepthDB
-            ),
-            source: "MeetingProcessingPipeline"
-        )
-        return kept
+        var rejectedOffsets = Set<Int>()
+        for (eraIndex, offsets) in indicesByEra {
+            let eraTurns = offsets.map { turns[$0] }
+            let measured = eraTurns.filter { $0.rms > 0 }
+            guard !measured.isEmpty else { continue }
+            let reference = MeetingNearFieldGate.referenceRMS(
+                turns: measured.map { (rms: $0.rms, duration: max(0, $0.end - $0.start)) }
+            )
+            var eraRejectedSeconds: TimeInterval = 0
+            for offset in offsets {
+                let turn = turns[offset]
+                guard turn.rms > 0, !MeetingNearFieldGate.isNearField(rms: turn.rms, reference: reference) else { continue }
+                rejectedOffsets.insert(offset)
+                eraRejectedSeconds += max(0, turn.end - turn.start)
+            }
+            guard eraRejectedSeconds > 0 else { continue }
+            DebugLogger.shared.info(
+                String(
+                    format: "Near-field gate: era %d dropped %.1fs of %d microphone turns below reference %.5f RMS − %.0f dB",
+                    eraIndex, eraRejectedSeconds, eraTurns.count, reference ?? 0, MeetingNearFieldGate.rejectionDepthDB
+                ),
+                source: "MeetingProcessingPipeline"
+            )
+        }
+        guard !rejectedOffsets.isEmpty else { return turns }
+        return turns.enumerated().filter { !rejectedOffsets.contains($0.offset) }.map(\.element)
     }
 
     /// Reads the chunk once and measures each turn's RMS. Failure degrades to zeros, which the gate
@@ -1354,6 +1369,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
         var stagedTurns: [StagedMicrophoneTurn] = []
         var echoMonitor = EchoMonitorAccumulator()
+        let eras = Self.microphoneEras(for: track, origin: context.origin)
+        // Era 0 has no writer-boundary anchor, so de-drift anchors it at the track's own first PTS.
+        let era0AnchorRelative = (track.chunks.map(\.presentationStart.seconds).min() ?? context.origin) - context.origin
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             let accumulatorSnapshot = accumulator
             let stagedTurnsSnapshot = stagedTurns
@@ -1361,6 +1379,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 try await self.processMicrophoneChunk(
                     chunk,
                     track: track,
+                    eras: eras,
+                    era0AnchorRelative: era0AnchorRelative,
                     diarizer: diarizer,
                     context: context,
                     remoteSpeech: remoteSpeech,
@@ -1382,6 +1402,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.finishMicrophoneTrack(
             track,
             session: session,
+            origin: context.origin,
             stagedTurns: stagedTurns,
             echoMonitor: echoMonitor,
             applicationTrackHadSpeech: !remoteSpeech.isEmpty,
@@ -1392,6 +1413,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func processMicrophoneChunk(
         _ chunk: MeetingAudioChunk,
         track: MeetingAudioTrack,
+        eras: [MeetingCaptureEra],
+        era0AnchorRelative: TimeInterval,
         diarizer: SpeakerDiarizationService,
         context: ProcessingContext,
         remoteSpeech: [TimelineInterval],
@@ -1485,8 +1508,18 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     for (offset, element) in transcribedTurns.enumerated() {
                         let (index, turn, text) = element
                         // De-drift applies ONLY here — echo verdicts below keep consuming raw chunkOffset.
-                        let start = MeetingMicrophoneDeDrift.correct(chunkOffset + turn.startSeconds, track: track, origin: context.origin)
-                        let end = MeetingMicrophoneDeDrift.correct(chunkOffset + turn.endSeconds, track: track, origin: context.origin)
+                        let rawStart = chunkOffset + turn.startSeconds
+                        let turnEraIndex = Self.eraIndex(containing: rawStart, eras: eras)
+                        var turnEra = eras[turnEraIndex]
+                        // Era 0's containment boundary is a sentinel, not a real anchor.
+                        if turnEraIndex == 0 { turnEra.startSeconds = era0AnchorRelative }
+                        let turnEraEnd = Self.eraEndRelative(afterIndex: turnEraIndex, eras: eras)
+                        let start = MeetingMicrophoneDeDrift.correct(
+                            rawStart, era: turnEra, eraEndRelative: turnEraEnd
+                        )
+                        let end = MeetingMicrophoneDeDrift.correct(
+                            chunkOffset + turn.endSeconds, era: turnEra, eraEndRelative: turnEraEnd
+                        )
                         let overlapsRemote = remoteSpeech.contains {
                             min(end, $0.end) - max(start, $0.start) > 0.15
                         }
@@ -1553,11 +1586,42 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
     }
 
-    /// Detector loop unchanged; `.voiceProcessing` then widens `echoScored` to every turn
-    /// (fallback-gap/no-app-track evidence hole). `isLikelyEcho` keeps real detector results.
+    /// The only place in the mic batch path allowed to read `track.captureMethod` directly.
+    /// `captureEras[].startSeconds` is raw PTS, converted here to origin-relative; era 0 is pinned to `-infinity`.
+    nonisolated static func microphoneEras(for track: MeetingAudioTrack, origin: TimeInterval) -> [MeetingCaptureEra] {
+        guard let rawEras = track.captureEras, !rawEras.isEmpty else {
+            return [MeetingCaptureEra(
+                method: track.captureMethod ?? .avCaptureSession,
+                deviceUID: nil,
+                deviceName: nil,
+                roleAtElection: .unknown,
+                startSeconds: -.infinity,
+                settledConfig: track.voiceProcessingConfig,
+                clockDrift: track.clockDrift
+            )]
+        }
+        return rawEras.enumerated().map { index, era in
+            var converted = era
+            converted.startSeconds = index == 0 ? -.infinity : era.startSeconds - origin
+            return converted
+        }
+    }
+
+    nonisolated static func eraIndex(containing turnStart: TimeInterval, eras: [MeetingCaptureEra]) -> Int {
+        var index = 0
+        for (offset, era) in eras.enumerated() where era.startSeconds <= turnStart {
+            index = offset
+        }
+        return index
+    }
+
+    nonisolated static func eraEndRelative(afterIndex index: Int, eras: [MeetingCaptureEra]) -> TimeInterval? {
+        eras.indices.contains(index + 1) ? eras[index + 1].startSeconds : nil
+    }
+
     nonisolated static func classifyMicrophoneTurns(
         _ turns: [StagedMicrophoneTurn],
-        captureMethod: MeetingAudioTrackCaptureMethod?,
+        eras: [MeetingCaptureEra],
         applicationTrackID: MeetingAudioTrackID?,
         segments: [MeetingTranscriptSegment],
         fallbackSpeakerID: SessionSpeakerID?
@@ -1583,13 +1647,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
         var widenedIndices = Set<Int>()
-        if captureMethod == .voiceProcessing {
-            for index in classified.indices {
-                if !detectorExamined.contains(index) {
-                    widenedIndices.insert(index)
-                }
-                classified[index].echoScored = true
+        for index in classified.indices {
+            let era = eras[Self.eraIndex(containing: classified[index].start, eras: eras)]
+            guard era.method == .voiceProcessing else { continue }
+            if !detectorExamined.contains(index) {
+                widenedIndices.insert(index)
             }
+            classified[index].echoScored = true
         }
         return (classified, widenedIndices)
     }
@@ -1636,15 +1700,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func finishMicrophoneTrack(
         _ track: MeetingAudioTrack,
         session: MeetingSession,
+        origin: TimeInterval,
         stagedTurns allStagedTurns: [StagedMicrophoneTurn],
         echoMonitor: EchoMonitorAccumulator,
         applicationTrackHadSpeech: Bool,
         accumulator: inout Accumulator
     ) {
-        // Session-wide, never per chunk: a chunk holding only distant audio would otherwise take
-        // that audio as its own reference and gate nothing.
+        let eras = Self.microphoneEras(for: track, origin: origin)
         let stagedTurns = session.selectedMicrophone.role == .personal
-            ? Self.rejectingFarField(allStagedTurns)
+            ? Self.rejectingFarField(allStagedTurns, eras: eras)
             : allStagedTurns
 
         if session.mode == .inRoom {
@@ -1689,7 +1753,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let fallbackSpeakerID = accumulator.speakerIDByKey["meeting-audio"]
         let (classifiedTurns, widenedIndices) = Self.classifyMicrophoneTurns(
             stagedTurns,
-            captureMethod: track.captureMethod,
+            eras: eras,
             applicationTrackID: applicationTrackID,
             segments: accumulator.segments,
             fallbackSpeakerID: fallbackSpeakerID
@@ -1705,8 +1769,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             index: accumulator.embeddingIndexByTrack[.microphone],
             role: session.selectedMicrophone.role,
             elected: localClusterID,
-            captureMethod: track.captureMethod,
-            widenedIndices: widenedIndices
+            captureMethod: eras.last?.method,
+            widenedIndices: widenedIndices,
+            captureEras: track.captureEras
         )
         Self.logEchoMonitorSummary(
             turns: classifiedTurns,

@@ -284,7 +284,7 @@ final class MeetingMicrophoneCaptureTests: XCTestCase {
         XCTAssertNotEqual(mismatchReason, errorReason)
     }
 
-    // MARK: - Writer-coupled synthetic stamp-sequence test (plan rev #17)
+    // MARK: - Writer-coupled synthetic stamp-sequence test
 
     private func makeWriter() throws -> (writer: MeetingAudioChunkWriter, sessionDirectory: URL) {
         let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -504,4 +504,443 @@ extension MeetingMicrophoneCaptureTests {
         }
         XCTAssertEqual(pts.seconds, 9.0, accuracy: 1.0 / 48_000)
     }
+}
+
+// MARK: - Bidirectional route-following mic: capture-side unit tests (no real engines/sessions)
+extension MeetingMicrophoneCaptureTests {
+    // MARK: MeetingEraAcceptanceFence
+
+    func testFenceBeginSampleAfterQuiesceReturnsFalse() async {
+        let fence = MeetingEraAcceptanceFence()
+        await fence.quiesce()
+        XCTAssertFalse(fence.beginSample())
+    }
+
+    func testFenceQuiesceAwaitsInFlightZero() async {
+        let fence = MeetingEraAcceptanceFence()
+        XCTAssertTrue(fence.beginSample())
+        XCTAssertTrue(fence.beginSample())
+
+        let quiesced = Task { await fence.quiesce() }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(quiesced.isCancelled, "quiesce must still be awaiting drain with 2 in-flight samples")
+
+        fence.endSample()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        // Still one in-flight: a concurrent beginSample must be rejected once quiesce() starts.
+        XCTAssertFalse(fence.beginSample())
+
+        fence.endSample()
+        await quiesced.value
+    }
+
+    func testFenceReuseAfterQuiesceStaysClosed() async {
+        let fence = MeetingEraAcceptanceFence()
+        await fence.quiesce()
+        XCTAssertFalse(fence.beginSample())
+        XCTAssertFalse(fence.beginSample())
+    }
+
+
+    func testAckResumeBeforeWaitReturnsImmediately() async {
+        let ack = MeetingCaptureMethodChangeAck()
+        ack.resume()
+        let start = Date()
+        await ack.wait(timeoutSeconds: 2.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testAckWaitThenResume() async {
+        let ack = MeetingCaptureMethodChangeAck()
+        let waiter = Task { await ack.wait(timeoutSeconds: 2.0) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        ack.resume()
+        let start = Date()
+        await waiter.value
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testAckBoundedTimeoutFiresWhenNeverResumed() async {
+        let ack = MeetingCaptureMethodChangeAck()
+        let start = Date()
+        await ack.wait(timeoutSeconds: 2.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.5)
+    }
+
+    func testAckDoubleResumeHarmless() async {
+        let ack = MeetingCaptureMethodChangeAck()
+        ack.resume()
+        ack.resume()
+        let start = Date()
+        await ack.wait(timeoutSeconds: 2.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    // MARK: Writer beginSplice
+
+    func testBeginSpliceReturnsFinalizedChunkPresentationEnd() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        for tick in 0..<5 { self.pushBuffer(writer, ptsSeconds: Double(tick) * 0.01) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let enqueue's async consume land
+
+        let boundary = await writer.beginSplice()
+        let track = await writer.stop()
+
+        XCTAssertEqual(track.chunks.count, 1)
+        let finalized = try XCTUnwrap(track.chunks.first)
+        XCTAssertEqual(finalized.finalizationState, .finalized)
+        XCTAssertFalse(finalized.sha256.isEmpty)
+        XCTAssertEqual(try XCTUnwrap(boundary).seconds, finalized.presentationEnd.seconds, accuracy: 1e-9)
+    }
+
+    func testBeginSpliceThenEnqueueOpensNewChunk() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        self.pushBuffer(writer, ptsSeconds: 0)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        _ = await writer.beginSplice()
+
+        self.pushBuffer(writer, ptsSeconds: 5)
+        let track = await writer.stop()
+
+        XCTAssertEqual(track.chunks.count, 2)
+        XCTAssertTrue(track.chunks.allSatisfy { $0.finalizationState == .finalized })
+    }
+
+    /// Once `.accepting` is false, `beginSplice` no-ops and returns the last finalized boundary.
+    func testBeginSpliceOnStoppedWriterNoOps() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        _ = await writer.stop() // stopped with zero chunks: nothing was ever finalized
+        let boundary = await writer.beginSplice()
+        XCTAssertNil(boundary)
+    }
+
+    /// Same no-op, but with existing chunks: returns the last finalized boundary.
+    func testBeginSpliceOnStoppedWriterReturnsLastFinalizedBoundary() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        self.pushBuffer(writer, ptsSeconds: 0)
+        let stoppedTrack = await writer.stop()
+        let lastEnd = try XCTUnwrap(stoppedTrack.chunks.last?.presentationEnd)
+
+        let rawBoundary = await writer.beginSplice()
+        let boundary = try XCTUnwrap(rawBoundary)
+        XCTAssertEqual(boundary.seconds, lastEnd.seconds, accuracy: 1e-9)
+
+        let trackAfter = await writer.snapshot()
+        XCTAssertEqual(trackAfter.chunks.count, stoppedTrack.chunks.count)
+    }
+
+    func testPostSpliceSubHalfSecondGapDoesNotMergeIntoOldChunk() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        self.pushBuffer(writer, ptsSeconds: 0) // ends at 0.01s
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        _ = await writer.beginSplice()
+
+        // Under the merge threshold, but the splice already forced rotation into a new chunk.
+        self.pushBuffer(writer, ptsSeconds: 0.21)
+        let track = await writer.stop()
+
+        XCTAssertEqual(track.chunks.count, 2)
+        XCTAssertEqual(track.chunks[1].discontinuities, [])
+        XCTAssertEqual(track.chunks[1].presentationStart.seconds, 0.21, accuracy: 1e-6)
+    }
+
+    // MARK: Writer format-mismatch guard
+
+    private func makeStereoBuffer(frameCount: Int, fill: (Int) -> Float) -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))!
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for channel in 0..<2 {
+            let data = buffer.floatChannelData![channel]
+            for index in 0..<frameCount { data[index] = fill(index) }
+        }
+        return buffer
+    }
+
+    private func pushStereoBuffer(_ writer: MeetingAudioChunkWriter, ptsSeconds: Double, frameCount: Int = 480) {
+        let buffer = self.makeStereoBuffer(frameCount: frameCount) { _ in 0.1 }
+        let pts = CMTime(seconds: ptsSeconds, preferredTimescale: 48_000)
+        guard let sampleBuffer = meetingMicrophoneSynthesizeSampleBuffer(from: buffer, presentationTime: pts) else {
+            return XCTFail("failed to synthesize a stereo sample buffer")
+        }
+        writer.enqueue(sampleBuffer)
+    }
+
+    func testFormatMismatchWithGapProducesTwoChunksZeroWriterFailures() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+        let track = MeetingAudioTrack(
+            id: UUID(), kind: .microphone, sourceIdentifier: "test-mic", sourceDisplayName: "Test Microphone",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: []
+        )
+        var events: [MeetingCaptureEvent] = []
+        let lock = NSLock()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: sessionDirectory, chunkDuration: 60) { event in
+            lock.withLock { events.append(event) }
+        }
+
+        self.pushBuffer(writer, ptsSeconds: 0) // mono, ends at 0.01s
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        self.pushStereoBuffer(writer, ptsSeconds: 0.21) // stereo, 0.2s gap
+        let finalTrack = await writer.stop()
+
+        XCTAssertEqual(finalTrack.chunks.count, 2)
+        XCTAssertTrue(finalTrack.chunks.allSatisfy { $0.finalizationState == .finalized })
+
+        let writerFailures = lock.withLock { events }.compactMap { event -> MeetingInterruptionKind? in
+            guard case let .interrupted(kind, _, _) = event else { return nil }
+            return kind
+        }.filter { $0 == .writerFailure }
+        XCTAssertEqual(writerFailures.count, 0)
+
+        let finalizedFormats = lock.withLock { events }.compactMap { event -> MeetingAudioFormat? in
+            guard case let .chunkFinalized(_, _, format) = event else { return nil }
+            return format
+        }
+        XCTAssertEqual(finalizedFormats.count, 2)
+        XCTAssertEqual(finalizedFormats[0].channelCount, 1)
+        XCTAssertEqual(finalizedFormats[1].channelCount, 2)
+    }
+
+    // MARK: Transactional updateTrackMetadata
+
+    func testUpdateTrackMetadataPersistsSuccessfully() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        try await writer.updateTrackMetadata { track in
+            track.captureMethod = .avCaptureSession
+        }
+        let track = await writer.stop()
+        XCTAssertEqual(track.captureMethod, .avCaptureSession)
+    }
+
+    func testUpdateTrackMetadataThrowOnPersistFailureLeavesInMemoryUnchanged() async throws {
+        let (writer, sessionDirectory) = try self.makeWriter()
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        // Remove the track directory the manifest is persisted under so the write fails.
+        let trackDirectory = sessionDirectory.appendingPathComponent("tracks", isDirectory: true)
+            .appendingPathComponent(MeetingAudioTrackKind.microphone.rawValue, isDirectory: true)
+        try FileManager.default.removeItem(at: trackDirectory)
+
+        do {
+            try await writer.updateTrackMetadata { track in
+                track.captureMethod = .avCaptureSession
+            }
+            XCTFail("expected the persist failure to propagate")
+        } catch {}
+
+        let track = await writer.snapshot()
+        XCTAssertNil(track.captureMethod, "a failed persist must leave the in-memory track untouched")
+    }
+
+    // MARK: MeetingCaptureDeviceElection
+
+    private func micIdentity(id: String, uid: String?, name: String, role: MeetingMicrophoneRole = .unknown) -> MeetingMicrophoneIdentity {
+        MeetingMicrophoneIdentity(captureDeviceID: id, coreAudioUID: uid, displayName: name, role: role)
+    }
+
+    func testElectionRoleTransfersOnlyWhenElectedDeviceEqualsOriginal() {
+        let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: .personal)
+        let catalog = [original]
+        let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: catalog, defaultInputUID: "uid-1")
+        XCTAssertEqual(elected.identity.captureDeviceID, "dev-1")
+        XCTAssertEqual(elected.role, .personal)
+    }
+
+    func testElectionDifferentDeviceReturnsUnknown() {
+        let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: .personal)
+        let other = self.micIdentity(id: "dev-2", uid: "uid-2", name: "AirPods", role: .unknown)
+        let catalog = [original, other]
+        let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: catalog, defaultInputUID: "uid-2")
+        XCTAssertEqual(elected.identity.captureDeviceID, "dev-2")
+        XCTAssertEqual(elected.role, .unknown)
+    }
+
+    func testElectionFallsBackToOriginalWhenNoSystemDefault() {
+        let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: .personal)
+        let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: [original], defaultInputUID: nil)
+        XCTAssertEqual(elected.identity, original)
+        XCTAssertEqual(elected.role, .personal)
+    }
+
+    // MARK: Codable: captureEras
+
+    private func sampleEra(method: MeetingAudioTrackCaptureMethod, start: Double) -> MeetingCaptureEra {
+        MeetingCaptureEra(
+            method: method, deviceUID: "uid-1", deviceName: "MacBook Mic",
+            roleAtElection: .personal, startSeconds: start
+        )
+    }
+
+    func testMultiEraCaptureErasRoundTrip() throws {
+        var track = MeetingAudioTrack(
+            id: UUID(), kind: .microphone, sourceIdentifier: "mic", sourceDisplayName: "Mic",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: []
+        )
+        track.captureMethod = .avCaptureSession
+        track.captureEras = [
+            self.sampleEra(method: .voiceProcessing, start: 0),
+            self.sampleEra(method: .avCaptureSession, start: 120),
+        ]
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(track)
+        let decoded = try JSONDecoder().decode(MeetingAudioTrack.self, from: data)
+        XCTAssertEqual(decoded.captureEras?.count, 2)
+        XCTAssertEqual(decoded.captureEras?[0].method, .voiceProcessing)
+        XCTAssertEqual(decoded.captureEras?[1].method, .avCaptureSession)
+        XCTAssertEqual(decoded.captureEras?[1].startSeconds, 120)
+    }
+
+    func testLegacyJSONWithoutCaptureErasDecodesNil() throws {
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "kind": "microphone",
+            "sourceIdentifier": "mic",
+            "sourceDisplayName": "Mic",
+            "timebase": {"startedHostTime": 0, "machTimebaseNumerator": 1, "machTimebaseDenominator": 1},
+            "health": {"status": "waiting", "level": 0, "droppedSampleCount": 0},
+            "chunks": []
+        }
+        """
+        let decoded = try JSONDecoder().decode(MeetingAudioTrack.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.captureEras)
+        XCTAssertNil(decoded.captureMethod)
+    }
+
+    /// A single malformed era (unknown `method`) is skipped, not fatal to the whole track decode.
+    func testUnknownEraMethodRawValueIsSkippedNotFatal() throws {
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "kind": "microphone",
+            "sourceIdentifier": "mic",
+            "sourceDisplayName": "Mic",
+            "timebase": {"startedHostTime": 0, "machTimebaseNumerator": 1, "machTimebaseDenominator": 1},
+            "health": {"status": "waiting", "level": 0, "droppedSampleCount": 0},
+            "chunks": [],
+            "captureEras": [
+                {"method": "bluetoothHFP", "roleAtElection": "unknown", "startSeconds": 0},
+                {"method": "avCaptureSession", "roleAtElection": "unknown", "startSeconds": 30}
+            ]
+        }
+        """
+        let decoded = try JSONDecoder().decode(MeetingAudioTrack.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.captureEras?.count, 1, "the malformed era is skipped, not fatal")
+        XCTAssertEqual(decoded.captureEras?.first?.method, .avCaptureSession)
+    }
+
+    func testMultiEraTrackCaptureMethodIsAvCaptureSession() {
+        // Multi-era tracks write the conservative track-level captureMethod for legacy readers.
+        var track = MeetingAudioTrack(
+            id: UUID(), kind: .microphone, sourceIdentifier: "mic", sourceDisplayName: "Mic",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: []
+        )
+        track.captureEras = [
+            self.sampleEra(method: .voiceProcessing, start: 0),
+            self.sampleEra(method: .avCaptureSession, start: 90),
+        ]
+        track.captureMethod = .avCaptureSession
+        XCTAssertEqual(track.captureMethod, .avCaptureSession)
+        XCTAssertEqual(track.captureEras?.first?.method, .voiceProcessing)
+    }
+
+    // MARK: Gate re-use per era
+
+    func testFreshGatePerEraPassesBufferingFlushPassthroughWhilePreviousEraGateStaysTerminal() throws {
+        let firstEraGate = MeetingVoiceProcessingCommitGate()
+        let buffer = self.makeMonoBuffer(frameCount: 480) { _ in 0.1 }
+        let sample = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+            from: buffer, presentationTime: CMTime(value: 0, timescale: 48_000)
+        ))
+
+        XCTAssertEqual(firstEraGate.offer(sample), .buffered)
+        let flushed = try XCTUnwrap(firstEraGate.beginCommitFlush())
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertNil(firstEraGate.continueCommitFlush())
+        XCTAssertTrue(firstEraGate.isCommitted)
+        XCTAssertEqual(firstEraGate.offer(sample), .passthrough)
+
+        let secondEraGate = MeetingVoiceProcessingCommitGate()
+        XCTAssertEqual(secondEraGate.offer(sample), .buffered)
+        XCTAssertFalse(secondEraGate.isCommitted)
+        _ = secondEraGate.beginCommitFlush()
+        XCTAssertNil(secondEraGate.continueCommitFlush())
+        XCTAssertTrue(secondEraGate.isCommitted)
+
+        XCTAssertTrue(firstEraGate.isCommitted, "unaffected by the second era's gate lifecycle")
+    }
+
+    // MARK: - MeetingSupervisedTimeout wall-clock bound
+
+    /// A non-cooperative 3s sleep must not block `run` past the supervision deadline.
+    func testSupervisedTimeoutReturnsNilByDeadlineEvenWhenTheOperationIsNonCooperative() async {
+        let start = Date()
+        let result = await MeetingSupervisedTimeout.run(seconds: 0.2) { () -> Bool in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            return true
+        }
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    // MARK: - Upgrade ring-discard boundary
+
+    func testRingDiscardDropsSamplesAtOrBehindBoundaryAndKeepsSamplesAfterIt() throws {
+        let buffer = self.makeMonoBuffer(frameCount: 480) { _ in 0.1 }
+        let before = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+            from: buffer, presentationTime: CMTime(value: 0, timescale: 48_000)
+        ))
+        let atBoundary = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+            from: buffer, presentationTime: CMTime(value: 48_000, timescale: 48_000)
+        ))
+        let after = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
+            from: buffer, presentationTime: CMTime(value: 48_001, timescale: 48_000)
+        ))
+        let boundary = CMTime(value: 48_000, timescale: 48_000)
+
+        let kept = MeetingUpgradeRingDiscard.discardingSamples(atOrBehind: boundary, from: [before, atBoundary, after])
+        XCTAssertEqual(kept.count, 1, "only the strictly-after sample survives")
+
+        let unfiltered = MeetingUpgradeRingDiscard.discardingSamples(atOrBehind: nil, from: [before, atBoundary, after])
+        XCTAssertEqual(unfiltered.count, 3, "nil boundary means the writer produced no splice — keep everything")
+    }
+
+    // MARK: - Not covered here: phase-machine transitions (file-private, hardware-driven —
+    // needs the Phase1 probe) and writer finalizationSlots saturation (no test seam exposed).
+    func testPreselectionBuiltInMicDefaultsToPersonalRole() {
+        let builtIn = MeetingMicrophoneIdentity(captureDeviceID: "built-in", coreAudioUID: "BuiltInMicrophoneDevice", displayName: "MacBook Pro Microphone")
+        let selection = MeetingMicrophonePreselection.select(
+            identities: [builtIn], savedDeviceID: "other-device", savedRole: .personal,
+            systemDefaultUID: "BuiltInMicrophoneDevice", preferredInputUID: nil, systemDefaultCaptureID: nil
+        )
+        XCTAssertEqual(selection.deviceID, "built-in")
+        XCTAssertEqual(selection.role, .personal)
+    }
+
+    func testElectionBuiltInMicDefaultsToPersonalRole() {
+        let original = MeetingMicrophoneIdentity(captureDeviceID: "airpods", coreAudioUID: "EC:input", displayName: "AirPods", role: .personal)
+        let builtIn = MeetingMicrophoneIdentity(captureDeviceID: "built-in", coreAudioUID: "BuiltInMicrophoneDevice", displayName: "MacBook Pro Microphone")
+        let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: [builtIn], defaultInputUID: "BuiltInMicrophoneDevice")
+        XCTAssertEqual(elected.role, .personal)
+    }
+
 }

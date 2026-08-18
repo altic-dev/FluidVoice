@@ -749,6 +749,17 @@ actor MeetingMicrophoneCapture {
         self.tapState = nil
     }
 
+    /// Fire-and-forget, bounded teardown. `onComplete(false)` means the supervision window elapsed first.
+    nonisolated func stopDetachedSupervised(seconds: Double, onComplete: @escaping @Sendable (Bool) -> Void) {
+        Task {
+            let completed = await MeetingSupervisedTimeout.run(seconds: seconds) {
+                await self.stop()
+                return true
+            }
+            onComplete(completed == true)
+        }
+    }
+
     func statistics() -> Stats {
         self.statsBox.snapshot()
     }

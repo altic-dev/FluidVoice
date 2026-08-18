@@ -23,6 +23,13 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
         )
     }
 
+    private func singleEra(_ method: MeetingAudioTrackCaptureMethod?) -> [MeetingCaptureEra] {
+        [MeetingCaptureEra(
+            method: method ?? .avCaptureSession, deviceUID: nil, deviceName: nil,
+            roleAtElection: .unknown, startSeconds: 0
+        )]
+    }
+
     private func turn(
         clusterID: SessionSpeakerID = UUID(),
         start: TimeInterval,
@@ -50,7 +57,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
         let segments = [self.segment(trackID: appTrackID, start: 0, end: 3, text: echoedText)]
 
         let (classified, widened) = MeetingProcessingPipeline.classifyMicrophoneTurns(
-            turns, captureMethod: .voiceProcessing, applicationTrackID: appTrackID,
+            turns, eras: self.singleEra(.voiceProcessing), applicationTrackID: appTrackID,
             segments: segments, fallbackSpeakerID: nil
         )
 
@@ -67,7 +74,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
         var vpioTurn = self.turn(start: 0, end: 3, text: "some text", overlapsRemote: false)
         vpioTurn.signalVerdict = .echo
         let (classified, _) = MeetingProcessingPipeline.classifyMicrophoneTurns(
-            [vpioTurn], captureMethod: .voiceProcessing, applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
+            [vpioTurn], eras: self.singleEra(.voiceProcessing), applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
         )
         XCTAssertTrue(classified[0].echoScored)
         XCTAssertTrue(classified[0].effectiveEcho, "signal veto is untouched by Phase 4 — echoScored never feeds effectiveEcho")
@@ -78,7 +85,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
         vpioTurn.signalVerdict = .containsLocalSpeech
         vpioTurn.isLikelyEcho = true
         let (classified, _) = MeetingProcessingPipeline.classifyMicrophoneTurns(
-            [vpioTurn], captureMethod: .voiceProcessing, applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
+            [vpioTurn], eras: self.singleEra(.voiceProcessing), applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
         )
         XCTAssertFalse(classified[0].effectiveEcho, "the rescue rule is untouched: containsLocalSpeech always wins")
     }
@@ -133,7 +140,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
 
         for captureMethod in [MeetingAudioTrackCaptureMethod?.none, .screenCaptureKit, .avCaptureSession] {
             let (classified, widened) = MeetingProcessingPipeline.classifyMicrophoneTurns(
-                turns, captureMethod: captureMethod, applicationTrackID: appTrackID,
+                turns, eras: self.singleEra(captureMethod), applicationTrackID: appTrackID,
                 segments: fallbackSegments, fallbackSpeakerID: fallbackSpeaker
             )
             XCTAssertTrue(widened.isEmpty, "non-VPIO never widens")
@@ -180,7 +187,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
 
         let turns = [self.turn(start: 0, end: 5, text: "local speech", overlapsRemote: false)]
         let (classified, widened) = MeetingProcessingPipeline.classifyMicrophoneTurns(
-            turns, captureMethod: track.captureMethod, applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
+            turns, eras: self.singleEra(track.captureMethod), applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
         )
         XCTAssertTrue(classified[0].echoScored, "the reconciled (decoded) track's captureMethod, not an in-memory one, drives widening")
         XCTAssertEqual(widened, [0])

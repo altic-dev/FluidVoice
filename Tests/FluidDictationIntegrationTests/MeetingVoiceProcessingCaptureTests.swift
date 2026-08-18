@@ -10,7 +10,7 @@ import XCTest
 /// screen-recording/microphone permission and are not exercised here. This covers the pure
 /// decision, gate, drift-eligibility, de-drift transform and Codable pieces of Phase 3.
 final class MeetingVoiceProcessingCaptureTests: XCTestCase {
-    // MARK: - Decision table (plan §3)
+    // MARK: - Decision table (incl. role)
 
     private func mic(uid: String? = "mic-uid", role: MeetingMicrophoneRole = .personal) -> MeetingMicrophoneIdentity {
         MeetingMicrophoneIdentity(captureDeviceID: "dev-1", coreAudioUID: uid, displayName: "Mic", role: role)
@@ -64,8 +64,6 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertTrue(reason.contains("headphones"))
     }
 
-    // MARK: - Decision table: role (Phase 4 plan §1)
-
     func testDecisionSucceedsForPersonalRole() {
         let decision = MeetingCapturePathDecider.decide(
             mode: .onlineCall, microphone: self.mic(role: .personal), outputRoute: self.viableRoute()
@@ -89,7 +87,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertTrue(reason.contains("personal"))
     }
 
-    // MARK: - Commit gate (plan §4, §7)
+    // MARK: - Commit gate
 
     private func makeSampleBuffer(ptsSeconds: Double = 0) -> CMSampleBuffer {
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
@@ -167,7 +165,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertNil(gate.beginCommitFlush())
     }
 
-    // MARK: - Watchdog predicate (plan §5, §7)
+    // MARK: - Watchdog predicate
 
     func testWatchdogDoesNotTripBeforeThreshold() {
         XCTAssertFalse(MeetingVoiceProcessingWatchdog.isStalled(secondsSinceLastEmittedBuffer: 9.9))
@@ -178,7 +176,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertTrue(MeetingVoiceProcessingWatchdog.isStalled(secondsSinceLastEmittedBuffer: 30))
     }
 
-    // MARK: - ScreenCaptureKit audio-settings plumbing (rebuild regression, plan §7)
+    // MARK: - ScreenCaptureKit audio-settings plumbing (rebuild regression)
 
     func testIncludeMicrophoneFalseAttachesNoMicrophoneDevice() {
         let configuration = SCStreamConfiguration()
@@ -194,7 +192,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(configuration.microphoneCaptureDeviceID, "dev-1")
     }
 
-    // MARK: - Eligibility (plan §6, §7)
+    // MARK: - Eligibility
 
     private func makeStats(
         resyncCount: Int = 0,
@@ -235,7 +233,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(MeetingVoiceProcessingDriftSnapshot.elapsedValidHostSeconds(MeetingMicrophoneCaptureStats.Snapshot()), 0)
     }
 
-    // MARK: - End-to-end de-drift sign (plan §7, resolves sol#1)
+    // MARK: - End-to-end de-drift sign
 
     private func makeTrack(chunkStart: Double, drift: MeetingClockDriftRecord?, captureMethod: MeetingAudioTrackCaptureMethod?) -> MeetingAudioTrack {
         var track = MeetingAudioTrack(
@@ -258,13 +256,25 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         return track
     }
 
+    /// Era anchored at origin-relative 0, mirroring a single-era track starting at the session origin.
+    private func makeEra(drift: MeetingClockDriftRecord?, captureMethod: MeetingAudioTrackCaptureMethod?) -> MeetingCaptureEra {
+        MeetingCaptureEra(
+            method: captureMethod ?? .avCaptureSession,
+            deviceUID: nil,
+            deviceName: nil,
+            roleAtElection: .unknown,
+            startSeconds: 0,
+            clockDrift: drift
+        )
+    }
+
     /// Drives the REAL clock fast-mic (host elapses SLOWER than frame count — the mirror of
     /// `testSlowDriftNeverFiresTheStepDetector`), then asserts the transform compresses the timeline.
     func testDeDriftCorrectsAFastMicAndTheInverseFormulaFails() {
         var clock = MeetingMicrophonePTSClock(timebase: mach_timebase_info_data_t(numer: 1, denom: 1))
         let ppm = 6.7e-6
         let windowSeconds = 0.1
-        let windows = 9_500 // 950s: past the ~12.5min materiality crossover at 6.7ppm (plan note)
+        let windows = 9_500 // 950s: past the ~12.5min materiality crossover at 6.7ppm
         for i in 0..<windows {
             let hostSeconds = Double(i) * windowSeconds * (1 - ppm) // fast mic: less host time per window
             _ = clock.stamp(hostTime: UInt64(hostSeconds * 1_000_000_000), frameCount: 4_800)
@@ -275,10 +285,10 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertGreaterThan(abs(cumulative), MeetingMicrophoneDeDrift.materialityThresholdSeconds)
 
         let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: cumulative, elapsedValidHostSeconds: elapsed, eligible: true)
-        let track = self.makeTrack(chunkStart: 0, drift: drift, captureMethod: .voiceProcessing)
+        let era = self.makeEra(drift: drift, captureMethod: .voiceProcessing)
 
         let rawEnd = Double(windows) * windowSeconds
-        let corrected = MeetingMicrophoneDeDrift.correct(rawEnd, track: track, origin: 0)
+        let corrected = MeetingMicrophoneDeDrift.correct(rawEnd, era: era, eraEndRelative: nil)
         XCTAssertLessThan(corrected, rawEnd, "correction must compress the fast timeline toward the reference, not expand it")
         XCTAssertEqual(corrected, rawEnd + cumulative, accuracy: 0.05, "k = 1 + cumulative/elapsed applied against the reference")
 
@@ -290,24 +300,24 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
 
     func testDeDriftIsANoOpWhenIneligible() {
         let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: -0.05, elapsedValidHostSeconds: 300, eligible: false)
-        let track = self.makeTrack(chunkStart: 0, drift: drift, captureMethod: .voiceProcessing)
-        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, track: track, origin: 0), 120)
+        let era = self.makeEra(drift: drift, captureMethod: .voiceProcessing)
+        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, era: era, eraEndRelative: nil), 120)
     }
 
     func testDeDriftIsANoOpForNonVoiceProcessingTracks() {
         let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: -0.05, elapsedValidHostSeconds: 300, eligible: true)
-        let track = self.makeTrack(chunkStart: 0, drift: drift, captureMethod: .screenCaptureKit)
-        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, track: track, origin: 0), 120)
+        let era = self.makeEra(drift: drift, captureMethod: .screenCaptureKit)
+        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, era: era, eraEndRelative: nil), 120)
     }
 
     func testDeDriftIsANoOpBelowMaterialityThreshold() {
         // 1ms cumulative over 300s is below the 5ms materiality gate.
         let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: -0.001, elapsedValidHostSeconds: 300, eligible: true)
-        let track = self.makeTrack(chunkStart: 0, drift: drift, captureMethod: .voiceProcessing)
-        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, track: track, origin: 0), 120)
+        let era = self.makeEra(drift: drift, captureMethod: .voiceProcessing)
+        XCTAssertEqual(MeetingMicrophoneDeDrift.correct(120, era: era, eraEndRelative: nil), 120)
     }
 
-    // MARK: - Ring flush pacing (plan §4/§7, opus N2)
+    // MARK: - Ring flush pacing
 
     /// flushBatch's pacing (4 samples / 5ms) against a real writer: a full ~5s ring must not trip backpressure.
     func testPacedRingFlushProducesNoWriterBackpressure() async throws {
@@ -337,7 +347,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(backpressureCount.withLock { $0 }, 0)
     }
 
-    // MARK: - Provenance promotion (plan §2, §7)
+    // MARK: - Provenance promotion
 
     func testProvenanceIsPessimisticThenPromotedOnCommit() async throws {
         let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -361,7 +371,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         _ = await writer.stop()
     }
 
-    // MARK: - Codable tolerance (plan §7, kimi#7)
+    // MARK: - Codable tolerance
 
     func testUnknownCaptureMethodRawValueDecodesToNil() throws {
         var track = self.makeTrack(chunkStart: 0, drift: nil, captureMethod: .voiceProcessing)
@@ -408,5 +418,93 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         let decoded = try decoder.decode(MeetingAudioTrack.self, from: try encoder.encode(track))
         XCTAssertEqual(decoded.captureMethod, .voiceProcessing)
         XCTAssertEqual(decoded.clockDrift, drift)
+    }
+
+    // MARK: - Sheet default mic preselection
+
+    private func identity(_ deviceID: String, uid: String?, role: MeetingMicrophoneRole = .unknown) -> MeetingMicrophoneIdentity {
+        MeetingMicrophoneIdentity(captureDeviceID: deviceID, coreAudioUID: uid, displayName: deviceID, role: role)
+    }
+
+    func testPreselectionPrefersSystemDefaultOverSavedDevice() {
+        let identities = [
+            self.identity("saved", uid: "saved-uid", role: .personal),
+            self.identity("default", uid: "default-uid"),
+        ]
+        let selection = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: "saved",
+            savedRole: .personal,
+            systemDefaultUID: "default-uid",
+            preferredInputUID: nil,
+            systemDefaultCaptureID: nil
+        )
+        XCTAssertEqual(selection.deviceID, "default")
+        XCTAssertEqual(selection.role, .unknown)
+    }
+
+    func testPreselectionReusesSavedRoleOnlyWhenDeviceMatchesSaved() {
+        let identities = [self.identity("saved", uid: "saved-uid", role: .personal)]
+        let selection = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: "saved",
+            savedRole: .personal,
+            systemDefaultUID: "saved-uid",
+            preferredInputUID: nil,
+            systemDefaultCaptureID: nil
+        )
+        XCTAssertEqual(selection.deviceID, "saved")
+        XCTAssertEqual(selection.role, .personal)
+    }
+
+    /// System default → preferred input UID → `AVCaptureDevice.default` unique ID → first identity.
+    func testPreselectionFallsBackThroughPreferredInputThenCaptureDeviceIDThenFirstIdentity() {
+        let identities = [
+            self.identity("a", uid: "a-uid"),
+            self.identity("b", uid: "b-uid"),
+            self.identity("c", uid: nil),
+        ]
+        let byPreferredInput = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: nil,
+            savedRole: .unknown,
+            systemDefaultUID: "no-match-uid",
+            preferredInputUID: "b-uid",
+            systemDefaultCaptureID: "a"
+        )
+        XCTAssertEqual(byPreferredInput.deviceID, "b", "preferred input UID must win over the AVCaptureDevice.default fallback")
+
+        let byCaptureID = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: nil,
+            savedRole: .unknown,
+            systemDefaultUID: "no-match-uid",
+            preferredInputUID: "no-match-uid",
+            systemDefaultCaptureID: "a"
+        )
+        XCTAssertEqual(byCaptureID.deviceID, "a")
+
+        let byFirst = MeetingMicrophonePreselection.select(
+            identities: identities,
+            savedDeviceID: nil,
+            savedRole: .unknown,
+            systemDefaultUID: "no-match-uid",
+            preferredInputUID: "no-match-uid",
+            systemDefaultCaptureID: "no-match-id"
+        )
+        XCTAssertEqual(byFirst.deviceID, "a")
+    }
+
+    func testPreselectionWithEmptyIdentitiesReturnsNil() {
+        let selection = MeetingMicrophonePreselection.select(
+            identities: [],
+            savedDeviceID: "saved",
+            savedRole: .personal,
+            systemDefaultUID: "default-uid",
+            preferredInputUID: "preferred-uid",
+            systemDefaultCaptureID: "default-id"
+        )
+        XCTAssertNil(selection.deviceID)
+        XCTAssertEqual(selection.role, .unknown)
     }
 }

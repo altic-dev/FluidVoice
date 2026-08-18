@@ -36,6 +36,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.onUpdate = onUpdate
     }
 
+    /// Clears any in-progress "You" partial at a capture-side mic splice, so it can't straddle eras.
+    func resetMicrophoneUtterance() {
+        self.publish { $0.settingPartial(nil, for: .you) }
+    }
+
     func setMicrophoneCaptureMethod(_ method: MeetingAudioTrackCaptureMethod?) {
         self.stateLock.withLock { self.microphoneCaptureMethod = method }
         DebugLogger.shared.info(

@@ -1326,6 +1326,31 @@ final class MeetingSessionCoordinator: ObservableObject {
             } else {
                 session.timebase.firstPresentationTime = chunk.presentationStart
             }
+        case let .captureMethodChanged(trackID, method, ack):
+            // Resumed after this lands, before the upgrade opens the gate. Downgrades pass `ack: nil`.
+            defer { ack?.resume() }
+            guard let index = session.audioTracks.firstIndex(where: { $0.id == trackID }) else { return }
+            session.audioTracks[index].captureMethod = method
+            if session.audioTracks[index].kind == .microphone {
+                self.liveTranscriptionCoordinator?.setMicrophoneCaptureMethod(method)
+                self.liveTranscriptionCoordinator?.resetMicrophoneUtterance()
+            }
+            session.events.append(MeetingSessionEvent(
+                id: UUID(),
+                occurredAt: Date(),
+                kind: .microphoneChanged,
+                trackID: trackID,
+                detail: "Microphone capture switched to \(method.rawValue)."
+            ))
+            // Only clear degradation this change plausibly caused — never a sticky one.
+            if session.state == .recordingDegraded,
+               self.degradeReason == nil || self.degradeReason == .sourceLoss || self.degradeReason == .silence,
+               !session.audioTracks.contains(where: { $0.health.status == .degraded })
+            {
+                session.state = .recording
+                self.state = .recording(session.id)
+                self.degradeReason = nil
+            }
         case let .interrupted(kind, trackID, detail):
             session.events.append(MeetingSessionEvent(
                 id: UUID(),

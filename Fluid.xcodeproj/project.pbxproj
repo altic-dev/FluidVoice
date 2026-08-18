@@ -38,6 +38,7 @@
 		E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */; };
 		5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */; };
 		5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4B00000000000000000001 /* MeetingPhase4Tests.swift */; };
+		5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */; };
 		E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */; };
 		E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000091 /* ClockRegressionHelper.swift */; };
 		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
@@ -102,6 +103,7 @@
 		E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneCaptureTests.swift; sourceTree = "<group>"; };
 		5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingCaptureTests.swift; sourceTree = "<group>"; };
 		5A4B00000000000000000001 /* MeetingPhase4Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPhase4Tests.swift; sourceTree = "<group>"; };
+		2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEraBatchTests.swift; sourceTree = "<group>"; };
 		E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTimelineDriftProbeTests.swift; sourceTree = "<group>"; };
 		E5EC00000000000000000091 /* ClockRegressionHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockRegressionHelper.swift; sourceTree = "<group>"; };
 		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
@@ -214,6 +216,7 @@
 				E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */,
 				5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */,
 				5A4B00000000000000000001 /* MeetingPhase4Tests.swift */,
+				2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */,
 				E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */,
 				E5EC00000000000000000091 /* ClockRegressionHelper.swift */,
 				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
@@ -408,6 +411,7 @@
 				E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */,
 				5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */,
 				5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */,
+				5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */,
 				E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */,
 				E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */,
 				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,

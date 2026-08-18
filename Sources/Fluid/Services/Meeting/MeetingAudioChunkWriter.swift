@@ -31,10 +31,13 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         var start: CMTime
         var end: CMTime
         var discontinuities: [MeetingAudioDiscontinuity]
+        /// Captured at `beginChunk` — `self.track.format` may already be the NEXT chunk's by finalize.
+        var format: MeetingAudioFormat
+        var sourceFormatDescription: CMFormatDescription
     }
 
     private enum FinalizationResult: @unchecked Sendable {
-        case finalized(MeetingAudioChunk)
+        case finalized(MeetingAudioChunk, MeetingAudioFormat)
         case failed(MeetingAudioChunk, String)
     }
 
@@ -51,8 +54,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private let eventHandler: EventHandler
     private let encoder: JSONEncoder
 
+    let trackID: MeetingAudioTrackID
+
     private var track: MeetingAudioTrack
     private var activeChunk: ActiveChunk?
+    /// Set synchronously when a chunk closes, since `track.chunks.last` can be stale (finalization is async).
+    private var lastFinalizedEnd: CMTime?
     private var lifecycle: Lifecycle = .accepting
     private var stopWaiters: [CheckedContinuation<MeetingAudioTrack, Never>] = []
     private var stoppedTrack: MeetingAudioTrack?
@@ -72,6 +79,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         chunkDuration: TimeInterval,
         eventHandler: @escaping EventHandler
     ) throws {
+        self.trackID = track.id
         self.track = track
         self.sessionDirectory = sessionDirectory
         self.trackDirectory = sessionDirectory
@@ -156,15 +164,42 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     }
 
     /// Unlike the `try?` writes elsewhere here, a persist failure propagates to the caller.
+    /// Transactional: mutates a copy, persists it, publishes to `self.track` only on success.
     func updateTrackMetadata(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.queue.async { [self] in
-                mutate(&self.track)
+                var candidate = self.track
+                mutate(&candidate)
                 do {
-                    try self.persistTrackManifest()
+                    try self.persistTrackManifest(candidate)
+                    self.track = candidate
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Splice point for a capture-side swap: finalizes the active chunk, returns its `presentationEnd`. No-op unless `.accepting`.
+    func beginSplice() async -> MeetingMediaTime? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<MeetingMediaTime?, Never>) in
+            self.queue.async { [self] in
+                self.stateLock.lock()
+                let accepting = self.lifecycle == .accepting
+                self.stateLock.unlock()
+                guard accepting else {
+                    continuation.resume(returning: self.track.chunks.last?.presentationEnd)
+                    return
+                }
+                guard let activeChunk = self.activeChunk else {
+                    continuation.resume(returning: self.track.chunks.last?.presentationEnd)
+                    return
+                }
+                let boundary = Self.mediaTime(activeChunk.end)
+                self.scheduleActiveChunkFinalization()
+                self.finalizationGroup.notify(queue: self.queue) {
+                    continuation.resume(returning: boundary)
                 }
             }
         }
@@ -210,6 +245,11 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
 
         do {
             if self.activeChunk == nil {
+                try self.beginChunk(with: sampleBuffer, at: presentationTime)
+            } else if let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+                      !CMFormatDescriptionEqual(formatDescription, otherFormatDescription: self.activeChunk?.sourceFormatDescription)
+            {
+                self.scheduleActiveChunkFinalization()
                 try self.beginChunk(with: sampleBuffer, at: presentationTime)
             }
             guard var activeChunk = self.activeChunk else { return }
@@ -294,14 +334,26 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 writer.error?.localizedDescription ?? "The audio writer could not start."
             )
         }
-        writer.startSession(atSourceTime: start)
+        // A cross-clock-domain producer swap must not overlap the chunk just finalized.
+        let clampedStart: CMTime
+        if let lastFinalizedEnd = self.lastFinalizedEnd, start < lastFinalizedEnd {
+            clampedStart = lastFinalizedEnd
+            DebugLogger.shared.warning(
+                "Meeting audio writer clamped a chunk start that preceded the prior chunk's end.",
+                source: "MeetingAudioChunkWriter"
+            )
+        } else {
+            clampedStart = start
+        }
+        writer.startSession(atSourceTime: clampedStart)
 
-        self.track.format = MeetingAudioFormat(
+        let format = MeetingAudioFormat(
             codec: "aac-lc",
             sampleRate: asbd.mSampleRate,
             channelCount: channelCount,
             bitRate: bitRate
         )
+        self.track.format = format
         let relativePath = finalURL.path.replacingOccurrences(
             of: self.sessionDirectory.path + "/",
             with: ""
@@ -313,15 +365,18 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
             relativeFinalPath: relativePath,
             writer: writer,
             input: input,
-            start: start,
-            end: start,
-            discontinuities: []
+            start: clampedStart,
+            end: clampedStart,
+            discontinuities: [],
+            format: format,
+            sourceFormatDescription: formatDescription
         )
     }
 
     private func scheduleActiveChunkFinalization() {
         guard let activeChunk = self.activeChunk else { return }
         self.activeChunk = nil
+        self.lastFinalizedEnd = activeChunk.end
         activeChunk.input.markAsFinished()
 
         guard self.finalizationSlots.wait(timeout: .now()) == .success else {
@@ -346,12 +401,10 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
 
     private func applyFinalization(_ result: FinalizationResult) {
         switch result {
-        case let .finalized(chunk):
+        case let .finalized(chunk, format):
             self.track.chunks.append(chunk)
             try? self.persistTrackManifest()
-            if let format = self.track.format {
-                self.eventHandler(.chunkFinalized(trackID: self.track.id, chunk: chunk, format: format))
-            }
+            self.eventHandler(.chunkFinalized(trackID: self.track.id, chunk: chunk, format: format))
         case let .failed(chunk, detail):
             self.track.chunks.append(chunk)
             self.track.health.status = .degraded
@@ -405,17 +458,20 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 ofItemAtPath: activeChunk.finalURL.path
             )
             let values = try activeChunk.finalURL.resourceValues(forKeys: [.fileSizeKey])
-            return try .finalized(MeetingAudioChunk(
-                id: UUID(),
-                sequence: activeChunk.sequence,
-                relativeFilePath: activeChunk.relativeFinalPath,
-                presentationStart: self.mediaTime(activeChunk.start),
-                presentationEnd: self.mediaTime(activeChunk.end),
-                discontinuities: activeChunk.discontinuities,
-                sha256: self.sha256(of: activeChunk.finalURL),
-                byteCount: Int64(values.fileSize ?? 0),
-                finalizationState: .finalized
-            ))
+            return try .finalized(
+                MeetingAudioChunk(
+                    id: UUID(),
+                    sequence: activeChunk.sequence,
+                    relativeFilePath: activeChunk.relativeFinalPath,
+                    presentationStart: self.mediaTime(activeChunk.start),
+                    presentationEnd: self.mediaTime(activeChunk.end),
+                    discontinuities: activeChunk.discontinuities,
+                    sha256: self.sha256(of: activeChunk.finalURL),
+                    byteCount: Int64(values.fileSize ?? 0),
+                    finalizationState: .finalized
+                ),
+                activeChunk.format
+            )
         } catch {
             return .failed(self.failedChunk(from: activeChunk), error.localizedDescription)
         }
@@ -465,8 +521,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         self.eventHandler(.trackHealth(trackID: self.track.id, health: self.track.health))
     }
 
-    private func persistTrackManifest() throws {
-        let data = try self.encoder.encode(self.track)
+    private func persistTrackManifest(_ track: MeetingAudioTrack? = nil) throws {
+        let data = try self.encoder.encode(track ?? self.track)
         try data.write(to: self.manifestURL, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o600))],

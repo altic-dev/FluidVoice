@@ -168,6 +168,32 @@ nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable, Sendable {
     }
 }
 
+/// Pure decision for the new-meeting sheet's default microphone: the system default input wins; a remembered role only carries over when that default IS the saved device.
+nonisolated enum MeetingMicrophonePreselection {
+    static func select(
+        identities: [MeetingMicrophoneIdentity],
+        savedDeviceID: String?,
+        savedRole: MeetingMicrophoneRole,
+        systemDefaultUID: String?,
+        preferredInputUID: String?,
+        systemDefaultCaptureID: String?
+    ) -> (deviceID: String?, role: MeetingMicrophoneRole) {
+        let matched = systemDefaultUID.flatMap { uid in
+            identities.first(where: { $0.coreAudioUID == uid })
+        } ?? preferredInputUID.flatMap { uid in
+            identities.first(where: { $0.coreAudioUID == uid })
+        } ?? systemDefaultCaptureID.flatMap { captureID in
+            identities.first(where: { $0.captureDeviceID == captureID })
+        } ?? identities.first
+
+        guard let matched else { return (nil, .unknown) }
+        if matched.captureDeviceID == savedDeviceID { return (matched.captureDeviceID, savedRole) }
+        // A built-in mic is inherently the owner's; .unknown would silently disable voice processing.
+        let role: MeetingMicrophoneRole = matched.coreAudioUID == "BuiltInMicrophoneDevice" ? .personal : .unknown
+        return (matched.captureDeviceID, role)
+    }
+}
+
 nonisolated struct MeetingPlatformProfile: Codable, Equatable, Sendable {
     var identifier: String
     var displayName: String
@@ -318,24 +344,39 @@ nonisolated struct MeetingClockDriftRecord: Codable, Equatable, Sendable {
     var eligible: Bool
 }
 
+/// Provenance for one contiguous span of a track's capture. Absence of `captureEras` means single-era legacy.
+nonisolated struct MeetingCaptureEra: Codable, Equatable, Sendable {
+    var method: MeetingAudioTrackCaptureMethod
+    var deviceUID: String?
+    var deviceName: String?
+    var roleAtElection: MeetingMicrophoneRole
+    var startSeconds: Double
+    var settledConfig: MeetingMicrophoneSettledConfig? = nil
+    var clockDrift: MeetingClockDriftRecord? = nil
+}
+
+/// Consumes and discards one malformed `captureEras` array element.
+private struct MeetingCaptureEraSkippedElement: Decodable {}
+
 /// Applied ONLY to emitted turn boundaries, never to raw `chunkOffset`. `k = 1 + cumulative/elapsed`:
 /// for a fast mic `cumulativeAbsorbedSeconds` is negative, so `k < 1` compresses the timeline.
 nonisolated enum MeetingMicrophoneDeDrift {
     static let materialityThresholdSeconds: Double = 0.005
     static let maxAbsolutePPM: Double = 100
 
-    static func correct(_ t: Double, track: MeetingAudioTrack, origin: Double) -> Double {
-        guard track.captureMethod == .voiceProcessing,
-              let drift = track.clockDrift, drift.eligible,
+    /// Era-scoped: applies the era's own drift record within its span; `era.startSeconds` must already be origin-relative.
+    static func correct(_ t: Double, era: MeetingCaptureEra, eraEndRelative: Double?) -> Double {
+        guard era.method == .voiceProcessing,
+              let drift = era.clockDrift, drift.eligible,
               drift.elapsedValidHostSeconds > 0
         else { return t }
+        let eraStartRelative = era.startSeconds
+        guard t >= eraStartRelative, eraEndRelative.map({ t < $0 }) ?? true else { return t }
         let fraction = drift.cumulativeAbsorbedSeconds / drift.elapsedValidHostSeconds
         guard abs(drift.cumulativeAbsorbedSeconds) > Self.materialityThresholdSeconds,
-              abs(fraction) * 1_000_000 < Self.maxAbsolutePPM,
-              let micFirstPTS = track.chunks.map(\.presentationStart.seconds).min()
+              abs(fraction) * 1_000_000 < Self.maxAbsolutePPM
         else { return t }
-        let micFirstRelative = micFirstPTS - origin
-        return micFirstRelative + (t - micFirstRelative) * (1 + fraction)
+        return eraStartRelative + (t - eraStartRelative) * (1 + fraction)
     }
 }
 
@@ -351,6 +392,10 @@ nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
     var captureMethod: MeetingAudioTrackCaptureMethod? = nil
     var voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil
     var clockDrift: MeetingClockDriftRecord? = nil
+    /// Ordered. PERSISTED startSeconds mixes domains: index 0 stores 0, eras 1+ store raw PTS
+    /// seconds — readers must go through the pipeline's microphoneEras(for:origin:), which
+    /// normalizes to origin-relative. Absence means single-era legacy.
+    var captureEras: [MeetingCaptureEra]? = nil
 
     init(
         id: MeetingAudioTrackID,
@@ -363,7 +408,8 @@ nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
         chunks: [MeetingAudioChunk],
         captureMethod: MeetingAudioTrackCaptureMethod? = nil,
         voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil,
-        clockDrift: MeetingClockDriftRecord? = nil
+        clockDrift: MeetingClockDriftRecord? = nil,
+        captureEras: [MeetingCaptureEra]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -376,13 +422,14 @@ nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
         self.captureMethod = captureMethod
         self.voiceProcessingConfig = voiceProcessingConfig
         self.clockDrift = clockDrift
+        self.captureEras = captureEras
     }
 }
 
 extension MeetingAudioTrack: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, kind, sourceIdentifier, sourceDisplayName, format, timebase, health, chunks
-        case captureMethod, voiceProcessingConfig, clockDrift
+        case captureMethod, voiceProcessingConfig, clockDrift, captureEras
     }
 
     init(from decoder: Decoder) throws {
@@ -400,6 +447,25 @@ extension MeetingAudioTrack: Codable {
         self.captureMethod = captureMethodRaw.flatMap(MeetingAudioTrackCaptureMethod.init(rawValue:))
         self.voiceProcessingConfig = try container.decodeIfPresent(MeetingMicrophoneSettledConfig.self, forKey: .voiceProcessingConfig)
         self.clockDrift = try container.decodeIfPresent(MeetingClockDriftRecord.self, forKey: .clockDrift)
+        self.captureEras = try Self.decodeTolerantCaptureEras(container: container, key: .captureEras)
+    }
+
+    /// An unrecognized era `method` skips that era rather than failing the whole session decode.
+    private static func decodeTolerantCaptureEras(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) throws -> [MeetingCaptureEra]? {
+        guard container.contains(key) else { return nil }
+        var unkeyed = try container.nestedUnkeyedContainer(forKey: key)
+        var eras: [MeetingCaptureEra] = []
+        while !unkeyed.isAtEnd {
+            if let era = try? unkeyed.decode(MeetingCaptureEra.self) {
+                eras.append(era)
+            } else {
+                _ = try? unkeyed.decode(MeetingCaptureEraSkippedElement.self)
+            }
+        }
+        return eras
     }
 
     func encode(to encoder: Encoder) throws {
@@ -415,6 +481,7 @@ extension MeetingAudioTrack: Codable {
         try container.encodeIfPresent(self.captureMethod, forKey: .captureMethod)
         try container.encodeIfPresent(self.voiceProcessingConfig, forKey: .voiceProcessingConfig)
         try container.encodeIfPresent(self.clockDrift, forKey: .clockDrift)
+        try container.encodeIfPresent(self.captureEras, forKey: .captureEras)
     }
 }
 
@@ -867,10 +934,46 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
     }
 }
 
+/// Resumed by the coordinator once its MainActor work lands, before the upgrade opens the gate.
+final nonisolated class MeetingCaptureMethodChangeAck: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var resumedEarly = false
+
+    /// Bounded: a dropped event (generation guard) never resumes, and an unbounded wait would deadlock the transition.
+    func wait(timeoutSeconds: Double = 2.0) async {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+            self?.resume()
+        }
+        await withCheckedContinuation { continuation in
+            let shouldResumeNow = self.lock.withLock { () -> Bool in
+                if self.resumedEarly { return true }
+                self.continuation = continuation
+                return false
+            }
+            if shouldResumeNow { continuation.resume() }
+        }
+        timeoutTask.cancel()
+    }
+
+    func resume() {
+        let pending = self.lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { self.resumedEarly = true }
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        pending?.resume()
+    }
+}
+
 nonisolated enum MeetingCaptureEvent: Sendable {
     case trackHealth(trackID: MeetingAudioTrackID, health: MeetingTrackHealth)
     case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
     case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
+    case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
 }
 
 /// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
