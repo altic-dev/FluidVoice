@@ -19,7 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var wasLaunchedAsLoginItem = false
     private var analyticsActivationSuppressionDeadline: Date?
     private var hasDeferredMLXUpgradeOffer = false
-    private var updatePromptWindow: NSWindow?
+    private var floatingPromptWindow: NSWindow?
+    private var floatingPromptTitle: String?
 
     var shouldPresentStartupMicrophoneNotice: Bool {
         !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
@@ -237,20 +238,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     @MainActor
     private func showMLXUpgradeOffer() {
-        let alert = NSAlert()
-        alert.messageText = "Fluid-1 is now 2.2x faster"
-        alert.informativeText = "A new 3.77 GB MLX model is available for Apple silicon. Continue to AI Enhancement to download and verify it. Your current slower model will keep working unless you choose to upgrade."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Continue to Download")
-        alert.addButton(withTitle: "Keep Current Model")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            PrivateAIMLXUpgradeCoordinator.beginUpgrade()
-            AppNavigationRouter.shared.request(.aiEnhancements)
-            self.bringMainWindowToFront()
-        } else {
-            PrivateAIMLXUpgradeCoordinator.keepCurrentModel()
-        }
+        // Offered unattended after launch, so it must never block the main actor - see
+        // presentFloatingPrompt(title:message:actions:).
+        self.presentFloatingPrompt(
+            title: "Fluid-1 is now 2.2x faster",
+            message: "A new 3.77 GB MLX model is available for Apple silicon. Continue to AI Enhancement to download and verify it. Your current slower model will keep working unless you choose to upgrade.",
+            actions: [
+                FloatingPromptAction(title: "Continue to Download") { [weak self] in
+                    PrivateAIMLXUpgradeCoordinator.beginUpgrade()
+                    AppNavigationRouter.shared.request(.aiEnhancements)
+                    self?.bringMainWindowToFront()
+                },
+                FloatingPromptAction(title: "Keep Current Model") {
+                    PrivateAIMLXUpgradeCoordinator.keepCurrentModel()
+                },
+            ]
+        )
     }
 
     /// Realize the main window invisibly so ContentView's startup runs, then order it out.
@@ -469,71 +472,119 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
-    /// Offers the available update from a floating panel instead of a modal alert.
+    @MainActor
+    private func showUpdateNotification(version: String) {
+        DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
+        self.presentFloatingPrompt(
+            title: "Update Available",
+            message: "FluidVoice \(version) is now available. The app will restart automatically after installation.",
+            actions: [
+                FloatingPromptAction(title: "Install Now") { [weak self] in
+                    self?.installOfferedUpdate()
+                },
+                FloatingPromptAction(title: "Later") { [weak self] in
+                    self?.postponeOfferedUpdate(version: version)
+                },
+            ]
+        )
+    }
+
+    @MainActor
+    private func installOfferedUpdate() {
+        DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
+        SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
+        // Installing restarts the app, so taking focus here costs nothing and keeps the updater's
+        // own install status window in front of the user.
+        NSApp.activate(ignoringOtherApps: true)
+        self.checkForUpdatesManually()
+    }
+
+    @MainActor
+    private func postponeOfferedUpdate(version: String) {
+        DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
+        SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
+    }
+
+    @MainActor
+    private func showUpdateAlert(title: String, message: String) {
+        self.presentFloatingPrompt(
+            title: title,
+            message: message,
+            actions: [FloatingPromptAction(title: "OK") {}]
+        )
+    }
+
+    // MARK: - Floating Prompts
+
+    /// Presents a prompt from a floating panel instead of a modal alert.
     ///
-    /// This prompt used to be an `NSAlert.runModal()`. That call never returns until the alert is
+    /// These prompts used to be `NSAlert.runModal()`. That call never returns until the alert is
     /// dismissed, and it runs inside a main actor job, so every other `@MainActor` job queues up
     /// behind it - including the dictation callbacks `GlobalHotkeyManager` posts from its event
     /// tap. FluidVoice is a menu bar app that is rarely frontmost, so the alert also came up
     /// unactivated behind other windows: dictation stayed dead until the user found the hidden
     /// dialog (#564, #745). The panel keeps the main actor free and floats above other apps
     /// without stealing focus, and matches the install status panel in SimpleUpdater.
+    ///
+    /// `actions` is ordered like `NSAlert.addButton(withTitle:)`: the first action is laid out
+    /// where the alert's default button used to sit. Choosing one dismisses the panel before its
+    /// handler runs, so a handler is free to present the next prompt.
+    ///
+    /// Only one prompt is on screen at a time. The title identifies the prompt: a repeat of the one
+    /// already showing is dropped (checks that used to be blocked by the modal now really do run
+    /// while a prompt is up), and a different prompt replaces it rather than stacking on top.
     @MainActor
-    private func showUpdateNotification(version: String) {
-        DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
+    private func presentFloatingPrompt(title: String, message: String, actions: [FloatingPromptAction]) {
+        DebugLogger.shared.info("🔔 Showing prompt: \(title)", source: "AppDelegate")
 
-        // Hourly checks keep running now that the prompt no longer blocks them, so never stack panels.
-        guard self.updatePromptWindow == nil else {
-            DebugLogger.shared.debug("Update prompt already on screen, skipping duplicate", source: "AppDelegate")
+        guard self.floatingPromptTitle != title else {
+            DebugLogger.shared.debug("Prompt \"\(title)\" already on screen, skipping duplicate", source: "AppDelegate")
             return
         }
+        self.dismissFloatingPrompt()
 
-        let panelWidth: CGFloat = 420
         let margin: CGFloat = 22
         let textLeading: CGFloat = 92
+        let buttonHeight: CGFloat = 30
+        let buttonSpacing: CGFloat = 10
+
+        let buttons = actions.map { action in
+            FloatingPromptButton(title: action.title) { [weak self] in
+                self?.dismissFloatingPrompt()
+                action.handler()
+            }
+        }
+        // The leading action is the default one, so give it the wider minimum an alert would use.
+        let buttonWidths = buttons.enumerated().map { index, button in
+            max(ceil(button.fittingSize.width), index == 0 ? 96 : 80)
+        }
+        let buttonsWidth = buttonWidths.reduce(0, +) + buttonSpacing * CGFloat(max(buttons.count - 1, 0))
+        let panelWidth = max(420, margin * 2 + buttonsWidth)
         let textWidth = panelWidth - textLeading - margin
 
-        let title = NSTextField(labelWithString: "Update Available")
-        title.font = .systemFont(ofSize: 16, weight: .semibold)
-        let titleHeight = ceil(title.fittingSize.height)
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        let titleHeight = ceil(titleLabel.fittingSize.height)
 
-        let detail = NSTextField(
-            wrappingLabelWithString: "FluidVoice \(version) is now available. The app will restart automatically after installation."
-        )
+        let detail = NSTextField(wrappingLabelWithString: message)
         detail.font = .systemFont(ofSize: 13)
         detail.textColor = .secondaryLabelColor
         detail.preferredMaxLayoutWidth = textWidth
         let detailHeight = ceil(detail.fittingSize.height)
 
-        let installButton = UpdatePromptButton(title: "Install Now") { [weak self] in
-            self?.installOfferedUpdate()
-        }
-        let laterButton = UpdatePromptButton(title: "Later") { [weak self] in
-            self?.postponeOfferedUpdate(version: version)
-        }
-
-        let buttonHeight: CGFloat = 30
-        let installWidth = max(ceil(installButton.fittingSize.width), 96)
-        let laterWidth = max(ceil(laterButton.fittingSize.width), 80)
         let buttonsY = margin - 2
         let detailY = buttonsY + buttonHeight + 16
         let titleY = detailY + detailHeight + 8
         let panelHeight = titleY + titleHeight + margin
 
-        title.frame = NSRect(x: textLeading, y: titleY, width: textWidth, height: titleHeight)
+        titleLabel.frame = NSRect(x: textLeading, y: titleY, width: textWidth, height: titleHeight)
         detail.frame = NSRect(x: textLeading, y: detailY, width: textWidth, height: detailHeight)
-        installButton.frame = NSRect(
-            x: panelWidth - margin - installWidth,
-            y: buttonsY,
-            width: installWidth,
-            height: buttonHeight
-        )
-        laterButton.frame = NSRect(
-            x: installButton.frame.minX - 10 - laterWidth,
-            y: buttonsY,
-            width: laterWidth,
-            height: buttonHeight
-        )
+
+        var buttonTrailing = panelWidth - margin
+        for (button, width) in zip(buttons, buttonWidths) {
+            button.frame = NSRect(x: buttonTrailing - width, y: buttonsY, width: width, height: buttonHeight)
+            buttonTrailing -= width + buttonSpacing
+        }
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
@@ -541,7 +592,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             backing: .buffered,
             defer: false
         )
-        panel.title = "Update Available"
+        panel.title = title
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.isOpaque = false
@@ -549,7 +600,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
-        // The panel is owned by updatePromptWindow, so let ARC release it after close().
+        // The panel is owned by floatingPromptWindow, so let ARC release it after close().
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
@@ -566,61 +617,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         icon.image = NSApp.applicationIconImage
         icon.imageScaling = .scaleProportionallyUpOrDown
         content.addSubview(icon)
-        content.addSubview(title)
+        content.addSubview(titleLabel)
         content.addSubview(detail)
-        content.addSubview(laterButton)
-        content.addSubview(installButton)
+        for button in buttons {
+            content.addSubview(button)
+        }
 
         panel.contentView = content
         panel.center()
         // Floating level plus orderFrontRegardless puts the prompt above the frontmost app without
         // activating FluidVoice, so an in-flight dictation is never interrupted to show it.
         panel.orderFrontRegardless()
-        self.updatePromptWindow = panel
+        self.floatingPromptWindow = panel
+        self.floatingPromptTitle = title
     }
 
     @MainActor
-    private func installOfferedUpdate() {
-        DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
-        self.dismissUpdatePrompt()
-        SettingsStore.shared.clearUpdateSnooze() // Clear snooze since they're installing
-        // The manual check still reports failures through a modal alert, so activate first to keep
-        // that alert in front of the user instead of behind other windows. Installing restarts the
-        // app anyway, so taking focus here costs nothing.
-        NSApp.activate(ignoringOtherApps: true)
-        self.checkForUpdatesManually()
-    }
-
-    @MainActor
-    private func postponeOfferedUpdate(version: String) {
-        DebugLogger.shared.info("User postponed update for 24 hours", source: "AppDelegate")
-        self.dismissUpdatePrompt()
-        SettingsStore.shared.snoozeUpdatePrompt(forVersion: version)
-    }
-
-    @MainActor
-    private func dismissUpdatePrompt() {
-        self.updatePromptWindow?.close()
-        self.updatePromptWindow = nil
-    }
-
-    @MainActor
-    private func showUpdateAlert(title: String, message: String) {
-        DebugLogger.shared.info("🔔 Showing alert: \(title)", source: "AppDelegate")
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+    private func dismissFloatingPrompt() {
+        self.floatingPromptWindow?.close()
+        self.floatingPromptWindow = nil
+        self.floatingPromptTitle = nil
     }
 }
 
-/// Push button for the update prompt panel.
+/// One button on a floating prompt panel.
+private struct FloatingPromptAction {
+    let title: String
+    let handler: @MainActor () -> Void
+}
+
+/// Push button for a floating prompt panel.
 ///
 /// The panel is a non-activating panel of a menu bar app, so it never becomes key; accepting the
 /// first mouse keeps a single click on the button working while another app stays frontmost.
-private final class UpdatePromptButton: NSButton {
+private final class FloatingPromptButton: NSButton {
     private let onClick: @MainActor () -> Void
 
     init(title: String, onClick: @escaping @MainActor () -> Void) {
@@ -635,7 +665,7 @@ private final class UpdatePromptButton: NSButton {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
-        fatalError("UpdatePromptButton is created in code only")
+        fatalError("FloatingPromptButton is created in code only")
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -643,6 +673,8 @@ private final class UpdatePromptButton: NSButton {
     }
 
     @objc private func handleClick() {
-        self.onClick()
+        // The handler closes the panel that owns this button, so hold the closure for the call.
+        let onClick = self.onClick
+        onClick()
     }
 }
