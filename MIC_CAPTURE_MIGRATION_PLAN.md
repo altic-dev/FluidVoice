@@ -232,7 +232,16 @@ SCStream path); AirPods mid-recording → route listener fired instantly with th
 clean interrupted state, audio preserved, retry offered. Post-meeting dictation normal.
 Not yet measured: start latency p50/p95, `silentForSeconds` under AGC over a long quiet stretch.
 
-**Phase 4 — attribution. BUILT 2026-08-17, gate PENDING.** Marks VPIO turns scored-clean
+**Phase 4 — attribution. DONE 2026-08-17, gate PASSED (v7 reprocess elected the same You with an
+identical transcript; two-voice-in-room abstained correctly with both voices labeled; monitor
+echo=0 with real coverage 67.6s and 4/15 delay locks).**
+
+**Flag removed 2026-08-17 (product decision):** echo cancellation is not a setting — the pre-flight
+decision table is the only gate (mode, role, output route, bindable mic). VPIO engages
+automatically whenever viable; otherwise the session runs the SCStream path and logs the decline
+reason. The `meetingVPIOMicCapture` toggle and backup key are gone.
+
+**Phase 4 detail:** Marks VPIO turns scored-clean
 (`echoScored` widened to every turn, forced after the existing text-classification loop) and lets the
 existing election run; text detector and signal veto both kept (measurement-driven reversal of the
 original "not consulted / not applied" plan, see §5). Decider now requires `role == .personal`

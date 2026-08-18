@@ -67,22 +67,18 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                   let microphoneWriter = writersByKind[.microphone]
             else { throw MeetingCaptureError.applicationNotSelected }
 
-            let flag = SettingsStore.shared.meetingVPIOMicCapture
             let decision = MeetingCapturePathDecider.decide(
-                flag: flag,
                 mode: configuration.mode,
                 microphone: configuration.microphone,
                 outputRoute: Self.currentOutputRouteSnapshot()
             )
             switch decision {
             case let .screenCaptureKit(reason):
-                if flag {
-                    DebugLogger.shared.log(
-                        "Meeting voice-processing capture declined: \(reason)",
-                        source: "MeetingCaptureEngine"
-                    )
-                    eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
-                }
+                DebugLogger.shared.log(
+                    "Meeting voice-processing capture declined: \(reason)",
+                    source: "MeetingCaptureEngine"
+                )
+                eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
                 runtime = try await ScreenCaptureMeetingRuntime.make(
                     application: application,
                     microphone: configuration.microphone,
@@ -360,7 +356,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
     private let application: MeetingApplicationIdentity
     private let microphone: MeetingMicrophoneIdentity
-    /// Immutable for the runtime's lifetime: a mid-run flag flip never drops/adds the mic.
+    /// Immutable for the runtime's lifetime: a rebuild never drops/adds the mic.
     private let includeMicrophone: Bool
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
@@ -963,14 +959,10 @@ nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
 /// would capture cleanly but never attribute.
 nonisolated enum MeetingCapturePathDecider {
     static func decide(
-        flag: Bool,
         mode: MeetingCaptureMode,
         microphone: MeetingMicrophoneIdentity,
         outputRoute: MeetingOutputRouteSnapshot
     ) -> MeetingCapturePathDecision {
-        guard flag else {
-            return .screenCaptureKit(reason: "Voice-processing meeting capture is disabled in Settings.")
-        }
         guard mode == .onlineCall else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
         }

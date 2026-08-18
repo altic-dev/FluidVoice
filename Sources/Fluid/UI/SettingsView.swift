@@ -952,17 +952,6 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
-                                        title: "Voice-Processing Meeting Mic Capture",
-                                        description: "Use echo-cancelling voice processing for the microphone in online-call meeting recordings. Lowers other audio volume while active.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.meetingVPIOMicCapture },
-                                            set: { SettingsStore.shared.meetingVPIOMicCapture = $0 }
-                                        ),
-                                        allowsDescriptionWrapping: true
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
                                         title: "Pause Media During Transcription",
                                         description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
                                         isOn: Binding(
