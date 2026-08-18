@@ -334,12 +334,22 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// File extensions the OS can actually decode, queried dynamically from AVFoundation.
     /// Filtered to audio/video types only — excludes subtitles, playlists, etc.
+    ///
+    /// Every filename extension a type declares is collected, not just the
+    /// preferred one: the Ogg audio type (`org.xiph.ogg-audio`) tags
+    /// `["ogg", "oga", "opus"]` with `ogg` preferred, so a preferred-only set
+    /// silently rejected `.opus` (WhatsApp voice notes) and `.oga` even though
+    /// macOS decodes them natively (#868).
     static let supportedFileExtensions: Set<String> = {
         let avTypes = AVURLAsset.audiovisualTypes()
-        let extensions = avTypes.compactMap { fileType -> String? in
-            guard let utType = UTType(fileType.rawValue) else { return nil }
-            guard utType.conforms(to: .audio) || utType.conforms(to: .movie) else { return nil }
-            return utType.preferredFilenameExtension
+        let extensions = avTypes.flatMap { fileType -> [String] in
+            guard let utType = UTType(fileType.rawValue) else { return [] }
+            guard utType.conforms(to: .audio) || utType.conforms(to: .movie) else { return [] }
+            var tags = utType.tags.filter { $0.isFilenameExtension }
+            if let preferred = utType.preferredFilenameExtension, !tags.contains(preferred) {
+                tags.append(preferred)
+            }
+            return tags
         }
         return Set(extensions)
     }()
