@@ -19,8 +19,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var wasLaunchedAsLoginItem = false
     private var analyticsActivationSuppressionDeadline: Date?
     private var hasDeferredMLXUpgradeOffer = false
-    private var floatingPromptWindow: NSWindow?
-    private var floatingPromptTitle: String?
+    private var floatingPromptWindow: FloatingPromptPanel?
+    /// Prompts waiting their turn. The head is the one on screen once a panel exists.
+    private var floatingPromptQueue: [FloatingPrompt] = []
+    /// Only the automatic update check, the manual check's result and the one-time MLX offer
+    /// enqueue prompts, so anything beyond a handful means something is looping.
+    private static let maxQueuedFloatingPrompts = 4
 
     var shouldPresentStartupMicrophoneNotice: Bool {
         !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
@@ -147,6 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             self.hasDeferredMLXUpgradeOffer = false
             self.scheduleMLXUpgradeOffer()
         }
+        self.focusFloatingPromptOnActivation()
     }
 
     func userNotificationCenter(
@@ -526,33 +531,57 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// dialog (#564, #745). The panel keeps the main actor free and floats above other apps
     /// without stealing focus, and matches the install status panel in SimpleUpdater.
     ///
-    /// `actions` is ordered like `NSAlert.addButton(withTitle:)`: the first action is laid out
-    /// where the alert's default button used to sit. Choosing one dismisses the panel before its
-    /// handler runs, so a handler is free to present the next prompt.
+    /// `actions` is ordered like `NSAlert.addButton(withTitle:)`: the first action is the default
+    /// one and is laid out where the alert's default button used to sit; the last is the cancelling
+    /// one. Choosing one dismisses the panel before its handler runs, so a handler is free to
+    /// enqueue the next prompt.
     ///
-    /// Only one prompt is on screen at a time. The title identifies the prompt: a repeat of the one
-    /// already showing is dropped (checks that used to be blocked by the modal now really do run
-    /// while a prompt is up), and a different prompt replaces it rather than stacking on top.
+    /// Only one prompt is on screen at a time, and prompts *queue* rather than replace each other.
+    /// Replacing would close a prompt without either handler running, which for a one-time offer
+    /// like the MLX upgrade means it is never recorded as answered and never shown again. A prompt
+    /// whose title is already on screen or already queued is still dropped, so the checks that the
+    /// modal used to block cannot pile up duplicates.
     @MainActor
     private func presentFloatingPrompt(title: String, message: String, actions: [FloatingPromptAction]) {
-        DebugLogger.shared.info("🔔 Showing prompt: \(title)", source: "AppDelegate")
-
-        guard self.floatingPromptTitle != title else {
-            DebugLogger.shared.debug("Prompt \"\(title)\" already on screen, skipping duplicate", source: "AppDelegate")
+        guard !self.floatingPromptQueue.contains(where: { $0.title == title }) else {
+            DebugLogger.shared.debug("Prompt \"\(title)\" already queued, skipping duplicate", source: "AppDelegate")
             return
         }
-        self.dismissFloatingPrompt()
+        guard self.floatingPromptQueue.count < Self.maxQueuedFloatingPrompts else {
+            DebugLogger.shared.error("Dropping prompt \"\(title)\": prompt queue is full", source: "AppDelegate")
+            return
+        }
 
+        self.floatingPromptQueue.append(FloatingPrompt(title: title, message: message, actions: actions))
+        self.showNextFloatingPromptIfIdle()
+    }
+
+    /// Builds and orders in the panel for the queue head, if nothing is on screen already.
+    @MainActor
+    private func showNextFloatingPromptIfIdle() {
+        guard self.floatingPromptWindow == nil, let prompt = self.floatingPromptQueue.first else { return }
+
+        let title = prompt.title
+        DebugLogger.shared.info("🔔 Showing prompt: \(title)", source: "AppDelegate")
+
+        let message = prompt.message
+        let actions = prompt.actions
         let margin: CGFloat = 22
         let textLeading: CGFloat = 92
         let buttonHeight: CGFloat = 30
         let buttonSpacing: CGFloat = 10
 
-        let buttons = actions.map { action in
-            FloatingPromptButton(title: action.title) { [weak self] in
-                self?.dismissFloatingPrompt()
+        let buttons = actions.enumerated().map { index, action in
+            let button = FloatingPromptButton(title: action.title) { [weak self] in
+                self?.finishVisibleFloatingPrompt()
                 action.handler()
             }
+            // Mirror NSAlert: Return triggers the first action. Escape is handled by the panel so
+            // that a single-button prompt answers to both keys, as the alert it replaced did.
+            if index == 0 {
+                button.keyEquivalent = "\r"
+            }
+            return button
         }
         // The leading action is the default one, so give it the wider minimum an alert would use.
         let buttonWidths = buttons.enumerated().map { index, button in
@@ -586,13 +615,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             buttonTrailing -= width + buttonSpacing
         }
 
-        let panel = NSPanel(
+        let panel = FloatingPromptPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.title = title
+        // Escape picks the cancelling action, the way it dismissed the alert this replaced.
+        if let cancelButton = buttons.last {
+            panel.onCancel = { [weak cancelButton] in cancelButton?.performClick(nil) }
+        }
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.isOpaque = false
@@ -624,19 +657,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
 
         panel.contentView = content
+        panel.initialFirstResponder = buttons.first
         panel.center()
         // Floating level plus orderFrontRegardless puts the prompt above the frontmost app without
-        // activating FluidVoice, so an in-flight dictation is never interrupted to show it.
+        // activating FluidVoice, so an in-flight dictation is never interrupted to show it. Note
+        // this deliberately does not make the panel key: taking key here would pull focus off
+        // whatever the user is typing into, which is the whole point of not using a modal. The
+        // panel becomes key when the user clicks it, or when FluidVoice itself is activated.
         panel.orderFrontRegardless()
+        if NSApp.isActive {
+            // FluidVoice is already frontmost, so taking key costs no other app its focus and the
+            // prompt is immediately answerable from the keyboard.
+            panel.makeKey()
+        }
         self.floatingPromptWindow = panel
-        self.floatingPromptTitle = title
     }
 
+    /// Closes the prompt on screen, drops it from the queue and shows whatever queued behind it.
     @MainActor
-    private func dismissFloatingPrompt() {
+    private func finishVisibleFloatingPrompt() {
         self.floatingPromptWindow?.close()
         self.floatingPromptWindow = nil
-        self.floatingPromptTitle = nil
+        if !self.floatingPromptQueue.isEmpty {
+            self.floatingPromptQueue.removeFirst()
+        }
+        self.showNextFloatingPromptIfIdle()
+    }
+
+    /// Gives the prompt keyboard focus once FluidVoice is frontmost, so a keyboard-only user who
+    /// activates the app can answer it. Never called while another app is frontmost.
+    @MainActor
+    private func focusFloatingPromptOnActivation() {
+        guard let panel = self.floatingPromptWindow else { return }
+        panel.makeKey()
     }
 }
 
@@ -646,9 +699,36 @@ private struct FloatingPromptAction {
     let handler: @MainActor () -> Void
 }
 
+/// A prompt on screen or waiting behind one.
+private struct FloatingPrompt {
+    let title: String
+    let message: String
+    let actions: [FloatingPromptAction]
+}
+
+/// Panel hosting a floating prompt.
+///
+/// Borderless windows refuse to become key by default, which would leave the prompt unanswerable
+/// without a mouse. A `.nonactivatingPanel` can take key from a click without activating the app,
+/// so opting in restores the keyboard path the replaced `NSAlert` had without stealing focus:
+/// nothing here makes the panel key on presentation.
+private final class FloatingPromptPanel: NSPanel {
+    var onCancel: (@MainActor () -> Void)?
+
+    override var canBecomeKey: Bool {
+        return true
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        // The handler closes this panel, so hold the closure for the call.
+        let onCancel = self.onCancel
+        onCancel?()
+    }
+}
+
 /// Push button for a floating prompt panel.
 ///
-/// The panel is a non-activating panel of a menu bar app, so it never becomes key; accepting the
+/// The panel belongs to a menu bar app and is not key until the user clicks it, so accepting the
 /// first mouse keeps a single click on the button working while another app stays frontmost.
 private final class FloatingPromptButton: NSButton {
     private let onClick: @MainActor () -> Void
