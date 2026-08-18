@@ -319,7 +319,7 @@ private final class MeetingProviderLanguagePin {
 @MainActor
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
-    static let pipelineVersion = 6
+    static let pipelineVersion = 7
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -387,8 +387,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         prototypeSpeakerIDs: Set<SessionSpeakerID>,
         index: MeetingSpeakerEmbeddingIndex?,
         role: MeetingMicrophoneRole,
-        elected: SessionSpeakerID?
+        elected: SessionSpeakerID?,
+        captureMethod: MeetingAudioTrackCaptureMethod?,
+        // `unscoredOverlap` pins to 0.0s under VPIO; this carries the widening delta instead.
+        widenedIndices: Set<Int> = []
     ) {
+        let widenedSeconds = widenedIndices.reduce(0.0) { total, offset in
+            guard turns.indices.contains(offset) else { return total }
+            return total + max(0, turns[offset].end - turns[offset].start)
+        }
         var supporting: [SessionSpeakerID: TimeInterval] = [:]
         var echoed: [SessionSpeakerID: TimeInterval] = [:]
         var skipped: [SessionSpeakerID: TimeInterval] = [:]
@@ -435,8 +442,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             }
         }
+        let captureMethodDescription = captureMethod.map(String.init(describing:)) ?? "nil"
         DebugLogger.shared.info(
-            "Local speaker election (role=\(role), elected=\(elected?.uuidString.prefix(8).description ?? "none")):\n  "
+            "Local speaker election (role=\(role), captureMethod=\(captureMethodDescription), "
+                + "elected=\(elected?.uuidString.prefix(8).description ?? "none"), "
+                + "widened=\(widenedIndices.count)/\(String(format: "%.1f", widenedSeconds))s):\n  "
                 + rows.joined(separator: "\n  ")
                 + (distances.isEmpty ? "" : "\n  " + distances.joined(separator: "\n  ")),
             source: "MeetingProcessingPipeline"
@@ -670,18 +680,19 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         turnStart: TimeInterval,
         turnEnd: TimeInterval,
         sampleRate: Double
-    ) -> TurnEchoVerdict {
+    ) -> (verdict: TurnEchoVerdict, scoreableSeconds: TimeInterval) {
         let frameSeconds = Double(MeetingEchoSignalScorer.frameLength) / sampleRate
         let overlapping = scores.fractions.indices.filter { index in
             let frameStart = chunkOffset + Double(index) * scores.hopSeconds
             let frameEnd = frameStart + frameSeconds
             return frameEnd > turnStart && frameStart < turnEnd
         }
-        guard !overlapping.isEmpty else { return .unknown }
+        guard !overlapping.isEmpty else { return (.unknown, 0) }
         let subset = EchoFrameScores(fractions: overlapping.map { scores.fractions[$0] }, hopSeconds: scores.hopSeconds)
         let result = MeetingEchoSignalScorer.verdict(subset)
         Self.logTurnFrameStats(subset, turnStart: turnStart, turnEnd: turnEnd, verdict: result)
-        return result
+        let scoreableCount = subset.fractions.filter { !$0.isNaN }.count
+        return (result, Double(scoreableCount) * subset.hopSeconds)
     }
 
     /// Frame-level picture behind a turn's verdict. The rescue rule uses an absolute low-run
@@ -762,6 +773,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     nonisolated struct EchoScoringOutcome {
         var verdicts: [Int: TurnEchoVerdict]
         var acceptedDelaySeconds: TimeInterval?
+        /// From the scorer's non-NaN frames — never fabricated from turn duration.
+        var scoreableSecondsByTurn: [Int: TimeInterval] = [:]
+        var delayConfidence: Double? = nil
     }
 
     /// Every failure here (missing/corrupt reference audio, decode errors, bad timing math, ...)
@@ -821,12 +835,20 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let scores = Self.maskingGuardedFrames(rawScores, chunkOffset: chunkOffset, sampleRate: sampleRate, guardIntervals: guardIntervals)
 
         var verdicts: [Int: TurnEchoVerdict] = [:]
+        var scoreableSecondsByTurn: [Int: TimeInterval] = [:]
         for turn in turns {
-            verdicts[turn.index] = Self.turnVerdict(
+            let scoring = Self.turnVerdict(
                 scores, chunkOffset: chunkOffset, turnStart: turn.start, turnEnd: turn.end, sampleRate: sampleRate
             )
+            verdicts[turn.index] = scoring.verdict
+            scoreableSecondsByTurn[turn.index] = scoring.scoreableSeconds
         }
-        return EchoScoringOutcome(verdicts: verdicts, acceptedDelaySeconds: acceptedDelaySeconds)
+        return EchoScoringOutcome(
+            verdicts: verdicts,
+            acceptedDelaySeconds: acceptedDelaySeconds,
+            scoreableSecondsByTurn: scoreableSecondsByTurn,
+            delayConfidence: estimate?.confidence
+        )
     }
 
     private struct Accumulator {
@@ -1331,6 +1353,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         )
         var stagedTurns: [StagedMicrophoneTurn] = []
+        var echoMonitor = EchoMonitorAccumulator()
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             let accumulatorSnapshot = accumulator
             let stagedTurnsSnapshot = stagedTurns
@@ -1343,6 +1366,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     remoteSpeech: remoteSpeech,
                     applicationTrack: applicationTrack,
                     epochState: &epochState,
+                    echoMonitor: &echoMonitor,
                     accumulator: &accumulator,
                     stagedTurns: &stagedTurns
                 )
@@ -1359,6 +1383,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             track,
             session: session,
             stagedTurns: stagedTurns,
+            echoMonitor: echoMonitor,
+            applicationTrackHadSpeech: !remoteSpeech.isEmpty,
             accumulator: &accumulator
         )
     }
@@ -1371,6 +1397,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         remoteSpeech: [TimelineInterval],
         applicationTrack: MeetingAudioTrack?,
         epochState: inout EchoDelayEpochState,
+        echoMonitor: inout EchoMonitorAccumulator,
         accumulator: inout Accumulator,
         stagedTurns: inout [StagedMicrophoneTurn]
     ) async throws {
@@ -1435,6 +1462,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             signalVerdictByIndex = outcome.verdicts
                             if let acceptedDelaySeconds = outcome.acceptedDelaySeconds {
                                 epochState.acceptedDelays.append(acceptedDelaySeconds)
+                            }
+                            echoMonitor.scoredChunkCount += 1
+                            echoMonitor.scoreableSeconds += outcome.scoreableSecondsByTurn.values.reduce(0, +)
+                            if outcome.acceptedDelaySeconds != nil { echoMonitor.lockedChunkCount += 1 }
+                            if let confidence = outcome.delayConfidence {
+                                echoMonitor.bestDelayConfidence = max(echoMonitor.bestDelayConfidence, confidence)
                             }
                         } catch {
                             if error is CancellationError { throw error }
@@ -1520,10 +1553,92 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
     }
 
+    /// Detector loop unchanged; `.voiceProcessing` then widens `echoScored` to every turn
+    /// (fallback-gap/no-app-track evidence hole). `isLikelyEcho` keeps real detector results.
+    nonisolated static func classifyMicrophoneTurns(
+        _ turns: [StagedMicrophoneTurn],
+        captureMethod: MeetingAudioTrackCaptureMethod?,
+        applicationTrackID: MeetingAudioTrackID?,
+        segments: [MeetingTranscriptSegment],
+        fallbackSpeakerID: SessionSpeakerID?
+    ) -> (turns: [StagedMicrophoneTurn], widenedIndices: Set<Int>) {
+        var classified = turns
+        var detectorExamined = Set<Int>()
+        if let applicationTrackID {
+            for index in classified.indices where classified[index].overlapsRemote {
+                let turn = classified[index]
+                let remoteText = Self.echoCandidateText(
+                    segments: segments,
+                    speakerIDToExclude: fallbackSpeakerID,
+                    applicationTrackID: applicationTrackID,
+                    window: (turn.start, turn.end)
+                )
+                guard !remoteText.isEmpty else { continue }
+                classified[index].echoScored = true
+                classified[index].isLikelyEcho = MeetingEchoDetector.isLikelyEcho(
+                    micText: turn.text,
+                    remoteText: remoteText
+                )
+                detectorExamined.insert(index)
+            }
+        }
+        var widenedIndices = Set<Int>()
+        if captureMethod == .voiceProcessing {
+            for index in classified.indices {
+                if !detectorExamined.contains(index) {
+                    widenedIndices.insert(index)
+                }
+                classified[index].echoScored = true
+            }
+        }
+        return (classified, widenedIndices)
+    }
+
+    struct EchoMonitorAccumulator {
+        var scoreableSeconds: TimeInterval = 0
+        var scoredChunkCount = 0
+        var lockedChunkCount = 0
+        var bestDelayConfidence: Double = 0
+    }
+
+    /// Telemetry, not mitigation — the (retained) signal veto is the mitigation.
+    nonisolated static func logEchoMonitorSummary(
+        turns: [StagedMicrophoneTurn],
+        monitor: EchoMonitorAccumulator,
+        applicationTrackHadSpeech: Bool
+    ) {
+        var breakdown: [TurnEchoVerdict: (count: Int, seconds: TimeInterval)] = [:]
+        for turn in turns {
+            var entry = breakdown[turn.signalVerdict] ?? (0, 0)
+            entry.count += 1
+            entry.seconds += max(0, turn.end - turn.start)
+            breakdown[turn.signalVerdict] = entry
+        }
+        let verdictDescription = [TurnEchoVerdict.echo, .containsLocalSpeech, .unknown].map { verdict -> String in
+            let entry = breakdown[verdict] ?? (0, 0)
+            return String(format: "%@=%d/%.1fs", String(describing: verdict), entry.count, entry.seconds)
+        }.joined(separator: " ")
+        DebugLogger.shared.info(
+            String(
+                format: "Echo scorer monitor: verdicts[%@] scoreableSeconds=%.1f delayLock=%d/%d bestConfidence=%.2f",
+                verdictDescription, monitor.scoreableSeconds, monitor.lockedChunkCount,
+                monitor.scoredChunkCount, monitor.bestDelayConfidence
+            ),
+            source: "MeetingProcessingPipeline"
+        )
+        guard applicationTrackHadSpeech, monitor.scoreableSeconds <= 0.001 else { return }
+        DebugLogger.shared.warning(
+            "Echo scorer monitor: coverage ~0 while the application track carried speech — the scorer is blind, which is not proof the mic is clean.",
+            source: "MeetingProcessingPipeline"
+        )
+    }
+
     private func finishMicrophoneTrack(
         _ track: MeetingAudioTrack,
         session: MeetingSession,
         stagedTurns allStagedTurns: [StagedMicrophoneTurn],
+        echoMonitor: EchoMonitorAccumulator,
+        applicationTrackHadSpeech: Bool,
         accumulator: inout Accumulator
     ) {
         // Session-wide, never per chunk: a chunk holding only distant audio would otherwise take
@@ -1572,24 +1687,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let applicationTrackID = session.audioTracks.first(where: { $0.kind == .applicationAudio })?.id
         // The 60s remote whole-chunk fallback is too coarse to score against; exclude its speaker.
         let fallbackSpeakerID = accumulator.speakerIDByKey["meeting-audio"]
-        var classifiedTurns = stagedTurns
-        if let applicationTrackID {
-            for index in classifiedTurns.indices where classifiedTurns[index].overlapsRemote {
-                let turn = classifiedTurns[index]
-                let remoteText = Self.echoCandidateText(
-                    segments: accumulator.segments,
-                    speakerIDToExclude: fallbackSpeakerID,
-                    applicationTrackID: applicationTrackID,
-                    window: (turn.start, turn.end)
-                )
-                guard !remoteText.isEmpty else { continue }
-                classifiedTurns[index].echoScored = true
-                classifiedTurns[index].isLikelyEcho = MeetingEchoDetector.isLikelyEcho(
-                    micText: turn.text,
-                    remoteText: remoteText
-                )
-            }
-        }
+        let (classifiedTurns, widenedIndices) = Self.classifyMicrophoneTurns(
+            stagedTurns,
+            captureMethod: track.captureMethod,
+            applicationTrackID: applicationTrackID,
+            segments: accumulator.segments,
+            fallbackSpeakerID: fallbackSpeakerID
+        )
 
         let prototypeSpeakerIDs = accumulator.embeddingIndexByTrack[.microphone]?.speakerIDs ?? []
         let localClusterID = session.selectedMicrophone.role == .personal
@@ -1600,7 +1704,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             prototypeSpeakerIDs: prototypeSpeakerIDs,
             index: accumulator.embeddingIndexByTrack[.microphone],
             role: session.selectedMicrophone.role,
-            elected: localClusterID
+            elected: localClusterID,
+            captureMethod: track.captureMethod,
+            widenedIndices: widenedIndices
+        )
+        Self.logEchoMonitorSummary(
+            turns: classifiedTurns,
+            monitor: echoMonitor,
+            applicationTrackHadSpeech: applicationTrackHadSpeech
         )
         if let localClusterID,
            let evidenceTurn = classifiedTurns.first(where: { $0.clusterID == localClusterID })
@@ -1621,13 +1732,36 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             isLocalUser: false,
             clusterID: nil
         )
+        // Clean non-local clusters keep their diarization identity as nameable speakers; only
+        // echo-demoted turns stay in the anonymous bucket (bleed must not become a "person").
+        var micSpeakerOrdinalByCluster: [SessionSpeakerID: Int] = [:]
         for turn in classifiedTurns {
             let isLocalCluster = turn.clusterID == localClusterID
             let isCleanLocalTurn = isLocalCluster && !turn.effectiveEcho
+            let speakerID: SessionSpeakerID
+            if isCleanLocalTurn {
+                speakerID = localClusterID ?? unknownSpeakerID
+            } else if !isLocalCluster, !turn.effectiveEcho, prototypeSpeakerIDs.contains(turn.clusterID) {
+                if micSpeakerOrdinalByCluster[turn.clusterID] == nil {
+                    let ordinal = micSpeakerOrdinalByCluster.count + 1
+                    micSpeakerOrdinalByCluster[turn.clusterID] = ordinal
+                    accumulator.addResolvedSpeaker(
+                        id: turn.clusterID,
+                        key: "microphone-speaker:\(turn.clusterID.uuidString)",
+                        displayName: "Microphone Speaker \(ordinal)",
+                        clusterID: turn.clusterLabel,
+                        trackKind: .microphone,
+                        isLocalUser: false
+                    )
+                }
+                speakerID = turn.clusterID
+            } else {
+                speakerID = unknownSpeakerID
+            }
             accumulator.segments.append(Self.segment(
                 key: "microphone:\(turn.chunkID.uuidString):\(turn.index)",
                 trackID: track.id,
-                speakerID: isCleanLocalTurn ? localClusterID : unknownSpeakerID,
+                speakerID: speakerID,
                 start: turn.start,
                 end: turn.end,
                 text: turn.text,

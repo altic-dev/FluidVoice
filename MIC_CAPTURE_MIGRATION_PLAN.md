@@ -63,21 +63,30 @@ That acceptance was given for the **speakers** case and does not extend to headp
 For a VPIO session, on the microphone track:
 
 - Diarization runs exactly as today (it is the segmenter), and **the election runs unchanged**.
-- VPIO turns are marked **scored clean** — `echoScored = true, isLikelyEcho = false` — because that is
-  what they are: examined, and known to contain no far-end audio. They therefore count as supporting
-  evidence in `localSpeakerEvidence` (`MeetingProcessingPipeline.swift:357`) exactly as a
-  text-examined clean turn does today.
+- VPIO turns are marked **scored clean** — `echoScored` is widened to `true` on every turn, forced
+  after the existing text-detector loop runs — because that is what they are: AEC-clean by hardware.
+  They therefore count as supporting evidence in `localSpeakerEvidence`
+  (`MeetingProcessingPipeline.swift:357`) exactly as a text-examined clean turn does today.
 - **This is the whole change.** No branch on cluster count, no bypass. AEC does not make diarization
   unnecessary — it makes it work, by removing the echo clusters that competed with the user's own
   voice and defeated the 1.75× margin rule in the observed failure. A second voice in the room is then
   handled by the election as it always was, which matters because misattribution is
   **uncorrectable in-product**: `mergeSpeakers` refuses any speaker with `isLocalUser`
   (`MeetingModels.swift:542`).
-- The text echo detector is not consulted; the signal veto is not applied.
-- `MeetingEchoSignalScorer` still runs as a **monitor**: its verdicts are recorded, never applied.
-  This is the only field evidence that AEC worked on hardware we have not measured; without it a
-  silently-degraded canceller yields bleed labelled "You", forever undetected.
+- ~~The text echo detector is not consulted; the signal veto is not applied.~~ **Superseded by Phase 4
+  measurement:** a healthy VPIO gate session produced zero `.echo` verdicts (7 `containsLocalSpeech` /
+  1 `unknown` / 0 `echo`) — the veto had nothing to veto. Suppressing it bought nothing on working
+  hardware and risked bleed-as-"You" on degraded hardware. Phase 4 ships with **both kept**: the text
+  detector still runs wherever remote text exists, and the signal veto still demotes
+  `signalVerdict == .echo` turns exactly as it does for non-VPIO tracks.
+- `MeetingEchoSignalScorer` still runs as a **monitor**: its verdicts are recorded, never applied
+  beyond the (retained) veto. This is the only field evidence that AEC worked on hardware we have not
+  measured; without it a silently-degraded canceller yields bleed labelled "You", forever undetected.
+  Phase 4 adds a per-session log-only summary (verdict breakdown, real scoreable coverage, delay-lock
+  info) plus a WARN when coverage is ~0 while the application track carried speech.
 - `MeetingLiveEchoFilter` is disabled for VPIO sessions (`MeetingLiveTranscriptionCoordinator.swift:150`).
+- The decider now also requires `role == .personal` — the election and near-field gate already did,
+  so a role-blind VPIO session captured cleanly but could never attribute.
 - `pipelineVersion` bumps; attribution rules changed.
 
 Unchanged: `.inRoom` (`AVCaptureSession`, not SCStream — `MeetingCaptureEngine.swift:624`), non-VPIO
@@ -191,7 +200,7 @@ PTS behind emitted audio, timeline reset on `AVAudioEngineConfigurationChange`, 
 values in the probe's track metadata. Absolute cross-path offset remains unmeasured (AEC removes
 acoustic stimuli, as reviewed) and is Phase 3's first real-call validation item.
 
-**Phase 3 — integrate behind a flag, default off. BUILT 2026-08-15, gate pending (needs a real call).**
+**Phase 3 — integrate behind a flag, default off. DONE 2026-08-17, gate PASSED on a real call.**
 Shipped behind `meetingVPIOMicCapture` (Settings → experimental, off): pre-flight capability
 decision (pure decision table; flag + `.onlineCall` + CoreAudio UID + built-in-speaker output route,
 every decline reason logged to session events); `VoiceProcessingMeetingRuntime` with a commit gate —
@@ -209,16 +218,40 @@ pipelineVersion bump (no pre-flag `.voiceProcessing` tracks can exist; checkpoin
 application pass only). Live echo filter untouched — deferred to Phase 4 as an attribution change.
 Reviewed adversarially over three rounds (two independent reviewers from BLOCK to PROCEED /
 PROCEED WITH CHANGES, all findings folded); 36 new unit tests.
-*Gate (open):* a real call ≥15 min (materiality must actually cross) whose transcript ordering is
-compared turn-by-turn against a human-checked reference. Not a simultaneous old-path capture — two
-microphone clients with one enabling VPIO perturbs the system under test. Also: start latency
-p50/p95 both paths, `silentForSeconds` under AGC, meeting→dictation teardown, flag-off byte-identical.
+*Gate results (2026-08-17, 15.5-min Zoom call, built-in mic/speakers):* VPIO engaged
+(`boundVerified` device 78, settled output BuiltInSpeakerDevice); live mic stream carried ONLY the
+user's speech while far-end played on speakers (previously a verbatim mirror of the app stream);
+double-talk captured the user cleanly as "You" mid-far-end-monologue; zero drops both streams.
+Batch: 53 segments — You 20 (all genuinely the user, `isLocalUser` elected), far end 32 across
+Speaker 1-5, ONE 2-word "Microphone / Unknown" fragment ("code and") — a non-local
+diarization cluster; deliberately NOT forced into "You" by Phase 4 (indistinguishable from a second
+voice's interjection). Drift record: −5.24 ms over 957 s (−5.5 ppm, matching the bench
++6.7 ppm fast-mic sign analysis), eligible, materiality crossed → de-drift executed on a real
+session. AirPods-at-start declined correctly ("The output device is Bluetooth", session ran
+SCStream path); AirPods mid-recording → route listener fired instantly with the designed message,
+clean interrupted state, audio preserved, retry offered. Post-meeting dictation normal.
+Not yet measured: start latency p50/p95, `silentForSeconds` under AGC over a long quiet stretch.
 
-**Phase 4 — attribution.** One change: mark VPIO turns scored-clean and let the existing election run.
-*Gate:* a single-voice VPIO session elects "You" with no `Microphone / Unknown`; a **two-voice**
-session still elects the owner and demotes the second speaker; a non-VPIO session produces a
-transcript identical to today's. The first alone proves nothing — the second is the real test, and it
-is only possible because the diarizer was kept.
+**Phase 4 — attribution. BUILT 2026-08-17, gate PENDING.** Marks VPIO turns scored-clean
+(`echoScored` widened to every turn, forced after the existing text-classification loop) and lets the
+existing election run; text detector and signal veto both kept (measurement-driven reversal of the
+original "not consulted / not applied" plan, see §5). Decider now requires `role == .personal`
+(`MeetingCapturePathDecider.decide`, decline reason "Microphone role is not set to personal").
+`logLocalSpeakerElection` gained `captureMethod` and a widened-turns counter (count + seconds forced
+scored with no remote text to examine), since `unscoredOverlap` pins to 0.0s under VPIO. New log-only
+per-session echo-monitor summary (verdict breakdown, real scoreable seconds — never fabricated from
+turn duration, extended `EchoScoringOutcome`/`computeEchoVerdicts` — delay-lock chunks/confidence) plus
+a WARN on ~0 coverage while the app track carried speech. Live: `MeetingLiveTranscriptionCoordinator`
+gained `setMicrophoneCaptureMethod`, called from `MeetingSessionCoordinator` right after
+`capture.start()` returns; `.voiceProcessing` skips `shouldSuppress`, nil (fail-safe default) keeps it
+on, bracketed by `[live/ECHO]` log lines so pre-setter suppressions are countable.
+`pipelineVersion` 6 → 7 (checkpoint invalidation only). The classification block was extracted to a
+`nonisolated static` pure function, `classifyMicrophoneTurns`, so it and the election are unit-tested
+directly; non-VPIO path is byte-identical by construction (the widening branch never executes).
+*Gate (attended, not yet run):* a single-voice VPIO session elects "You" with no
+`Microphone / Unknown`; a **two-voice** session still elects the owner and demotes the second speaker;
+a non-VPIO session produces a transcript identical to today's. The first alone proves nothing — the
+second is the real test, and it is only possible because the diarizer was kept.
 
 ## 10. Not claimable unattended
 

@@ -959,7 +959,8 @@ nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
     var isHeadphonesDataSource: Bool
 }
 
-/// Pure decision table. Role is deliberately NOT consulted — `.unknown` everywhere on this branch.
+/// Pure decision table. Requires `role == .personal` — the election does too; role-blind VPIO
+/// would capture cleanly but never attribute.
 nonisolated enum MeetingCapturePathDecider {
     static func decide(
         flag: Bool,
@@ -972,6 +973,9 @@ nonisolated enum MeetingCapturePathDecider {
         }
         guard mode == .onlineCall else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
+        }
+        guard microphone.role == .personal else {
+            return .screenCaptureKit(reason: "Microphone role is not set to personal.")
         }
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
             return .screenCaptureKit(reason: "The selected microphone has no CoreAudio device UID.")

@@ -22,6 +22,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var snapshot: MeetingLiveTranscriptSnapshot = .empty
     private var recentThemUtterances: [MeetingLiveUtterance] = []
     private var offerCounts: [MeetingAudioTrackKind: Int] = [:]
+    /// nil (fail-safe) keeps the echo filter ON; guarded by `stateLock` on both sides.
+    private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
     private let originBox = MeetingLiveOriginBox()
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
 
@@ -32,6 +34,14 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     init(onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
         self.onUpdate = onUpdate
+    }
+
+    func setMicrophoneCaptureMethod(_ method: MeetingAudioTrackCaptureMethod?) {
+        self.stateLock.withLock { self.microphoneCaptureMethod = method }
+        DebugLogger.shared.info(
+            "[live/ECHO] setter-armed captureMethod=\(method.map(String.init(describing:)) ?? "nil")",
+            source: "MeetingLive"
+        )
     }
 
     func start(mode: MeetingCaptureMode) {
@@ -140,7 +150,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.publish { $0.settingPartial(text, for: speaker) }
     }
 
-    private func handleUtterance(kind: MeetingAudioTrackKind, text: String, start: CMTime, end: CMTime) {
+    /// Not `private`: Phase 4 tests drive it directly.
+    func handleUtterance(kind: MeetingAudioTrackKind, text: String, start: CMTime, end: CMTime) {
         guard let origin = self.originBox.current else { return }
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let endSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin)
@@ -148,23 +159,30 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
             if speaker == .you {
-                let recentThem = MeetingLiveEchoFilter.recentThemText(
-                    from: self.recentThemUtterances,
-                    before: startSeconds,
-                    windowSeconds: Self.echoWindowSeconds
-                )
-                if MeetingLiveEchoFilter.shouldSuppress(micText: text, recentThemText: recentThem) {
+                if self.microphoneCaptureMethod == .voiceProcessing {
                     DebugLogger.shared.info(
-                        "[live/ECHO] SUPPRESSED mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
+                        "[live/ECHO] skipped (voiceProcessing) mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
                         source: "MeetingLive"
                     )
-                    self.snapshot = self.snapshot.settingPartial(nil, for: .you)
-                    return self.snapshot
+                } else {
+                    let recentThem = MeetingLiveEchoFilter.recentThemText(
+                        from: self.recentThemUtterances,
+                        before: startSeconds,
+                        windowSeconds: Self.echoWindowSeconds
+                    )
+                    if MeetingLiveEchoFilter.shouldSuppress(micText: text, recentThemText: recentThem) {
+                        DebugLogger.shared.info(
+                            "[live/ECHO] SUPPRESSED mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
+                            source: "MeetingLive"
+                        )
+                        self.snapshot = self.snapshot.settingPartial(nil, for: .you)
+                        return self.snapshot
+                    }
+                    DebugLogger.shared.info(
+                        "[live/ECHO] kept mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
+                        source: "MeetingLive"
+                    )
                 }
-                DebugLogger.shared.info(
-                    "[live/ECHO] kept mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
-                    source: "MeetingLive"
-                )
             } else {
                 let record = MeetingLiveUtterance(id: UUID(), speaker: .them, text: text, start: startSeconds, end: endSeconds)
                 self.recentThemUtterances.append(record)

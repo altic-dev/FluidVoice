@@ -277,6 +277,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard self.operationGeneration == generation, !Task.isCancelled else {
                 throw CancellationError()
             }
+            if let microphoneTrack = startResult.tracks.first(where: { $0.kind == .microphone }) {
+                liveTranscriptionCoordinator.setMicrophoneCaptureMethod(microphoneTrack.captureMethod)
+            }
             session.audioTracks = startResult.tracks
             if let firstPresentationTime = startResult.firstPresentationTime {
                 session.timebase.firstPresentationTime = firstPresentationTime

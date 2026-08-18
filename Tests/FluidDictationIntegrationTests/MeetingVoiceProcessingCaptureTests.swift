@@ -12,8 +12,8 @@ import XCTest
 final class MeetingVoiceProcessingCaptureTests: XCTestCase {
     // MARK: - Decision table (plan §3)
 
-    private func mic(uid: String? = "mic-uid") -> MeetingMicrophoneIdentity {
-        MeetingMicrophoneIdentity(captureDeviceID: "dev-1", coreAudioUID: uid, displayName: "Mic")
+    private func mic(uid: String? = "mic-uid", role: MeetingMicrophoneRole = .personal) -> MeetingMicrophoneIdentity {
+        MeetingMicrophoneIdentity(captureDeviceID: "dev-1", coreAudioUID: uid, displayName: "Mic", role: role)
     }
 
     private func viableRoute() -> MeetingOutputRouteSnapshot {
@@ -67,6 +67,31 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         let decision = MeetingCapturePathDecider.decide(flag: true, mode: .onlineCall, microphone: self.mic(), outputRoute: route)
         guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
         XCTAssertTrue(reason.contains("headphones"))
+    }
+
+    // MARK: - Decision table: role (Phase 4 plan §1)
+
+    func testDecisionSucceedsForPersonalRole() {
+        let decision = MeetingCapturePathDecider.decide(
+            flag: true, mode: .onlineCall, microphone: self.mic(role: .personal), outputRoute: self.viableRoute()
+        )
+        XCTAssertEqual(decision, .voiceProcessing)
+    }
+
+    func testDecisionDeclinesForSharedRole() {
+        let decision = MeetingCapturePathDecider.decide(
+            flag: true, mode: .onlineCall, microphone: self.mic(role: .shared), outputRoute: self.viableRoute()
+        )
+        guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
+        XCTAssertTrue(reason.contains("personal"))
+    }
+
+    func testDecisionDeclinesForUnknownRole() {
+        let decision = MeetingCapturePathDecider.decide(
+            flag: true, mode: .onlineCall, microphone: self.mic(role: .unknown), outputRoute: self.viableRoute()
+        )
+        guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
+        XCTAssertTrue(reason.contains("personal"))
     }
 
     // MARK: - Commit gate (plan §4, §7)
