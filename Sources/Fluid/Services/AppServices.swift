@@ -120,9 +120,10 @@ final class AppServices: ObservableObject {
         )
         self._meetingSessionCoordinator = coordinator
         self.setupMeetingCoordinatorForwarding()
-        Task { @MainActor [weak coordinator] in
-            await coordinator?.ensureRestored()
-            await coordinator?.sweepExpiredAudio()
+        Task { @MainActor in
+            MeetingRecordingPillController.shared.activate(coordinator: coordinator)
+            await coordinator.ensureRestored()
+            await coordinator.sweepExpiredAudio()
         }
         return coordinator
     }

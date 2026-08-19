@@ -25,6 +25,8 @@ actor MeetingLiveTrackEngine {
     /// A 24-slot queue held only ~0.25s and shed 5s of meeting-opening audio during warmup.
     nonisolated let queue = MeetingLiveBoundedQueue<MeetingLiveSampleCopy.Sample>(capacity: 512)
     private static let chunkSize: StreamingChunkSize = .ms160
+    private static let maxOpenUtteranceSeconds: Double = 20
+    private static let partialStallSeconds: Double = 2.5
     /// The recognizer buffers a full chunk before it can decode it, so the speech behind the first
     /// token started at least one chunk before the audio we were feeding when that token arrived.
     private static let decoderLookback = CMTime(value: CMTimeValue(chunkSize.durationMs), timescale: 1000)
@@ -37,6 +39,8 @@ actor MeetingLiveTrackEngine {
     private var converterSourceFormat: AVAudioFormat?
     private var utteranceStartPTS: CMTime?
     private var utteranceTurnID: UUID?
+    private var lastPartialText = ""
+    private var lastPartialUptime: Double?
     private var lastConsumedPTS: CMTime?
     private var currentFeedPTS: CMTime?
     private var lastUtteranceEndPTS: CMTime?
@@ -195,11 +199,44 @@ actor MeetingLiveTrackEngine {
         do {
             try await self.manager.appendAudio(converted)
             try await self.manager.processBufferedAudio()
+            await self.rotateLongUtteranceIfNeeded()
         } catch {
             self.diag("appendAudio/process error: \(error)")
             self.onDegraded?(self.kind, "Live captions hit an error and resynced.")
             await self.resetUtterance()
         }
+    }
+
+    /// The decoder's own endpointing is unreliable in the field: it can stop emitting partials
+    /// mid-utterance (observed after as little as 10s / ~120 chars) and never fire EOU, freezing
+    /// captions on stale text. Two fallbacks close the turn: the decoder has gone quiet for a few
+    /// seconds (a pause or a stall — either way the turn is over), or the utterance hit the hard
+    /// duration ceiling. Both finalize the current partial and reset for a fresh turn.
+    private func rotateLongUtteranceIfNeeded() async {
+        guard let start = self.utteranceStartPTS,
+              let end = self.lastConsumedPTS,
+              let turnID = self.utteranceTurnID
+        else { return }
+        let openSeconds = end.seconds - start.seconds
+        let quietSeconds = self.lastPartialUptime.map { ProcessInfo.processInfo.systemUptime - $0 }
+        let hitCeiling = openSeconds > Self.maxOpenUtteranceSeconds
+        let decoderQuiet = (quietSeconds ?? 0) > Self.partialStallSeconds && !self.lastPartialText.isEmpty
+        guard hitCeiling || decoderQuiet else { return }
+        let text = self.lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.utteranceStartPTS = nil
+        self.utteranceTurnID = nil
+        self.lastPartialText = ""
+        self.lastPartialUptime = nil
+        await self.manager.reset()
+        guard !text.isEmpty else { return }
+        self.lastUtteranceEndPTS = end
+        self.diagUtterances += 1
+        self.diag(String(
+            format: "forced EOU (%@) span=[%.2f–%.2f] chars=%d",
+            hitCeiling ? "open>\(Int(Self.maxOpenUtteranceSeconds))s" : String(format: "quiet %.1fs", quietSeconds ?? 0),
+            start.seconds, end.seconds, text.count
+        ))
+        self.onUtterance?(self.kind, turnID, text, start, end)
     }
 
     /// Once every 5s of wall clock: proves audio is still reaching the recognizer, and how long the
@@ -233,6 +270,8 @@ actor MeetingLiveTrackEngine {
             self.utteranceTurnID = UUID()
         }
         guard let start = self.utteranceStartPTS, let turnID = self.utteranceTurnID else { return }
+        self.lastPartialText = text
+        self.lastPartialUptime = ProcessInfo.processInfo.systemUptime
         let end = self.lastConsumedPTS ?? start
         self.diagPartials += 1
         if self.diagPartials % 10 == 1 {
@@ -250,6 +289,8 @@ actor MeetingLiveTrackEngine {
         self.diagLastEouUptime = now
         self.utteranceStartPTS = nil
         self.utteranceTurnID = nil
+        self.lastPartialText = ""
+        self.lastPartialUptime = nil
         await self.manager.reset()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -287,6 +328,8 @@ actor MeetingLiveTrackEngine {
     private func resetUtterance() async {
         self.utteranceStartPTS = nil
         self.utteranceTurnID = nil
+        self.lastPartialText = ""
+        self.lastPartialUptime = nil
         self.lastConsumedPTS = nil
         await self.manager.reset()
     }

@@ -300,3 +300,21 @@ final class MeetingLiveProvisionalContainmentTests: XCTestCase {
         XCTAssertFalse(liveSnapshot.utterances.isEmpty, "sanity: the live snapshot really did hold provisional content")
     }
 }
+
+@MainActor
+final class MeetingFloatingCaptionsControllerVisibilityTests: XCTestCase {
+    func testVisibleOnlyForRecordingAndRecordingDegraded() {
+        let id = MeetingSessionID()
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .idle))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .preparing(id)))
+        XCTAssertTrue(MeetingFloatingCaptionsController.isVisible(for: .recording(id)))
+        XCTAssertTrue(MeetingFloatingCaptionsController.isVisible(for: .recordingDegraded(id)))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .stopping(id)))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .processing(id, .saving)))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .completed(id)))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .interrupted(id)))
+        XCTAssertFalse(MeetingFloatingCaptionsController.isVisible(for: .failed(id, MeetingSessionFailure(
+            id: UUID(), occurredAt: Date(), domain: .capture, code: "test", message: "test failure", recoverable: true
+        ))))
+    }
+}

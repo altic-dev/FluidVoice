@@ -248,9 +248,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         var captureStartAttempted = false
 
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator { [weak self] snapshot in
-            Task { @MainActor [weak self] in
-                self?.liveTranscript = snapshot
+            // Common-modes trampoline, not the main dispatch queue: the queue is starved while the
+            // user drags a window (event-tracking mode), which froze live captions mid-drag.
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                MainActor.assumeIsolated {
+                    self?.liveTranscript = snapshot
+                }
             }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
