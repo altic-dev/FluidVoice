@@ -2271,6 +2271,8 @@ private struct MeetingLiveTranscriptCard: View {
     let snapshot: MeetingLiveTranscriptSnapshot
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPinnedToBottom = true
 
     var body: some View {
         ThemedCard(style: .subtle) {
@@ -2288,45 +2290,24 @@ private struct MeetingLiveTranscriptCard: View {
                     }
                 }
 
-                if self.lines.isEmpty {
+                if self.rows.isEmpty {
                     Text("Listening…")
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                                ForEach(Array(self.lines.enumerated()), id: \.offset) { index, line in
-                                    self.lineView(line)
-                                        .id(index)
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 160)
-                        .onChange(of: self.lines.count) {
-                            proxy.scrollTo(self.lines.count - 1, anchor: .bottom)
-                        }
-                    }
+                    self.scrollingBubbleList
                 }
             }
         }
     }
 
-    private struct Line {
-        let speaker: MeetingLiveSpeaker
-        let text: String
-        let isPartial: Bool
+    private var rows: [MeetingLiveBubbleComposer.Row] {
+        MeetingLiveBubbleComposer.rows(for: self.snapshot)
     }
 
-    /// Newest at the bottom; each engine's partial replaces in place rather than appending.
-    private var lines: [Line] {
-        var lines = self.snapshot.utterances.map { Line(speaker: $0.speaker, text: $0.text, isPartial: false) }
-        for speaker: MeetingLiveSpeaker in [.you, .them] {
-            if let partial = self.snapshot.partials[speaker], !partial.isEmpty {
-                lines.append(Line(speaker: speaker, text: partial, isPartial: true))
-            }
-        }
-        return lines
+    private var trailingPartialLength: Int {
+        guard let last = self.rows.last, last.isPartial else { return 0 }
+        return last.text.count
     }
 
     private var availabilityIndicator: String? {
@@ -2338,17 +2319,106 @@ private struct MeetingLiveTranscriptCard: View {
         }
     }
 
-    private func lineView(_ line: Line) -> some View {
-        HStack(alignment: .top, spacing: self.theme.metrics.spacing.xs) {
-            Text(line.speaker == .you ? "You" : "Them")
-                .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: 44, alignment: .leading)
-            Text(line.text)
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(line.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
-                .italic(line.isPartial)
+    private var scrollingBubbleList: some View {
+        let rows = self.rows
+        let rowIDs = rows.map(\.id)
+        return ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                        ForEach(rows) { row in
+                            MeetingLiveBubbleRow(row: row)
+                                .equatable()
+                                .id(row.id)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+                .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let bottomOffset = geometry.contentSize.height - geometry.containerSize.height
+                    return geometry.contentOffset.y >= bottomOffset - 24
+                } action: { _, isPinned in
+                    self.isPinnedToBottom = isPinned
+                }
+                .onChange(of: rows.count) {
+                    self.scrollToBottomIfPinned(proxy: proxy)
+                }
+                .onChange(of: self.trailingPartialLength) {
+                    self.scrollToBottomIfPinned(proxy: proxy)
+                }
+
+                if !self.isPinnedToBottom {
+                    Button {
+                        self.isPinnedToBottom = true
+                        self.scrollToBottom(proxy: proxy, animated: true)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .frame(width: 28, height: 28)
+                            .background(self.theme.palette.contentBackground, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(6)
+                }
+            }
         }
+        .frame(maxHeight: 280)
+    }
+
+    private func scrollToBottomIfPinned(proxy: ScrollViewProxy) {
+        guard self.isPinnedToBottom else { return }
+        self.scrollToBottom(proxy: proxy, animated: false)
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        guard let lastID = self.rows.last?.id else { return }
+        guard animated, !self.reduceMotion else {
+            proxy.scrollTo(lastID, anchor: .bottom)
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(lastID, anchor: .bottom)
+        }
+    }
+}
+
+private struct MeetingLiveBubbleRow: View, Equatable {
+    let row: MeetingLiveBubbleComposer.Row
+
+    @Environment(\.theme) private var theme
+
+    static func == (lhs: MeetingLiveBubbleRow, rhs: MeetingLiveBubbleRow) -> Bool {
+        lhs.row == rhs.row
+    }
+
+    private var isYou: Bool { self.row.speaker == .you }
+
+    /// `contentBackground` reads as invisible against this card, so "Them" gets an explicit tint.
+    private var fill: Color {
+        let base = self.isYou ? self.theme.palette.accent : self.theme.palette.secondaryText
+        let strength: Double = self.isYou ? 0.10 : 0.08
+        return base.opacity(self.row.isPartial ? strength / 2 : strength)
+    }
+
+    var body: some View {
+        VStack(alignment: self.isYou ? .trailing : .leading, spacing: 4) {
+            if self.row.showsLabel {
+                Text(self.isYou ? "You" : "Them")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.isYou ? self.theme.palette.accent : self.theme.palette.secondaryText)
+            }
+            Text(self.row.text)
+                // The partial→final color swap solidifies in place; it must never animate.
+                .transaction { $0.animation = nil }
+                .meetingBubbleStyle(.live(fill: self.fill, foreground: self.row.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText))
+        }
+        .frame(maxWidth: .infinity, alignment: self.isYou ? .trailing : .leading)
+        .padding(self.isYou ? .leading : .trailing, 32)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(self.isYou ? "You" : "Them"), \(self.row.text)")
+        .accessibilityHidden(self.row.isPartial)
     }
 }
 
@@ -3101,13 +3171,8 @@ private struct MeetingTranscriptSegmentRow: View {
                 self.speakerLabel
             }
             Text(self.segment.text)
-                .font(.system(size: 15, design: .monospaced))
-                .lineSpacing(5)
-                .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(self.bubbleFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .meetingBubbleStyle(MeetingBubbleStyle.final(fill: self.bubbleFill, foreground: self.theme.palette.primaryText))
             if self.segment.isEcho {
                 Text("probable echo")
                     .font(self.theme.typography.caption)
@@ -3124,13 +3189,8 @@ private struct MeetingTranscriptSegmentRow: View {
                 self.speakerLabel
             }
             Text(self.segment.text)
-                .font(.system(size: 15, design: .monospaced))
-                .lineSpacing(5)
-                .foregroundStyle(self.theme.palette.primaryText)
                 .textSelection(.enabled)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(self.bubbleFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .meetingBubbleStyle(MeetingBubbleStyle.final(fill: self.bubbleFill, foreground: self.theme.palette.primaryText))
             if self.segment.isEcho {
                 Text("probable echo")
                     .font(self.theme.typography.caption)
@@ -3141,4 +3201,43 @@ private struct MeetingTranscriptSegmentRow: View {
         .padding(.trailing, 48)
     }
 
+}
+
+/// Shared bubble look for final transcript and live captions; callers own alignment, labels, and insets.
+fileprivate struct MeetingBubbleStyle {
+    var font: Font
+    var lineSpacing: CGFloat
+    var horizontalPadding: CGFloat
+    var verticalPadding: CGFloat
+    var cornerRadius: CGFloat
+    var fill: Color
+    var foreground: Color
+
+    static func final(fill: Color, foreground: Color) -> MeetingBubbleStyle {
+        MeetingBubbleStyle(
+            font: .system(size: 15, design: .monospaced), lineSpacing: 5,
+            horizontalPadding: 18, verticalPadding: 12, cornerRadius: 18,
+            fill: fill, foreground: foreground
+        )
+    }
+
+    static func live(fill: Color, foreground: Color) -> MeetingBubbleStyle {
+        MeetingBubbleStyle(
+            font: .system(size: 13, design: .monospaced), lineSpacing: 3,
+            horizontalPadding: 12, verticalPadding: 8, cornerRadius: 12,
+            fill: fill, foreground: foreground
+        )
+    }
+}
+
+extension View {
+    fileprivate func meetingBubbleStyle(_ style: MeetingBubbleStyle) -> some View {
+        self
+            .font(style.font)
+            .lineSpacing(style.lineSpacing)
+            .foregroundStyle(style.foreground)
+            .padding(.horizontal, style.horizontalPadding)
+            .padding(.vertical, style.verticalPadding)
+            .background(style.fill, in: RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
+    }
 }

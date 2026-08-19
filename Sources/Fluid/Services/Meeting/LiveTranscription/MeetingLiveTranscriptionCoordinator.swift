@@ -133,11 +133,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         Task { [weak self] in
             guard let self else { return }
             await engine.configure(
-                onPartial: { [weak self] kind, text, start, end in
-                    self?.handlePartial(kind: kind, text: text, start: start, end: end)
+                onPartial: { [weak self] kind, id, text, start, end in
+                    self?.handlePartial(kind: kind, id: id, text: text, start: start, end: end)
                 },
-                onUtterance: { [weak self] kind, text, start, end in
-                    self?.handleUtterance(kind: kind, text: text, start: start, end: end)
+                onUtterance: { [weak self] kind, id, text, start, end in
+                    self?.handleUtterance(kind: kind, id: id, text: text, start: start, end: end)
                 },
                 onDegraded: { [weak self] kind, reason in
                     self?.handleDegraded(kind: kind, reason: reason)
@@ -150,13 +150,16 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         }
     }
 
-    private func handlePartial(kind: MeetingAudioTrackKind, text: String, start: CMTime, end: CMTime) {
+    private func handlePartial(kind: MeetingAudioTrackKind, id: UUID, text: String, start: CMTime, end: CMTime) {
+        guard let origin = self.originBox.current else { return }
+        let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let speaker = Self.speaker(for: kind)
-        self.publish { $0.settingPartial(text, for: speaker) }
+        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds)
+        self.publish { $0.settingPartial(partial, for: speaker) }
     }
 
-    /// Not `private`: Phase 4 tests drive it directly.
-    func handleUtterance(kind: MeetingAudioTrackKind, text: String, start: CMTime, end: CMTime) {
+    /// Not `private`: Phase 4 tests drive it directly, predating the solidify UUID — hence the default.
+    func handleUtterance(kind: MeetingAudioTrackKind, id: UUID = UUID(), text: String, start: CMTime, end: CMTime) {
         guard let origin = self.originBox.current else { return }
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let endSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin)
@@ -180,7 +183,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                             "[live/ECHO] SUPPRESSED mic utterance [\(String(format: "%.2f", startSeconds))] text=\(text)",
                             source: "MeetingLive"
                         )
-                        self.snapshot = self.snapshot.settingPartial(nil, for: .you)
+                        self.snapshot = self.snapshot.settingPartial(nil, for: .you).markingFinalized(id)
                         return self.snapshot
                     }
                     DebugLogger.shared.info(
@@ -189,11 +192,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
                     )
                 }
             } else {
-                let record = MeetingLiveUtterance(id: UUID(), speaker: .them, text: text, start: startSeconds, end: endSeconds)
+                let record = MeetingLiveUtterance(id: id, speaker: .them, text: text, start: startSeconds, end: endSeconds)
                 self.recentThemUtterances.append(record)
                 self.recentThemUtterances.removeAll { $0.end < startSeconds - Self.echoWindowSeconds }
             }
-            let utterance = MeetingLiveUtterance(id: UUID(), speaker: speaker, text: text, start: startSeconds, end: endSeconds)
+            let utterance = MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: startSeconds, end: endSeconds)
             self.snapshot = self.snapshot.inserting(utterance).settingPartial(nil, for: speaker)
             return self.snapshot
         }

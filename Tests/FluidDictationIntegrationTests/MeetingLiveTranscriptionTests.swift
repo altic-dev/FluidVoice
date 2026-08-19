@@ -57,27 +57,114 @@ final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.utterances.first?.text, "arrived second, starts early")
     }
 
+    private func partial(_ text: String, id: UUID = UUID(), start: TimeInterval = 0) -> MeetingLivePartial {
+        MeetingLivePartial(id: id, text: text, start: start)
+    }
+
     func testGrowingPartialsReplaceRatherThanConcatenate() {
+        let id = UUID()
         var snapshot = MeetingLiveTranscriptSnapshot.empty
-        snapshot = snapshot.settingPartial("hel", for: .you)
-        snapshot = snapshot.settingPartial("hello", for: .you)
-        snapshot = snapshot.settingPartial("hello there", for: .you)
-        XCTAssertEqual(snapshot.partials[.you], "hello there")
+        snapshot = snapshot.settingPartial(self.partial("hel", id: id), for: .you)
+        snapshot = snapshot.settingPartial(self.partial("hello", id: id), for: .you)
+        snapshot = snapshot.settingPartial(self.partial("hello there", id: id), for: .you)
+        XCTAssertEqual(snapshot.partials[.you]?.text, "hello there")
     }
 
     func testEmptyPartialClearsTheSlot() {
         var snapshot = MeetingLiveTranscriptSnapshot.empty
-        snapshot = snapshot.settingPartial("hello", for: .them)
-        snapshot = snapshot.settingPartial("", for: .them)
+        snapshot = snapshot.settingPartial(self.partial("hello"), for: .them)
+        snapshot = snapshot.settingPartial(nil, for: .them)
         XCTAssertNil(snapshot.partials[.them])
     }
 
     func testPartialsForEachSpeakerAreIndependent() {
         var snapshot = MeetingLiveTranscriptSnapshot.empty
-        snapshot = snapshot.settingPartial("you partial", for: .you)
-        snapshot = snapshot.settingPartial("them partial", for: .them)
-        XCTAssertEqual(snapshot.partials[.you], "you partial")
-        XCTAssertEqual(snapshot.partials[.them], "them partial")
+        snapshot = snapshot.settingPartial(self.partial("you partial"), for: .you)
+        snapshot = snapshot.settingPartial(self.partial("them partial"), for: .them)
+        XCTAssertEqual(snapshot.partials[.you]?.text, "you partial")
+        XCTAssertEqual(snapshot.partials[.them]?.text, "them partial")
+    }
+
+    func testStalePartialAfterFinalizeIsDropped() {
+        let id = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot = snapshot.inserting(self.utterance(.you, "final text", start: 0, end: 1))
+        snapshot = snapshot.markingFinalized(id)
+        snapshot = snapshot.settingPartial(self.partial("resurrected", id: id), for: .you)
+        XCTAssertNil(snapshot.partials[.you])
+    }
+
+    func testEchoSuppressionFinalizesTurnWithoutUtterance() {
+        let id = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot = snapshot.settingPartial(self.partial("in flight", id: id), for: .you)
+        snapshot = snapshot.settingPartial(nil, for: .you).markingFinalized(id)
+        XCTAssertNil(snapshot.partials[.you])
+        XCTAssertTrue(snapshot.utterances.isEmpty)
+
+        let late = snapshot.settingPartial(self.partial("late arrival", id: id), for: .you)
+        XCTAssertNil(late.partials[.you], "a partial for an echo-suppressed turn must not resurrect")
+    }
+
+    func testFinalizedTurnIDCapEvictsOldestWithoutBreakingRecentDedup() {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        var ids: [UUID] = []
+        for index in 0..<100 {
+            let id = UUID()
+            ids.append(id)
+            snapshot = snapshot.inserting(self.utterance(.you, "turn \(index)", start: TimeInterval(index), end: TimeInterval(index) + 1))
+            snapshot = snapshot.markingFinalized(id)
+        }
+        let oldest = ids[0]
+        let recent = ids[ids.count - 1]
+        XCTAssertFalse(snapshot.finalizedTurnIDs.contains(oldest), "cap must evict the oldest id")
+        let staleOldPartial = snapshot.settingPartial(self.partial("should not be dropped by cap logic", id: oldest), for: .you)
+        XCTAssertNotNil(staleOldPartial.partials[.you], "an evicted id is no longer recognized as stale")
+
+        let staleRecentPartial = snapshot.settingPartial(self.partial("still dropped", id: recent), for: .you)
+        XCTAssertNil(staleRecentPartial.partials[.you], "a recently finalized id must still be recognized as stale")
+    }
+}
+
+final class MeetingLiveBubbleComposerTests: XCTestCase {
+    private func utterance(_ speaker: MeetingLiveSpeaker, _ text: String, start: TimeInterval, end: TimeInterval, id: UUID = UUID()) -> MeetingLiveUtterance {
+        MeetingLiveUtterance(id: id, speaker: speaker, text: text, start: start, end: end)
+    }
+
+    func testFinalizedThenBottomPinnedPartialsOrderedByStart() {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot = snapshot.inserting(self.utterance(.you, "hello", start: 0, end: 1))
+        snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "them partial", start: 5), for: .them)
+        snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "you partial", start: 3), for: .you)
+
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.text), ["hello", "you partial", "them partial"])
+        XCTAssertEqual(rows.map(\.isPartial), [false, true, true])
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false, true])
+    }
+
+    func testShowsLabelIsFalseWhenSpeakerRepeatsAcrossPartial() {
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot = snapshot.inserting(self.utterance(.you, "first", start: 0, end: 1))
+        snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "still talking", start: 2), for: .you)
+
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false])
+    }
+
+    func testSolidifyKeepsRowIdentityStable() {
+        let turnID = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot = snapshot.settingPartial(MeetingLivePartial(id: turnID, text: "in flight text", start: 0), for: .you)
+        let partialRows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(partialRows.first?.id, turnID)
+        XCTAssertEqual(partialRows.first?.isPartial, true)
+
+        snapshot = snapshot.inserting(self.utterance(.you, "in flight text finalized", start: 0, end: 2, id: turnID))
+            .settingPartial(nil, for: .you)
+        let finalRows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(finalRows.first?.id, turnID)
+        XCTAssertEqual(finalRows.first?.isPartial, false)
     }
 }
 
@@ -203,7 +290,7 @@ final class MeetingLiveProvisionalContainmentTests: XCTestCase {
         // but nothing ever threads it into the exporter or the session's segments.
         let liveSnapshot = MeetingLiveTranscriptSnapshot.empty
             .inserting(MeetingLiveUtterance(id: UUID(), speaker: .you, text: "PROVISIONAL_LIVE_ONLY_TEXT", start: 0, end: 1))
-            .settingPartial("PROVISIONAL_PARTIAL_ONLY_TEXT", for: .them)
+            .settingPartial(MeetingLivePartial(id: UUID(), text: "PROVISIONAL_PARTIAL_ONLY_TEXT", start: 0), for: .them)
 
         let exported = MeetingTranscriptExporter.text(for: session, includeEchoes: true)
         XCTAssertTrue(exported.contains("FINAL_TRANSCRIPT_TEXT"))

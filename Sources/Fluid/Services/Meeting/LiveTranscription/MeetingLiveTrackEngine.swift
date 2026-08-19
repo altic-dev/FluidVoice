@@ -14,8 +14,8 @@ import os
 /// (never from the SCStream callback itself). A polling drain loop pulls off the bounded queue and
 /// does all FluidAudio work on this actor, off the capture path entirely.
 actor MeetingLiveTrackEngine {
-    typealias PartialHandler = @Sendable (MeetingAudioTrackKind, String, CMTime, CMTime) -> Void
-    typealias UtteranceHandler = @Sendable (MeetingAudioTrackKind, String, CMTime, CMTime) -> Void
+    typealias PartialHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
+    typealias UtteranceHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
     typealias DegradedHandler = @Sendable (MeetingAudioTrackKind, String) -> Void
     typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
 
@@ -36,6 +36,7 @@ actor MeetingLiveTrackEngine {
     private var converter: AVAudioConverter?
     private var converterSourceFormat: AVAudioFormat?
     private var utteranceStartPTS: CMTime?
+    private var utteranceTurnID: UUID?
     private var lastConsumedPTS: CMTime?
     private var currentFeedPTS: CMTime?
     private var lastUtteranceEndPTS: CMTime?
@@ -229,27 +230,30 @@ actor MeetingLiveTrackEngine {
             // Backdating must not reach behind the utterance that just closed, or consecutive turns
             // render as overlapping spans.
             self.utteranceStartPTS = self.lastUtteranceEndPTS.map { max(backdated, $0) } ?? backdated
+            self.utteranceTurnID = UUID()
         }
-        guard let start = self.utteranceStartPTS else { return }
+        guard let start = self.utteranceStartPTS, let turnID = self.utteranceTurnID else { return }
         let end = self.lastConsumedPTS ?? start
         self.diagPartials += 1
         if self.diagPartials % 10 == 1 {
             self.diag("partial #\(self.diagPartials) chars=\(text.count) tail=…\(String(text.suffix(60)))")
         }
-        self.onPartial?(self.kind, text, start, end)
+        self.onPartial?(self.kind, turnID, text, start, end)
     }
 
     private func handleEOU(_ text: String) async {
         let start = self.utteranceStartPTS
         let end = self.lastConsumedPTS ?? start
+        let turnID = self.utteranceTurnID
         let now = ProcessInfo.processInfo.systemUptime
         let gap = self.diagLastEouUptime.map { now - $0 }
         self.diagLastEouUptime = now
         self.utteranceStartPTS = nil
+        self.utteranceTurnID = nil
         await self.manager.reset()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard let start, let end else {
+        guard let start, let end, let turnID else {
             self.diag("EOU fired but no start PTS — dropped (chars=\(text.count))")
             return
         }
@@ -261,7 +265,7 @@ actor MeetingLiveTrackEngine {
             gap.map { String(format: "%.1fs", $0) } ?? "first",
             trimmed
         ))
-        self.onUtterance?(self.kind, trimmed, start, end)
+        self.onUtterance?(self.kind, turnID, trimmed, start, end)
     }
 
     /// A saturated queue sheds many samples in a burst. Recording one pending resync instead of
@@ -282,6 +286,7 @@ actor MeetingLiveTrackEngine {
 
     private func resetUtterance() async {
         self.utteranceStartPTS = nil
+        self.utteranceTurnID = nil
         self.lastConsumedPTS = nil
         await self.manager.reset()
     }
