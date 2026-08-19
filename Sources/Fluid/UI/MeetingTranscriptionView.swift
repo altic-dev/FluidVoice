@@ -175,16 +175,17 @@ struct MeetingTranscriptionView: View {
                     isQuiescent: self.coordinator.isQuiescent,
                     onOpenMeetingSettings: self.openMeetingSettings,
                     isRetrying: self.isRetrying,
-                    onCloseSelection: self.selectedHistorySessionID == nil
-                        ? nil
-                        : { self.selectedHistorySessionID = nil }
+                    onCloseSelection: self.closeCanvasAction
                 )
 
                 if self.isMeetingHistoryVisible {
                     Divider()
                     MeetingHistoryInspector(
                         sessions: self.meetingHistory,
-                        selectedSessionID: self.$selectedHistorySessionID,
+                        selectedSessionID: Binding(
+                            get: { self.selectedHistorySessionID },
+                            set: { if self.canBrowseMeetingHistory { self.selectedHistorySessionID = $0 } }
+                        ),
                         errorMessage: self.meetingHistoryError,
                         isQuiescent: self.coordinator.isQuiescent,
                         onRefresh: { Task { await self.loadMeetingHistory() } },
@@ -345,6 +346,20 @@ struct MeetingTranscriptionView: View {
     private var selectedHistorySession: MeetingSession? {
         guard let selectedHistorySessionID else { return nil }
         return self.meetingHistory.first(where: { $0.id == selectedHistorySessionID })
+    }
+
+    /// Closing a history selection returns to whatever is underneath; closing the just-finished
+    /// meeting's own result/failure returns to the new-meeting screen.
+    private var closeCanvasAction: (() -> Void)? {
+        if self.selectedHistorySessionID != nil {
+            return { self.selectedHistorySessionID = nil }
+        }
+        switch self.coordinator.state {
+        case .completed, .failed, .interrupted:
+            return { self.startNewMeeting() }
+        default:
+            return nil
+        }
     }
 
     private var canBrowseMeetingHistory: Bool {
@@ -585,6 +600,8 @@ struct MeetingTranscriptionView: View {
         guard !self.isStopping else { return }
         self.isStopping = true
         self.actionErrorMessage = nil
+        // Stop is an explicit "show me my meeting" — a stale sidebar pick must not hijack the outcome.
+        self.selectedHistorySessionID = nil
         Task {
             defer { self.isStopping = false }
             do {
@@ -1115,8 +1132,37 @@ struct MeetingTranscriptionCanvas: View {
 
     @Environment(\.theme) private var theme
 
+    /// Recording renders outside the ScrollView so the live captions card can fill the height;
+    /// its transcript list is its own scroller, and nested scrolling would fight it.
+    private var fillsCanvasHeight: Bool {
+        switch self.state {
+        case .recording, .stopping: true
+        default: false
+        }
+    }
+
     var body: some View {
-        ScrollView {
+        Group {
+            if self.fillsCanvasHeight {
+                self.canvasContent
+                    .frame(maxWidth: 820)
+                    .padding(self.theme.metrics.spacing.xxl)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView {
+                    self.canvasContent
+                        .frame(maxWidth: 820)
+                        .padding(self.theme.metrics.spacing.xxl)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(self.theme.palette.windowBackground)
+    }
+
+    @ViewBuilder
+    private var canvasContent: some View {
             Group {
                 switch self.state {
                 case let .setup(isStarting, recentSession):
@@ -1183,12 +1229,6 @@ struct MeetingTranscriptionCanvas: View {
                     )
                 }
             }
-            .frame(maxWidth: 820)
-            .padding(self.theme.metrics.spacing.xxl)
-            .frame(maxWidth: .infinity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(self.theme.palette.windowBackground)
     }
 }
 
@@ -2294,10 +2334,12 @@ private struct MeetingLiveTranscriptCard: View {
                     Text("Listening…")
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
+                        .frame(maxHeight: .infinity, alignment: .top)
                 } else {
                     self.scrollingBubbleList
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -2364,7 +2406,7 @@ private struct MeetingLiveTranscriptCard: View {
                 }
             }
         }
-        .frame(maxHeight: 280)
+        .frame(minHeight: 120, maxHeight: .infinity)
     }
 
     private func scrollToBottomIfPinned(proxy: ScrollViewProxy) {
@@ -2395,11 +2437,10 @@ private struct MeetingLiveBubbleRow: View, Equatable {
 
     private var isYou: Bool { self.row.speaker == .you }
 
-    /// `contentBackground` reads as invisible against this card, so "Them" gets an explicit tint.
+    /// Same washes as the final transcript: accent for You, the first speaker-palette pastel for Them.
     private var fill: Color {
-        let base = self.isYou ? self.theme.palette.accent : self.theme.palette.secondaryText
-        let strength: Double = self.isYou ? 0.10 : 0.08
-        return base.opacity(self.row.isPartial ? strength / 2 : strength)
+        let base = self.isYou ? self.theme.palette.accent : MeetingSpeakerPalette.tint(forSpeakerIndex: 0)
+        return base.opacity(self.row.isPartial ? 0.05 : 0.10)
     }
 
     var body: some View {
@@ -2412,7 +2453,7 @@ private struct MeetingLiveBubbleRow: View, Equatable {
             Text(self.row.text)
                 // The partial→final color swap solidifies in place; it must never animate.
                 .transaction { $0.animation = nil }
-                .meetingBubbleStyle(.live(fill: self.fill, foreground: self.row.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText))
+                .meetingBubbleStyle(.final(fill: self.fill, foreground: self.row.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText))
         }
         .frame(maxWidth: .infinity, alignment: self.isYou ? .trailing : .leading)
         .padding(self.isYou ? .leading : .trailing, 32)
@@ -3221,13 +3262,6 @@ fileprivate struct MeetingBubbleStyle {
         )
     }
 
-    static func live(fill: Color, foreground: Color) -> MeetingBubbleStyle {
-        MeetingBubbleStyle(
-            font: .system(size: 13, design: .monospaced), lineSpacing: 3,
-            horizontalPadding: 12, verticalPadding: 8, cornerRadius: 12,
-            fill: fill, foreground: foreground
-        )
-    }
 }
 
 extension View {
