@@ -531,6 +531,8 @@ final class SpeakerLabeledTranscriptionPolicyTests: XCTestCase {
         ]
 
         XCTAssertNil(SpeakerLabeledTranscriptionPolicy.assembleTurns(turns))
+    }
+}
 
 /// Word-timing mapping is meeting-only: `transcribeFinal` never reaches it.
 final class FluidAudioProviderWordTimingTests: XCTestCase {

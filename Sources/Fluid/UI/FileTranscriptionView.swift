@@ -427,7 +427,7 @@ struct FileTranscriptionView: View {
                 .buttonStyle(.borderless)
             }
 
-            if let notice = transcriptionService.fallbackNotice {
+            if let notice = result.speakerLabelingNotice ?? transcriptionService.fallbackNotice {
                 Label(notice, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundColor(.secondary)
