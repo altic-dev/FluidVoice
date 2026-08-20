@@ -119,6 +119,128 @@ final class HotkeyShortcutTests: XCTestCase {
         ))
     }
 
+    func testLongDictationPolicyKeepsShortRecordingsOnSinglePassPath() {
+        let sampleRate = 10
+        let sampleCount = (20 * 60 * sampleRate) - 1
+        let samples = [Float](repeating: 0, count: sampleCount)
+
+        XCTAssertTrue(ASRService.shouldProcessStreamingPreview(
+            sampleCount: sampleCount,
+            sampleRate: sampleRate
+        ))
+        XCTAssertEqual(
+            ASRService.finalTranscriptionRanges(samples: samples, sampleRate: sampleRate),
+            [0..<sampleCount]
+        )
+    }
+
+    func testLongDictationPolicyBoundsPreviewAndCoversFiftyMinutesExactlyOnce() {
+        let sampleRate = 10
+        let maximumRangeCount = 20 * 60 * sampleRate
+        let sampleCount = 50 * 60 * sampleRate
+        let samples = [Float](repeating: 0, count: sampleCount)
+        let ranges = ASRService.finalTranscriptionRanges(
+            samples: samples,
+            sampleRate: sampleRate
+        )
+
+        XCTAssertFalse(ASRService.shouldProcessStreamingPreview(
+            sampleCount: maximumRangeCount,
+            sampleRate: sampleRate
+        ))
+        XCTAssertEqual(ranges, [
+            0..<maximumRangeCount,
+            maximumRangeCount..<(maximumRangeCount * 2),
+            (maximumRangeCount * 2)..<sampleCount,
+        ])
+        XCTAssertTrue(ranges.allSatisfy { !$0.isEmpty && $0.count <= maximumRangeCount })
+        XCTAssertEqual(ranges.first?.lowerBound, 0)
+        XCTAssertEqual(ranges.last?.upperBound, sampleCount)
+        XCTAssertTrue(zip(ranges, ranges.dropFirst()).allSatisfy { $0.upperBound == $1.lowerBound })
+    }
+
+    func testLongDictationPolicyAvoidsSubsecondTailAtBoundary() {
+        let sampleRate = 10
+        let maximumRangeCount = 20 * 60 * sampleRate
+
+        XCTAssertEqual(
+            ASRService.finalTranscriptionRanges(
+                samples: [Float](repeating: 0, count: maximumRangeCount),
+                sampleRate: sampleRate
+            ),
+            [0..<maximumRangeCount]
+        )
+
+        let ranges = ASRService.finalTranscriptionRanges(
+            samples: [Float](repeating: 0, count: maximumRangeCount + 1),
+            sampleRate: sampleRate
+        )
+        XCTAssertEqual(ranges.first?.lowerBound, 0)
+        XCTAssertEqual(ranges.last?.upperBound, maximumRangeCount + 1)
+        XCTAssertTrue(ranges.allSatisfy { !$0.isEmpty && $0.count <= maximumRangeCount })
+        XCTAssertGreaterThanOrEqual(ranges.last?.count ?? 0, sampleRate)
+        XCTAssertTrue(zip(ranges, ranges.dropFirst()).allSatisfy { $0.upperBound == $1.lowerBound })
+    }
+
+    func testLongDictationPolicyChoosesQuietBoundaryNearChunkLimit() {
+        let sampleRate = 100
+        let maximumRangeCount = 20 * 60 * sampleRate
+        let quietBoundary = maximumRangeCount - sampleRate
+        var samples = [Float](repeating: 1, count: maximumRangeCount + (10 * sampleRate))
+        for index in (quietBoundary - 4)..<(quietBoundary + 4) {
+            samples[index] = 0
+        }
+
+        let ranges = ASRService.finalTranscriptionRanges(samples: samples, sampleRate: sampleRate)
+
+        XCTAssertEqual(ranges.first?.upperBound, quietBoundary)
+        XCTAssertEqual(ranges.last?.lowerBound, quietBoundary)
+    }
+
+    @MainActor
+    func testLongDictationPolicyCombinesOnlyUsableChunkResults() async throws {
+        let results = [
+            ASRTranscriptionResult(text: " first ", confidence: 0.8),
+            ASRTranscriptionResult(text: " \n\t ", confidence: 0.1),
+            ASRTranscriptionResult(text: "second", confidence: 0.6),
+        ]
+        var requestedRanges: [Range<Int>] = []
+
+        let result = try await ASRService.transcribeFinalChunks(
+            ranges: [0..<10, 10..<20, 20..<30]
+        ) { _, range in
+            requestedRanges.append(range)
+            return results[requestedRanges.count - 1]
+        }
+
+        XCTAssertEqual(requestedRanges, [0..<10, 10..<20, 20..<30])
+        XCTAssertEqual(result.text, "first second")
+        XCTAssertEqual(result.confidence, 0.7, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testLongDictationPolicyStopsSerialFinalizationOnFirstError() async {
+        struct ExpectedError: Error {}
+        var requestedRanges: [Range<Int>] = []
+
+        do {
+            _ = try await ASRService.transcribeFinalChunks(
+                ranges: [0..<10, 10..<20, 20..<30]
+            ) { _, range in
+                requestedRanges.append(range)
+                if requestedRanges.count == 2 {
+                    throw ExpectedError()
+                }
+                return ASRTranscriptionResult(text: "partial", confidence: 1)
+            }
+            XCTFail("Expected chunk finalization to throw")
+        } catch is ExpectedError {
+            XCTAssertEqual(requestedRanges, [0..<10, 10..<20])
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     @MainActor
     func testSilentRecordingSettingRoundTripsAndOlderBackupsStillDecode() async throws {
         let settingsStore = SettingsStore.shared

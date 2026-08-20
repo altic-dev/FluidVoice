@@ -87,6 +87,111 @@ enum AudioCaptureStartOutcome: Equatable {
 /// Models are cached locally to avoid repeated downloads.
 @MainActor
 final class ASRService: ObservableObject {
+    private nonisolated static let longDictationChunkDurationSeconds = 20 * 60
+
+    nonisolated static func shouldProcessStreamingPreview(
+        sampleCount: Int,
+        sampleRate: Int = 16_000
+    ) -> Bool {
+        guard sampleCount >= 0, sampleRate > 0 else { return false }
+        return sampleCount < self.longDictationChunkDurationSeconds * sampleRate
+    }
+
+    nonisolated static func finalTranscriptionRanges(
+        samples: [Float],
+        sampleRate: Int = 16_000
+    ) -> [Range<Int>] {
+        let sampleCount = samples.count
+        guard sampleCount > 0, sampleRate > 0 else { return [] }
+
+        let maximumSampleCount = Self.longDictationChunkDurationSeconds * sampleRate
+        guard sampleCount > maximumSampleCount else { return [0..<sampleCount] }
+
+        var ranges: [Range<Int>] = []
+        var start = 0
+        while sampleCount - start > maximumSampleCount {
+            let preferredEnd = start + maximumSampleCount
+            let latestEndWithValidTail = sampleCount - sampleRate
+            let upperBound = min(preferredEnd, latestEndWithValidTail)
+            let searchRadius = 2 * sampleRate
+            let lowerBound = max(start + sampleRate, upperBound - searchRadius)
+            let end = Self.quietestBoundary(
+                in: samples,
+                lowerBound: lowerBound,
+                upperBound: upperBound,
+                preferredEnd: preferredEnd,
+                sampleRate: sampleRate
+            ) ?? upperBound
+            ranges.append(start..<end)
+            start = end
+        }
+
+        ranges.append(start..<sampleCount)
+        return ranges
+    }
+
+    private nonisolated static func quietestBoundary(
+        in samples: [Float],
+        lowerBound: Int,
+        upperBound: Int,
+        preferredEnd: Int,
+        sampleRate: Int
+    ) -> Int? {
+        guard lowerBound <= upperBound else { return nil }
+
+        let analysisWindow = max(1, sampleRate * 80 / 1000)
+        let halfWindow = max(1, analysisWindow / 2)
+        let stride = max(1, sampleRate * 20 / 1000)
+        let searchRadius = max(1, 2 * sampleRate)
+        var bestBoundary: Int?
+        var bestScore = Float.greatestFiniteMagnitude
+        var boundary = lowerBound
+
+        while boundary <= upperBound {
+            let windowStart = max(0, boundary - halfWindow)
+            let windowEnd = min(samples.count, boundary + halfWindow)
+            var energy: Float = 0
+            for index in windowStart..<windowEnd {
+                energy += abs(samples[index])
+            }
+
+            let windowSampleCount = max(1, windowEnd - windowStart)
+            let distancePenalty = Float(abs(boundary - preferredEnd)) / Float(searchRadius) * 0.0001
+            let score = energy / Float(windowSampleCount) + distancePenalty
+            if score < bestScore {
+                bestScore = score
+                bestBoundary = boundary
+            }
+            boundary += stride
+        }
+
+        return bestBoundary
+    }
+
+    static func transcribeFinalChunks(
+        ranges: [Range<Int>],
+        transcribe: (Int, Range<Int>) async throws -> ASRTranscriptionResult
+    ) async rethrows -> ASRTranscriptionResult {
+        var transcriptions: [String] = []
+        var totalConfidence: Float = 0
+
+        for (index, range) in ranges.enumerated() where !range.isEmpty {
+            let result = try await transcribe(index + 1, range)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            transcriptions.append(text)
+            totalConfidence += result.confidence
+        }
+
+        let confidence = transcriptions.isEmpty
+            ? 0
+            : totalConfidence / Float(transcriptions.count)
+        return ASRTranscriptionResult(
+            text: transcriptions.joined(separator: " "),
+            confidence: confidence
+        )
+    }
+
     nonisolated static func shouldAssessShortAudioSilence(
         isEnabled: Bool,
         useDictionaryTrainingPath: Bool,
@@ -1108,6 +1213,7 @@ final class ASRService: ObservableObject {
     private var benchmarkStreamingChunkIndex: Int = 0
     private var benchmarkCompletedStreamingChunks: Int = 0
     private var benchmarkLastChunkSampleCount: Int = 0
+    private var hasLoggedLongDictationPreviewBound = false
     private let transcriptionExecutor = TranscriptionExecutor() // Serializes all CoreML access
     private var providerResetDrain: (id: UUID, task: Task<Void, Never>)?
     private var engineConfigurationChangeObserver: NSObjectProtocol?
@@ -1774,6 +1880,7 @@ final class ASRService: ObservableObject {
         self.benchmarkStreamingChunkIndex = 0
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
+        self.hasLoggedLongDictationPreviewBound = false
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
         self.audioCapturePipeline.setRecordingEnabled(
             true,
@@ -2520,10 +2627,48 @@ final class ASRService: ObservableObject {
                 self.lastDictionaryTrainingResult = result
                 finalSource = "dictionaryTraining"
             } else {
-                result = try await self.transcriptionExecutor.run { [provider] in
-                    try await provider.transcribeFinal(pcm)
+                let ranges = Self.finalTranscriptionRanges(samples: pcm)
+                let isChunked = ranges.count > 1
+                let finalPCM = pcm
+                finalSource = isChunked ? "chunked" : "full"
+                self.benchmarkLog(
+                    "final_policy mode=\(isChunked ? "chunked" : "single_pass") " +
+                        "ranges=\(ranges.count) samples=\(finalPCM.count) " +
+                        "limitSamples=\(Self.longDictationChunkDurationSeconds * 16_000)"
+                )
+                if isChunked {
+                    result = try await Self.transcribeFinalChunks(ranges: ranges) { chunkNumber, range in
+                        let chunk = Array(finalPCM[range])
+                        let chunkStartedAt = Date().timeIntervalSince1970
+                        self.benchmarkLog(
+                            "final_chunk_start index=\(chunkNumber) ranges=\(ranges.count) " +
+                                "startSample=\(range.lowerBound) endSample=\(range.upperBound) samples=\(chunk.count)"
+                        )
+                        let chunkResult: ASRTranscriptionResult
+                        do {
+                            chunkResult = try await self.transcriptionExecutor.run { [provider] in
+                                try await provider.transcribeFinal(chunk)
+                            }
+                        } catch {
+                            self.benchmarkLog(
+                                "final_chunk_fail index=\(chunkNumber) ranges=\(ranges.count) " +
+                                    "elapsedMs=\(self.elapsedMilliseconds(since: chunkStartedAt)) " +
+                                    "samples=\(chunk.count) error=\(error.localizedDescription)"
+                            )
+                            throw error
+                        }
+                        self.benchmarkLog(
+                            "final_chunk_done index=\(chunkNumber) ranges=\(ranges.count) " +
+                                "elapsedMs=\(self.elapsedMilliseconds(since: chunkStartedAt)) samples=\(chunk.count) " +
+                                "textChars=\(chunkResult.text.trimmingCharacters(in: .whitespacesAndNewlines).count)"
+                        )
+                        return chunkResult
+                    }
+                } else {
+                    result = try await self.transcriptionExecutor.run { [provider] in
+                        try await provider.transcribeFinal(finalPCM)
+                    }
                 }
-                finalSource = "full"
             }
             let finalElapsedMs = self.elapsedMilliseconds(since: finalStartedAt)
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
@@ -4600,10 +4745,10 @@ final class ASRService: ObservableObject {
 
         while !Task.isCancelled {
             DebugLogger.shared.debug("🔄 runStreamingLoop() - calling processStreamingChunk()", source: "ASRService")
-            await self.processStreamingChunk()
+            let shouldContinue = await self.processStreamingChunk()
             DebugLogger.shared.debug("🔄 runStreamingLoop() - processStreamingChunk() returned", source: "ASRService")
 
-            if Task.isCancelled || self.isRunning == false {
+            if !shouldContinue || Task.isCancelled || self.isRunning == false {
                 break
             }
 
@@ -4632,8 +4777,8 @@ final class ASRService: ObservableObject {
     }
 
     @MainActor
-    private func processStreamingChunk() async {
-        guard self.isRunning else { return }
+    private func processStreamingChunk() async -> Bool {
+        guard self.isRunning else { return false }
         self.benchmarkStreamingChunkIndex += 1
         let chunkIndex = self.benchmarkStreamingChunkIndex
         let chunkAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)
@@ -4643,23 +4788,38 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.debug("⚠️ Skipping chunk - previous transcription still in progress", source: "ASRService")
             self.benchmarkLog("chunk_skip index=\(chunkIndex) reason=busy ageMs=\(chunkAgeMs)")
             self.skipNextChunk = true
-            return
+            return true
         }
 
         if self.skipNextChunk {
             DebugLogger.shared.debug("⚠️ Skipping chunk for ANE recovery", source: "ASRService")
             self.benchmarkLog("chunk_skip index=\(chunkIndex) reason=recovery ageMs=\(chunkAgeMs)")
             self.skipNextChunk = false
-            return
+            return true
         }
 
         guard self.isAsrReady, self.transcriptionProvider.isReady else {
             self.benchmarkLog("chunk_skip index=\(chunkIndex) reason=not_ready ageMs=\(chunkAgeMs) isAsrReady=\(self.isAsrReady) providerReady=\(self.transcriptionProvider.isReady)")
-            return
+            return true
         }
 
         // Thread-safe count check
         let currentSampleCount = self.audioBuffer.count
+        guard Self.shouldProcessStreamingPreview(sampleCount: currentSampleCount) else {
+            if !self.hasLoggedLongDictationPreviewBound {
+                self.hasLoggedLongDictationPreviewBound = true
+                DebugLogger.shared.info(
+                    "Streaming preview paused after reaching the 20-minute dictation bound; retaining the last preview",
+                    source: "ASRService"
+                )
+                self.benchmarkLog(
+                    "chunk_skip index=\(chunkIndex) reason=long_dictation_preview_bound " +
+                        "ageMs=\(chunkAgeMs) samples=\(currentSampleCount) " +
+                        "limitSamples=\(Self.longDictationChunkDurationSeconds * 16_000)"
+                )
+            }
+            return false
+        }
         // Most ASR models require at least 1 second of 16kHz audio (16,000 samples) to transcribe
         let minSamples = self.minimumStreamingPreviewSamples
         guard currentSampleCount >= minSamples else {
@@ -4671,7 +4831,7 @@ final class ASRService: ObservableObject {
                 )
                 self.benchmarkLog("chunk_wait index=\(chunkIndex) ageMs=\(chunkAgeMs) samples=\(currentSampleCount) minSamples=\(minSamples)")
             }
-            return
+            return true
         }
 
         // Thread-safe copy of the data
@@ -4681,7 +4841,7 @@ final class ASRService: ObservableObject {
         guard !chunk.isEmpty else {
             DebugLogger.shared.warning("Audio buffer returned empty chunk despite count > 0. Skipping transcription.", source: "ASRService")
             self.benchmarkLog("chunk_skip index=\(chunkIndex) reason=empty ageMs=\(chunkAgeMs)")
-            return
+            return true
         }
 
         self.isProcessingChunk = true
@@ -4751,6 +4911,7 @@ final class ASRService: ObservableObject {
             self.benchmarkLog("chunk_fail index=\(chunkIndex) elapsedMs=\(self.elapsedMilliseconds(since: startedAt)) samples=\(chunk.count) error=\(error.localizedDescription)")
             self.skipNextChunk = true
         }
+        return true
     }
 
     /// Smart diff to prevent text from jumping around
