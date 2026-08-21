@@ -326,6 +326,41 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
+    // MARK: - Fix 17: a shell in argument position is a nested invocation, not a leaf
+
+    func testNestedShellPayloadInArgumentPositionIsCaught() {
+        let cases = [
+            "xargs sh -c 'rm -rf victim'",
+            "find . -exec sh -c 'rm -rf victim' \\;",
+            "find . -execdir bash -c 'rm -rf victim' \\;",
+            "env sh -c 'rm -rf victim'",
+            "nohup zsh -c 'rm -rf victim'",
+            "timeout 5 sh -c 'rm -rf victim'",
+            "xargs -I{} /bin/sh -c 'rm -rf {}'",
+            "cd /tmp && xargs sh -c 'rm -rf victim'",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected the nested shell payload in \"\(command)\" to be parsed"
+            )
+        }
+    }
+
+    func testNestedBenignShellPayloadInArgumentPositionIsNotFlagged() {
+        let cases = [
+            "xargs sh -c 'ls -la'",
+            "find . -exec sh -c 'cat {}' \\;",
+            "env bash -c 'git status'",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation"
+            )
+        }
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {

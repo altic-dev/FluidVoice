@@ -714,17 +714,31 @@ final class CommandModeService: ObservableObject {
         "sh", "bash", "zsh", "dash", "ksh",
     ]
 
-    /// True if any word, resolved to its basename, names a destructive program.
-    /// Anywhere a program can appear as an argument rather than as argv[0], the same
-    /// basename resolution the leading command gets has to apply -- comparing raw words
-    /// misses `/bin/rm` in exactly the places the leading-word check would have caught it.
+    /// True if a program reference anywhere in `words` is destructive.
+    ///
+    /// Used for every position where a program can appear as an argument rather than as
+    /// argv[0]. Two things have to hold there, and they are the same two that hold for a
+    /// leading command: a reference resolves by basename (so `/bin/rm` is `rm`), and a
+    /// shell is not a leaf -- everything after it is a nested invocation that gets the
+    /// same classification, so `xargs sh -c 'rm -rf x'` is caught like `sh -c 'rm -rf x'`.
     private nonisolated static func containsDestructiveProgram(
-        _ words: ArraySlice<String>
+        _ words: ArraySlice<String>,
+        depth: Int
     ) -> Bool {
-        words.contains { word in
-            let name = (word as NSString).lastPathComponent
-            return destructiveCommandNames.contains(name) || name.hasPrefix("mkfs")
+        var index = words.startIndex
+        while index < words.endIndex {
+            let name = (words[index] as NSString).lastPathComponent
+            if destructiveCommandNames.contains(name) || name.hasPrefix("mkfs") {
+                return true
+            }
+            if shellInterpreterNames.contains(name), depth < maxShellRecursionDepth {
+                if isDestructiveSimpleCommand(Array(words[index...]), depth: depth) {
+                    return true
+                }
+            }
+            index = words.index(after: index)
         }
+        return false
     }
 
     /// Classifies one already-split simple command. `words` is already lowercase and
@@ -761,7 +775,7 @@ final class CommandModeService: ObservableObject {
         if commandName == "find" {
             if remaining.contains("-delete") { return true }
             if remaining.contains("-exec") || remaining.contains("-execdir") {
-                if containsDestructiveProgram(remaining.dropFirst()) { return true }
+                if containsDestructiveProgram(remaining.dropFirst(), depth: depth) { return true }
             }
         }
 
@@ -781,7 +795,7 @@ final class CommandModeService: ObservableObject {
         // `xargs rm`, `env rm`, `nohup rm`, `sudo rm` -- the program that actually runs
         // is an argument here, not argv[0].
         if commandRunnerNames.contains(commandName) {
-            if containsDestructiveProgram(remaining.dropFirst()) { return true }
+            if containsDestructiveProgram(remaining.dropFirst(), depth: depth) { return true }
         }
 
         // `sh -c 'rm -rf victim'` -- the payload is a shell command, so run it back
