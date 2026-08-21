@@ -645,10 +645,13 @@ final class CommandModeService: ObservableObject {
         if commandName == "diskutil" {
             // Match the subcommand token itself, not a substring anywhere in the
             // command -- `diskutil info /Volumes/EraseDisk` contains "erasedisk"
-            // in its argument and isn't destructive at all.
+            // in its argument and isn't destructive at all. `quiet` is a real
+            // diskutil modifier that can precede the verb (`diskutil quiet
+            // eraseDisk ...`), so skip over it rather than reading it as the verb.
             let diskutilSubcommand = cmd
                 .split(whereSeparator: { $0 == " " || $0 == "\t" })
                 .dropFirst()
+                .drop(while: { $0 == "quiet" })
                 .first
                 .map(String.init) ?? ""
             let destructiveDiskutilSubcommands: Set = [

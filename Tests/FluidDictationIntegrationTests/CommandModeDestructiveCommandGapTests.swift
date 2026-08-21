@@ -114,6 +114,29 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
+    // MARK: - Fix 6: diskutil's `quiet` modifier doesn't hide the destructive verb
+
+    func testDiskutilQuietModifierStillCatchesDestructiveVerb() {
+        let cases = [
+            "diskutil quiet eraseDisk JHFS+ Untitled disk0",
+            "diskutil quiet secureErase 0 /dev/disk0",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation -- `quiet` precedes the verb, "
+                    + "it isn't the verb"
+            )
+        }
+    }
+
+    func testDiskutilQuietModifierAloneIsNotFlagged() {
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand("diskutil quiet list"),
+            "expected a read-only verb after `quiet` NOT to require confirmation"
+        )
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {
