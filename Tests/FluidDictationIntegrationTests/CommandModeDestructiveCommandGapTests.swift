@@ -82,6 +82,38 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
+    // MARK: - Fix 4: quoted absolute-path invocation
+
+    func testQuotedAbsolutePathInvocationIsCaught() {
+        let cases = [
+            "\"/bin/rm\" -rf ~/Documents",
+            "'/bin/rm' -rf ~/Documents",
+            "\"/usr/bin/sudo\" reboot",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation despite the quoted absolute path"
+            )
+        }
+    }
+
+    // MARK: - Fix 5: diskutil subcommand matching doesn't false-positive on arguments
+
+    func testDiskutilArgumentContainingSubcommandNameIsNotFlagged() {
+        let cases = [
+            "diskutil info /Volumes/EraseDisk",
+            "diskutil list /Volumes/ReformatBackup",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation -- the destructive-looking "
+                    + "text is in an argument, not the diskutil subcommand"
+            )
+        }
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {

@@ -607,9 +607,20 @@ final class CommandModeService: ObservableObject {
         // (last path component) so `/bin/rm`, `/usr/bin/rm`, and bare `rm`
         // are all recognized as the same command regardless of how the
         // model referenced it.
-        let leadingToken = cmd
-            .drop(while: { $0 == " " || $0 == "\t" })
-            .prefix(while: { $0 != " " && $0 != "\t" })
+        var leadingToken = String(
+            cmd
+                .drop(while: { $0 == " " || $0 == "\t" })
+                .prefix(while: { $0 != " " && $0 != "\t" })
+        )
+        // `"/bin/rm" -rf ~` keeps its quotes here since quotes aren't a token
+        // delimiter above, so lastPathComponent would derive `rm"` and miss the
+        // match entirely. Strip one matching wrapping pair, same as a shell would.
+        if leadingToken.count >= 2,
+            let first = leadingToken.first, let last = leadingToken.last,
+            first == last, first == "\"" || first == "'"
+        {
+            leadingToken = String(leadingToken.dropFirst().dropLast())
+        }
         let commandName = (leadingToken as NSString).lastPathComponent
         let destructiveCommandNames: Set = [
             "rm", "rmdir", "mv", "sudo", "kill", "pkill", "killall",
@@ -632,11 +643,19 @@ final class CommandModeService: ObservableObject {
         // subcommands specifically so read-only uses (`diskutil list`,
         // `diskutil info`) are not flagged.
         if commandName == "diskutil" {
-            let destructiveDiskutilSubcommands = [
+            // Match the subcommand token itself, not a substring anywhere in the
+            // command -- `diskutil info /Volumes/EraseDisk` contains "erasedisk"
+            // in its argument and isn't destructive at all.
+            let diskutilSubcommand = cmd
+                .split(whereSeparator: { $0 == " " || $0 == "\t" })
+                .dropFirst()
+                .first
+                .map(String.init) ?? ""
+            let destructiveDiskutilSubcommands: Set = [
                 "erasedisk", "erasevolume", "secureerase",
                 "reformat", "partitiondisk", "zerodisk", "unmountdisk",
             ]
-            if destructiveDiskutilSubcommands.contains(where: { cmd.contains($0) }) {
+            if destructiveDiskutilSubcommands.contains(diskutilSubcommand) {
                 return true
             }
         }
