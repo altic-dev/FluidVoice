@@ -248,6 +248,84 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         )
     }
 
+    // MARK: - Fix 14: backslash-escaped whitespace in an executable path
+
+    func testEscapedWhitespaceInPathIsCaught() {
+        let cases = [
+            "/tmp/tools\\ dir/rm -rf victim",
+            "/tmp/tools\\ dir/sudo reboot",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to resolve past the escaped space to the real basename"
+            )
+        }
+    }
+
+    // MARK: - Fix 15: program passed as an argument to a runner resolves by basename
+
+    func testPathQualifiedProgramInRunnersIsCaught() {
+        let cases = [
+            "find . -exec /bin/rm -rf {} \\;",
+            "find . -execdir /bin/rm {} \\;",
+            "env /bin/rm -rf victim",
+            "nohup /bin/rm -rf victim",
+            "time /bin/rm victim",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to resolve the argument program to its basename"
+            )
+        }
+    }
+
+    func testBenignProgramsInRunnersAreNotFlagged() {
+        let cases = [
+            "env /bin/ls -la",
+            "nohup /usr/bin/python3 script.py",
+            "time git status",
+            "find . -type f -exec /bin/cat {} \\;",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation"
+            )
+        }
+    }
+
+    // MARK: - Fix 16: shell -c payload is parsed, not treated as an opaque argument
+
+    func testShellWrapperPayloadIsParsed() {
+        let cases = [
+            "sh -c 'rm -rf victim'",
+            "bash -c \"rm -rf victim\"",
+            "zsh -c 'cd /tmp && /bin/rm victim'",
+            "sh -c 'sh -c \"rm -rf victim\"'",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected the shell payload in \"\(command)\" to be parsed for destructive commands"
+            )
+        }
+    }
+
+    func testBenignShellWrapperPayloadIsNotFlagged() {
+        let cases = [
+            "sh -c 'ls -la'",
+            "bash -c \"git status\"",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation"
+            )
+        }
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {

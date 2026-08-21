@@ -588,6 +588,15 @@ final class CommandModeService: ObservableObject {
         var i = 0
         while i < chars.count {
             let c = chars[i]
+            // A backslash escapes the next character (outside single quotes), so an
+            // escaped separator like `find ... -exec rm {} \;` doesn't split here.
+            // Both characters are kept verbatim -- tokenizeWords consumes the escape.
+            if c == "\\", quote != "'", i + 1 < chars.count {
+                current.append(c)
+                current.append(chars[i + 1])
+                i += 2
+                continue
+            }
             if let q = quote {
                 current.append(c)
                 if c == q { quote = nil }
@@ -627,13 +636,27 @@ final class CommandModeService: ObservableObject {
     /// Tokenizes one simple command into words, tracking quote state so a quoted span
     /// (single or double) stays one word even when it contains whitespace -- the gap that
     /// let `"/tmp/tools dir/rm" file` resolve to `tools` instead of `rm`. Quote characters
-    /// themselves are dropped from the output, the same way a shell would consume them.
+    /// themselves are dropped from the output, the same way a shell would consume them,
+    /// and a backslash escapes the next character (outside single quotes, where a shell
+    /// treats it literally) so `/tmp/tools\ dir/rm` stays one word too.
     private nonisolated static func tokenizeWords(_ simpleCommand: String) -> [String] {
         var words: [String] = []
         var current = ""
         var quote: Character?
         var inWord = false
+        var escaped = false
         for c in simpleCommand {
+            if escaped {
+                current.append(c)
+                inWord = true
+                escaped = false
+                continue
+            }
+            if c == "\\", quote != "'" {
+                escaped = true
+                inWord = true
+                continue
+            }
             if let q = quote {
                 if c == q {
                     quote = nil
@@ -675,9 +698,42 @@ final class CommandModeService: ObservableObject {
         return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
+    /// Utilities that take another program as an argument and run it. The destructive
+    /// program is never this simple command's own leading word, so each argument has to
+    /// be considered a candidate command in its own right.
+    private static let commandRunnerNames: Set<String> = [
+        "xargs", "env", "nohup", "command", "exec", "time", "nice",
+        "setsid", "stdbuf", "timeout", "watch", "sudo",
+    ]
+
+    /// Shells whose `-c` payload is itself a shell command, so it can be parsed with the
+    /// same machinery rather than treated as an opaque string. Distinct from a general
+    /// interpreter (`python3 -c`), whose payload is a different language entirely and is
+    /// out of reach of this classifier.
+    private static let shellInterpreterNames: Set<String> = [
+        "sh", "bash", "zsh", "dash", "ksh",
+    ]
+
+    /// True if any word, resolved to its basename, names a destructive program.
+    /// Anywhere a program can appear as an argument rather than as argv[0], the same
+    /// basename resolution the leading command gets has to apply -- comparing raw words
+    /// misses `/bin/rm` in exactly the places the leading-word check would have caught it.
+    private nonisolated static func containsDestructiveProgram(
+        _ words: ArraySlice<String>
+    ) -> Bool {
+        words.contains { word in
+            let name = (word as NSString).lastPathComponent
+            return destructiveCommandNames.contains(name) || name.hasPrefix("mkfs")
+        }
+    }
+
     /// Classifies one already-split simple command. `words` is already lowercase and
     /// tokenized, so this only ever deals with correctly-resolved argv, not raw text.
-    private nonisolated static func isDestructiveSimpleCommand(_ words: [String]) -> Bool {
+    /// `depth` bounds recursion into nested shell payloads.
+    private nonisolated static func isDestructiveSimpleCommand(
+        _ words: [String],
+        depth: Int
+    ) -> Bool {
         guard !words.isEmpty else { return false }
 
         // A bare truncating/creating redirect, `> file` or `>> file`, anywhere in the
@@ -700,10 +756,13 @@ final class CommandModeService: ObservableObject {
         }
 
         // `find -delete` / `find ... -exec rm ...` deletes without ever matching a
-        // bare command name, since `find` itself isn't destructive.
+        // bare command name, since `find` itself isn't destructive. The -exec target
+        // can be path-qualified like any other program reference.
         if commandName == "find" {
             if remaining.contains("-delete") { return true }
-            if remaining.contains("-exec") && remaining.contains("rm") { return true }
+            if remaining.contains("-exec") || remaining.contains("-execdir") {
+                if containsDestructiveProgram(remaining.dropFirst()) { return true }
+            }
         }
 
         // diskutil's erase/reformat/partition subcommands are as destructive as
@@ -719,25 +778,35 @@ final class CommandModeService: ObservableObject {
             }
         }
 
-        // `find ... | xargs rm` hands the destructive program to xargs as its own
-        // argument rather than invoking it directly, so it never shows up as this
-        // simple command's own leading word. That argument can itself be path-qualified
-        // (`xargs -I{} /bin/rm {}`), so it needs the same basename resolution as the
-        // leading command, not a raw-string comparison.
-        if commandName == "xargs" {
-            if remaining.dropFirst().contains(where: {
-                destructiveCommandNames.contains(($0 as NSString).lastPathComponent)
-            }) {
-                return true
+        // `xargs rm`, `env rm`, `nohup rm`, `sudo rm` -- the program that actually runs
+        // is an argument here, not argv[0].
+        if commandRunnerNames.contains(commandName) {
+            if containsDestructiveProgram(remaining.dropFirst()) { return true }
+        }
+
+        // `sh -c 'rm -rf victim'` -- the payload is a shell command, so run it back
+        // through the same parse instead of treating it as an opaque argument.
+        if shellInterpreterNames.contains(commandName), depth < maxShellRecursionDepth {
+            for argument in remaining.dropFirst() where !argument.hasPrefix("-") {
+                if isDestructiveCommand(argument, depth: depth + 1) { return true }
             }
         }
 
         return false
     }
 
-    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+    /// Bounds `sh -c '...'` nesting so a pathological payload can't recurse without end.
+    private static let maxShellRecursionDepth = 4
+
+    private nonisolated static func isDestructiveCommand(_ command: String, depth: Int) -> Bool {
         let simpleCommands = splitIntoSimpleCommands(command.lowercased())
-        return simpleCommands.contains { isDestructiveSimpleCommand(tokenizeWords($0)) }
+        return simpleCommands.contains {
+            isDestructiveSimpleCommand(tokenizeWords($0), depth: depth)
+        }
+    }
+
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+        isDestructiveCommand(command, depth: 0)
     }
 
     private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
