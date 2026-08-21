@@ -665,17 +665,30 @@ final class CommandModeService: ObservableObject {
         return words
     }
 
+    /// `NAME=value` in leading position is a real shell feature -- it scopes an
+    /// environment variable to the command that follows, not a command itself.
+    /// `LC_ALL=C rm -rf victim` runs `rm`, not `lc_all=c`.
+    private nonisolated static func isEnvironmentAssignmentWord(_ word: String) -> Bool {
+        guard let equalsIndex = word.firstIndex(of: "=") else { return false }
+        let name = word[word.startIndex..<equalsIndex]
+        guard let first = name.first, first.isLetter || first == "_" else { return false }
+        return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
     /// Classifies one already-split simple command. `words` is already lowercase and
     /// tokenized, so this only ever deals with correctly-resolved argv, not raw text.
     private nonisolated static func isDestructiveSimpleCommand(_ words: [String]) -> Bool {
-        guard let rawCommand = words.first else { return false }
+        guard !words.isEmpty else { return false }
 
         // A bare truncating/creating redirect, `> file` or `>> file`, anywhere in the
-        // command's own words -- not just as a prefix of the whole thing, so `echo bad >
-        // /etc/hosts` is caught the same as a command that opens with `>` alone.
-        if words.dropFirst().contains(where: { $0 == ">" || $0 == ">>" }) {
+        // command's own words, including as the very first one (`> file` alone is a
+        // complete, valid, destructive command).
+        if words.contains(where: { $0 == ">" || $0 == ">>" }) {
             return true
         }
+
+        let remaining = words.drop(while: isEnvironmentAssignmentWord)
+        guard let rawCommand = remaining.first else { return false }
 
         // Absolute and relative paths resolve to the same bare name a shell would use
         // (`/bin/rm`, `/usr/bin/rm`, and bare `rm` are all just `rm`), so this alone
@@ -689,8 +702,8 @@ final class CommandModeService: ObservableObject {
         // `find -delete` / `find ... -exec rm ...` deletes without ever matching a
         // bare command name, since `find` itself isn't destructive.
         if commandName == "find" {
-            if words.contains("-delete") { return true }
-            if words.contains("-exec") && words.contains("rm") { return true }
+            if remaining.contains("-delete") { return true }
+            if remaining.contains("-exec") && remaining.contains("rm") { return true }
         }
 
         // diskutil's erase/reformat/partition subcommands are as destructive as
@@ -700,7 +713,7 @@ final class CommandModeService: ObservableObject {
         // diskutil modifier that can precede the verb (`diskutil quiet eraseDisk ...`),
         // so it's skipped rather than read as the verb itself.
         if commandName == "diskutil" {
-            let subcommand = words.dropFirst().drop(while: { $0 == "quiet" }).first ?? ""
+            let subcommand = remaining.dropFirst().drop(while: { $0 == "quiet" }).first ?? ""
             if destructiveDiskutilSubcommands.contains(subcommand) {
                 return true
             }
@@ -708,9 +721,13 @@ final class CommandModeService: ObservableObject {
 
         // `find ... | xargs rm` hands the destructive program to xargs as its own
         // argument rather than invoking it directly, so it never shows up as this
-        // simple command's own leading word.
+        // simple command's own leading word. That argument can itself be path-qualified
+        // (`xargs -I{} /bin/rm {}`), so it needs the same basename resolution as the
+        // leading command, not a raw-string comparison.
         if commandName == "xargs" {
-            if words.dropFirst().contains(where: { destructiveCommandNames.contains($0) }) {
+            if remaining.dropFirst().contains(where: {
+                destructiveCommandNames.contains(($0 as NSString).lastPathComponent)
+            }) {
                 return true
             }
         }

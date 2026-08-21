@@ -202,6 +202,52 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         )
     }
 
+    // MARK: - Fix 11: path-qualified xargs target
+
+    func testPathQualifiedXargsTargetIsCaught() {
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("find . -print0 | xargs -0 /bin/rm"),
+            "expected the path-qualified xargs target to resolve to rm"
+        )
+    }
+
+    // MARK: - Fix 12: bare redirect as the entire simple command
+
+    func testBareRedirectAsEntireCommandIsCaught() {
+        let cases = [
+            "> important.txt",
+            ">> important.txt",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation"
+            )
+        }
+    }
+
+    // MARK: - Fix 13: leading environment assignment before a destructive command
+
+    func testLeadingEnvironmentAssignmentIsCaught() {
+        let cases = [
+            "LC_ALL=C rm -rf victim",
+            "A=1 B=2 sudo reboot",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation despite the leading assignment"
+            )
+        }
+    }
+
+    func testLeadingEnvironmentAssignmentAloneIsNotFlagged() {
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand("LC_ALL=C ls -la"),
+            "expected a benign command after an assignment NOT to require confirmation"
+        )
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {
