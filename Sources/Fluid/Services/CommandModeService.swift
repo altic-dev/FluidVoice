@@ -559,111 +559,168 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
-        let cmd = command.lowercased()
+    private static let destructiveCommandNames: Set<String> = [
+        "rm", "rmdir", "mv", "sudo", "kill", "pkill", "killall",
+        "chmod", "chown", "chgrp", "dd", "shred", "truncate", "format",
+    ]
 
-        // Commands that start with these are destructive
-        let destructivePrefixes = [
-            "rm ", "rm\t", "rmdir ", "rm -", // delete
-            "mv ", "mv\t", // move/rename
-            "sudo ", // elevated privileges
-            "kill ", "pkill ", "killall ", // terminate processes
-            "chmod ", "chown ", "chgrp ", // change permissions/ownership
-            "dd ", // disk operations
-            "mkfs", "format", // filesystem formatting
-            "> ", // overwrite file
-            "truncate ", // truncate file
-            "shred ", // secure delete
-        ]
+    private static let destructiveDiskutilSubcommands: Set<String> = [
+        "erasedisk", "erasevolume", "secureerase",
+        "reformat", "partitiondisk", "zerodisk", "unmountdisk",
+    ]
 
-        // Check if command starts with any destructive prefix
-        if destructivePrefixes.contains(where: { cmd.hasPrefix($0) }) {
+    /// Splits a full command into the individual commands a shell would run, on unquoted
+    /// `&&`, `||`, `;`, `&`, `|`, and newline. Every prior version of this classifier only
+    /// ever looked at the leading token of the whole string, so anything after a separator
+    /// -- `cd /tmp && rm -rf victim` -- was invisible to it. This makes every command in a
+    /// chain go through the same check, at whatever position it's in.
+    ///
+    /// Doesn't handle backslash-escaped separators (`\;`) -- an escaped operator inside a
+    /// `find -exec ... \;` gets split as if it were real, but the -exec/rm detection below
+    /// checks word membership on the resulting pieces rather than the exact tail, so it
+    /// still matches correctly. A real escape-aware parser would be needed to do better,
+    /// and nothing here depends on it.
+    private nonisolated static func splitIntoSimpleCommands(_ command: String) -> [String] {
+        var commands: [String] = []
+        var current = ""
+        var quote: Character?
+        let chars = Array(command)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if let q = quote {
+                current.append(c)
+                if c == q { quote = nil }
+                i += 1
+                continue
+            }
+            if c == "\"" || c == "'" {
+                quote = c
+                current.append(c)
+                i += 1
+                continue
+            }
+            if c == "&" || c == "|" {
+                if i + 1 < chars.count, chars[i + 1] == c {
+                    i += 1  // swallow the doubled form (&&, ||) as one separator
+                }
+                commands.append(current)
+                current = ""
+                i += 1
+                continue
+            }
+            if c == ";" || c == "\n" {
+                commands.append(current)
+                current = ""
+                i += 1
+                continue
+            }
+            current.append(c)
+            i += 1
+        }
+        commands.append(current)
+        return commands
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Tokenizes one simple command into words, tracking quote state so a quoted span
+    /// (single or double) stays one word even when it contains whitespace -- the gap that
+    /// let `"/tmp/tools dir/rm" file` resolve to `tools` instead of `rm`. Quote characters
+    /// themselves are dropped from the output, the same way a shell would consume them.
+    private nonisolated static func tokenizeWords(_ simpleCommand: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var quote: Character?
+        var inWord = false
+        for c in simpleCommand {
+            if let q = quote {
+                if c == q {
+                    quote = nil
+                } else {
+                    current.append(c)
+                }
+                inWord = true
+                continue
+            }
+            if c == "\"" || c == "'" {
+                quote = c
+                inWord = true
+                continue
+            }
+            if c == " " || c == "\t" {
+                if inWord {
+                    words.append(current)
+                    current = ""
+                    inWord = false
+                }
+                continue
+            }
+            current.append(c)
+            inWord = true
+        }
+        if inWord {
+            words.append(current)
+        }
+        return words
+    }
+
+    /// Classifies one already-split simple command. `words` is already lowercase and
+    /// tokenized, so this only ever deals with correctly-resolved argv, not raw text.
+    private nonisolated static func isDestructiveSimpleCommand(_ words: [String]) -> Bool {
+        guard let rawCommand = words.first else { return false }
+
+        // A bare truncating/creating redirect, `> file` or `>> file`, anywhere in the
+        // command's own words -- not just as a prefix of the whole thing, so `echo bad >
+        // /etc/hosts` is caught the same as a command that opens with `>` alone.
+        if words.dropFirst().contains(where: { $0 == ">" || $0 == ">>" }) {
             return true
         }
 
-        // Check for destructive patterns anywhere in piped commands
-        let destructivePatterns = [
-            "| rm ", "| sudo ", "| dd ",
-            "; rm ", "; sudo ",
-            "&& rm ", "&& sudo ",
-            "xargs rm", "xargs -I",
-        ]
+        // Absolute and relative paths resolve to the same bare name a shell would use
+        // (`/bin/rm`, `/usr/bin/rm`, and bare `rm` are all just `rm`), so this alone
+        // covers what used to need a separate prefix-list plus a path-resolution pass.
+        let commandName = (rawCommand as NSString).lastPathComponent
 
-        if destructivePatterns.contains(where: { cmd.contains($0) }) {
+        if destructiveCommandNames.contains(commandName) || commandName.hasPrefix("mkfs") {
             return true
         }
 
-        // rm with flags like -rf, -r, -f anywhere
-        if cmd.contains("rm -") {
-            return true
+        // `find -delete` / `find ... -exec rm ...` deletes without ever matching a
+        // bare command name, since `find` itself isn't destructive.
+        if commandName == "find" {
+            if words.contains("-delete") { return true }
+            if words.contains("-exec") && words.contains("rm") { return true }
         }
 
-        // The prefix list above only matches a bare command name. A model
-        // that reaches for `/bin/rm`, `/usr/bin/sudo`, etc. (not unusual —
-        // absolute paths are a normal way to disambiguate a binary) skips
-        // every check above except the `rm -` fallback, which only happens
-        // to catch `rm` and only when it carries a `-` flag. Resolve the
-        // leading token to its bare command name the same way a shell would
-        // (last path component) so `/bin/rm`, `/usr/bin/rm`, and bare `rm`
-        // are all recognized as the same command regardless of how the
-        // model referenced it.
-        var leadingToken = String(
-            cmd
-                .drop(while: { $0 == " " || $0 == "\t" })
-                .prefix(while: { $0 != " " && $0 != "\t" })
-        )
-        // `"/bin/rm" -rf ~` keeps its quotes here since quotes aren't a token
-        // delimiter above, so lastPathComponent would derive `rm"` and miss the
-        // match entirely. Strip one matching wrapping pair, same as a shell would.
-        if leadingToken.count >= 2,
-            let first = leadingToken.first, let last = leadingToken.last,
-            first == last, first == "\"" || first == "'"
-        {
-            leadingToken = String(leadingToken.dropFirst().dropLast())
-        }
-        let commandName = (leadingToken as NSString).lastPathComponent
-        let destructiveCommandNames: Set = [
-            "rm", "rmdir", "mv", "sudo", "kill", "pkill", "killall",
-            "chmod", "chown", "chgrp", "dd", "mkfs", "shred", "truncate",
-        ]
-        if destructiveCommandNames.contains(commandName) {
-            return true
-        }
-
-        // `find -delete` / `find ... -exec rm ...` deletes without ever
-        // matching "rm -" or any `|`/`;`/`&&` pattern above, since `rm`
-        // inside `-exec` never sits next to a matched separator.
-        if commandName == "find", cmd.contains(" -delete") || (cmd.contains("-exec") && cmd.contains("rm ")) {
-            return true
-        }
-
-        // diskutil's erase/reformat/partition subcommands are as destructive
-        // as `dd`/`mkfs`/`format` but are a different binary entirely and
-        // weren't covered by any check above. Scoped to the destructive
-        // subcommands specifically so read-only uses (`diskutil list`,
-        // `diskutil info`) are not flagged.
+        // diskutil's erase/reformat/partition subcommands are as destructive as
+        // `dd`/`mkfs`/`format` but are a different binary and weren't covered by any
+        // check above. Scoped to the destructive subcommands specifically so read-only
+        // uses (`diskutil list`, `diskutil info`) aren't flagged. `quiet` is a real
+        // diskutil modifier that can precede the verb (`diskutil quiet eraseDisk ...`),
+        // so it's skipped rather than read as the verb itself.
         if commandName == "diskutil" {
-            // Match the subcommand token itself, not a substring anywhere in the
-            // command -- `diskutil info /Volumes/EraseDisk` contains "erasedisk"
-            // in its argument and isn't destructive at all. `quiet` is a real
-            // diskutil modifier that can precede the verb (`diskutil quiet
-            // eraseDisk ...`), so skip over it rather than reading it as the verb.
-            let diskutilSubcommand = cmd
-                .split(whereSeparator: { $0 == " " || $0 == "\t" })
-                .dropFirst()
-                .drop(while: { $0 == "quiet" })
-                .first
-                .map(String.init) ?? ""
-            let destructiveDiskutilSubcommands: Set = [
-                "erasedisk", "erasevolume", "secureerase",
-                "reformat", "partitiondisk", "zerodisk", "unmountdisk",
-            ]
-            if destructiveDiskutilSubcommands.contains(diskutilSubcommand) {
+            let subcommand = words.dropFirst().drop(while: { $0 == "quiet" }).first ?? ""
+            if destructiveDiskutilSubcommands.contains(subcommand) {
+                return true
+            }
+        }
+
+        // `find ... | xargs rm` hands the destructive program to xargs as its own
+        // argument rather than invoking it directly, so it never shows up as this
+        // simple command's own leading word.
+        if commandName == "xargs" {
+            if words.dropFirst().contains(where: { destructiveCommandNames.contains($0) }) {
                 return true
             }
         }
 
         return false
+    }
+
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+        let simpleCommands = splitIntoSimpleCommands(command.lowercased())
+        return simpleCommands.contains { isDestructiveSimpleCommand(tokenizeWords($0)) }
     }
 
     private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {

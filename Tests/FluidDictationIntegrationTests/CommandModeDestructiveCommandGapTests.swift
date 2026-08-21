@@ -137,6 +137,71 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         )
     }
 
+    // MARK: - Fix 7: format/mkfs.* basenames
+
+    func testFormatAndMkfsVariantBasenamesAreCaught() {
+        let cases = [
+            "/usr/local/bin/format /dev/disk2",
+            "/sbin/mkfs.ext4 /dev/sdb1",
+            "mkfs.vfat /dev/disk3",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation"
+            )
+        }
+    }
+
+    // MARK: - Fix 8: quoted path with an internal space
+
+    func testQuotedPathWithInternalSpaceIsCaught() {
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("\"/tmp/tools dir/rm\" file"),
+            "expected the quoted path to resolve to rm despite the internal space"
+        )
+    }
+
+    // MARK: - Fix 9: destructive command after a compound-command separator
+
+    func testDestructiveCommandAfterSeparatorIsCaught() {
+        let cases = [
+            "cd /tmp && /bin/rm victim",
+            "echo done; rm -rf ~/Documents",
+            "true || sudo reboot",
+            "find . -name '*.log' | xargs rm",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation for the command after the separator"
+            )
+        }
+    }
+
+    func testBenignCommandsChainedWithSeparatorsAreNotFlagged() {
+        let cases = [
+            "cd /tmp && ls -la",
+            "git status; git log",
+            "find . -name '*.log' | xargs cat",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation"
+            )
+        }
+    }
+
+    // MARK: - Fix 10: redirect anywhere in the command, not just as a leading prefix
+
+    func testRedirectAnywhereInCommandIsCaught() {
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("echo malicious > /etc/hosts"),
+            "expected a mid-command redirect to require confirmation"
+        )
+    }
+
     // MARK: - No new false positives on benign commands
 
     func testBenignCommandsAreNotFlagged() {
