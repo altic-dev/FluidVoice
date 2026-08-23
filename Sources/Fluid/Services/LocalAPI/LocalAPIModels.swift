@@ -86,6 +86,29 @@ enum LocalAPI {
         )
     }
 
+    static func isAllowedHostHeader(_ rawHost: String?) -> Bool {
+        guard let rawHost, !rawHost.isEmpty else { return true }
+        let host = rawHost.lowercased()
+        return host == "localhost" ||
+            host == "127.0.0.1" ||
+            host == "[::1]" ||
+            host.hasPrefix("localhost:") ||
+            host.hasPrefix("127.0.0.1:") ||
+            host.hasPrefix("[::1]:")
+    }
+
+    static func isAllowedOriginHeader(_ rawOrigin: String?) -> Bool {
+        guard let rawOrigin, !rawOrigin.isEmpty else { return true }
+        guard let components = URLComponents(string: rawOrigin),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased()
+        else {
+            return false
+        }
+        guard scheme == "http" || scheme == "https" else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
     static func boundedLimit(from request: Request, default defaultValue: Int = 100, maximum: Int = 1000) -> Int {
         guard let raw = request.query["limit"], let value = Int(raw) else {
             return defaultValue

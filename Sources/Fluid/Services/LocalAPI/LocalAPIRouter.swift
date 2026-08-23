@@ -31,6 +31,13 @@ final class LocalAPIRouter {
     }
 
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        guard LocalAPI.isAllowedHostHeader(request.headers["host"]) else {
+            return LocalAPI.error("Invalid Host header.", status: 400)
+        }
+        guard LocalAPI.isAllowedOriginHeader(request.headers["origin"]) else {
+            return LocalAPI.error("Forbidden Origin header.", status: 403)
+        }
+
         let key = RouteKey(method: request.method.uppercased(), path: request.path)
         guard let handler = self.routes[key] else {
             if self.routes.keys.contains(where: { $0.path == request.path }) {

@@ -112,7 +112,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Local-First** — your voice and text never leave your machine unless you opt in to a cloud AI provider
 - **Fastest Parakeet on Mac** — one of the fastest native implementations of Parakeet on macOS, with near-instant transcription and minimal latency
 - **Configurable Overlay** — choose from pill-shaped to large overlay sizes to show live preview, or keep it minimal. Everything is optional
-- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, analytics, and beta builds are all opt-in. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
+- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, cloud providers, and beta builds are opt-in. Anonymous health/usage analytics are enabled by default and can be disabled from Settings. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
 
 ---
 
@@ -262,9 +262,9 @@ xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=ma
 
 FluidVoice is **local-first**. Your voice, audio, and transcribed text never leave your machine unless you explicitly opt in to a cloud AI provider.
 
-### What's Collected (Opt-In)
+### What's Collected (Default-On, Anonymous)
 
-Anonymous analytics are enabled by default to track app health and feature usage. You can disable at any time from `Settings → Share Anonymous Analytics`.
+Anonymous analytics are enabled by default to track app health and feature usage. You can disable them at any time from `Settings → Share Anonymous Analytics`. AI enhancement, audio history, cloud providers, and beta builds remain opt-in.
 
 **Collected:**
 
