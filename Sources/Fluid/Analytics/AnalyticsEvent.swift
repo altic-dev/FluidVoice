@@ -5,6 +5,7 @@ enum AnalyticsEvent: String {
     case activeUser = "active_user"
     case usageDailySummary = "usage_daily_summary"
     case modelUsageDailySummary = "model_usage_daily_summary"
+    case insertionLatencyDailySummary = "insertion_latency_daily_summary"
     case onboardingStarted = "onboarding_started"
     case onboardingStepViewed = "onboarding_step_viewed"
     case onboardingStepCompleted = "onboarding_step_completed"
@@ -28,6 +29,24 @@ enum AnalyticsUsageMode: String {
 enum AnalyticsModelRole: String {
     case transcription
     case aiPostProcessing = "ai_post_processing"
+}
+
+enum AnalyticsInsertionPath: String {
+    case clipboard
+    case direct
+    case clipboardFallback = "clipboard_fallback"
+    case notAttempted = "not_attempted"
+}
+
+enum AnalyticsInsertionOutcome: String {
+    case dispatched
+    case emptyText = "empty_text"
+    case accessibilityNotTrusted = "accessibility_not_trusted"
+    case clipboardSnapshotFailed = "clipboard_snapshot_failed"
+    case clipboardWriteFailed = "clipboard_write_failed"
+    case pasteCommandFailed = "paste_command_failed"
+    case targetUnavailable = "target_unavailable"
+    case targetRestoreFailed = "target_restore_failed"
 }
 
 struct AnalyticsModelDescriptor: Equatable {

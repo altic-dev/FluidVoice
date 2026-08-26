@@ -111,6 +111,72 @@ final class AnalyticsDatabase {
         }
     }
 
+    func recordInsertionLatency(
+        path: AnalyticsInsertionPath,
+        outcome: AnalyticsInsertionOutcome,
+        requestMilliseconds: Int,
+        readyMilliseconds: Int?,
+        toggleStopMilliseconds: Int? = nil,
+        at date: Date
+    ) throws {
+        try self.finalizeDays(before: date)
+        let requestMilliseconds = max(0, requestMilliseconds)
+        let readyMilliseconds = readyMilliseconds.map { max(0, $0) }
+        let readyCount = readyMilliseconds == nil ? 0 : 1
+        let readyValue = readyMilliseconds ?? 0
+        let day = self.dayString(date)
+
+        try self.transaction {
+            try self.run(
+                "INSERT INTO daily_insertion_latency (" +
+                    "day, delivery_path, outcome, request_count, request_total_ms, request_min_ms, request_max_ms, " +
+                    "ready_count, ready_total_ms, ready_min_ms, ready_max_ms" +
+                    ") VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
+                    "ON CONFLICT(day, delivery_path, outcome) DO UPDATE SET " +
+                    "request_count = request_count + 1, " +
+                    "request_total_ms = request_total_ms + excluded.request_total_ms, " +
+                    "request_min_ms = MIN(request_min_ms, excluded.request_min_ms), " +
+                    "request_max_ms = MAX(request_max_ms, excluded.request_max_ms), " +
+                    "ready_count = ready_count + excluded.ready_count, " +
+                    "ready_total_ms = ready_total_ms + excluded.ready_total_ms, " +
+                    "ready_min_ms = CASE " +
+                    "WHEN excluded.ready_count = 0 THEN ready_min_ms " +
+                    "WHEN ready_count = 0 THEN excluded.ready_min_ms " +
+                    "ELSE MIN(ready_min_ms, excluded.ready_min_ms) END, " +
+                    "ready_max_ms = CASE " +
+                    "WHEN excluded.ready_count = 0 THEN ready_max_ms " +
+                    "WHEN ready_count = 0 THEN excluded.ready_max_ms " +
+                    "ELSE MAX(ready_max_ms, excluded.ready_max_ms) END",
+                bindings: [
+                    .text(day), .text(path.rawValue), .text(outcome.rawValue),
+                    .integer(requestMilliseconds), .integer(requestMilliseconds), .integer(requestMilliseconds),
+                    .integer(readyCount), .integer(readyValue), .integer(readyValue), .integer(readyValue),
+                ]
+            )
+
+            if let toggleStopMilliseconds,
+               outcome == .dispatched,
+               path == .clipboard || path == .clipboardFallback
+            {
+                let milliseconds = max(0, toggleStopMilliseconds)
+                try self.run(
+                    "INSERT INTO daily_clipboard_toggle_latency " +
+                        "(day, delivery_path, sample_count, total_ms, min_ms, max_ms) " +
+                        "VALUES (?, ?, 1, ?, ?, ?) " +
+                        "ON CONFLICT(day, delivery_path) DO UPDATE SET " +
+                        "sample_count = sample_count + 1, " +
+                        "total_ms = total_ms + excluded.total_ms, " +
+                        "min_ms = MIN(min_ms, excluded.min_ms), " +
+                        "max_ms = MAX(max_ms, excluded.max_ms)",
+                    bindings: [
+                        .text(day), .text(path.rawValue),
+                        .integer(milliseconds), .integer(milliseconds), .integer(milliseconds),
+                    ]
+                )
+            }
+        }
+    }
+
     func recordOnboardingStarted(origin: AnalyticsOnboardingOrigin, at date: Date) throws {
         try self.finalizeDays(before: date)
         try self.transaction {
@@ -273,8 +339,20 @@ final class AnalyticsDatabase {
                 "WHERE day < ? ORDER BY day, role, mode, provider, model",
             bindings: [.text(today)]
         )
+        let insertionRows = try self.query(
+            "SELECT day, delivery_path, outcome, request_count, request_total_ms, request_min_ms, " +
+                "request_max_ms, ready_count, ready_total_ms, ready_min_ms, ready_max_ms " +
+                "FROM daily_insertion_latency WHERE day < ? ORDER BY day, delivery_path, outcome",
+            bindings: [.text(today)]
+        )
+        let clipboardToggleRows = try self.query(
+            "SELECT day, delivery_path, sample_count, total_ms, min_ms, max_ms " +
+                "FROM daily_clipboard_toggle_latency WHERE day < ? ORDER BY day, delivery_path",
+            bindings: [.text(today)]
+        )
 
-        guard !usageRows.isEmpty || !modelRows.isEmpty else { return }
+        guard !usageRows.isEmpty || !modelRows.isEmpty || !insertionRows.isEmpty || !clipboardToggleRows.isEmpty
+        else { return }
         try self.transaction {
             for row in usageRows where row.count == 5 {
                 try self.enqueue(.usageDailySummary, at: date, properties: [
@@ -295,8 +373,49 @@ final class AnalyticsDatabase {
                     "use_count": Int(row[5]) ?? 0,
                 ])
             }
+            for row in insertionRows where row.count == 11 {
+                let requestCount = Int(row[3]) ?? 0
+                let requestTotal = Int(row[4]) ?? 0
+                let readyCount = Int(row[7]) ?? 0
+                let readyTotal = Int(row[8]) ?? 0
+                let toggleRow = clipboardToggleRows.first {
+                    $0.count == 6 &&
+                        row[2] == AnalyticsInsertionOutcome.dispatched.rawValue &&
+                        $0[0] == row[0] &&
+                        $0[1] == row[1]
+                }
+                var properties: [String: Any] = [
+                    "latency_date": row[0],
+                    "delivery_path": row[1],
+                    "outcome": row[2],
+                    "request_count": requestCount,
+                    "request_total_ms": requestTotal,
+                    "request_average_ms": Self.average(total: requestTotal, count: requestCount),
+                    "request_min_ms": Int(row[5]) ?? 0,
+                    "request_max_ms": Int(row[6]) ?? 0,
+                    "ready_count": readyCount,
+                ]
+                if readyCount > 0 {
+                    properties["ready_total_ms"] = readyTotal
+                    properties["ready_average_ms"] = Self.average(total: readyTotal, count: readyCount)
+                    properties["ready_min_ms"] = Int(row[9]) ?? 0
+                    properties["ready_max_ms"] = Int(row[10]) ?? 0
+                }
+                if let toggleRow {
+                    let count = Int(toggleRow[2]) ?? 0
+                    let total = Int(toggleRow[3]) ?? 0
+                    properties["toggle_stop_to_dispatch_count"] = count
+                    properties["toggle_stop_to_dispatch_total_ms"] = total
+                    properties["toggle_stop_to_dispatch_average_ms"] = Self.average(total: total, count: count)
+                    properties["toggle_stop_to_dispatch_min_ms"] = Int(toggleRow[4]) ?? 0
+                    properties["toggle_stop_to_dispatch_max_ms"] = Int(toggleRow[5]) ?? 0
+                }
+                try self.enqueue(.insertionLatencyDailySummary, at: date, properties: properties)
+            }
             try self.run("DELETE FROM daily_usage WHERE day < ?", bindings: [.text(today)])
             try self.run("DELETE FROM daily_model_usage WHERE day < ?", bindings: [.text(today)])
+            try self.run("DELETE FROM daily_insertion_latency WHERE day < ?", bindings: [.text(today)])
+            try self.run("DELETE FROM daily_clipboard_toggle_latency WHERE day < ?", bindings: [.text(today)])
         }
     }
 
@@ -364,6 +483,8 @@ final class AnalyticsDatabase {
             try self.execute("DELETE FROM outbox")
             try self.execute("DELETE FROM daily_usage")
             try self.execute("DELETE FROM daily_model_usage")
+            try self.execute("DELETE FROM daily_insertion_latency")
+            try self.execute("DELETE FROM daily_clipboard_toggle_latency")
             try self.execute("DELETE FROM event_dedupe")
             try self.execute("DELETE FROM onboarding_flows")
             try self.execute("DELETE FROM model_download_attempts")
@@ -397,6 +518,29 @@ final class AnalyticsDatabase {
             model TEXT NOT NULL,
             use_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(day, role, mode, provider, model)
+        );
+        CREATE TABLE IF NOT EXISTS daily_insertion_latency (
+            day TEXT NOT NULL,
+            delivery_path TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            request_total_ms INTEGER NOT NULL DEFAULT 0,
+            request_min_ms INTEGER NOT NULL DEFAULT 0,
+            request_max_ms INTEGER NOT NULL DEFAULT 0,
+            ready_count INTEGER NOT NULL DEFAULT 0,
+            ready_total_ms INTEGER NOT NULL DEFAULT 0,
+            ready_min_ms INTEGER NOT NULL DEFAULT 0,
+            ready_max_ms INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day, delivery_path, outcome)
+        );
+        CREATE TABLE IF NOT EXISTS daily_clipboard_toggle_latency (
+            day TEXT NOT NULL,
+            delivery_path TEXT NOT NULL,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            total_ms INTEGER NOT NULL DEFAULT 0,
+            min_ms INTEGER NOT NULL DEFAULT 0,
+            max_ms INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day, delivery_path)
         );
         CREATE TABLE IF NOT EXISTS event_dedupe (
             dedupe_key TEXT PRIMARY KEY,
@@ -524,6 +668,11 @@ final class AnalyticsDatabase {
     private func dayString(_ date: Date) -> String {
         let components = self.calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private static func average(total: Int, count: Int) -> Double {
+        guard count > 0 else { return 0 }
+        return (Double(total) / Double(count) * 10).rounded() / 10
     }
 
     private func purgeDeletedPages() throws {

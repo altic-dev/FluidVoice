@@ -3,7 +3,10 @@ import SwiftUI
 struct RewriteModeView: View {
     @ObservedObject var service: RewriteModeService
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { self.appServices.asr }
+    private var asr: ASRService {
+        self.appServices.asr
+    }
+
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     @Environment(\.theme) private var theme
@@ -15,7 +18,7 @@ struct RewriteModeView: View {
     @State private var isHoveringHowTo: Bool = false
     @State private var isThinkingExpanded: Bool = false
 
-    // Local state for available models (derived from shared AI Settings pool)
+    /// Local state for available models (derived from shared AI Settings pool)
     @State private var availableModels: [String] = []
 
     var body: some View {
@@ -133,7 +136,9 @@ struct RewriteModeView: View {
                                 Spacer()
 
                                 Button("Replace Original") {
-                                    self.service.acceptRewrite()
+                                    Task { @MainActor in
+                                        await self.service.acceptRewrite()
+                                    }
                                     self.onClose?()
                                 }
                                 .buttonStyle(.borderedProminent)

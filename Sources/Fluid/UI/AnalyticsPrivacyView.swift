@@ -36,16 +36,17 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("Onboarding steps viewed and completed, including skips.")
                     self.bullet("Transcription and AI provider/model identifiers, counted as daily totals.")
                     self.bullet("Model download source, outcome, and download duration.")
+                    self.bullet("Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome.")
 
                     self.sectionTitle("We do NOT collect")
                     self.bullet("Any transcription text or audio.")
                     self.bullet("Selected text, rewrite prompts, or AI responses.")
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
-                    self.bullet("Hardware identifiers, CPU/chip details, performance timings, or individual transcription events.")
+                    self.bullet("Hardware identifiers, CPU/chip details, target-app identity, or individual insertion timings/events.")
 
                     self.sectionTitle("How it’s used")
-                    self.bullet("To understand feature adoption, onboarding completion, model usage, active installations, and retention without requiring accounts.")
+                    self.bullet("To understand feature adoption, insertion performance, onboarding completion, model usage, active installations, and retention without requiring accounts.")
 
                     self.sectionTitle("Control")
                     self.bullet("You can disable analytics anytime in Settings → Share Anonymous Analytics.")

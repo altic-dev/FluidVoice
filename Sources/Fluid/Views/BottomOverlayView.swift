@@ -1661,9 +1661,10 @@ private struct BottomOverlayPromptMenuView: View {
     }
 
     private func restoreTypingTargetApp() {
-        let pid = NotchContentState.shared.recordingTargetPID
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            if let pid { _ = TypingService.activateApp(pid: pid) }
+        guard let context = NotchContentState.shared.recordingTargetContext else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            _ = await TypingService.prepareTargetForDelivery(context)
         }
     }
 }
@@ -2287,7 +2288,11 @@ struct BottomOverlayView: View {
 
     private var shouldReservePreviewArea: Bool {
         self.layout.showsPreview &&
-            (self.settings.enableStreamingPreview || self.contentState.isAIProcessingFailureVisible)
+            (
+                self.settings.enableStreamingPreview ||
+                    self.contentState.isAIProcessingFailureVisible ||
+                    self.contentState.isTextDeliveryFailureVisible
+            )
     }
 
     private var overlayFrameHeight: CGFloat? {
@@ -2341,6 +2346,10 @@ struct BottomOverlayView: View {
         self.shouldReservePreviewArea && self.contentState.isAIProcessingFailureVisible && !self.contentState.isProcessing
     }
 
+    private var shouldShowTextDeliveryFailure: Bool {
+        self.shouldReservePreviewArea && self.contentState.isTextDeliveryFailureVisible && !self.contentState.isProcessing
+    }
+
     private var shouldSuppressPreviewDuringRelease: Bool {
         if self.shouldShowProcessingPreview {
             return false
@@ -2350,7 +2359,7 @@ struct BottomOverlayView: View {
 
     private func previewResizeBucket(for previewText: String) -> Int {
         guard self.shouldReservePreviewArea else { return 0 }
-        if self.shouldShowAIProcessingFailure { return 1 }
+        if self.shouldShowAIProcessingFailure || self.shouldShowTextDeliveryFailure { return 1 }
         let trimmed = previewText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return self.shouldShowProcessingStatus ? 1 : 0 }
 
@@ -2816,6 +2825,32 @@ struct BottomOverlayView: View {
         .frame(maxWidth: self.previewMaxWidth, alignment: .leading)
     }
 
+    private var textDeliveryFailureView: some View {
+        HStack(spacing: 8) {
+            Text(self.contentState.textDeliveryFailureMessage)
+                .font(.system(size: self.layout.transFontSize, weight: .semibold))
+                .foregroundStyle(Color.orange.opacity(0.9))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            self.failureIconButton(systemName: "doc.on.doc", help: "Copy transcript") {
+                _ = ClipboardService.copyToClipboard(self.contentState.textDeliveryFailureTranscript)
+            }
+            self.failureIconButton(systemName: "arrow.down.doc", help: "Paste last transcript") {
+                let transcript = self.contentState.textDeliveryFailureTranscript
+                self.contentState.clearTextDeliveryFailure()
+                self.contentState.onRetryTextDeliveryRequested?(transcript)
+            }
+            self.failureIconButton(systemName: "xmark", help: "Dismiss") {
+                self.contentState.clearTextDeliveryFailure()
+                NotchOverlayManager.shared.hide()
+            }
+        }
+        .frame(maxWidth: self.previewMaxWidth, alignment: .leading)
+    }
+
     private func scrollablePreviewText(_ previewText: String) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
@@ -2882,6 +2917,8 @@ struct BottomOverlayView: View {
                         Group {
                             if self.shouldSuppressPreviewDuringRelease {
                                 Color.clear
+                            } else if self.shouldShowTextDeliveryFailure {
+                                self.textDeliveryFailureView
                             } else if self.shouldShowAIProcessingFailure {
                                 self.aiProcessingFailureView
                             } else if self.shouldShowProcessingPreview {
@@ -2942,6 +2979,8 @@ struct BottomOverlayView: View {
                         Group {
                             if self.shouldSuppressPreviewDuringRelease {
                                 Color.clear
+                            } else if self.shouldShowTextDeliveryFailure {
+                                self.textDeliveryFailureView
                             } else if self.shouldShowAIProcessingFailure {
                                 self.aiProcessingFailureView
                             } else if self.shouldShowProcessingPreview {
@@ -3236,6 +3275,10 @@ struct BottomOverlayView: View {
             }
         }
         .onChange(of: self.contentState.isAIProcessingFailureVisible) { _, _ in
+            guard !self.layout.usesFixedCanvas else { return }
+            self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
+        }
+        .onChange(of: self.contentState.isTextDeliveryFailureVisible) { _, _ in
             guard !self.layout.usesFixedCanvas else { return }
             self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }

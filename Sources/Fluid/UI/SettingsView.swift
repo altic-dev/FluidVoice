@@ -943,7 +943,7 @@ struct SettingsView: View {
 
                                     self.optionToggleRow(
                                         title: "Share Anonymous Analytics",
-                                        description: "Send lean, anonymous daily usage, onboarding, retention, and model metrics. Never includes transcription text or prompts.",
+                                        description: "Send lean, anonymous daily usage, insertion performance, onboarding, retention, and model metrics. Never includes transcription text or prompts.",
                                         isOn: self.analyticsToggleBinding
                                     )
 

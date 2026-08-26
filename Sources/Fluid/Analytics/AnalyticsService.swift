@@ -60,6 +60,25 @@ final class AnalyticsService {
         }
     }
 
+    func recordInsertionLatency(
+        path: AnalyticsInsertionPath,
+        outcome: AnalyticsInsertionOutcome,
+        requestMilliseconds: Int,
+        readyMilliseconds: Int?,
+        toggleStopMilliseconds: Int?
+    ) {
+        self.submit { core, context in
+            await core.recordInsertionLatency(
+                path: path,
+                outcome: outcome,
+                requestMilliseconds: requestMilliseconds,
+                readyMilliseconds: readyMilliseconds,
+                toggleStopMilliseconds: toggleStopMilliseconds,
+                context: context
+            )
+        }
+    }
+
     func recordOnboardingStarted(origin: AnalyticsOnboardingOrigin) {
         self.submit { core, context in
             await core.recordOnboardingStarted(origin: origin, context: context)
@@ -248,6 +267,26 @@ private actor AnalyticsCore {
     ) async {
         await self.write(context: context) { database, date in
             try database.recordModelUsage(role: role, mode: mode, descriptor: descriptor, at: date)
+        }
+    }
+
+    func recordInsertionLatency(
+        path: AnalyticsInsertionPath,
+        outcome: AnalyticsInsertionOutcome,
+        requestMilliseconds: Int,
+        readyMilliseconds: Int?,
+        toggleStopMilliseconds: Int?,
+        context: AnalyticsContext
+    ) async {
+        await self.write(context: context) { database, date in
+            try database.recordInsertionLatency(
+                path: path,
+                outcome: outcome,
+                requestMilliseconds: requestMilliseconds,
+                readyMilliseconds: readyMilliseconds,
+                toggleStopMilliseconds: toggleStopMilliseconds,
+                at: date
+            )
         }
     }
 
