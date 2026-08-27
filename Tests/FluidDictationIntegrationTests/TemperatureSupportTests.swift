@@ -41,6 +41,44 @@ final class TemperatureSupportTests: XCTestCase {
         }
     }
 
+    func testIsReasoningModel_doesNotMatchEveryOpenAIModel() {
+        // Regression: isReasoningModel matched the whole "openai/" prefix, so
+        // every OpenAI model on a provider like OpenRouter was mis-classified
+        // as a reasoning model and lost temperature control. Only actual
+        // reasoning model families should match.
+        let nonReasoning = [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "chatgpt-4o-latest",
+            // Provider-prefixed (e.g. OpenRouter) non-reasoning IDs — the bug case
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
+            "openai/gpt-4o-mini",
+            "openai/chatgpt-4o-latest",
+        ]
+        for model in nonReasoning {
+            XCTAssertFalse(
+                SettingsStore.shared.isReasoningModel(model),
+                "\(model) is not a reasoning model and must keep temperature control"
+            )
+        }
+
+        // Control: known reasoning models still classify as reasoning, both
+        // bare and provider-prefixed.
+        let reasoning = [
+            "o1", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini",
+            "openai/o3", "openai/o3-mini", "openai/gpt-5", "openai/gpt-oss-120b",
+            "deepseek/deepseek-reasoner",
+        ]
+        for model in reasoning {
+            XCTAssertTrue(
+                SettingsStore.shared.isReasoningModel(model),
+                "\(model) is a reasoning model"
+            )
+        }
+    }
+
     func testTemperatureSupported_olderAndNonAnthropicModels() {
         let supported = [
             "gpt-4.1",
@@ -48,6 +86,9 @@ final class TemperatureSupportTests: XCTestCase {
             "claude-sonnet-4-20250514",
             "gemini-2.5-flash",
             "llama3",
+            // OpenRouter-prefixed non-reasoning OpenAI models keep temperature
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
             // Dotted OpenRouter IDs for models that still accept temperature
             "anthropic/claude-sonnet-4.6",
             "anthropic/claude-sonnet-4.5",

@@ -75,13 +75,20 @@ final class WhisperProvider: TranscriptionProvider {
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
+    private let languageCodeOverride: String?
 
     var modelOverride: SettingsStore.SpeechModel?
 
-    init(modelDirectory: URL? = nil, urlSession: URLSession = .shared, modelOverride: SettingsStore.SpeechModel? = nil) {
+    init(
+        modelDirectory: URL? = nil,
+        urlSession: URLSession = .shared,
+        modelOverride: SettingsStore.SpeechModel? = nil,
+        languageCodeOverride: String? = nil
+    ) {
         self.overriddenModelDirectory = modelDirectory
         self.urlSession = urlSession
         self.modelOverride = modelOverride
+        self.languageCodeOverride = languageCodeOverride
     }
 
     deinit {
@@ -359,20 +366,8 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        let transcript = try await session.run(
-            samples,
-            options: RunOptions(
-                timestamps: .segment,
-                family: .whisper(WhisperRunOptions(
-                    conditionOnPrevTokens: false,
-                    temperature: 0,
-                    temperatureInc: 0.2,
-                    compressionRatioThold: 2.4,
-                    logprobThold: -1,
-                    noSpeechThold: 0.6
-                ))
-            )
-        )
+        let languageCode = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+        let transcript = try await session.run(samples, options: Self.runOptions(languageCode: languageCode))
         let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
@@ -407,20 +402,8 @@ final class WhisperProvider: TranscriptionProvider {
             if chunk.count < minSamples {
                 chunk.append(contentsOf: repeatElement(0, count: minSamples - chunk.count))
             }
-            let transcript = try await session.run(
-                chunk,
-                options: RunOptions(
-                    timestamps: .segment,
-                    family: .whisper(WhisperRunOptions(
-                        conditionOnPrevTokens: false,
-                        temperature: 0,
-                        temperatureInc: 0.2,
-                        compressionRatioThold: 2.4,
-                        logprobThold: -1,
-                        noSpeechThold: 0.6
-                    ))
-                )
-            )
+            let languageCode = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+            let transcript = try await session.run(chunk, options: Self.runOptions(languageCode: languageCode))
             let offset = Double(startSample) / 16_000
             let chunkSegments = transcript.segments.compactMap { segment -> WhisperTimedSegment? in
                 let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -435,6 +418,21 @@ final class WhisperProvider: TranscriptionProvider {
             await progressHandler?(chunkSegments, Double(endSample) / 16_000)
         }
         return allSegments
+    }
+
+    static func runOptions(languageCode: String?) -> RunOptions {
+        RunOptions(
+            timestamps: .segment,
+            language: languageCode,
+            family: .whisper(WhisperRunOptions(
+                conditionOnPrevTokens: false,
+                temperature: 0,
+                temperatureInc: 0.2,
+                compressionRatioThold: 2.4,
+                logprobThold: -1,
+                noSpeechThold: 0.6
+            ))
+        )
     }
 
     func modelsExistOnDisk() -> Bool {

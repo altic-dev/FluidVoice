@@ -230,6 +230,12 @@ protocol PrivateAIIntegrationProviding: Sendable {
         context: PrivateAIIntegrationService.AppContext,
         streamHandler: PrivateAIStreamHandler?
     ) async throws -> PrivateAIIntegrationService.EnhancementResult
+    func rewrite(
+        _ inputText: String,
+        systemPrompt: String,
+        runtime: PrivateAIIntegrationService.RuntimeConfiguration,
+        context: PrivateAIIntegrationService.AppContext
+    ) async throws -> PrivateAIIntegrationService.EnhancementResult
 }
 
 extension PrivateAIIntegrationProviding {
@@ -260,6 +266,15 @@ extension PrivateAIIntegrationProviding {
         streamHandler _: PrivateAIStreamHandler?
     ) async throws -> PrivateAIIntegrationService.EnhancementResult {
         try await self.enhanceDictation(inputText, runtime: runtime, context: context)
+    }
+
+    func rewrite(
+        _: String,
+        systemPrompt _: String,
+        runtime _: PrivateAIIntegrationService.RuntimeConfiguration,
+        context _: PrivateAIIntegrationService.AppContext
+    ) async throws -> PrivateAIIntegrationService.EnhancementResult {
+        throw PrivateAIUnavailableError()
     }
 }
 

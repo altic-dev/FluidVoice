@@ -17,6 +17,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let privateAIBackendPreference: SettingsStore.PrivateAIBackendPreference?
     let privateAIContextTokenLimit: Int?
     let selectedSpeechModel: SettingsStore.SpeechModel
+    let selectedWhisperLanguageCode: String?
     let selectedCohereLanguage: SettingsStore.CohereLanguage
     let selectedNemotronLanguage: SettingsStore.NemotronLanguage?
     let selectedAppleSpeechLocaleIdentifier: String?
@@ -57,12 +58,24 @@ struct SettingsBackupPayload: Codable, Equatable {
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
     let enableStreamingPreview: Bool
+    // Optional so backups created before incremental Parakeet finalization still decode.
+    let experimentalParakeetUnifiedFinalEnabled: Bool?
     // Optional so backups created before the silence filter still decode.
     let skipSilentRecordingsEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
+    let spokenSendEnabled: Bool?
+    let spokenSendImmediatelyEnabled: Bool?
+    let spokenSendPhrase: String?
+    let spokenSendKey: SettingsStore.SpokenSendKey?
     let preferredInputDeviceUID: String?
+    // Optional so backups created before microphone priority ordering still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let microphonePriority: [SettingsStore.MicrophonePriorityEntry]?
+    // Optional so backups created before microphone removal history still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let suppressedMicrophoneUIDs: [String]?
     let preferredOutputDeviceUID: String?
     let microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode?
     let visualizerNoiseThreshold: Double
@@ -75,6 +88,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let saveAudioWithTranscriptionHistory: Bool?
     let audioHistoryBudgetGB: Double?
     let notifyAIProcessingFailures: Bool?
+    let showMicrophoneChangeAlerts: Bool?
     let weekendsDontBreakStreak: Bool
     let fillerWords: [String]
     let removeFillerWordsEnabled: Bool
@@ -83,6 +97,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let punctuationDictionaryPrefix: String?
     // swiftlint:disable:next discouraged_optional_collection
     let punctuationDictionaryRules: [SettingsStore.PunctuationDictionaryRule]?
+    // Optional so backups created before spoken formatting actions still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let spokenFormattingActionRules: [SettingsStore.SpokenFormattingActionRule]?
     let gaavModeEnabled: Bool
     let gaavLowercaseFirstLetterEnabled: Bool?
     let gaavRemoveTrailingPeriodEnabled: Bool?
@@ -102,6 +119,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let editPromptRoutingScope: SettingsStore.PromptRoutingScope?
     let defaultDictationPromptOverride: String?
     let defaultEditPromptOverride: String?
+    let fileTranscriptionSpeakerLabelsEnabled: Bool?
+    let fileTranscriptionExpectedSpeakerCount: Int?
 }
 
 struct AppBackupDocument: Codable, Equatable {

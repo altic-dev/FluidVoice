@@ -20,6 +20,7 @@ enum AIProcessingError: LocalizedError {
     case missingAPIKey(provider: String)
     case missingModel(provider: String)
     case emptyResponse
+    case dictationExceedsAIContextWindow
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ enum AIProcessingError: LocalizedError {
             return "No model selected for \(provider)"
         case .emptyResponse:
             return "AI returned an empty response"
+        case .dictationExceedsAIContextWindow:
+            return "Dictation exceeded the AI context window"
         }
     }
 
@@ -39,7 +42,7 @@ enum AIProcessingError: LocalizedError {
         switch self {
         case .noVerifiedProvider, .missingAPIKey, .missingModel:
             return true
-        case .emptyResponse:
+        case .emptyResponse, .dictationExceedsAIContextWindow:
             return false
         }
     }
@@ -243,6 +246,7 @@ struct ContentView: View {
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
+    @State private var recordingFocusTarget: TypingService.CapturedFocusTarget? = nil
 
     // Command Mode State
     // @State private var showCommandMode: Bool = false
@@ -251,9 +255,10 @@ struct ContentView: View {
     @State private var visualizerNoiseThreshold: Double = SettingsStore.shared.visualizerNoiseThreshold
     @State private var inputDevices: [AudioDevice.Device] = []
     @State private var outputDevices: [AudioDevice.Device] = []
-    @State private var selectedInputUID: String = AudioDevice.getDefaultInputDevice()?.uid ?? ""
+    // Populated by gated audio initialization; querying Core Audio while SwiftUI
+    // constructs this view can race AttributeGraph metadata processing.
+    @State private var selectedInputUID: String = ""
     @State private var selectedOutputUID: String = SettingsStore.shared.preferredOutputDeviceUID ?? ""
-    @State private var microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode = SettingsStore.shared.microphoneSelectionMode
 
     // AI Prompts Tab State
     @State private var aiInputText: String = ""
@@ -279,6 +284,11 @@ struct ContentView: View {
     @State private var accessibilityGuideRequestID: UUID?
     @State private var prewarmDictationTask: Task<Void, Never>?
     @State private var overlayLifecycleID: UInt64 = 0
+    @State private var spokenSendAutoStopTask: Task<Void, Never>?
+    @State private var spokenSendAutoStopTriggered = false
+    @State private var spokenSendCountdownStartedAt: TimeInterval?
+    @State private var spokenSendLastVoiceActivityAt: TimeInterval = 0
+    @State private var spokenSendVoiceActivityCancellable: AnyCancellable?
 
     private var isRecordingAnyShortcutCapture: Bool {
         self.activeShortcutRecordingTarget != nil
@@ -308,6 +318,7 @@ struct ContentView: View {
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var microphoneSettingsScrollRequest = 0
 
     var body: some View {
         let layout = AnyView(
@@ -351,6 +362,9 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
                 self.reloadSettingsStateAfterBackupRestore()
             }
+            .onReceive(self.asr.$partialTranscription) { text in
+                self.handleSpokenSendPartialTranscription(text)
+            }
             .toolbar {
                 if !self.settings.shouldShowOnboarding {
                     ToolbarItemGroup(placement: .primaryAction) {
@@ -383,19 +397,12 @@ struct ContentView: View {
                 // Hardware change detected → refresh device lists
                 self.refreshDevices()
 
-                switch SettingsStore.shared.microphoneSelectionMode {
-                case .system:
-                    if let sysIn = AudioDevice.getDefaultInputDevice()?.uid {
-                        self.selectedInputUID = sysIn
-                    }
-                case .manual:
-                    // The refreshed device list drives the displayed selection.
-                    break
-                }
-
                 if let sysOut = AudioDevice.getDefaultOutputDevice()?.uid {
                     self.selectedOutputUID = sysOut
                 }
+            }
+            .onChange(of: self.audioObserver.inputAvailabilityTick) { _, _ in
+                self.refreshInputDevices()
             }
             .onDisappear {
                 Task { await self.asr.stopWithoutTranscription() }
@@ -557,6 +564,10 @@ struct ContentView: View {
         self.appear = true
         self.refreshAccessibilityPermissionState()
 
+        Task {
+            await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
+        }
+
         self.handleMenuBarNavigation(self.menuBarManager.requestedNavigationDestination)
         if UserDefaults.standard.bool(forKey: self.accessibilityRestartFlagKey) {
             UserDefaults.standard.set(false, forKey: self.accessibilityRestartFlagKey)
@@ -597,38 +608,29 @@ struct ContentView: View {
             DebugLogger.shared.info("🚦 Startup delay complete, signaling UI ready...", source: "ContentView")
             self.appServices.signalUIReady()
 
-            DebugLogger.shared.info("🔊 Starting delayed audio initialization...", source: "ContentView")
-            self.audioObserver.startObserving()
-            self.asr.initialize()
-            self.menuBarManager.configure(asrService: self.appServices.asr)
-            self.refreshDevices()
+            Task { @MainActor in
+                await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
+                await AudioStartupGate.shared.waitUntilOpen()
 
-            switch SettingsStore.shared.microphoneSelectionMode {
-            case .system:
-                if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid {
-                    self.selectedInputUID = defaultUID
+                DebugLogger.shared.info("🔊 Starting gated audio initialization...", source: "ContentView")
+                self.audioObserver.startObserving()
+                await self.asr.initialize()
+                self.menuBarManager.configure(asrService: self.appServices.asr)
+                self.refreshDevices()
+
+                if self.selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid {
+                    self.selectedOutputUID = defOut
                 }
-            case .manual:
-                if let preferredUID = SettingsStore.shared.preferredInputDeviceUID, !preferredUID.isEmpty {
-                    self.selectedInputUID = preferredUID
-                } else if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid {
-                    self.selectedInputUID = defaultUID
-                    SettingsStore.shared.preferredInputDeviceUID = defaultUID
+
+                if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
+                   !prefOut.isEmpty,
+                   outputDevices.first(where: { $0.uid == prefOut }) != nil
+                {
+                    self.selectedOutputUID = prefOut
                 }
-            }
 
-            if self.selectedOutputUID.isEmpty, let defOut = AudioDevice.getDefaultOutputDevice()?.uid {
-                self.selectedOutputUID = defOut
+                DebugLogger.shared.info("✅ Audio subsystems initialized", source: "ContentView")
             }
-
-            if let prefOut = SettingsStore.shared.preferredOutputDeviceUID,
-               !prefOut.isEmpty,
-               outputDevices.first(where: { $0.uid == prefOut }) != nil
-            {
-                self.selectedOutputUID = prefOut
-            }
-
-            DebugLogger.shared.info("✅ Audio subsystems initialized", source: "ContentView")
         }
     }
 
@@ -962,12 +964,14 @@ struct ContentView: View {
     @MainActor
     private func handleMenuBarNavigation(_ destination: MenuBarNavigationDestination?) {
         guard let destination else { return }
-        defer { menuBarManager.requestedNavigationDestination = nil }
         guard !self.settings.shouldShowOnboarding else { return }
 
         switch destination {
         case .customDictionary:
             self.selectedSidebarItem = .customDictionary
+        case .microphoneSettings:
+            self.selectedSidebarItem = .preferences
+            self.microphoneSettingsScrollRequest &+= 1
         case .preferences:
             self.selectedSidebarItem = .preferences
         }
@@ -1456,11 +1460,11 @@ struct ContentView: View {
 
     private var preferencesView: some View {
         SettingsView(
+            microphonePreferenceCoordinator: self.appServices.microphonePreferenceCoordinator,
             appear: self.$appear,
             visualizerNoiseThreshold: self.$visualizerNoiseThreshold,
             selectedInputUID: self.$selectedInputUID,
             selectedOutputUID: self.$selectedOutputUID,
-            microphoneSelectionMode: self.$microphoneSelectionMode,
             inputDevices: self.$inputDevices,
             outputDevices: self.$outputDevices,
             accessibilityEnabled: self.$accessibilityEnabled,
@@ -1485,7 +1489,8 @@ struct ContentView: View {
             openAccessibilitySettings: self.openAccessibilitySettings,
             restartApp: self.restartApp,
             revealAppInFinder: self.revealAppInFinder,
-            openApplicationsFolder: self.openApplicationsFolder
+            openApplicationsFolder: self.openApplicationsFolder,
+            microphoneSettingsScrollRequest: self.microphoneSettingsScrollRequest
         )
     }
 
@@ -1529,11 +1534,38 @@ struct ContentView: View {
         // Query CoreAudio off the main thread — during device topology changes, synchronous
         // CoreAudio calls on main can deadlock while the HAL is still settling.
         DispatchQueue.global(qos: .userInitiated).async {
-            let inputs = AudioDevice.listInputDevices()
+            let inputs = AudioDevice.listInputDevicesRefreshingLiveness()
             let outputs = AudioDevice.listOutputDevices()
+            let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
             DispatchQueue.main.async {
                 self.inputDevices = inputs
                 self.outputDevices = outputs
+                if let selectedInput = self.appServices.microphonePreferenceCoordinator
+                    .reconcileMicrophoneSelection(
+                        availableInputs: inputs,
+                        defaultInputUID: defaultInputUID
+                    )
+                {
+                    self.selectedInputUID = selectedInput.uid
+                }
+            }
+        }
+    }
+
+    private func refreshInputDevices() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let inputs = AudioDevice.listInputDevicesRefreshingLiveness()
+            let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
+            DispatchQueue.main.async {
+                self.inputDevices = inputs
+                if let selectedInput = self.appServices.microphonePreferenceCoordinator
+                    .reconcileMicrophoneSelection(
+                        availableInputs: inputs,
+                        defaultInputUID: defaultInputUID
+                    )
+                {
+                    self.selectedInputUID = selectedInput.uid
+                }
             }
         }
     }
@@ -1590,6 +1622,50 @@ struct ContentView: View {
         return (name: "Unknown", bundleId: "unknown", windowTitle: "")
     }
 
+    private func isSpokenSendBlockedApp(
+        _ appInfo: (name: String, bundleId: String, windowTitle: String)
+    ) -> Bool {
+        let identity = "\(appInfo.name) \(appInfo.bundleId)".lowercased()
+        return identity.contains("terminal")
+            || identity.contains("iterm")
+            || identity.contains("warp")
+            || identity.contains("ghostty")
+            || identity.contains("kitty")
+            || identity.contains("alacritty")
+    }
+
+    private func deliverSpokenSend(
+        _ outputPlan: DictationLiteralOutputPlan,
+        targetPID: pid_t?,
+        textReadyAt: TimeInterval
+    ) async -> TypingService.DeliveryOutcome {
+        let sendsExistingDraft = outputPlan.plainText.isEmpty
+        let outcome = await self.asr.typeOutputPlanToActiveFieldAndWait(
+            outputPlan,
+            preferredTargetPID: targetPID,
+            textReadyAt: textReadyAt,
+            postInsertionKey: self.settings.spokenSendKey,
+            requiredFocusTarget: self.recordingFocusTarget
+        )
+        if outcome.didDispatchAction {
+            NotchContentState.shared.setSpokenSendIndicatorState(.sent)
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            return outcome
+        }
+
+        NotchContentState.shared.setSpokenSendIndicatorState(.failed)
+        DebugLogger.shared.warning(
+            "Spoken Send skipped because delivery safety checks did not pass",
+            source: "ContentView"
+        )
+        let message = outcome.didInsert
+            ? "Text inserted — send skipped"
+            : sendsExistingDraft ? "Couldn't send" : "Couldn't insert or send"
+        NotchOverlayManager.shared.updateTranscriptionText(message)
+        try? await Task.sleep(nanoseconds: 650_000_000)
+        return outcome
+    }
+
     /// Best-effort frontmost window title lookup for the current app
     private func getFrontmostWindowTitle(ownerPid: pid_t) -> String? {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -1608,7 +1684,9 @@ struct ContentView: View {
     private func captureRecordingTargetContext() {
         // Capture the focused target PID BEFORE any overlay/UI changes.
         // Used to restore focus when the user interacts with overlay dropdowns.
-        let focusedPID = TypingService.captureSystemFocusedPID()
+        let focusTarget = TypingService.captureSystemFocusTarget()
+        self.recordingFocusTarget = focusTarget
+        let focusedPID = focusTarget?.pid
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID
 
@@ -2030,7 +2108,8 @@ struct ContentView: View {
             !wasRewriteMode &&
             !wasCommandMode &&
             !promptTest.isActive &&
-            !shouldUseAIOnStop
+            !shouldUseAIOnStop &&
+            !self.settings.spokenSendEnabled
         var didRequestOverlayHideOnStop = false
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
@@ -2128,31 +2207,25 @@ struct ContentView: View {
         // If this was a rewrite recording, process the rewrite instead of typing
         if wasRewriteMode {
             DebugLogger.shared.info("Processing rewrite with instruction: \(transcribedText)", source: "ContentView")
+            AnalyticsService.shared.recordModelUsage(
+                role: .transcription,
+                mode: .edit,
+                descriptor: self.settings.selectedSpeechModel.analyticsDescriptor
+            )
             let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
             await self.processRewriteWithVoiceInstruction(transcribedText, appInfo: appInfo)
-            AnalyticsService.shared.capture(
-                .transcriptionCompleted,
-                properties: [
-                    "mode": AnalyticsMode.rewrite.rawValue,
-                    "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: transcribedText)),
-                    "ai_used": true,
-                ]
-            )
             return
         }
 
         // If this was a command recording, process the command
         if wasCommandMode {
             DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
-            await self.processCommandWithVoice(transcribedText)
-            AnalyticsService.shared.capture(
-                .transcriptionCompleted,
-                properties: [
-                    "mode": AnalyticsMode.command.rawValue,
-                    "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: transcribedText)),
-                    "ai_used": true,
-                ]
+            AnalyticsService.shared.recordModelUsage(
+                role: .transcription,
+                mode: .command,
+                descriptor: self.settings.selectedSpeechModel.analyticsDescriptor
             )
+            await self.processCommandWithVoice(transcribedText)
             return
         }
 
@@ -2160,24 +2233,41 @@ struct ContentView: View {
         var aiFallbackReason: String?
         var postProcessingModel: String?
         let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
-        let normalizedTranscribedText = ASRService.applySpokenPunctuationFormatting(
+        let punctuationFormattedText = ASRService.applySpokenPunctuationFormatting(
             transcribedText,
             appName: appInfo.name,
             bundleID: appInfo.bundleId,
             windowTitle: appInfo.windowTitle
         )
+        let spokenSendParse = SpokenSendParser.parse(
+            punctuationFormattedText,
+            phrase: self.settings.spokenSendPhrase,
+            enabled: route == .normal && self.settings.spokenSendEnabled
+        )
+        self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)
+        let normalizedTranscribedText = spokenSendParse.text
+        let sendsExistingDraft = spokenSendParse.shouldSend &&
+            normalizedTranscribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        let shouldUseAI = activeDictationSlot.map {
+        let shouldUseAI = !sendsExistingDraft && (activeDictationSlot.map {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: appInfo.bundleId)
-        } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appInfo.bundleId)
+        } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appInfo.bundleId))
         let transcriptionModelInfo = self.currentTranscriptionModelInfo()
+        let postProcessingModelInfo = self.currentDictationAIModelInfo(
+            dictationSlot: activeDictationSlot,
+            appBundleID: appInfo.bundleId
+        )
+        AnalyticsService.shared.recordUsage(
+            mode: .dictation,
+            transcriptionModel: self.settings.selectedSpeechModel.analyticsDescriptor,
+            aiModel: shouldUseAI ? AnalyticsModelDescriptor(
+                provider: postProcessingModelInfo.provider ?? "unknown",
+                model: postProcessingModelInfo.model ?? "unknown"
+            ) : nil
+        )
 
         if shouldUseAI {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
-            let postProcessingModelInfo = self.currentDictationAIModelInfo(
-                dictationSlot: activeDictationSlot,
-                appBundleID: appInfo.bundleId
-            )
             postProcessingModel = postProcessingModelInfo.model
             let postProcessingInputChars = normalizedTranscribedText.count
             let postProcessingStart = Date()
@@ -2235,18 +2325,6 @@ struct ContentView: View {
                     + "inputChars=\(postProcessingInputChars) fallback=\(aiFallbackReason != nil)",
                 source: "ContentView"
             )
-            AnalyticsService.shared.capture(
-                .dictationPostProcessingCompleted,
-                properties: [
-                    "latency_ms": postProcessingLatencyMs,
-                    "input_chars": postProcessingInputChars,
-                    "post_processing_provider": postProcessingModelInfo.provider ?? "unknown",
-                    "post_processing_model": postProcessingModelInfo.model ?? "unknown",
-                    "transcription_provider": transcriptionModelInfo.provider,
-                    "transcription_model": transcriptionModelInfo.model,
-                ]
-            )
-
             // Clear transient status text before leaving processing state to avoid
             // a brief non-shimmer "Refining..." preview flash.
             NotchOverlayManager.shared.updateTranscriptionText("")
@@ -2296,18 +2374,6 @@ struct ContentView: View {
         self.appBench("transcription_finalized chars=\(finalText.count)")
         self.appBench("text_ready chars=\(finalText.count)")
 
-        AnalyticsService.shared.capture(
-            .transcriptionCompleted,
-            properties: [
-                "mode": AnalyticsMode.dictation.rawValue,
-                "words_bucket": AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText)),
-                "ai_used": shouldUseAI,
-                "ai_changed_text": transcribedText != finalText,
-                "transcription_provider": transcriptionModelInfo.provider,
-                "transcription_model": transcriptionModelInfo.model,
-            ]
-        )
-
         let shouldPersistOutputs = route == .normal
         if !shouldPersistOutputs {
             DebugLogger.shared.info(
@@ -2318,7 +2384,7 @@ struct ContentView: View {
 
         let shouldShowAIProcessingFailure = shouldPersistOutputs && aiFallbackReason != nil
         if shouldShowAIProcessingFailure {
-            self.pendingAIReprocessText = transcribedText
+            self.pendingAIReprocessText = spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText
             NotchContentState.shared.showAIProcessingFailure()
             self.menuBarManager.finishProcessingKeepingOverlayVisible()
         } else {
@@ -2330,13 +2396,13 @@ struct ContentView: View {
         let isFluidFrontmost = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
 
         // Save to transcription history (transcription mode only, if enabled)
-        if shouldPersistOutputs, SettingsStore.shared.saveTranscriptionHistory {
+        if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory {
             let historyEntryID = UUID()
             let historyTimestamp = Date()
             TranscriptionHistoryStore.shared.addEntry(
                 id: historyEntryID,
                 timestamp: historyTimestamp,
-                rawText: transcribedText,
+                rawText: spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
                 processedText: finalText,
                 appName: appInfo.name,
                 windowTitle: appInfo.windowTitle,
@@ -2354,18 +2420,12 @@ struct ContentView: View {
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
         let shouldCopyToClipboard = shouldPersistOutputs &&
+            !sendsExistingDraft &&
             SettingsStore.shared.copyTranscriptionToClipboard &&
             !isFluidFrontmost
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.dictation.rawValue,
-                    "method": AnalyticsOutputMethod.clipboard.rawValue,
-                ]
-            )
         }
 
         var didTypeExternally = false
@@ -2378,60 +2438,58 @@ struct ContentView: View {
 
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID()
+            let spokenSendRequested = spokenSendParse.shouldSend
+            let targetMatchesRecordingFocus = typingTarget.pid != nil
+                && typingTarget.pid == self.recordingFocusTarget?.pid
+            let spokenSendAllowed = spokenSendRequested
+                && aiFallbackReason == nil
+                && (sendsExistingDraft || !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                && targetMatchesRecordingFocus
+                && !self.isSpokenSendBlockedApp(appInfo)
             // Dispatch insertion as soon as the destination app is ready; the
             // overlay hides asynchronously after output so it cannot delay paste.
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
+            if spokenSendAllowed {
+                NotchContentState.shared.setSpokenSendIndicatorState(.sending)
+                NotchOverlayManager.shared.updateTranscriptionText("Sending")
+            }
             self.appBench(
                 "text_ready_to_type_request elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - finalTextReadyAt) * 1000).rounded()))"
             )
-            self.asr.typeOutputPlanToActiveField(
-                finalOutputPlan,
-                preferredTargetPID: typingTarget.pid,
-                textReadyAt: finalTextReadyAt,
-                tracksDictionaryCorrections: true
-            )
-            didTypeExternally = true
+            if spokenSendAllowed {
+                let deliveryOutcome = await self.deliverSpokenSend(
+                    finalOutputPlan,
+                    targetPID: typingTarget.pid,
+                    textReadyAt: finalTextReadyAt
+                )
+                didTypeExternally = deliveryOutcome.didInsert
+            } else {
+                self.asr.typeOutputPlanToActiveField(
+                    finalOutputPlan,
+                    preferredTargetPID: typingTarget.pid,
+                    textReadyAt: finalTextReadyAt,
+                    tracksDictionaryCorrections: true
+                )
+                didTypeExternally = true
+            }
+            if spokenSendRequested, !spokenSendAllowed {
+                NotchContentState.shared.setSpokenSendIndicatorState(.failed)
+                DebugLogger.shared.warning(
+                    "Spoken Send skipped because delivery safety checks did not pass",
+                    source: "ContentView"
+                )
+                if aiFallbackReason == nil {
+                    NotchOverlayManager.shared.updateTranscriptionText("Text inserted — send skipped")
+                    try? await Task.sleep(nanoseconds: 650_000_000)
+                }
+            }
+            NotchOverlayManager.shared.updateTranscriptionText("")
+            NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
             if !shouldShowAIProcessingFailure, !didRequestOverlayHideOnStop {
                 self.hideOverlayAfterOutput()
             }
-        }
-
-        if didTypeExternally {
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.dictation.rawValue,
-                    "method": AnalyticsOutputMethod.typed.rawValue,
-                ]
-            )
-
-            // Register the post-transcription edit observation after insertion is dispatched.
-            let wordsBucket = AnalyticsBuckets.bucketWords(AnalyticsBuckets.wordCount(in: finalText))
-            let modelInfo = self.currentDictationAIModelInfo(
-                dictationSlot: activeDictationSlot,
-                appBundleID: appInfo.bundleId
-            )
-            await PostTranscriptionEditTracker.shared.markTranscriptionCompleted(
-                mode: AnalyticsMode.dictation.rawValue,
-                outputMethod: AnalyticsOutputMethod.typed.rawValue,
-                wordsBucket: wordsBucket,
-                aiUsed: shouldUseAI,
-                aiModel: modelInfo.model,
-                aiProvider: modelInfo.provider
-            )
-        } else if shouldPersistOutputs,
-                  SettingsStore.shared.copyTranscriptionToClipboard == false,
-                  SettingsStore.shared.saveTranscriptionHistory
-        {
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.dictation.rawValue,
-                    "method": AnalyticsOutputMethod.historyOnly.rawValue,
-                ]
-            )
         }
 
         if !didTypeExternally, !shouldShowAIProcessingFailure, !didRequestOverlayHideOnStop {
@@ -2443,8 +2501,139 @@ struct ContentView: View {
         self.hideOverlayAsync(reason: "after_output")
     }
 
+    private func updateSpokenSendIndicatorForFinalParse(shouldSend: Bool) {
+        if shouldSend, NotchContentState.shared.spokenSendIndicatorState == .sending {
+            return
+        }
+        NotchContentState.shared.setSpokenSendIndicatorState(shouldSend ? .detected : .hidden)
+    }
+
     private func advanceOverlayLifecycle() {
+        self.spokenSendAutoStopTask?.cancel()
+        self.spokenSendAutoStopTask = nil
+        self.stopSpokenSendVoiceActivityMonitoring()
+        self.spokenSendAutoStopTriggered = false
+        self.spokenSendCountdownStartedAt = nil
+        self.spokenSendLastVoiceActivityAt = ProcessInfo.processInfo.systemUptime
         self.overlayLifecycleID &+= 1
+        NotchContentState.shared.clearAIProcessingFailure()
+    }
+
+    private func handleSpokenSendPartialTranscription(_ text: String) {
+        guard self.settings.spokenSendEnabled else { return }
+        let isDictationMode = self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode
+        let shouldStop = isDictationMode &&
+            self.currentDictationOutputRouteForHotkeyStop() == .normal &&
+            self.asr.isRunning &&
+            !self.spokenSendAutoStopTriggered &&
+            SpokenSendParser.shouldStopImmediately(
+                text,
+                phrase: self.settings.spokenSendPhrase,
+                spokenSendEnabled: self.settings.spokenSendEnabled,
+                sendImmediatelyEnabled: self.settings.spokenSendImmediatelyEnabled
+            )
+
+        guard shouldStop else {
+            self.spokenSendAutoStopTask?.cancel()
+            self.spokenSendAutoStopTask = nil
+            self.stopSpokenSendVoiceActivityMonitoring()
+            self.spokenSendCountdownStartedAt = nil
+            if !self.spokenSendAutoStopTriggered,
+               NotchContentState.shared.spokenSendIndicatorState == .countingDown
+            {
+                NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+            }
+            return
+        }
+
+        guard self.spokenSendAutoStopTask == nil else {
+            return
+        }
+
+        let expectedOverlayLifecycleID = self.overlayLifecycleID
+        let countdownStartedAt = ProcessInfo.processInfo.systemUptime
+        self.spokenSendCountdownStartedAt = countdownStartedAt
+        self.spokenSendLastVoiceActivityAt = countdownStartedAt
+        self.startSpokenSendVoiceActivityMonitoring()
+        let expectedCountdownID = NotchContentState.shared.beginSpokenSendCountdown()
+        self.spokenSendAutoStopTask = Task { @MainActor in
+            // Keep one countdown across harmless streaming refinements such as punctuation or casing.
+            try? await Task.sleep(nanoseconds: SpokenSendParser.immediateStopSettleNanoseconds)
+            let quietDuration = ProcessInfo.processInfo.systemUptime - self.spokenSendLastVoiceActivityAt
+            guard !Task.isCancelled,
+                  self.overlayLifecycleID == expectedOverlayLifecycleID,
+                  NotchContentState.shared.spokenSendCountdownID == expectedCountdownID,
+                  self.asr.isRunning,
+                  self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode,
+                  self.currentDictationOutputRouteForHotkeyStop() == .normal,
+                  !self.spokenSendAutoStopTriggered,
+                  SpokenSendParser.canCompleteImmediateStop(
+                      self.asr.partialTranscription,
+                      phrase: self.settings.spokenSendPhrase,
+                      spokenSendEnabled: self.settings.spokenSendEnabled,
+                      sendImmediatelyEnabled: self.settings.spokenSendImmediatelyEnabled,
+                      quietDuration: quietDuration
+                  )
+            else {
+                if self.overlayLifecycleID == expectedOverlayLifecycleID,
+                   NotchContentState.shared.spokenSendCountdownID == expectedCountdownID
+                {
+                    self.spokenSendAutoStopTask = nil
+                    self.stopSpokenSendVoiceActivityMonitoring()
+                    self.spokenSendCountdownStartedAt = nil
+                    if NotchContentState.shared.spokenSendIndicatorState == .countingDown {
+                        NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+                    }
+                }
+                return
+            }
+
+            self.spokenSendAutoStopTask = nil
+            self.stopSpokenSendVoiceActivityMonitoring()
+            self.spokenSendCountdownStartedAt = nil
+            self.spokenSendAutoStopTriggered = true
+            NotchContentState.shared.setSpokenSendIndicatorState(.sending)
+            DebugLogger.shared.info("Spoken Send countdown completed; stopping dictation", source: "ContentView")
+            await self.stopAndProcessTranscription(route: .normal)
+        }
+    }
+
+    private func handleSpokenSendAudioLevel(_ level: CGFloat) {
+        guard SpokenSendParser.isMeaningfulVoiceActivity(level) else { return }
+
+        let activityAt = ProcessInfo.processInfo.systemUptime
+        self.spokenSendLastVoiceActivityAt = activityAt
+        guard let countdownStartedAt = self.spokenSendCountdownStartedAt,
+              SpokenSendParser.shouldCancelCountdownForVoiceActivity(
+                  countdownStartedAt: countdownStartedAt,
+                  voiceActivityAt: activityAt
+              ),
+              self.spokenSendAutoStopTask != nil
+        else {
+            return
+        }
+
+        self.spokenSendAutoStopTask?.cancel()
+        self.spokenSendAutoStopTask = nil
+        self.stopSpokenSendVoiceActivityMonitoring()
+        self.spokenSendCountdownStartedAt = nil
+        if NotchContentState.shared.spokenSendIndicatorState == .countingDown {
+            NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+        }
+    }
+
+    private func startSpokenSendVoiceActivityMonitoring() {
+        guard self.spokenSendVoiceActivityCancellable == nil else { return }
+        self.spokenSendVoiceActivityCancellable = self.asr.audioLevelPublisher
+            .receive(on: RunLoop.main)
+            .sink { level in
+                self.handleSpokenSendAudioLevel(level)
+            }
+    }
+
+    private func stopSpokenSendVoiceActivityMonitoring() {
+        self.spokenSendVoiceActivityCancellable?.cancel()
+        self.spokenSendVoiceActivityCancellable = nil
     }
 
     private func hideOverlayAsync(reason: String) {
@@ -2892,13 +3081,6 @@ struct ContentView: View {
             // Copy to clipboard as backup
             if SettingsStore.shared.copyTranscriptionToClipboard {
                 ClipboardService.copyToClipboard(self.rewriteModeService.rewrittenText)
-                AnalyticsService.shared.capture(
-                    .outputDelivered,
-                    properties: [
-                        "mode": AnalyticsMode.rewrite.rawValue,
-                        "method": AnalyticsOutputMethod.clipboard.rawValue,
-                    ]
-                )
             }
 
             // Type the rewritten text
@@ -2911,27 +3093,12 @@ struct ContentView: View {
                 hideApp: false,
                 recordAnalytics: false
             )
-            AnalyticsService.shared.capture(
-                .outputDelivered,
-                properties: [
-                    "mode": AnalyticsMode.rewrite.rawValue,
-                    "method": AnalyticsOutputMethod.typed.rawValue,
-                ]
-            )
-
             // Clear the rewrite service state for next use
             self.rewriteModeService.clearState()
             self.hideOverlayAfterOutput()
         } else {
             await self.menuBarManager.finishProcessingAndHideOverlay()
             DebugLogger.shared.error("Rewrite failed - no result", source: "ContentView")
-            AnalyticsService.shared.capture(
-                .errorOccurred,
-                properties: [
-                    "domain": AnalyticsErrorDomain.llm.rawValue,
-                    "category": "rewrite_no_result",
-                ]
-            )
         }
     }
 
@@ -3060,15 +3227,25 @@ struct ContentView: View {
         if shouldShowDictationOverlay {
             self.menuBarManager.setOverlayMode(.dictation)
             self.menuBarManager.showRecordingOverlayImmediately()
+            DebugLogger.shared.benchmark(
+                "APP_BENCH",
+                message: "overlay_phase phase=connecting",
+                source: "AppBenchmark"
+            )
         }
 
         Task {
-            if shouldPlayStartSound, !self.asr.isRunning {
-                TranscriptionSoundPlayer.shared.playStartSound()
-            }
             let startOutcome = await self.asr.start(onCaptureStarted: {
+                if shouldPlayStartSound {
+                    TranscriptionSoundPlayer.shared.playStartSound()
+                }
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: .primary)
+                DebugLogger.shared.benchmark(
+                    "APP_BENCH",
+                    message: "overlay_phase phase=recording trigger=first_pcm",
+                    source: "AppBenchmark"
+                )
             })
             if startOutcome == .failed {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
@@ -3118,6 +3295,18 @@ struct ContentView: View {
         guard let pid = NotchContentState.shared.recordingTargetPID else { return }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.appBench("focus_restore_start targetPID=\(pid)")
+        if let focusTarget = self.recordingFocusTarget, focusTarget.pid == pid {
+            if TypingService.isExactFocusTargetActive(focusTarget) {
+                self.appBench("focus_restore_result activated=false element=true elapsedMs=0 reason=already_focused")
+                return
+            }
+            let activated = TypingService.activateApp(pid: pid)
+            let focusedElementRestored = TypingService.restoreFocusTarget(focusTarget)
+            self.appBench(
+                "focus_restore_result activated=\(activated) element=\(focusedElementRestored) elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))"
+            )
+            return
+        }
         if TypingService.isCapturedFocusStillActive(for: pid) {
             self.appBench("focus_restore_result activated=false element=true elapsedMs=0 reason=already_focused")
             DebugLogger.shared.debug(
@@ -3305,7 +3494,7 @@ struct ContentView: View {
                 // Set overlay mode to command
                 self.menuBarManager.setOverlayMode(.command)
 
-                guard !self.asr.isRunning else { return }
+                guard !self.asr.isRunningOrStarting else { return }
 
                 self.advanceOverlayLifecycle()
 
@@ -3314,9 +3503,16 @@ struct ContentView: View {
                     "Starting voice recording for command",
                     source: "ContentView"
                 )
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
-                    await self.asr.start()
+                    let startOutcome = await self.asr.start(onCaptureStarted: {
+                        TranscriptionSoundPlayer.shared.playStartSound()
+                        self.appBench("overlay_phase phase=recording trigger=first_pcm mode=command")
+                    })
+                    if startOutcome == .failed {
+                        self.menuBarManager.hideRecordingOverlayImmediately(
+                            reason: "command_asr_start_failed"
+                        )
+                    }
                 }
             },
             rewriteModeCallback: {
@@ -3345,15 +3541,22 @@ struct ContentView: View {
                 // Set flag so stopAndProcessTranscription knows to process as rewrite
                 self.setActiveRecordingMode(.edit)
 
-                guard !self.asr.isRunning else { return }
+                guard !self.asr.isRunningOrStarting else { return }
 
                 self.advanceOverlayLifecycle()
 
                 // Start recording immediately for the edit instruction
                 DebugLogger.shared.info("Starting voice recording for edit mode", source: "ContentView")
-                TranscriptionSoundPlayer.shared.playStartSound()
                 Task {
-                    await self.asr.start()
+                    let startOutcome = await self.asr.start(onCaptureStarted: {
+                        TranscriptionSoundPlayer.shared.playStartSound()
+                        self.appBench("overlay_phase phase=recording trigger=first_pcm mode=edit")
+                    })
+                    if startOutcome == .failed {
+                        self.menuBarManager.hideRecordingOverlayImmediately(
+                            reason: "edit_asr_start_failed"
+                        )
+                    }
                 }
             },
             isDictateRecordingProvider: {
@@ -3687,16 +3890,18 @@ extension ContentView {
             self.menuBarManager.setOverlayMode(.dictation)
             self.menuBarManager.showRecordingOverlayImmediately()
             self.appBench("overlay_mode_requested mode=Dictation")
+            self.appBench("overlay_phase phase=connecting")
         }
         Task {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
-            if SettingsStore.shared.enableTranscriptionSounds, !self.asr.isRunning {
-                TranscriptionSoundPlayer.shared.playStartSound()
-            }
             let startOutcome = await self.asr.start(onCaptureStarted: {
+                if SettingsStore.shared.enableTranscriptionSounds {
+                    TranscriptionSoundPlayer.shared.playStartSound()
+                }
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
             if startOutcome == .failed {
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
@@ -4322,13 +4527,6 @@ private extension ContentView {
         self.isRewriteModeShortcutEnabled = SettingsStore.shared.rewriteModeShortcutEnabled
         self.playgroundUsed = SettingsStore.shared.playgroundUsed
         self.visualizerNoiseThreshold = SettingsStore.shared.visualizerNoiseThreshold
-        self.microphoneSelectionMode = SettingsStore.shared.microphoneSelectionMode
-        switch SettingsStore.shared.microphoneSelectionMode {
-        case .system:
-            self.selectedInputUID = AudioDevice.getDefaultInputDevice()?.uid ?? ""
-        case .manual:
-            self.selectedInputUID = SettingsStore.shared.preferredInputDeviceUID ?? AudioDevice.getDefaultInputDevice()?.uid ?? ""
-        }
         self.selectedOutputUID = SettingsStore.shared.preferredOutputDeviceUID ?? ""
         self.enableDebugLogs = SettingsStore.shared.enableDebugLogs
         self.hotkeyMode = SettingsStore.shared.hotkeyMode

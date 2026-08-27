@@ -39,6 +39,22 @@ final class AudioEngineRetirementDrainTests: XCTestCase {
             ]
         )
     }
+
+    func testWaitForScheduledReleasesCompletesAfterScheduledRelease() async throws {
+        let drain = AudioEngineRetirementDrain(label: "test.audio-engine-retirement.barrier")
+        let recorder = DeinitRecorder()
+        var probe: DeinitProbe? = DeinitProbe(id: 1, recorder: recorder)
+        let token = AudioEngineRetirementToken(try XCTUnwrap(probe))
+        probe = nil
+
+        drain.schedule(token)
+        await drain.waitForScheduledReleases()
+
+        XCTAssertEqual(
+            recorder.events,
+            [DeinitEvent(id: 1, occurredOnMainThread: false)]
+        )
+    }
 }
 
 private final class DeinitProbe {

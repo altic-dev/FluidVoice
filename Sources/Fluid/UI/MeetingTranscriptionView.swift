@@ -9,6 +9,7 @@ struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
     @State private var selectedFileURL: URL?
     @AppStorage("FileTranscriptionSpeechModel") private var selectedModelRawValue = SettingsStore.SpeechModel.whisperLargeTurbo.rawValue
     @AppStorage("FileTranscriptionSpeakerDiarization") private var speakerDiarizationEnabled = true
@@ -39,6 +40,11 @@ struct MeetingTranscriptionView: View {
             case .srt: return "srt"
             }
         }
+    }
+
+    private var selectedFileIsVideo: Bool {
+        guard let fileExtension = selectedFileURL?.pathExtension.lowercased() else { return false }
+        return UTType(filenameExtension: fileExtension)?.conforms(to: .movie) ?? false
     }
 
     var body: some View {
@@ -226,6 +232,54 @@ struct MeetingTranscriptionView: View {
                         )
                 )
 
+                // Speaker labeling options (unavailable on Intel Macs)
+                if SpeakerDiarizationService.isSupported {
+                    VStack(spacing: 10) {
+                        Toggle(isOn: self.$settings.fileTranscriptionSpeakerLabelsEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Label speakers")
+                                    .font(.subheadline)
+
+                                Text(self.selectedFileIsVideo
+                                    ? "Available for audio files only"
+                                    : "Identify who said what (downloads speaker models on first use)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .disabled(self.selectedFileIsVideo)
+
+                        if self.settings.fileTranscriptionSpeakerLabelsEnabled, !self.selectedFileIsVideo {
+                            HStack {
+                                Text("Number of speakers")
+                                    .font(.subheadline)
+
+                                Spacer()
+
+                                Picker("", selection: self.$settings.fileTranscriptionExpectedSpeakerCount) {
+                                    Text("Auto").tag(0)
+                                    ForEach(2...8, id: \.self) { count in
+                                        Text("\(count)").tag(count)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .frame(width: 90)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(self.theme.palette.cardBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                            )
+                    )
+                }
+
                 // Transcribe Button
                 Button(action: {
                     Task {
@@ -385,6 +439,12 @@ struct MeetingTranscriptionView: View {
                 .buttonStyle(.borderless)
             }
 
+            if let notice = result.speakerLabelingNotice ?? transcriptionService.fallbackNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Divider()
 
             if !result.subtitleCues.isEmpty {
@@ -404,11 +464,36 @@ struct MeetingTranscriptionView: View {
 
             // Transcription text
             ScrollView {
-                Text(result.text)
-                    .font(.body)
-                    .textSelection(.enabled)
+                if !result.speakerSegments.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(result.speakerSegments) { segment in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(segment.speaker)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(Color.fluidGreen)
+
+                                    Text(segment.timestampText)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Text(segment.text)
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
+                } else {
+                    Text(result.text)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
             }
             .frame(maxHeight: 300)
             .background(
@@ -541,6 +626,11 @@ struct MeetingTranscriptionView: View {
                     .help("Remove from history")
                 }
                 .buttonStyle(.borderless)
+            }
+            if let notice = entry.speakerLabelingNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             Divider()
             if !result.subtitleCues.isEmpty {

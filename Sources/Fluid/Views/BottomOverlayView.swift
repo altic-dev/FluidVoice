@@ -123,6 +123,7 @@ final class BottomOverlayWindowController {
         // offscreen. Revealing the neutral shell first causes a visible flash
         // that reads as the overlay appearing twice.
         NotchContentState.shared.setBottomOverlayPresented(true)
+        NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
         NotchContentState.shared.mode = mode
         switch mode {
         case .dictation: NotchContentState.shared.promptPickerMode = .dictate
@@ -2137,6 +2138,16 @@ struct BottomOverlayView: View {
         }
     }
 
+    private var showsSpokenSendIndicator: Bool {
+        self.contentState.mode == .dictation &&
+            self.settings.spokenSendEnabled &&
+            self.contentState.spokenSendIndicatorState.isVisible
+    }
+
+    private var spokenSendIndicatorSize: CGFloat {
+        max(self.layout.modeFontSize + 3, 13)
+    }
+
     private static let transientOverlayStatusTexts: Set<String> = [
         "Transcribing",
         "Refining",
@@ -2275,7 +2286,8 @@ struct BottomOverlayView: View {
     }
 
     private var shouldReservePreviewArea: Bool {
-        self.layout.showsPreview && self.settings.enableStreamingPreview
+        self.layout.showsPreview &&
+            (self.settings.enableStreamingPreview || self.contentState.isAIProcessingFailureVisible)
     }
 
     private var overlayFrameHeight: CGFloat? {
@@ -2777,17 +2789,23 @@ struct BottomOverlayView: View {
 
     private var aiProcessingFailureView: some View {
         HStack(spacing: 8) {
-            Text("AI Enhancement failed")
+            Text(self.contentState.aiProcessingFailureMessage)
                 .font(.system(size: self.layout.transFontSize, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(
+                    self.contentState.canRetryAIProcessingFailure
+                        ? Color.white.opacity(0.9)
+                        : Color.orange.opacity(0.9)
+                )
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             Spacer(minLength: 4)
 
-            self.failureIconButton(systemName: "arrow.clockwise", help: "Try again") {
-                self.contentState.clearAIProcessingFailure()
-                self.contentState.onReprocessLastRequested?()
+            if self.contentState.canRetryAIProcessingFailure {
+                self.failureIconButton(systemName: "arrow.clockwise", help: "Try again") {
+                    self.contentState.clearAIProcessingFailure()
+                    self.contentState.onReprocessLastRequested?()
+                }
             }
 
             self.failureIconButton(systemName: "xmark", help: "Dismiss") {
@@ -2982,7 +3000,7 @@ struct BottomOverlayView: View {
                 }
 
                 // Waveform + Mode label row
-                HStack(spacing: self.layout.hPadding / 1.5) {
+                HStack(spacing: self.isPillSize ? 4 : self.layout.hPadding / 1.5) {
                     // Target app icon (the app where text will be typed)
                     let appIcon = self.displayedAppIcon
                     let showModelLoading = self.layout.showsModeLabel && !self.appServices.asr.isAsrReady &&
@@ -3008,17 +3026,48 @@ struct BottomOverlayView: View {
                     .opacity((appIcon != nil || showModelLoading || !self.layout.showsModeLabel) ? 1 : 0)
 
                     // Waveform visualization
-                    BottomWaveformView(color: self.modeColor, layout: self.layout)
-                        .frame(width: self.layout.waveformWidth, height: self.layout.waveformHeight)
+                    BottomWaveformView(
+                        color: self.modeColor,
+                        layout: self.layout,
+                        visibleBarCount: self.isPillSize && self.showsSpokenSendIndicator ? 6 : nil
+                    )
+                    .frame(
+                        width: self.isPillSize && self.showsSpokenSendIndicator
+                            ? 32
+                            : self.layout.waveformWidth,
+                        height: self.layout.waveformHeight
+                    )
+
+                    if self.isPillSize, self.showsSpokenSendIndicator {
+                        SpokenSendIndicatorView(
+                            state: self.contentState.spokenSendIndicatorState,
+                            color: self.modeColor,
+                            size: 14
+                        )
+                        .id(self.contentState.spokenSendCountdownID)
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    }
 
                     // Mode label + model load hint
                     if self.layout.showsModeLabel {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(self.modeLabel)
-                                .font(.system(size: self.layout.modeFontSize, weight: .semibold))
-                                .foregroundStyle(self.modeColor)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
+                            HStack(spacing: 5) {
+                                Text(self.modeLabel)
+                                    .font(.system(size: self.layout.modeFontSize, weight: .semibold))
+                                    .foregroundStyle(self.modeColor)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+
+                                if self.showsSpokenSendIndicator {
+                                    SpokenSendIndicatorView(
+                                        state: self.contentState.spokenSendIndicatorState,
+                                        color: self.modeColor,
+                                        size: self.spokenSendIndicatorSize
+                                    )
+                                    .id(self.contentState.spokenSendCountdownID)
+                                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                                }
+                            }
 
                             if !self.appServices.asr.isAsrReady &&
                                 (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
@@ -3030,6 +3079,10 @@ struct BottomOverlayView: View {
                                     .lineLimit(1)
                             }
                         }
+                        .animation(
+                            self.reduceMotion ? nil : .easeOut(duration: 0.14),
+                            value: self.contentState.spokenSendIndicatorState
+                        )
                     }
                 }
             }
@@ -3242,6 +3295,7 @@ struct BottomOverlayView: View {
 struct BottomWaveformView: View {
     let color: Color
     let layout: BottomOverlayView.LayoutConstants
+    let visibleBarCount: Int?
 
     @ObservedObject private var contentState = NotchContentState.shared
     // Initialize with max possible bar count (11 for large) to prevent index-out-of-range before onAppear
@@ -3249,7 +3303,7 @@ struct BottomWaveformView: View {
     @State private var noiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
     private var barCount: Int {
-        self.layout.barCount
+        self.visibleBarCount ?? self.layout.barCount
     }
 
     private var barWidth: CGFloat {

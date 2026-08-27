@@ -32,8 +32,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/altic-dev/FluidAudio.git",
       "state" : {
-        "branch" : "B/cohere-coreml-asr",
-        "revision" : "edee7154e66d2196be896580c6c26ff81c2c528e"
+        "branch" : "main",
+        "revision" : "3fd63887eef1dc25edea8263ce4b44aa854d898b"
       }
     },
     {
@@ -52,15 +52,6 @@
       "state" : {
         "revision" : "8e355c28e9393c42e58b18c54cace2c42c98a616",
         "version" : "1.4.1"
-      }
-    },
-    {
-      "identity" : "posthog-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/PostHog/posthog-ios.git",
-      "state" : {
-        "revision" : "1ba3e8636d4f1ad9f18f5a4273e88d39a162466b",
-        "version" : "3.41.1"
       }
     },
     {

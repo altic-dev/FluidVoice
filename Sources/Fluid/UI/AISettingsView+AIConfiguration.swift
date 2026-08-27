@@ -1078,9 +1078,7 @@ extension AIEnhancementSettingsView {
     }
 
     private func isPrivateAIModelVerified(_ model: PrivateAIRegisteredModel) -> Bool {
-        guard PrivateAIIntegrationService.isModelInstalled(model) else { return false }
-        let key = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        return self.viewModel.settings.verifiedProviderFingerprints[key] == PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+        PrivateAIProviderPromptFormat.verifiedModelID(for: model.id, settings: self.viewModel.settings) != nil
     }
 
     private func privateAIModelStatus(

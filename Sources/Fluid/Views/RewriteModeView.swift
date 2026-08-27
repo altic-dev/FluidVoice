@@ -175,15 +175,11 @@ struct RewriteModeView: View {
                 // Provider Selector (compact, searchable)
                 SearchableProviderPicker(
                     builtInProviders: self.builtInProvidersList,
-                    savedProviders: self.settings.savedProviders.filter { !self.isPrivateAIProviderID($0.id) },
+                    savedProviders: self.settings.savedProviders,
                     selectedProviderID: Binding(
                         get: { self.settings.rewriteModeSelectedProviderID },
                         set: { newValue in
-                            if self.isPrivateAIProviderID(newValue) {
-                                return
-                            } else {
-                                self.settings.rewriteModeSelectedProviderID = newValue
-                            }
+                            self.settings.rewriteModeSelectedProviderID = newValue
                             self.updateAvailableModels()
                         }
                     )
@@ -280,12 +276,6 @@ struct RewriteModeView: View {
     private func updateAvailableModels() {
         let currentProviderID = self.settings.rewriteModeSelectedProviderID
         let currentModel = self.settings.rewriteModeSelectedModel ?? ""
-        if self.isPrivateAIProviderID(currentProviderID) {
-            self.settings.rewriteModeSelectedProviderID = ""
-            self.settings.rewriteModeSelectedModel = nil
-            self.availableModels = []
-            return
-        }
         guard !currentProviderID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             self.availableModels = []
             return
@@ -314,12 +304,7 @@ struct RewriteModeView: View {
     }
 
     private var builtInProvidersList: [(id: String, name: String)] {
-        ModelRepository.shared.builtInProvidersList().filter { !self.isPrivateAIProviderID($0.id) }
-    }
-
-    private func isPrivateAIProviderID(_ providerID: String) -> Bool {
-        PrivateFeatures.privateAIProvider &&
-            providerID.trimmingCharacters(in: .whitespacesAndNewlines) == PrivateAIProviderFeature.shared.providerID
+        ModelRepository.shared.builtInProvidersList()
     }
 
     private var shortcutDisplay: String {

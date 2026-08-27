@@ -26,6 +26,11 @@ final class DictionaryCorrectionOverlayController {
         self.panel?.isVisible == true
     }
 
+    func transientOverlayLayoutDidChange() {
+        guard self.isPresented else { return }
+        self.resizeAndPositionPanel(animated: true)
+    }
+
     func show(
         candidate: AutomaticDictionaryCorrectionCandidate,
         onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void
@@ -199,7 +204,9 @@ final class DictionaryCorrectionOverlayController {
 
         let visibleFrame = screen.visibleFrame
         let requestedY = visibleFrame.minY + CGFloat(SettingsStore.shared.overlayBottomOffset)
-        let y = max(visibleFrame.minY + 10, min(requestedY, visibleFrame.maxY - size.height - 40))
+        let microphoneToastY = MicrophoneChangeOverlayController.shared.topEdge(on: screen).map { $0 + 10 }
+        let stackedY = max(requestedY, microphoneToastY ?? requestedY)
+        let y = max(visibleFrame.minY + 10, min(stackedY, visibleFrame.maxY - size.height - 40))
         let frame = NSRect(
             x: screen.frame.midX - size.width / 2,
             y: y,
@@ -217,6 +224,368 @@ final class DictionaryCorrectionOverlayController {
             panel.animator().setFrame(frame, display: true)
         }
     }
+}
+
+enum MicrophoneChangePresentation: Hashable {
+    case startupSelection
+    case selectionChange
+    case activeChange
+}
+
+struct MicrophoneChangeNotice: Hashable {
+    let previousName: String?
+    let currentName: String?
+    let presentation: MicrophoneChangePresentation
+}
+
+@MainActor
+final class MicrophoneChangeOverlayController {
+    static let shared = MicrophoneChangeOverlayController()
+
+    private static let displayDurationNanoseconds: UInt64 = 5_000_000_000
+    private var panel: NSPanel?
+    private var hostingView: NSHostingView<MicrophoneChangeOverlayView>?
+    private var dismissTask: Task<Void, Never>?
+    private var generation: UInt64 = 0
+
+    private init() {}
+
+    func show(_ notice: MicrophoneChangeNotice) {
+        guard Bundle.main.bundleIdentifier == "com.FluidApp.app",
+              SettingsStore.shared.showMicrophoneChangeAlerts
+        else { return }
+        self.generation &+= 1
+        let currentGeneration = self.generation
+        self.dismissTask?.cancel()
+
+        let rootView = MicrophoneChangeOverlayView(
+            notice: notice,
+            displayDuration: Double(Self.displayDurationNanoseconds) / 1_000_000_000,
+            startedAt: Date(),
+            onSettings: { [weak self] in
+                self?.hide()
+                NotificationCenter.default.post(name: .openMicrophoneSettingsRequested, object: nil)
+            },
+            onDisable: { [weak self] in
+                self?.disableFutureAlerts()
+            },
+            onDismiss: { [weak self] in self?.hide() }
+        )
+        if let hostingView = self.hostingView {
+            hostingView.rootView = rootView
+        } else {
+            self.createPanel(rootView: rootView)
+        }
+
+        guard let panel = self.panel else { return }
+        self.resizeAndPositionPanel()
+        DebugLogger.shared.debug(
+            "Showing microphone change overlay frame=\(NSStringFromRect(panel.frame))",
+            source: "MicrophoneChangeOverlay"
+        )
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        self.animate(duration: 0.12) {
+            panel.animator().alphaValue = 1
+        }
+        DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+
+        self.dismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.displayDurationNanoseconds)
+            guard !Task.isCancelled,
+                  let self,
+                  self.generation == currentGeneration
+            else { return }
+            self.hide()
+        }
+    }
+
+    func disableFutureAlerts() {
+        SettingsStore.shared.showMicrophoneChangeAlerts = false
+        self.hide()
+    }
+
+    func hide() {
+        self.generation &+= 1
+        let hideGeneration = self.generation
+        self.dismissTask?.cancel()
+        self.dismissTask = nil
+        guard let panel, panel.isVisible else { return }
+        self.animate(duration: 0.1) {
+            panel.animator().alphaValue = 0
+        } completion: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == hideGeneration else { return }
+                self.panel?.orderOut(nil)
+                self.panel?.alphaValue = 1
+                DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+            }
+        }
+    }
+
+    func topEdge(on screen: NSScreen) -> CGFloat? {
+        guard let panel, panel.isVisible, panel.frame.intersects(screen.frame) else { return nil }
+        return panel.frame.maxY
+    }
+
+    private func createPanel(rootView: MicrophoneChangeOverlayView) {
+        let panel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.animationBehavior = .none
+
+        let hostingView = NSHostingView(rootView: rootView)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+        panel.contentView = hostingView
+        self.panel = panel
+        self.hostingView = hostingView
+    }
+
+    private func resizeAndPositionPanel() {
+        guard let panel, let hostingView,
+              let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main
+        else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+        let size = NSSize(width: ceil(fittingSize.width), height: ceil(fittingSize.height))
+        guard size.width > 0, size.height > 0 else { return }
+        hostingView.frame = NSRect(origin: .zero, size: size)
+        let visibleFrame = screen.visibleFrame
+        let frame = NSRect(
+            x: screen.frame.midX - size.width / 2,
+            y: visibleFrame.minY + 10,
+            width: size.width,
+            height: size.height
+        )
+        panel.setFrame(frame, display: true)
+    }
+
+    private func animate(
+        duration: TimeInterval,
+        changes: () -> Void,
+        completion: (() -> Void)? = nil
+    ) {
+        guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion == false else {
+            changes()
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            changes()
+        } completionHandler: {
+            completion?()
+        }
+    }
+}
+
+private struct MicrophoneChangeOverlayView: View {
+    let notice: MicrophoneChangeNotice
+    let displayDuration: TimeInterval
+    let startedAt: Date
+    let onSettings: () -> Void
+    let onDisable: () -> Void
+    let onDismiss: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isCloseHovered = false
+    @State private var isDisableHovered = false
+    @State private var isSettingsHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: self.notice.currentName == nil ? "mic.slash.fill" : "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(width: 24, height: 24)
+
+                Text(self.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                Spacer(minLength: 8)
+
+                Button(action: self.onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(self.isCloseHovered ? 0.95 : 0.68))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.white.opacity(self.isCloseHovered ? 0.13 : 0.06)))
+                }
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+                .onHover { self.isCloseHovered = $0 }
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss microphone change")
+            }
+
+            Text(self.detailText)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Text(self.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button("Do not show again", action: self.onDisable)
+                    .buttonStyle(TransientOverlaySettingsButtonStyle(isHovered: self.isDisableHovered))
+                    .onHover { self.isDisableHovered = $0 }
+                    .help("Turn off microphone change alerts")
+
+                Button("Settings", action: self.onSettings)
+                    .buttonStyle(TransientOverlaySettingsButtonStyle(isHovered: self.isSettingsHovered))
+                    .onHover { self.isSettingsHovered = $0 }
+                    .help("Open microphone settings")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 540)
+        .background(TransientOverlayBackground())
+        .overlay(alignment: .bottomLeading) {
+            TransientOverlayCountdownBar(
+                startedAt: self.startedAt,
+                duration: self.displayDuration,
+                reduceMotion: self.reduceMotion
+            )
+        }
+        .preferredColorScheme(.dark)
+        .id(self.notice)
+    }
+
+    private var detailText: String {
+        if self.notice.presentation == .startupSelection,
+           let currentName = self.notice.currentName
+        {
+            return currentName
+        }
+        switch (self.notice.previousName, self.notice.currentName) {
+        case let (previous?, current?):
+            return "\(previous)  →  \(current)"
+        case let (previous?, nil):
+            return "\(previous) is no longer available"
+        case let (nil, current?):
+            return "Now using \(current)"
+        case (nil, nil):
+            return "Connect or restore a microphone in Settings"
+        }
+    }
+
+    private var title: String {
+        if self.notice.presentation == .startupSelection {
+            return "Microphone selected"
+        }
+        return self.notice.currentName == nil ? "Microphone unavailable" : "Microphone changed"
+    }
+
+    private var explanation: String {
+        if self.notice.currentName == nil {
+            return "Choose an available microphone in Settings."
+        }
+        if self.notice.presentation == .startupSelection {
+            return "FluidVoice will try this microphone first when you dictate."
+        }
+        if self.notice.presentation == .selectionChange {
+            return "FluidVoice selected this microphone for capture."
+        }
+        return "FluidVoice confirmed this microphone is capturing audio."
+    }
+}
+
+private struct TransientOverlaySettingsButtonStyle: ButtonStyle {
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 1 : 0.9))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.20 : self.isHovered ? 0.14 : 0.09))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(
+                                Color.white.opacity(configuration.isPressed ? 0.28 : 0.12),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+private struct TransientOverlayCountdownBar: View {
+    let startedAt: Date
+    let duration: TimeInterval
+    let reduceMotion: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: self.reduceMotion ? 1 : 1 / 30)) { context in
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                    Capsule()
+                        .fill(Color.white.opacity(0.82))
+                        .frame(width: proxy.size.width * self.remainingProgress(at: context.date))
+                }
+            }
+        }
+        .frame(height: 3)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 3)
+        .allowsHitTesting(false)
+    }
+
+    private func remainingProgress(at date: Date) -> CGFloat {
+        guard self.duration > 0 else { return 0 }
+        return CGFloat(max(0, min(1, 1 - date.timeIntervalSince(self.startedAt) / self.duration)))
+    }
+}
+
+private struct TransientOverlayBackground: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color.black)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.15), .white.opacity(0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+            )
+    }
+}
+
+extension Notification.Name {
+    static let openMicrophoneSettingsRequested = Notification.Name("OpenMicrophoneSettingsRequested")
 }
 
 private struct AutomaticDictionaryCorrectionOverlayView: View {
@@ -246,7 +615,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(width: 460)
-        .background(self.overlayBackground)
+        .background(TransientOverlayBackground())
         .overlay(alignment: .bottomLeading) {
             if self.session.screen == .choice {
                 GeometryReader { proxy in
@@ -556,22 +925,6 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
-            )
-    }
-
-    private var overlayBackground: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.black)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.15), .white.opacity(0.08)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
             )
     }
 }

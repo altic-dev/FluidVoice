@@ -368,6 +368,7 @@ final class NotchOverlayManager {
 
         // Safety: reset processing state when hiding
         NotchContentState.shared.setProcessing(false)
+        NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
 
         // Handle visible or showing states (can hide while still expanding)
         guard self.state == .visible || self.state == .showing, self.notch != nil else {

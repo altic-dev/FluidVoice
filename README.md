@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/altic-dev/FluidVoice/stargazers"><img src="https://img.shields.io/github/stars/altic-dev/FluidVoice?style=social" alt="GitHub stars"/></a>
   <a href="https://github.com/sponsors/altic-dev"><img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor FluidVoice"/></a>
-  <a href="https://x.com/ALTIC_DEV"><img src="https://img.shields.io/badge/X-%40ALTIC__DEV-black?logo=x&logoColor=white" alt="X @ALTIC_DEV"/></a>
+  <a href="https://x.com/fluidvoiceapp"><img src="https://img.shields.io/badge/X-%40fluidvoiceapp-black?logo=x&logoColor=white" alt="X @fluidvoiceapp"/></a>
   <br />
   <a href="https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1"><img src="https://img.shields.io/badge/Models-Nemotron%20Speech%203.5%20%7C%20Parakeet%20Flash%20%7C%20Parakeet%20v3%20%26%20v2%20%7C%20Cohere%20%7C%20Apple%20Speech%20%7C%20Whisper-blue" alt="Supported Models"/></a>
   <br /><br />
@@ -114,7 +114,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Local-First** — your voice and text never leave your machine unless you opt in to a cloud AI provider
 - **Fastest Parakeet on Mac** — one of the fastest native implementations of Parakeet on macOS, with near-instant transcription and minimal latency
 - **Configurable Overlay** — choose from pill-shaped to large overlay sizes to show live preview, or keep it minimal. Everything is optional
-- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, analytics, and beta builds are all opt-in. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
+- **Everything is Optional** — AI enhancement, Fluid Intelligence, audio history, detailed analytics, and beta builds are optional. The core dictation experience works out of the box with zero configuration beyond permissions and a hotkey
 
 ---
 
@@ -266,16 +266,19 @@ xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=ma
 
 FluidVoice is **local-first**. Your voice, audio, and transcribed text never leave your machine unless you explicitly opt in to a cloud AI provider.
 
-### What's Collected (Opt-In)
+### What's Collected
 
-Anonymous analytics are enabled by default to track app health and feature usage. You can disable at any time from `Settings → Share Anonymous Analytics`.
+FluidVoice records one anonymous activity signal per local day and uploads the week's buffered signals together after the week ends. Detailed anonymous analytics are enabled by default and can be disabled at any time from `Settings → Share Detailed Anonymous Analytics`; when disabled, only the weekly activity batch is sent.
 
-**Collected:**
+**Daily activity:**
 
-- App version, build, macOS version
-- Low-cardinality feature/config flags (e.g. app mode, major settings)
-- Approximate usage ranges (not exact values)
-- High-level success/error outcomes
+- A random installation ID, activity date, app version, and macOS platform label
+
+**With detailed analytics enabled:**
+
+- Daily feature and model usage totals
+- Onboarding progress
+- Model download starts and high-level outcomes
 
 **Not Collected:**
 
@@ -290,7 +293,7 @@ Anonymous analytics are enabled by default to track app health and feature usage
 
 Join our Discord: https://discord.gg/VUPHaKSvYV
 
-Follow development on X: [@ALTIC_DEV](https://x.com/ALTIC_DEV)
+Follow development on X: [@fluidvoiceapp](https://x.com/fluidvoiceapp)
 
 ---
 

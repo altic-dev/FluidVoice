@@ -14,5 +14,7 @@ struct AnalyticsConfig {
         return AnalyticsConfig(postHogApiKey: key, postHogHost: host.isEmpty ? AnalyticsConfig.defaultEUHost : host)
     }
 
-    nonisolated var isConfigured: Bool { !self.postHogApiKey.isEmpty }
+    nonisolated var isConfigured: Bool {
+        !self.postHogApiKey.isEmpty
+    }
 }

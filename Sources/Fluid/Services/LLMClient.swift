@@ -75,6 +75,11 @@ final class LLMClient {
         self.session = URLSession(configuration: config)
     }
 
+    /// Test seam for deterministic transport fixtures; callers own the session configuration.
+    init(session: URLSession) {
+        self.session = session
+    }
+
     // MARK: - Response Types
 
     struct Response {
@@ -678,52 +683,51 @@ final class LLMClient {
                     }
                     contentBuffer.append(content)
                     config.onContentChunk?(content)
-                    continue
-                }
+                } else {
+                    // If we were in thinking mode via a separate field (not tag-based),
+                    // receiving "content" usually means the thinking phase is over.
+                    if state == .inThinking && reasoningField == nil && tagDetectionBuffer.isEmpty {
+                        // This is a subtle heuristic: if we were thinking, didn't just get a reasoning field chunk,
+                        // and have no partial tags buffered, we should check if this content chunk
+                        // is the start of the final answer.
+                        // For safety with tag-based parsers, we let the parser decide unless it's a known separate-field model.
+                    }
 
-                // If we were in thinking mode via a separate field (not tag-based),
-                // receiving "content" usually means the thinking phase is over.
-                if state == .inThinking && reasoningField == nil && tagDetectionBuffer.isEmpty {
-                    // This is a subtle heuristic: if we were thinking, didn't just get a reasoning field chunk,
-                    // and have no partial tags buffered, we should check if this content chunk
-                    // is the start of the final answer.
-                    // For safety with tag-based parsers, we let the parser decide unless it's a known separate-field model.
-                }
+                    // Debug: Log first few chunks and any chunk containing think tags
+                    let containsThinkTag = content.contains("<think") || content.contains("</think") || content.contains("<thinking") || content.contains("</thinking")
+                    if thinkingBuffer.count + contentBuffer.count < 8 || containsThinkTag {
+                        let escaped = content.replacingOccurrences(of: "\n", with: "\\n")
+                        let marker = containsThinkTag ? " [HAS THINK TAG!]" : ""
+                        DebugLogger.shared.debug("LLMClient: Chunk '\(escaped)'\(marker)", source: "LLMClient")
+                    }
 
-                // Debug: Log first few chunks and any chunk containing think tags
-                let containsThinkTag = content.contains("<think") || content.contains("</think") || content.contains("<thinking") || content.contains("</thinking")
-                if thinkingBuffer.count + contentBuffer.count < 8 || containsThinkTag {
-                    let escaped = content.replacingOccurrences(of: "\n", with: "\\n")
-                    let marker = containsThinkTag ? " [HAS THINK TAG!]" : ""
-                    DebugLogger.shared.debug("LLMClient: Chunk '\(escaped)'\(marker)", source: "LLMClient")
-                }
+                    let previousState = state
+                    let (newState, thinkChunk, contentChunk) = parser.processChunk(
+                        content,
+                        currentState: state,
+                        tagBuffer: &tagDetectionBuffer
+                    )
 
-                let previousState = state
-                let (newState, thinkChunk, contentChunk) = parser.processChunk(
-                    content,
-                    currentState: state,
-                    tagBuffer: &tagDetectionBuffer
-                )
+                    // Handle state transitions for callbacks
+                    if previousState != .inThinking && newState == .inThinking {
+                        DebugLogger.shared.debug("LLMClient: State transition → inThinking", source: "LLMClient")
+                        config.onThinkingStart?()
+                    }
+                    if previousState == .inThinking && newState == .inContent {
+                        DebugLogger.shared.debug("LLMClient: State transition → inContent", source: "LLMClient")
+                        config.onThinkingEnd?()
+                    }
+                    state = newState
 
-                // Handle state transitions for callbacks
-                if previousState != .inThinking && newState == .inThinking {
-                    DebugLogger.shared.debug("LLMClient: State transition → inThinking", source: "LLMClient")
-                    config.onThinkingStart?()
-                }
-                if previousState == .inThinking && newState == .inContent {
-                    DebugLogger.shared.debug("LLMClient: State transition → inContent", source: "LLMClient")
-                    config.onThinkingEnd?()
-                }
-                state = newState
-
-                // Accumulate and callback
-                if !thinkChunk.isEmpty {
-                    thinkingBuffer.append(thinkChunk)
-                    config.onThinkingChunk?(thinkChunk)
-                }
-                if !contentChunk.isEmpty {
-                    contentBuffer.append(contentChunk)
-                    config.onContentChunk?(contentChunk)
+                    // Accumulate and callback
+                    if !thinkChunk.isEmpty {
+                        thinkingBuffer.append(thinkChunk)
+                        config.onThinkingChunk?(thinkChunk)
+                    }
+                    if !contentChunk.isEmpty {
+                        contentBuffer.append(contentChunk)
+                        config.onContentChunk?(contentChunk)
+                    }
                 }
             }
 
@@ -893,6 +897,13 @@ final class LLMClient {
         var workingText = text
         var thinking = ""
 
+        // Models that emit a proper <think>…</think> block may still leak a stray
+        // </think> later in their answer. Detect up front whether an opening tag was
+        // ever present so the orphan pass below is only applied to the no-opening-tag
+        // case it is meant for (e.g. Nemotron's "thoughts</think>response").
+        let hasOpeningThinkTag = text.range(of: "<think>") != nil
+            || text.range(of: "<thinking>") != nil
+
         // First, handle proper <think>...</think> pairs
         if let regex = try? NSRegularExpression(pattern: Self.thinkingTagPattern, options: []) {
             let range = NSRange(workingText.startIndex..., in: workingText)
@@ -908,8 +919,15 @@ final class LLMClient {
         }
 
         // Second, handle orphan closing tags (content before </think> without opening tag)
-        // This handles cases like "We have a request...</think>Hello!"
-        if let orphanRegex = try? NSRegularExpression(pattern: Self.orphanThinkingPattern, options: []) {
+        // This handles cases like "We have a request...</think>Hello!" (Nemotron-style output
+        // that begins with thinking and uses </think> as the separator, with no opening tag).
+        // Skip this when an opening tag was present: there the thinking section was already
+        // removed above, so any remaining </think> is stray markup and is stripped below
+        // rather than reclassifying the preceding answer text as thinking (which dropped the
+        // text between the real close and the stray close from the visible response).
+        if !hasOpeningThinkTag,
+           let orphanRegex = try? NSRegularExpression(pattern: Self.orphanThinkingPattern, options: [])
+        {
             let range = NSRange(workingText.startIndex..., in: workingText)
             let matches = orphanRegex.matches(in: workingText, options: [], range: range)
 

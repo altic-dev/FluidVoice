@@ -26,12 +26,13 @@ struct SettingsView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject var microphonePreferenceCoordinator: MicrophonePreferenceCoordinator
     @Binding var appear: Bool
     @Binding var visualizerNoiseThreshold: Double
     @Binding var selectedInputUID: String
     @Binding var selectedOutputUID: String
-    @Binding var microphoneSelectionMode: SettingsStore.MicrophoneSelectionMode
     @Binding var inputDevices: [AudioDevice.Device]
     @Binding var outputDevices: [AudioDevice.Device]
     @Binding var accessibilityEnabled: Bool
@@ -53,18 +54,20 @@ struct SettingsView: View {
     // CRITICAL FIX: Cache default device names to avoid CoreAudio calls during view body evaluation.
     // Querying AudioDevice.getDefaultInputDevice() in the view body triggers HALSystem::InitializeShell()
     // which races with SwiftUI's AttributeGraph metadata processing and causes EXC_BAD_ACCESS crashes.
-    @State private var cachedDefaultInputName: String = ""
+    @State private var cachedDefaultInputUID: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
-    // Analytics consent UI state (default ON; user can opt-out)
-    @State private var shareAnonymousAnalytics: Bool = SettingsStore.shared.shareAnonymousAnalytics
+    // Detailed analytics consent UI state (default ON; daily activity remains enabled)
+    @State private var shareDetailedAnalytics: Bool = SettingsStore.shared.shareDetailedAnalytics
     @State private var showAnalyticsPrivacy: Bool = false
-    @State private var pendingAnalyticsValue: Bool? = nil
-    @State private var showAreYouSureToStopAnalytics: Bool = false
+    @State private var pendingDetailedAnalyticsValue: Bool? = nil
+    @State private var showDetailedAnalyticsConfirmation: Bool = false
     @State private var rollbackVersion: String = ""
     @State private var isRollingBack: Bool = false
     @State private var audioHistoryBudgetText: String = Self.audioBudgetText(for: SettingsStore.shared.audioHistoryBudgetGB)
     @State private var audioHistoryUsageBytes: Int64 = DictationAudioHistoryStore.shared.audioUsageBytes()
+    @State private var draggedMicrophoneUID: String?
+    @State private var hoveredMicrophoneUID: String?
 
     let hotkeyManager: GlobalHotkeyManager?
     let menuBarManager: MenuBarManager
@@ -74,28 +77,7 @@ struct SettingsView: View {
     let restartApp: () -> Void
     let revealAppInFinder: () -> Void
     let openApplicationsFolder: () -> Void
-
-    private var inputDeviceSelection: Binding<String> {
-        Binding(
-            get: { self.selectedInputUID },
-            set: { newUID in
-                guard !newUID.isEmpty else { return }
-                guard !self.asr.isRunning else {
-                    DebugLogger.shared.warning(
-                        "Cannot change input device during recording",
-                        source: "SettingsView"
-                    )
-                    return
-                }
-
-                self.selectedInputUID = newUID
-                SettingsStore.shared.recordInputDeviceSelection(newUID)
-                if SettingsStore.shared.shouldSyncInputSelectionToSystemDefault() {
-                    _ = AudioDevice.setDefaultInputDevice(uid: newUID)
-                }
-            }
-        )
-    }
+    let microphoneSettingsScrollRequest: Int
 
     private var isRecordingAnyShortcut: Bool {
         self.activeShortcutRecordingTarget != nil
@@ -117,40 +99,40 @@ struct SettingsView: View {
         self.activeShortcutRecordingTarget == target
     }
 
-    private var analyticsToggleBinding: Binding<Bool> {
+    private var detailedAnalyticsToggleBinding: Binding<Bool> {
         Binding(
             get: {
-                self.pendingAnalyticsValue ?? self.shareAnonymousAnalytics
+                self.pendingDetailedAnalyticsValue ?? self.shareDetailedAnalytics
             },
             set: { newValue in
                 // User is trying to turn OFF → ask first
-                if self.shareAnonymousAnalytics == true, newValue == false {
-                    self.pendingAnalyticsValue = false
-                    self.showAreYouSureToStopAnalytics = true
+                if self.shareDetailedAnalytics, !newValue {
+                    self.pendingDetailedAnalyticsValue = false
+                    self.showDetailedAnalyticsConfirmation = true
 
                     return
                 }
 
                 // Normal ON path
-                self.shareAnonymousAnalytics = newValue
+                self.shareDetailedAnalytics = newValue
                 self.applyAnalyticsConsentChange(newValue)
             }
         )
     }
 
-    private var analyticsConfirmationBinding: Binding<Bool> {
+    private var detailedAnalyticsConfirmationBinding: Binding<Bool> {
         Binding(
-            get: { self.showAreYouSureToStopAnalytics },
+            get: { self.showDetailedAnalyticsConfirmation },
             set: { newValue in
                 // Only open modal if we have a pending value
                 if newValue {
-                    if self.pendingAnalyticsValue != nil {
-                        self.showAreYouSureToStopAnalytics = true
+                    if self.pendingDetailedAnalyticsValue != nil {
+                        self.showDetailedAnalyticsConfirmation = true
                     }
                 } else {
                     // Closing the modal: reset pending state
-                    self.showAreYouSureToStopAnalytics = false
-                    self.pendingAnalyticsValue = nil
+                    self.showDetailedAnalyticsConfirmation = false
+                    self.pendingDetailedAnalyticsValue = nil
                 }
             }
         )
@@ -233,7 +215,11 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        SettingsPersistentScrollView(theme: self.theme, colorScheme: self.colorScheme) {
+        SettingsPersistentScrollView(
+            theme: self.theme,
+            colorScheme: self.colorScheme,
+            microphoneSettingsScrollRequest: self.microphoneSettingsScrollRequest
+        ) {
             VStack(spacing: 16) {
                 // App Settings Card
                 ThemedCard(style: .standard) {
@@ -470,12 +456,11 @@ struct SettingsView: View {
                                                 repo: "Fluid-oss",
                                                 includePrerelease: includePrerelease
                                             )
-                                            let ok = NSAlert()
-                                            ok.messageText = "Update Found!"
-                                            ok.informativeText = "A new version is available and will be installed now."
-                                            ok.alertStyle = .informational
-                                            ok.addButton(withTitle: "OK")
-                                            ok.runModal()
+                                        } catch SimpleUpdateError.updateAlreadyInProgress {
+                                            DebugLogger.shared.info(
+                                                "Update installation already in progress",
+                                                source: "SettingsView"
+                                            )
                                         } catch {
                                             let msg = NSAlert()
                                             if let pmkError = error as? PMKError, pmkError.isCancelled {
@@ -886,6 +871,9 @@ struct SettingsView: View {
                                     }
                                     Divider().opacity(0.2)
 
+                                    self.spokenSendSettings
+                                    Divider().opacity(0.2)
+
                                     self.optionToggleRow(
                                         title: "Save Transcription History",
                                         description: "Save transcriptions for stats tracking. Disable for privacy.",
@@ -923,73 +911,11 @@ struct SettingsView: View {
                                     }
 
                                     self.optionToggleRow(
-                                        title: "Notify AI Enhancement Failures",
-                                        description: "Show a macOS notification when AI Enhancement fails and raw transcription is typed.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.notifyAIProcessingFailures },
-                                            set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
                                         title: "Weekends Don't Break Streak",
                                         description: "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.",
                                         isOn: Binding(
                                             get: { SettingsStore.shared.weekendsDontBreakStreak },
                                             set: { SettingsStore.shared.weekendsDontBreakStreak = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Lowercase First Letter",
-                                        description: "Start each transcription with a lowercase letter. Useful for search queries, form fields, or casual text.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.gaavLowercaseFirstLetterEnabled },
-                                            set: { SettingsStore.shared.gaavLowercaseFirstLetterEnabled = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Remove Trailing Period",
-                                        description: "Drop a final period from transcriptions. Feature requested by MaxGaav.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.gaavRemoveTrailingPeriodEnabled },
-                                            set: { SettingsStore.shared.gaavRemoveTrailingPeriodEnabled = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Slash Commands & @ Formatting",
-                                        description: "When on, \"slash status\" becomes \"/status\"; \"tag Paul\", \"mention Paul\", \"at sign Paul\", and \"at the rate Paul\" become \"@Paul\". " +
-                                            "In chat apps, \"at Paul\" also works. Turn it off to leave all of these unchanged.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.literalDictationFormattingEnabled },
-                                            set: { SettingsStore.shared.literalDictationFormattingEnabled = $0 }
-                                        ),
-                                        allowsDescriptionWrapping: true
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Space Between Dictations",
-                                        description: "Add spacing so consecutive dictations chain without manually pressing the spacebar.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.continuousDictationSpacingEnabled },
-                                            set: { SettingsStore.shared.continuousDictationSpacingEnabled = $0 }
-                                        )
-                                    )
-                                    Divider().opacity(0.2)
-
-                                    self.optionToggleRow(
-                                        title: "Smart Capitalization",
-                                        description: "Use text before the cursor to decide whether the next dictation should start capitalized or lowercase.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.contextAwareCapitalizationEnabled },
-                                            set: { SettingsStore.shared.contextAwareCapitalizationEnabled = $0 }
                                         )
                                     )
                                     Divider().opacity(0.2)
@@ -1016,9 +942,11 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
-                                        title: "Share Anonymous Analytics",
-                                        description: "Send anonymous usage and performance metrics to help improve FluidVoice. Never includes transcription text or prompts.",
-                                        isOn: self.analyticsToggleBinding
+                                        title: "Share Detailed Anonymous Analytics",
+                                        description: "Share anonymous daily feature, onboarding, and model metrics. " +
+                                            "When off, FluidVoice records one anonymous activity signal per day and sends them weekly to measure active use. " +
+                                            "Never includes transcription text or prompts.",
+                                        isOn: self.detailedAnalyticsToggleBinding
                                     )
 
                                     HStack {
@@ -1093,6 +1021,103 @@ struct SettingsView: View {
                     .padding(16)
                 }
 
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Text Formatting", systemImage: "textformat")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+
+                        VStack(spacing: 16) {
+                            self.settingsToggleRow(
+                                title: "Lowercase First Letter",
+                                description: "Start each transcription with a lowercase letter.",
+                                isOn: Binding(
+                                    get: { self.settings.gaavLowercaseFirstLetterEnabled },
+                                    set: { self.settings.gaavLowercaseFirstLetterEnabled = $0 }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Remove Trailing Period",
+                                description: "Drop a final period from transcriptions.",
+                                isOn: Binding(
+                                    get: { self.settings.gaavRemoveTrailingPeriodEnabled },
+                                    set: { self.settings.gaavRemoveTrailingPeriodEnabled = $0 }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Slash Commands & @ Formatting",
+                                description: "Convert spoken slash commands and supported @ mentions into symbols.",
+                                isOn: Binding(
+                                    get: { self.settings.literalDictationFormattingEnabled },
+                                    set: { self.settings.literalDictationFormattingEnabled = $0 }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Space Between Dictations",
+                                description: "Add spacing when consecutive dictations are joined.",
+                                isOn: Binding(
+                                    get: { self.settings.continuousDictationSpacingEnabled },
+                                    set: { self.settings.continuousDictationSpacingEnabled = $0 }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Smart Capitalization",
+                                description: "Use text before the cursor to choose uppercase or lowercase.",
+                                isOn: Binding(
+                                    get: { self.settings.contextAwareCapitalizationEnabled },
+                                    set: { self.settings.contextAwareCapitalizationEnabled = $0 }
+                                )
+                            )
+                        }
+                    }
+                    .padding(16)
+                }
+
+                // Notification Settings Card
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Notifications", systemImage: "bell.fill")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            self.optionToggleRow(
+                                title: "AI Enhancement Failures",
+                                description: "Notify when AI Enhancement fails and raw transcription is typed.",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.notifyAIProcessingFailures },
+                                    set: { SettingsStore.shared.notifyAIProcessingFailures = $0 }
+                                )
+                            )
+
+                            Divider().opacity(0.2)
+
+                            self.optionToggleRow(
+                                title: "Microphone Changes",
+                                description: "Show an alert when FluidVoice changes or loses its microphone.",
+                                isOn: Binding(
+                                    get: { self.settings.showMicrophoneChangeAlerts },
+                                    set: { enabled in
+                                        self.settings.showMicrophoneChangeAlerts = enabled
+                                        if enabled == false {
+                                            MicrophoneChangeOverlayController.shared.hide()
+                                        }
+                                    }
+                                )
+                            )
+                        }
+                    }
+                    .padding(16)
+                }
+
                 // Audio Devices Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -1106,7 +1131,8 @@ struct SettingsView: View {
                             Button {
                                 self.refreshDevices()
                                 // Update cached default device names on refresh
-                                self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+                                let defaultInput = AudioDevice.getDefaultInputDevice()
+                                self.cachedDefaultInputUID = defaultInput?.uid ?? ""
                                 self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
                             } label: {
                                 Label("Refresh", systemImage: "arrow.clockwise")
@@ -1115,63 +1141,21 @@ struct SettingsView: View {
                             .controlSize(.small)
                         }
 
-                        // Info note about device syncing
-                        self.microphoneModeInfo
-
                         VStack(alignment: .leading, spacing: 12) {
-                            self.microphoneModeToggle
-
-                            HStack {
-                                Text("Input Device")
-                                    .font(self.theme.typography.bodyStrong)
-                                    .foregroundStyle(self.settingsTitleText)
-                                Spacer()
-                                Picker("", selection: self.inputDeviceSelection) {
-                                    // Handle empty state gracefully
-                                    if self.inputDevices.isEmpty {
-                                        Text("Loading...").tag("")
-                                    } else {
-                                        ForEach(self.inputDevices, id: \.uid) { dev in
-                                            // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
-                                            let isSystemDefault = !self.cachedDefaultInputName.isEmpty && dev.name == self.cachedDefaultInputName
-                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
-                                        }
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 240)
-                                .disabled(self.asr.isRunning)
-                                // Sync selection when devices load or change
+                            self.microphonePrioritySection
                                 .onChange(of: self.inputDevices) { _, newDevices in
-                                    // Update cached default device name when device list changes
-                                    self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
-
-                                    guard !newDevices.isEmpty else { return }
-
-                                    switch self.microphoneSelectionMode {
-                                    case .system:
-                                        if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                                           newDevices.contains(where: { $0.uid == defaultUID })
-                                        {
-                                            self.selectedInputUID = defaultUID
-                                        } else if !newDevices.contains(where: { $0.uid == self.selectedInputUID }) {
-                                            self.selectedInputUID = newDevices.first?.uid ?? ""
-                                        }
-                                    case .manual:
-                                        if let preferredUID = SettingsStore.shared.preferredInputDeviceUID,
-                                           newDevices.contains(where: { $0.uid == preferredUID })
-                                        {
-                                            self.selectedInputUID = preferredUID
-                                        } else if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                                                  newDevices.contains(where: { $0.uid == defaultUID })
-                                        {
-                                            self.selectedInputUID = defaultUID
-                                        } else {
-                                            self.selectedInputUID = newDevices.first?.uid ?? ""
-                                        }
+                                    let defaultInput = AudioDevice.getDefaultInputDevice()
+                                    self.cachedDefaultInputUID = defaultInput?.uid ?? ""
+                                    guard newDevices.isEmpty == false else { return }
+                                    if let selectedInput = self.appServices.microphonePreferenceCoordinator
+                                        .reconcileMicrophoneSelection(
+                                            availableInputs: newDevices,
+                                            defaultInputUID: self.cachedDefaultInputUID
+                                        )
+                                    {
+                                        self.selectedInputUID = selectedInput.uid
                                     }
                                 }
-                            }
 
                             HStack {
                                 Text("Output Device")
@@ -1231,21 +1215,12 @@ struct SettingsView: View {
                                 }
                             }
 
-                            // CRITICAL FIX: Use cached values instead of querying CoreAudio in view body.
-                            // Querying AudioDevice here triggers HALSystem::InitializeShell() race condition.
-                            if !self.cachedDefaultInputName.isEmpty && !self.cachedDefaultOutputName.isEmpty {
-                                HStack {
-                                    Spacer()
-                                    Text("Default: \(self.cachedDefaultInputName) / \(self.cachedDefaultOutputName)")
-                                        .font(.caption)
-                                        .foregroundStyle(self.settingsTertiaryText)
-                                        .lineLimit(1)
-                                }
-                            }
+                            self.microphoneQualityGuidance
                         }
                     }
                     .padding(16)
                 }
+                .background(MicrophoneSettingsScrollAnchor())
 
                 // Overlay Settings Card
                 ThemedCard(style: .standard) {
@@ -1511,23 +1486,23 @@ struct SettingsView: View {
                     .padding(16)
                 }
 
-                // Experimental Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Experimental Settings", systemImage: "exclamationmark.triangle")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            self.lowLatencyAudioCaptureToggle
-
-                            if self.asr.isRunning {
-                                Text("Settings are disabled during active recording")
-                                    .font(.caption)
-                                    .foregroundStyle(self.settingsSecondaryText)
-                                    .italic()
-                            }
+                        HStack(spacing: 8) {
+                            Label("Experimental", systemImage: "flask.fill")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
                         }
+
+                        self.settingsToggleRow(
+                            title: "Faster Long Dictation",
+                            description: "For long recordings, reuse completed live windows and process only the remaining tail when you stop.",
+                            footnote: "Parakeet only. Falls back to normal transcription if reuse is unavailable or fails.",
+                            isOn: Binding(
+                                get: { SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled },
+                                set: { SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled = $0 }
+                            )
+                        )
                     }
                     .padding(16)
                 }
@@ -1539,19 +1514,19 @@ struct SettingsView: View {
                 .frame(minWidth: 520, minHeight: 520)
                 .appTheme(self.theme)
         }
-        .sheet(isPresented: self.analyticsConfirmationBinding) {
+        .sheet(isPresented: self.detailedAnalyticsConfirmationBinding) {
             AnalyticsConfirmationView(
                 onConfirm: {
-                    if let pending = pendingAnalyticsValue {
-                        self.shareAnonymousAnalytics = pending
+                    if let pending = pendingDetailedAnalyticsValue {
+                        self.shareDetailedAnalytics = pending
                         self.applyAnalyticsConsentChange(pending)
                     }
-                    self.pendingAnalyticsValue = nil
-                    self.showAreYouSureToStopAnalytics = false
+                    self.pendingDetailedAnalyticsValue = nil
+                    self.showDetailedAnalyticsConfirmation = false
                 },
                 onCancel: {
-                    self.pendingAnalyticsValue = nil
-                    self.showAreYouSureToStopAnalytics = false
+                    self.pendingDetailedAnalyticsValue = nil
+                    self.showDetailedAnalyticsConfirmation = false
                 }
             )
         }
@@ -1565,15 +1540,15 @@ struct SettingsView: View {
 
                 // Sync input device selection after refresh
                 if !self.inputDevices.isEmpty {
-                    let inputValid = self.inputDevices.contains { $0.uid == self.selectedInputUID }
-                    if !inputValid || self.selectedInputUID.isEmpty {
-                        if let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                           self.inputDevices.contains(where: { $0.uid == defaultUID })
-                        {
-                            self.selectedInputUID = defaultUID
-                        } else {
-                            self.selectedInputUID = self.inputDevices.first?.uid ?? ""
-                        }
+                    let defaultInput = AudioDevice.getDefaultInputDevice()
+                    self.cachedDefaultInputUID = defaultInput?.uid ?? ""
+                    if let selectedInput = self.appServices.microphonePreferenceCoordinator
+                        .reconcileMicrophoneSelection(
+                            availableInputs: self.inputDevices,
+                            defaultInputUID: self.cachedDefaultInputUID
+                        )
+                    {
+                        self.selectedInputUID = selectedInput.uid
                     }
                 }
 
@@ -1597,7 +1572,8 @@ struct SettingsView: View {
 
                 // CRITICAL FIX: Populate cached default device names after onAppear, not during view body evaluation.
                 // This avoids the CoreAudio/SwiftUI AttributeGraph race condition that causes EXC_BAD_ACCESS.
-                self.cachedDefaultInputName = AudioDevice.getDefaultInputDevice()?.name ?? ""
+                let defaultInput = AudioDevice.getDefaultInputDevice()
+                self.cachedDefaultInputUID = defaultInput?.uid ?? ""
                 self.cachedDefaultOutputName = AudioDevice.getDefaultOutputDevice()?.name ?? ""
                 self.refreshRollbackState()
                 self.settings.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
@@ -1698,9 +1674,9 @@ struct SettingsView: View {
     }
 
     private func syncLocalSettingsAfterBackupRestore() {
-        self.shareAnonymousAnalytics = SettingsStore.shared.shareAnonymousAnalytics
-        self.pendingAnalyticsValue = nil
-        self.showAreYouSureToStopAnalytics = false
+        self.shareDetailedAnalytics = SettingsStore.shared.shareDetailedAnalytics
+        self.pendingDetailedAnalyticsValue = nil
+        self.showDetailedAnalyticsConfirmation = false
         self.refreshAudioHistoryUsage()
     }
 
@@ -1852,9 +1828,8 @@ struct SettingsView: View {
     }
 
     private func applyAnalyticsConsentChange(_ enabled: Bool) {
-        SettingsStore.shared.shareAnonymousAnalytics = enabled
-        AnalyticsService.shared.setEnabled(enabled)
-        AnalyticsService.shared.capture(.analyticsConsentChanged, properties: ["enabled": enabled])
+        SettingsStore.shared.shareDetailedAnalytics = enabled
+        AnalyticsService.shared.setDetailedAnalyticsEnabled(enabled)
     }
 
     // MARK: - Helper Views
@@ -1879,10 +1854,11 @@ struct SettingsView: View {
 
                 Spacer()
 
-                Toggle("", isOn: isOn)
+                Toggle(title, isOn: isOn)
                     .toggleStyle(.switch)
                     .tint(self.theme.palette.accent)
                     .labelsHidden()
+                    .accessibilityLabel(title)
             }
 
             if let footnote = footnote {
@@ -2313,61 +2289,307 @@ struct SettingsView: View {
 }
 
 private extension SettingsView {
-    var microphoneModeInfo: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "info.circle")
-                .foregroundStyle(self.settingsSecondaryText)
-                .font(self.theme.typography.bodyStrong)
-            Text(
-                self.microphoneSelectionMode == .system
-                    ? "FluidVoice follows the macOS default microphone."
-                    : "FluidVoice keeps your preferred microphone selected while it is available."
-            )
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.settingsSecondaryText)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 4)
-    }
+    var microphonePrioritySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Input Device Priority")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.settingsTitleText)
 
-    var microphoneModeToggle: some View {
-        Toggle(
-            "Use macOS default microphone",
-            isOn: Binding(
-                get: { self.microphoneSelectionMode == .system },
-                set: { self.updateMicrophoneSelectionMode(useSystemDefault: $0) }
-            )
-        )
-        .toggleStyle(.switch)
-        .font(self.theme.typography.bodyStrong)
-        .foregroundStyle(self.settingsTitleText)
-        .disabled(self.asr.isRunning)
-    }
+                Spacer()
 
-    func updateMicrophoneSelectionMode(useSystemDefault: Bool) {
-        let nextMode: SettingsStore.MicrophoneSelectionMode = useSystemDefault ? .system : .manual
-        let currentSystemInputUID = AudioDevice.getDefaultInputDevice()?.uid
-        let availableInputUIDs = Set(self.inputDevices.map(\.uid))
-        let restoredSystemInputUID = SettingsStore.shared.setMicrophoneSelectionMode(
-            nextMode,
-            currentSystemInputUID: currentSystemInputUID,
-            availableInputUIDs: availableInputUIDs
-        )
-        self.microphoneSelectionMode = nextMode
-
-        if nextMode == .manual {
-            if self.selectedInputUID.isEmpty,
-               let defaultUID = currentSystemInputUID
-            {
-                self.selectedInputUID = defaultUID
-                SettingsStore.shared.recordInputDeviceSelection(defaultUID)
-            } else {
-                SettingsStore.shared.recordInputDeviceSelection(self.selectedInputUID)
+                if self.settings.suppressedMicrophoneUIDs.isEmpty == false {
+                    Button {
+                        self.settings.restoreRemovedMicrophones(with: self.inputDevices)
+                        self.refreshActiveInputSelection()
+                    } label: {
+                        Label("Restore Removed", systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.plain)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.accent)
+                    .disabled(self.isMicrophonePriorityEditingDisabled)
+                }
             }
-        } else if let restoredSystemInputUID {
-            self.selectedInputUID = restoredSystemInputUID
-            _ = AudioDevice.setDefaultInputDevice(uid: restoredSystemInputUID)
+
+            VStack(spacing: 0) {
+                if self.settings.microphonePriority.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "mic.slash")
+                            .foregroundStyle(self.settingsSecondaryText)
+                        Text(self.inputDevices.isEmpty ? "No microphones available" : "No microphones in priority")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.settingsSecondaryText)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 42)
+                } else {
+                    ForEach(Array(self.settings.microphonePriority.enumerated()), id: \.element.uid) { index, entry in
+                        if index > 0 {
+                            Divider().opacity(0.55)
+                        }
+                        self.microphonePriorityRow(entry, rank: index + 1)
+                    }
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(self.theme.palette.cardBackground.opacity(self.colorScheme == .light ? 0.72 : 0.52))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(self.theme.palette.cardBorder.opacity(0.7), lineWidth: 1)
+                    )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Text("FluidVoice tries microphones from top to bottom. Drag to reorder; unavailable devices keep their place.")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    func microphonePriorityRow(
+        _ entry: SettingsStore.MicrophonePriorityEntry,
+        rank: Int
+    ) -> some View {
+        let connectedDevice = self.inputDevices.first { $0.uid == entry.uid }
+        let isAvailable = connectedDevice.map {
+            self.appServices.microphonePreferenceCoordinator.isInputDeviceAvailable($0)
+        } ?? false
+        let isActive = entry.uid == self.microphonePreferenceCoordinator.confirmedActiveInputUID && isAvailable
+        let isHovered = self.hoveredMicrophoneUID == entry.uid
+
+        return HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(self.settingsTertiaryText.opacity(self.isMicrophonePriorityEditingDisabled ? 0.35 : 0.72))
+                .frame(width: 18, height: 30)
+                .contentShape(Rectangle())
+                .onDrag {
+                    self.draggedMicrophoneUID = entry.uid
+                    return NSItemProvider(object: entry.uid as NSString)
+                } preview: {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(self.theme.palette.cardBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(self.theme.palette.cardBorder.opacity(0.8), lineWidth: 1)
+                            )
+
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(self.settingsTitleText)
+                    }
+                    .frame(width: 30, height: 30)
+                    .shadow(color: Color.black.opacity(0.18), radius: 5, y: 2)
+                }
+                .allowsHitTesting(self.isMicrophonePriorityEditingDisabled == false)
+                .accessibilityHidden(true)
+
+            Text("\(rank).")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+                .monospacedDigit()
+                .frame(width: 22, alignment: .trailing)
+
+            Text(entry.name)
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(isAvailable ? self.settingsTitleText : self.settingsSecondaryText)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            if isHovered {
+                Button(role: .destructive) {
+                    self.removeMicrophonePriorityEntry(entry)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemRed).opacity(0.82))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(self.isMicrophonePriorityEditingDisabled)
+                .help("Remove \(entry.name) from microphone priority")
+                .accessibilityLabel("Remove \(entry.name)")
+                .transition(.opacity)
+            } else if isActive {
+                Circle()
+                    .fill(Color(nsColor: .systemGreen))
+                    .frame(width: 7, height: 7)
+                    .shadow(color: Color(nsColor: .systemGreen).opacity(0.45), radius: 3)
+                    .accessibilityLabel("Active microphone")
+            } else if isAvailable == false {
+                Text("Unavailable")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.settingsSecondaryText)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 42)
+        .contentShape(Rectangle())
+        .opacity(isAvailable ? 1 : 0.62)
+        .onHover { isHovering in
+            let animation: Animation? = self.accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)
+            withAnimation(animation) {
+                if isHovering {
+                    self.hoveredMicrophoneUID = entry.uid
+                } else if self.hoveredMicrophoneUID == entry.uid {
+                    self.hoveredMicrophoneUID = nil
+                }
+            }
+        }
+        .onDrop(
+            of: [UTType.plainText.identifier],
+            delegate: MicrophonePriorityDropDelegate(
+                targetUID: entry.uid,
+                settings: self.settings,
+                draggedUID: self.$draggedMicrophoneUID,
+                reorderAnimation: self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16),
+                onDropCompleted: self.refreshActiveInputSelection
+            )
+        )
+        .contextMenu {
+            Button("Move Up") {
+                self.settings.moveMicrophonePriority(uid: entry.uid, by: -1)
+                self.refreshActiveInputSelection()
+            }
+            .disabled(self.isMicrophonePriorityEditingDisabled || rank == 1)
+
+            Button("Move Down") {
+                self.settings.moveMicrophonePriority(uid: entry.uid, by: 1)
+                self.refreshActiveInputSelection()
+            }
+            .disabled(self.isMicrophonePriorityEditingDisabled || rank == self.settings.microphonePriority.count)
+
+            Divider()
+
+            Button("Remove from Priority", role: .destructive) {
+                self.removeMicrophonePriorityEntry(entry)
+            }
+            .disabled(self.isMicrophonePriorityEditingDisabled)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Priority \(rank), \(entry.name)")
+        .accessibilityValue(isActive ? "Active" : (isAvailable ? "Available" : "Unavailable"))
+        .accessibilityAction(named: "Move up") {
+            guard self.isMicrophonePriorityEditingDisabled == false, rank > 1 else { return }
+            self.settings.moveMicrophonePriority(uid: entry.uid, by: -1)
+            self.refreshActiveInputSelection()
+        }
+        .accessibilityAction(named: "Move down") {
+            guard self.isMicrophonePriorityEditingDisabled == false,
+                  rank < self.settings.microphonePriority.count
+            else { return }
+            self.settings.moveMicrophonePriority(uid: entry.uid, by: 1)
+            self.refreshActiveInputSelection()
+        }
+        .accessibilityAction(named: "Remove from priority") {
+            guard self.isMicrophonePriorityEditingDisabled == false else { return }
+            self.removeMicrophonePriorityEntry(entry)
+        }
+    }
+
+    var isMicrophonePriorityEditingDisabled: Bool {
+        self.asr.isRunning || self.asr.isStarting
+    }
+
+    func refreshActiveInputSelection() {
+        // Reuse the existing off-main hardware refresh so the green active
+        // indicator and next capture resolve from live Core Audio.
+        self.refreshDevices()
+    }
+
+    func removeMicrophonePriorityEntry(_ entry: SettingsStore.MicrophonePriorityEntry) {
+        self.hoveredMicrophoneUID = nil
+        self.settings.removeMicrophoneFromPriority(
+            uid: entry.uid,
+            isConnected: self.inputDevices.contains { $0.uid == entry.uid }
+        )
+        self.refreshActiveInputSelection()
+    }
+
+    var selectedInputDevice: AudioDevice.Device? {
+        guard let confirmedUID = self.microphonePreferenceCoordinator.confirmedActiveInputUID else {
+            return nil
+        }
+        return self.inputDevices.first { $0.uid == confirmedUID }
+    }
+
+    @ViewBuilder
+    var microphoneQualityGuidance: some View {
+        if self.selectedInputDevice?.isBluetooth == true {
+            self.microphoneQualityGuidanceRow(
+                message: "Bluetooth microphone mode can reduce headphone playback quality. Prefer a wired, USB, or display microphone when available.",
+                systemImage: "exclamationmark.triangle.fill",
+                color: self.theme.palette.warning
+            )
+        } else {
+            self.microphoneQualityGuidanceRow(
+                message: "This order applies only to FluidVoice and does not change your macOS input.",
+                systemImage: "info.circle",
+                color: self.settingsSecondaryText
+            )
+        }
+    }
+
+    func microphoneQualityGuidanceRow(
+        message: String,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+            Text(message)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MicrophonePriorityDropDelegate: DropDelegate {
+    let targetUID: String
+    let settings: SettingsStore
+    @Binding var draggedUID: String?
+    let reorderAnimation: Animation?
+    let onDropCompleted: () -> Void
+
+    func validateDrop(info _: DropInfo) -> Bool {
+        self.draggedUID != nil
+    }
+
+    func dropEntered(info _: DropInfo) {
+        guard let draggedUID = self.draggedUID,
+              draggedUID != self.targetUID
+        else { return }
+
+        let entries = self.settings.microphonePriority
+        guard let sourceIndex = entries.firstIndex(where: { $0.uid == draggedUID }),
+              let targetIndex = entries.firstIndex(where: { $0.uid == self.targetUID })
+        else { return }
+
+        withAnimation(self.reorderAnimation) {
+            self.settings.reorderMicrophonePriority(
+                fromOffsets: IndexSet(integer: sourceIndex),
+                toOffset: targetIndex > sourceIndex ? targetIndex + 1 : targetIndex
+            )
+        }
+    }
+
+    func dropUpdated(info _: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info _: DropInfo) -> Bool {
+        self.draggedUID = nil
+        self.onDropCompleted()
+        return true
     }
 }
 
@@ -2377,15 +2599,30 @@ private final class SettingsPersistentScroller: NSScroller {
     }
 }
 
+private final class SettingsPersistentScrollCoordinator {
+    var lastMicrophoneSettingsScrollRequest = 0
+}
+
 private struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     private let theme: AppTheme
     private let colorScheme: ColorScheme
+    private let microphoneSettingsScrollRequest: Int
     private let content: Content
 
-    init(theme: AppTheme, colorScheme: ColorScheme, @ViewBuilder content: () -> Content) {
+    init(
+        theme: AppTheme,
+        colorScheme: ColorScheme,
+        microphoneSettingsScrollRequest: Int,
+        @ViewBuilder content: () -> Content
+    ) {
         self.theme = theme
         self.colorScheme = colorScheme
+        self.microphoneSettingsScrollRequest = microphoneSettingsScrollRequest
         self.content = content()
+    }
+
+    func makeCoordinator() -> SettingsPersistentScrollCoordinator {
+        SettingsPersistentScrollCoordinator()
     }
 
     private var hostedContent: AnyView {
@@ -2425,7 +2662,7 @@ private struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable 
         return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context _: Context) {
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
         (scrollView.documentView as? NSHostingView<AnyView>)?.rootView = self.hostedContent
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -2436,6 +2673,52 @@ private struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable 
         }
         scrollView.verticalScroller?.isHidden = false
         scrollView.verticalScroller?.alphaValue = 1
+
+        guard self.microphoneSettingsScrollRequest > 0,
+              context.coordinator.lastMicrophoneSettingsScrollRequest != self.microphoneSettingsScrollRequest
+        else { return }
+        context.coordinator.lastMicrophoneSettingsScrollRequest = self.microphoneSettingsScrollRequest
+        DispatchQueue.main.async {
+            Self.scrollToMicrophoneSettings(in: scrollView)
+        }
+    }
+
+    private static func scrollToMicrophoneSettings(in scrollView: NSScrollView) {
+        guard let documentView = scrollView.documentView else { return }
+        documentView.layoutSubtreeIfNeeded()
+        guard let anchor = documentView.descendant(withIdentifier: MicrophoneSettingsScrollAnchor.identifier) else {
+            return
+        }
+
+        let targetRect = anchor.convert(anchor.bounds, to: documentView)
+        let maximumY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
+        let targetY = min(maximumY, max(0, targetRect.minY - 12))
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+}
+
+private struct MicrophoneSettingsScrollAnchor: NSViewRepresentable {
+    static let identifier = NSUserInterfaceItemIdentifier("FluidVoice.MicrophoneSettingsScrollAnchor")
+
+    func makeNSView(context _: Context) -> NSView {
+        let view = NSView()
+        view.identifier = Self.identifier
+        return view
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
+}
+
+private extension NSView {
+    func descendant(withIdentifier identifier: NSUserInterfaceItemIdentifier) -> NSView? {
+        if self.identifier == identifier { return self }
+        for subview in self.subviews {
+            if let match = subview.descendant(withIdentifier: identifier) {
+                return match
+            }
+        }
+        return nil
     }
 }
 
@@ -2590,26 +2873,79 @@ struct FlowLayout: Layout {
 }
 
 private extension SettingsView {
-    var lowLatencyAudioCaptureToggle: some View {
+    var spokenSendSettings: some View {
         Group {
-            self.settingsToggleRow(
-                title: "Faster Recording Start",
-                description: "FluidVoice starts listening sooner, so your first word is less likely to be missed.",
-                footnote: "If your microphone does not work correctly, turn this off.",
+            self.optionToggleRow(
+                title: "Spoken Send",
+                description: "Say a phrase at the end of dictation to send with your chosen Enter command.",
                 isOn: Binding(
-                    get: { self.settings.experimentalDirectAudioCaptureEnabled },
-                    set: { enabled in
-                        self.settings.experimentalDirectAudioCaptureEnabled = enabled
-                        if enabled {
-                            self.settings.directAudioCaptureConsecutiveFailures = 0
-                        }
-                        self.asr.refreshAudioCaptureBackendPreference()
-                    }
+                    get: { self.settings.spokenSendEnabled },
+                    set: { self.settings.spokenSendEnabled = $0 }
                 )
             )
-            .disabled(self.asr.isRunning)
 
-            Divider().padding(.vertical, 8)
+            if self.settings.spokenSendEnabled {
+                VStack(spacing: 10) {
+                    self.optionToggleRow(
+                        title: "Send Immediately",
+                        description: "Stop listening and send as soon as the phrase is recognized. May not work with all voice models; Parakeet is recommended.",
+                        isOn: Binding(
+                            get: { self.settings.spokenSendImmediatelyEnabled },
+                            set: { self.settings.spokenSendImmediatelyEnabled = $0 }
+                        )
+                    )
+
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Send Phrase")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.settingsTitleText)
+                            Text("Say it at the end. Say “literal \(self.settings.spokenSendPhrase)” to dictate it normally.")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.settingsSecondaryText)
+                        }
+
+                        Spacer()
+
+                        TextField(
+                            "send it",
+                            text: Binding(
+                                get: { self.settings.spokenSendPhrase },
+                                set: { self.settings.spokenSendPhrase = $0 }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 170)
+                        .accessibilityLabel("Spoken Send phrase")
+                    }
+
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Send Command")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.settingsTitleText)
+                            Text("Choose the Enter behavior expected by the destination app.")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.settingsSecondaryText)
+                        }
+
+                        Spacer()
+
+                        Picker("", selection: Binding(
+                            get: { self.settings.spokenSendKey },
+                            set: { self.settings.spokenSendKey = $0 }
+                        )) {
+                            ForEach(SettingsStore.SpokenSendKey.allCases) { key in
+                                Text(key.displayName).tag(key)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 170, alignment: .trailing)
+                        .accessibilityLabel("Spoken Send command")
+                    }
+                }
+                .padding(.leading, 12)
+            }
         }
     }
 }
@@ -2641,21 +2977,25 @@ struct AnalyticsConfirmationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Are you sure you want to stop sharing anonymous analytics?")
+            Text("Stop sharing detailed anonymous analytics?")
                 .font(.headline)
 
-            Text("By sharing anonymous usage data, you help us build the features you care about most. We never collect personal information (Audio, Transcription text etc), ever. Your support simply helps us make FluidVoice better for you.")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(self.theme.palette.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1)
-                )
+            Text(
+                "FluidVoice will stop sharing feature, onboarding, and model metrics. " +
+                    "One anonymous activity signal will still be recorded each day and sent weekly so we can measure active use. " +
+                    "We never collect audio, transcription text, prompts, or other personal information."
+            )
+            .font(self.theme.typography.bodySmall)
+            .foregroundStyle(.secondary)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(self.theme.palette.cardBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1)
+            )
 
             Text(self.contactInfoText)
                 .font(self.theme.typography.bodySmall)
@@ -2671,7 +3011,7 @@ struct AnalyticsConfirmationView: View {
                     self.onCancel()
                 }
 
-                Button("Yes") {
+                Button("Stop Detailed Analytics") {
                     self.onConfirm()
                 }
                 .buttonStyle(.borderedProminent)

@@ -11,7 +11,10 @@ import FluidAudio
 
 // swiftlint:disable file_length type_body_length
 final class SettingsStore: ObservableObject {
+    static let microphonePriorityMigrationVersion = 4
+
     static let shared = SettingsStore()
+    private static let automaticWhisperLanguageCode = "auto"
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
@@ -22,6 +25,8 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationSystemOverheadTokens = 1280
     static let privateAIDictationMinimumOutputTokens = 256
     static let privateAIDictationRoundTripTokenCost = 2.75
+    private static let privateAIDenseSegmentByteThreshold = 12
+    private static let privateAIDenseBytesPerToken = 2
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
@@ -45,7 +50,6 @@ final class SettingsStore: ObservableObject {
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
-        self.disableExperimentalDirectAudioCaptureIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
     }
 
@@ -59,18 +63,48 @@ final class SettingsStore: ObservableObject {
         return max(100, Int((inputTokens * 0.75 / 50).rounded(.up)) * 50)
     }
 
-    static func privateAIMaxOutputTokens(forInputText inputText: String, contextTokenLimit: Int) -> Int {
-        let wordCount = inputText.split { $0.isWhitespace || $0.isNewline }.count
-        let estimatedInputTokens = max(1, Int((Double(wordCount) / 0.75).rounded(.up)))
+    struct PrivateAIDictationTokenBudget: Equatable {
+        let maxOutputTokens: Int
+        let hasSufficientHeadroom: Bool
+    }
+
+    static func privateAIDictationTokenBudget(forInputText inputText: String, contextTokenLimit: Int) -> PrivateAIDictationTokenBudget {
+        let estimatedInputTokens = self.estimatedPrivateAIInputTokens(for: inputText)
         let requestedOutputTokens = max(
             Self.privateAIDictationMinimumOutputTokens,
             Int((Double(estimatedInputTokens) * 1.15).rounded(.up)) + 64
         )
-        let availableOutputTokens = max(
-            Self.privateAIDictationMinimumOutputTokens,
-            Self.clampPrivateAIContextTokenLimit(contextTokenLimit) - Self.privateAIDictationSystemOverheadTokens - estimatedInputTokens
+        let availableOutputTokens = Self.clampPrivateAIContextTokenLimit(contextTokenLimit)
+            - Self.privateAIDictationSystemOverheadTokens
+            - estimatedInputTokens
+        return PrivateAIDictationTokenBudget(
+            maxOutputTokens: min(requestedOutputTokens, max(Self.privateAIDictationMinimumOutputTokens, availableOutputTokens)),
+            hasSufficientHeadroom: availableOutputTokens >= requestedOutputTokens
         )
-        return min(requestedOutputTokens, availableOutputTokens)
+    }
+
+    private static func estimatedPrivateAIInputTokens(for inputText: String) -> Int {
+        let segments = inputText.split { $0.isWhitespace || $0.isNewline }
+        let wordBasedEstimate = Int((Double(segments.count) / 0.75).rounded(.up))
+        // Keep the existing prose estimate, but charge long unbroken input by UTF-8 size so
+        // URLs, identifiers, and languages without whitespace cannot look like a single token.
+        let denseSegmentEstimate = segments.reduce(into: 0) { estimate, segment in
+            let byteCount = segment.utf8.count
+            if byteCount > Self.privateAIDenseSegmentByteThreshold {
+                estimate += (byteCount + Self.privateAIDenseBytesPerToken - 1)
+                    / Self.privateAIDenseBytesPerToken
+            } else {
+                estimate += 1
+            }
+        }
+        return max(1, max(wordBasedEstimate, denseSegmentEstimate))
+    }
+
+    static func privateAIMaxOutputTokens(forInputText inputText: String, contextTokenLimit: Int) -> Int {
+        self.privateAIDictationTokenBudget(
+            forInputText: inputText,
+            contextTokenLimit: contextTokenLimit
+        ).maxOutputTokens
     }
 
     enum PrivateAIBackendPreference: String, Codable, CaseIterable, Identifiable {
@@ -197,6 +231,13 @@ final class SettingsStore: ObservableObject {
                 return "Use Preferred Microphone"
             }
         }
+    }
+
+    struct MicrophonePriorityEntry: Codable, Hashable, Identifiable {
+        let uid: String
+        var name: String
+
+        var id: String { self.uid }
     }
 
     enum DictationPromptSelection: Equatable {
@@ -1376,9 +1417,27 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Anonymous analytics toggle (default: ON). Uses default-true semantics so existing installs
-    /// upgrading to a version that includes analytics do not silently default to OFF.
-    var shareAnonymousAnalytics: Bool {
+    /// Label speakers ("Speaker 1", "Speaker 2") in file transcriptions (default: OFF).
+    var fileTranscriptionSpeakerLabelsEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.fileTranscriptionSpeakerLabelsEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.fileTranscriptionSpeakerLabelsEnabled)
+        }
+    }
+
+    /// Expected speaker count hint for file transcription diarization. 0 = auto-detect.
+    var fileTranscriptionExpectedSpeakerCount: Int {
+        get { self.defaults.integer(forKey: Keys.fileTranscriptionExpectedSpeakerCount) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.fileTranscriptionExpectedSpeakerCount)
+        }
+    }
+
+    /// Detailed anonymous analytics toggle (default: ON). The daily activity signal is always enabled.
+    /// Uses default-true semantics so existing installs upgrading to analytics do not default to OFF.
+    var shareDetailedAnalytics: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.shareAnonymousAnalytics)
             if value == nil { return true }
@@ -1761,6 +1820,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
+    /// Experimental and enabled by default; users can fall back to full-buffer finalization.
+    var experimentalParakeetUnifiedFinalEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
+        }
+    }
+
     /// Skips clearly silent recordings up to four seconds before invoking ASR.
     /// Opt-in so quiet speech keeps the existing transcription behavior by default.
     var skipSilentRecordingsEnabled: Bool {
@@ -1782,28 +1851,10 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Direct Core Audio capture is opt-in while the faster recording path is experimental.
-    var experimentalDirectAudioCaptureEnabled: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.experimentalDirectAudioCaptureEnabled)
-            return value as? Bool ?? false
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
-        }
-    }
-
-    private func disableExperimentalDirectAudioCaptureIfNeeded() {
-        guard self.defaults.bool(forKey: Keys.experimentalDirectAudioCaptureForcedOff) == false else { return }
-        self.defaults.set(false, forKey: Keys.experimentalDirectAudioCaptureEnabled)
-        self.defaults.set(true, forKey: Keys.experimentalDirectAudioCaptureForcedOff)
-    }
-
-    var directAudioCaptureConsecutiveFailures: Int {
-        get { self.defaults.integer(forKey: Keys.directAudioCaptureConsecutiveFailures) }
-        set { self.defaults.set(max(0, newValue), forKey: Keys.directAudioCaptureConsecutiveFailures) }
-    }
+    /// Direct Core Audio is the required capture backend. Legacy persisted
+    /// preferences are intentionally ignored because AVAudioEngine can block or
+    /// crash while audio devices are changing.
+    var experimentalDirectAudioCaptureEnabled: Bool { true }
 
     var copyTranscriptionToClipboard: Bool {
         get { self.defaults.bool(forKey: Keys.copyTranscriptionToClipboard) }
@@ -1815,20 +1866,61 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.preferredInputDeviceUID) }
     }
 
+    var microphonePriority: [MicrophonePriorityEntry] {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.microphonePriority),
+                  let entries = try? JSONDecoder().decode([MicrophonePriorityEntry].self, from: data)
+            else { return [] }
+            return Self.normalizedMicrophonePriority(entries)
+        }
+        set {
+            let entries = Self.normalizedMicrophonePriority(newValue)
+            guard entries != self.microphonePriority else { return }
+            objectWillChange.send()
+            if let data = try? JSONEncoder().encode(entries) {
+                self.defaults.set(data, forKey: Keys.microphonePriority)
+            } else {
+                self.defaults.removeObject(forKey: Keys.microphonePriority)
+            }
+            if let firstUID = entries.first?.uid {
+                self.preferredInputDeviceUID = firstUID
+            }
+        }
+    }
+
+    var suppressedMicrophoneUIDs: Set<String> {
+        get { Set(self.defaults.stringArray(forKey: Keys.suppressedMicrophoneUIDs) ?? []) }
+        set {
+            if newValue.isEmpty {
+                self.defaults.removeObject(forKey: Keys.suppressedMicrophoneUIDs)
+            } else {
+                self.defaults.set(newValue.sorted(), forKey: Keys.suppressedMicrophoneUIDs)
+            }
+        }
+    }
+
     var preferredOutputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
     }
 
+    var storedMicSelectionModeForMigration: MicrophoneSelectionMode {
+        guard let rawValue = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+              let mode = MicrophoneSelectionMode(rawValue: rawValue)
+        else { return .system }
+        return mode
+    }
+
+    var hasStoredMicSelectionModeForMigration: Bool {
+        self.defaults.object(forKey: Keys.microphoneSelectionMode) != nil
+    }
+
     var microphoneSelectionMode: MicrophoneSelectionMode {
         get {
-            if let raw = self.defaults.string(forKey: Keys.microphoneSelectionMode),
-               let mode = MicrophoneSelectionMode(rawValue: raw)
-            {
-                return mode
-            }
-
-            return .system
+            guard let rawValue = self.defaults.string(forKey: Keys.microphoneSelectionMode),
+                  let mode = MicrophoneSelectionMode(rawValue: rawValue)
+            else { return .manual }
+            return mode
         }
         set {
             objectWillChange.send()
@@ -1836,45 +1928,126 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    func recordInputDeviceSelection(_ uid: String) {
+    func recordInputDeviceSelection(_ uid: String, name: String? = nil) {
         guard uid.isEmpty == false else { return }
-        guard self.microphoneSelectionMode == .manual else { return }
 
-        self.preferredInputDeviceUID = uid
+        var suppressedUIDs = self.suppressedMicrophoneUIDs
+        suppressedUIDs.remove(uid)
+        self.suppressedMicrophoneUIDs = suppressedUIDs
+
+        var entries = self.microphonePriority.filter { $0.uid != uid }
+        let existingName = self.microphonePriority.first { $0.uid == uid }?.name
+        entries.insert(
+            MicrophonePriorityEntry(uid: uid, name: name ?? existingName ?? "Microphone"),
+            at: 0
+        )
+        self.microphonePriority = entries
+        self.microphoneSelectionMode = .manual
     }
 
-    func shouldSyncInputSelectionToSystemDefault() -> Bool {
-        self.microphoneSelectionMode == .system
+    func reconcileMicrophonePriority(with devices: [AudioDevice.Device]) {
+        var entries = self.microphonePriority
+        let preferredUID = self.preferredInputDeviceUID
+        let connectedUIDs = Set(devices.map(\.uid))
+        var suppressedUIDs = self.suppressedMicrophoneUIDs
+        suppressedUIDs.formIntersection(connectedUIDs)
+        self.suppressedMicrophoneUIDs = suppressedUIDs
+
+        if entries.isEmpty,
+           let preferredUID,
+           preferredUID.isEmpty == false
+        {
+            let name = devices.first { $0.uid == preferredUID }?.name ?? "Previously selected microphone"
+            entries.append(MicrophonePriorityEntry(uid: preferredUID, name: name))
+        }
+
+        var knownUIDs = Set(entries.map(\.uid))
+        let newEntries = devices.compactMap { device -> MicrophonePriorityEntry? in
+            guard suppressedUIDs.contains(device.uid) == false,
+                  knownUIDs.insert(device.uid).inserted
+            else { return nil }
+            return MicrophonePriorityEntry(uid: device.uid, name: device.name)
+        }
+        if newEntries.isEmpty == false {
+            // Keep the user's first choice stable while making a newly connected
+            // microphone the immediate fallback. Its position remains persisted
+            // when the device later disconnects.
+            entries.insert(contentsOf: newEntries, at: min(1, entries.count))
+        }
+
+        let namesByUID = Dictionary(
+            devices.map { ($0.uid, $0.name) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        entries = entries.map { entry in
+            MicrophonePriorityEntry(uid: entry.uid, name: namesByUID[entry.uid] ?? entry.name)
+        }
+        self.microphonePriority = entries
     }
 
-    @discardableResult
-    func setMicrophoneSelectionMode(
-        _ mode: MicrophoneSelectionMode,
-        currentSystemInputUID: String?,
-        availableInputUIDs: Set<String>
-    ) -> String? {
-        let previousMode = self.microphoneSelectionMode
+    func removeMicrophoneFromPriority(uid: String, isConnected: Bool) {
+        guard uid.isEmpty == false else { return }
 
-        if previousMode == .system,
-           mode == .manual,
-           let currentSystemInputUID,
-           currentSystemInputUID.isEmpty == false
-        {
-            self.defaults.set(currentSystemInputUID, forKey: Keys.systemInputDeviceUIDBeforeManual)
+        var suppressedUIDs = self.suppressedMicrophoneUIDs
+        if isConnected {
+            suppressedUIDs.insert(uid)
+        } else {
+            suppressedUIDs.remove(uid)
         }
+        self.suppressedMicrophoneUIDs = suppressedUIDs
 
-        self.microphoneSelectionMode = mode
-
-        guard mode == .system else { return nil }
-
-        if let previousSystemInputUID = self.defaults.string(forKey: Keys.systemInputDeviceUIDBeforeManual),
-           previousSystemInputUID.isEmpty == false,
-           availableInputUIDs.contains(previousSystemInputUID)
-        {
-            return previousSystemInputUID
+        let entries = self.microphonePriority.filter { $0.uid != uid }
+        self.microphonePriority = entries
+        if entries.isEmpty {
+            self.preferredInputDeviceUID = nil
         }
+    }
 
-        return currentSystemInputUID
+    func restoreRemovedMicrophones(with devices: [AudioDevice.Device]) {
+        self.suppressedMicrophoneUIDs = []
+        self.reconcileMicrophonePriority(with: devices)
+    }
+
+    func reorderMicrophonePriority(fromOffsets: IndexSet, toOffset: Int) {
+        var entries = self.microphonePriority
+        entries.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        self.microphonePriority = entries
+    }
+
+    func moveMicrophonePriority(uid: String, before targetUID: String) {
+        guard uid != targetUID else { return }
+        var entries = self.microphonePriority
+        guard let sourceIndex = entries.firstIndex(where: { $0.uid == uid }),
+              let targetIndex = entries.firstIndex(where: { $0.uid == targetUID })
+        else { return }
+
+        let entry = entries.remove(at: sourceIndex)
+        let adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+        entries.insert(entry, at: adjustedTargetIndex)
+        self.microphonePriority = entries
+    }
+
+    func moveMicrophonePriority(uid: String, by offset: Int) {
+        var entries = self.microphonePriority
+        guard let sourceIndex = entries.firstIndex(where: { $0.uid == uid }) else { return }
+        let destination = min(max(sourceIndex + offset, 0), entries.count - 1)
+        guard destination != sourceIndex else { return }
+        entries.swapAt(sourceIndex, destination)
+        self.microphonePriority = entries
+    }
+
+    private static func normalizedMicrophonePriority(
+        _ entries: [MicrophonePriorityEntry]
+    ) -> [MicrophonePriorityEntry] {
+        var seen = Set<String>()
+        return entries.filter { entry in
+            entry.uid.isEmpty == false && seen.insert(entry.uid).inserted
+        }
+    }
+
+    var microphoneSelectionMigrationVersion: Int {
+        get { self.defaults.integer(forKey: Keys.microphoneSelectionMigrationVersion) }
+        set { self.defaults.set(newValue, forKey: Keys.microphoneSelectionMigrationVersion) }
     }
 
     var visualizerNoiseThreshold: Double {
@@ -2457,6 +2630,10 @@ final class SettingsStore: ObservableObject {
         !self.onboardingCompleted
     }
 
+    var analyticsOnboardingOrigin: AnalyticsOnboardingOrigin {
+        self.defaults.bool(forKey: Keys.manualOnboardingResetRequested) ? .manualRestart : .firstRun
+    }
+
     var shouldPromptAccessibilityOnLaunch: Bool {
         !self.shouldShowOnboarding
     }
@@ -2882,14 +3059,20 @@ final class SettingsStore: ObservableObject {
 
     /// Global check if a model is a reasoning model (requires special params/max_completion_tokens)
     func isReasoningModel(_ model: String) -> Bool {
-        let modelLower = model.lowercased()
+        // Drop a provider/namespace prefix (e.g. OpenRouter's "openai/") so the
+        // family checks below match prefixed reasoning IDs like "openai/o3"
+        // without also matching every non-reasoning "openai/*" model (e.g.
+        // "openai/gpt-4o"), which would strip its temperature control.
+        var modelLower = model.lowercased()
+        if let slash = modelLower.firstIndex(of: "/") {
+            modelLower = String(modelLower[modelLower.index(after: slash)...])
+        }
         return modelLower.hasPrefix("gpt-5") ||
             modelLower.contains("gpt-5.") ||
             modelLower.hasPrefix("o1") ||
             modelLower.hasPrefix("o3") ||
             modelLower.hasPrefix("o4") ||
             modelLower.contains("gpt-oss") ||
-            modelLower.hasPrefix("openai/") ||
             (modelLower.contains("deepseek") && modelLower.contains("reasoner"))
     }
 
@@ -2937,6 +3120,28 @@ final class SettingsStore: ObservableObject {
                 self.defaults.set(encoded, forKey: Keys.verifiedProviderFingerprints)
             } else {
                 self.defaults.removeObject(forKey: Keys.verifiedProviderFingerprints)
+            }
+        }
+    }
+
+    /// Stored verification fingerprints per private model ID. Provider-level fingerprints remain
+    /// for backward compatibility, while this map allows Dictation and Edit Mode to use different
+    /// installed models without invalidating each other.
+    var verifiedPrivateAIModelFingerprints: [String: String] {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.verifiedPrivateAIModelFingerprints),
+                  let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+            else {
+                return [:]
+            }
+            return decoded
+        }
+        set {
+            objectWillChange.send()
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(encoded, forKey: Keys.verifiedPrivateAIModelFingerprints)
+            } else {
+                self.defaults.removeObject(forKey: Keys.verifiedPrivateAIModelFingerprints)
             }
         }
     }
@@ -3030,6 +3235,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Whether transient microphone selection and availability alerts are shown.
+    var showMicrophoneChangeAlerts: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.showMicrophoneChangeAlerts)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.showMicrophoneChangeAlerts)
+        }
+    }
+
     func makeBackupPayload() -> SettingsBackupPayload {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
@@ -3041,6 +3258,7 @@ final class SettingsStore: ObservableObject {
             privateAIBackendPreference: self.privateAIBackendPreference,
             privateAIContextTokenLimit: self.privateAIContextTokenLimit,
             selectedSpeechModel: self.selectedSpeechModel,
+            selectedWhisperLanguageCode: Self.whisperLanguageBackupValue(for: self.selectedWhisperLanguageCode),
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
@@ -3074,17 +3292,26 @@ final class SettingsStore: ObservableObject {
             autoUpdateCheckEnabled: self.autoUpdateCheckEnabled,
             betaReleasesEnabled: self.betaReleasesEnabled,
             enableDebugLogs: self.enableDebugLogs,
-            shareAnonymousAnalytics: self.shareAnonymousAnalytics,
+            shareAnonymousAnalytics: self.shareDetailedAnalytics,
             pressAndHoldMode: self.pressAndHoldMode,
             hotkeyMode: self.hotkeyMode,
             enableStreamingPreview: self.enableStreamingPreview,
+            experimentalParakeetUnifiedFinalEnabled: self.experimentalParakeetUnifiedFinalEnabled,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
+            spokenSendEnabled: self.spokenSendEnabled,
+            spokenSendImmediatelyEnabled: self.spokenSendImmediatelyEnabled,
+            spokenSendPhrase: self.spokenSendPhrase,
+            spokenSendKey: self.spokenSendKey,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
+            microphonePriority: self.microphonePriority,
+            suppressedMicrophoneUIDs: self.suppressedMicrophoneUIDs.sorted(),
             preferredOutputDeviceUID: self.preferredOutputDeviceUID,
-            microphoneSelectionMode: self.microphoneSelectionMode,
+            // Kept in the backup schema for compatibility with older builds.
+            // Current builds always resolve microphones from the priority list.
+            microphoneSelectionMode: .manual,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
@@ -3095,6 +3322,7 @@ final class SettingsStore: ObservableObject {
             saveAudioWithTranscriptionHistory: self.saveAudioWithTranscriptionHistory,
             audioHistoryBudgetGB: self.audioHistoryBudgetGB,
             notifyAIProcessingFailures: self.notifyAIProcessingFailures,
+            showMicrophoneChangeAlerts: self.showMicrophoneChangeAlerts,
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
@@ -3102,6 +3330,7 @@ final class SettingsStore: ObservableObject {
             literalDictationFormattingEnabled: self.literalDictationFormattingEnabled,
             punctuationDictionaryPrefix: self.punctuationDictionaryPrefix,
             punctuationDictionaryRules: self.punctuationDictionaryRules,
+            spokenFormattingActionRules: self.spokenFormattingActionRules,
             gaavModeEnabled: self.gaavModeEnabled,
             gaavLowercaseFirstLetterEnabled: self.gaavLowercaseFirstLetterEnabled,
             gaavRemoveTrailingPeriodEnabled: self.gaavRemoveTrailingPeriodEnabled,
@@ -3120,7 +3349,9 @@ final class SettingsStore: ObservableObject {
             selectedEditPromptID: self.selectedEditPromptID,
             editPromptRoutingScope: self.editPromptRoutingScope,
             defaultDictationPromptOverride: self.defaultDictationPromptOverride,
-            defaultEditPromptOverride: self.defaultEditPromptOverride
+            defaultEditPromptOverride: self.defaultEditPromptOverride,
+            fileTranscriptionSpeakerLabelsEnabled: self.fileTranscriptionSpeakerLabelsEnabled,
+            fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount
         )
     }
 
@@ -3150,6 +3381,9 @@ final class SettingsStore: ObservableObject {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
         self.selectedSpeechModel = payload.selectedSpeechModel
+        if let selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode {
+            self.selectedWhisperLanguageCode = Self.whisperLanguageCode(fromBackupValue: selectedWhisperLanguageCode)
+        }
         self.selectedCohereLanguage = payload.selectedCohereLanguage
         if let selectedNemotronLanguage = payload.selectedNemotronLanguage {
             self.selectedNemotronLanguage = selectedNemotronLanguage
@@ -3190,19 +3424,46 @@ final class SettingsStore: ObservableObject {
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
         self.betaReleasesEnabled = payload.betaReleasesEnabled
         self.enableDebugLogs = payload.enableDebugLogs
-        self.shareAnonymousAnalytics = payload.shareAnonymousAnalytics
+        self.shareDetailedAnalytics = payload.shareAnonymousAnalytics
         self.hotkeyMode = payload.hotkeyMode ?? (payload.pressAndHoldMode ? .hold : .toggle)
         self.enableStreamingPreview = payload.enableStreamingPreview
+        if let experimentalParakeetUnifiedFinalEnabled = payload.experimentalParakeetUnifiedFinalEnabled {
+            self.experimentalParakeetUnifiedFinalEnabled = experimentalParakeetUnifiedFinalEnabled
+        }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
         }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
         self.textInsertionMode = payload.textInsertionMode
+        if let spokenSendEnabled = payload.spokenSendEnabled {
+            self.spokenSendEnabled = spokenSendEnabled
+        }
+        if let spokenSendImmediatelyEnabled = payload.spokenSendImmediatelyEnabled {
+            self.spokenSendImmediatelyEnabled = spokenSendImmediatelyEnabled
+        }
+        if let spokenSendPhrase = payload.spokenSendPhrase {
+            self.spokenSendPhrase = spokenSendPhrase
+        }
+        if let spokenSendKey = payload.spokenSendKey {
+            self.spokenSendKey = spokenSendKey
+        }
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
+        self.suppressedMicrophoneUIDs = Set(payload.suppressedMicrophoneUIDs ?? [])
+        if let microphonePriority = payload.microphonePriority {
+            self.microphonePriority = microphonePriority
+        } else {
+            self.microphonePriority = []
+        }
         self.preferredOutputDeviceUID = payload.preferredOutputDeviceUID
-        if let microphoneSelectionMode = payload.microphoneSelectionMode {
-            self.microphoneSelectionMode = microphoneSelectionMode
+        if payload.microphonePriority != nil {
+            self.microphoneSelectionMode = .manual
+            self.microphoneSelectionMigrationVersion = Self.microphonePriorityMigrationVersion
+        } else if payload.microphoneSelectionMode == .system {
+            self.microphoneSelectionMode = .system
+            self.microphoneSelectionMigrationVersion = 0
+        } else {
+            self.microphoneSelectionMode = .manual
         }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
         self.overlayPosition = payload.overlayPosition
@@ -3220,6 +3481,9 @@ final class SettingsStore: ObservableObject {
         if let notifyAIProcessingFailures = payload.notifyAIProcessingFailures {
             self.notifyAIProcessingFailures = notifyAIProcessingFailures
         }
+        if let showMicrophoneChangeAlerts = payload.showMicrophoneChangeAlerts {
+            self.showMicrophoneChangeAlerts = showMicrophoneChangeAlerts
+        }
         self.weekendsDontBreakStreak = payload.weekendsDontBreakStreak
         self.fillerWords = payload.fillerWords
         self.removeFillerWordsEnabled = payload.removeFillerWordsEnabled
@@ -3234,6 +3498,9 @@ final class SettingsStore: ObservableObject {
         }
         if let punctuationDictionaryRules = payload.punctuationDictionaryRules {
             self.punctuationDictionaryRules = punctuationDictionaryRules
+        }
+        if let spokenFormattingActionRules = payload.spokenFormattingActionRules {
+            self.spokenFormattingActionRules = spokenFormattingActionRules
         }
         let restoredGaavModeEnabled = payload.gaavModeEnabled
         let restoredContinuousDictationModeEnabled = payload.continuousDictationModeEnabled ?? false
@@ -3263,6 +3530,12 @@ final class SettingsStore: ObservableObject {
         self.selectedEditPromptID = payload.selectedEditPromptID
         self.defaultDictationPromptOverride = payload.defaultDictationPromptOverride
         self.defaultEditPromptOverride = payload.defaultEditPromptOverride
+        if let fileTranscriptionSpeakerLabelsEnabled = payload.fileTranscriptionSpeakerLabelsEnabled {
+            self.fileTranscriptionSpeakerLabelsEnabled = fileTranscriptionSpeakerLabelsEnabled
+        }
+        if let fileTranscriptionExpectedSpeakerCount = payload.fileTranscriptionExpectedSpeakerCount {
+            self.fileTranscriptionExpectedSpeakerCount = fileTranscriptionExpectedSpeakerCount
+        }
         self.promptModeSelectedPromptID = payload.promptModeSelectedPromptID
         self.isSecondaryDictationPromptOff = payload.secondaryDictationPromptOff ?? false
         self.normalizePromptSelectionsIfNeeded()
@@ -3667,17 +3940,16 @@ final class SettingsStore: ObservableObject {
 
     private func syncLinkedProviderSelections(to providerID: String) {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
-        let model = self.modelSelection(for: linkedProviderID)
 
         if self.rewriteModeLinkedToGlobal {
-            self.rewriteModeSelectedProviderID = linkedProviderID
-            self.rewriteModeSelectedModel = model
+            self.rewriteModeSelectedProviderID = trimmed
+            self.rewriteModeSelectedModel = self.modelSelection(for: trimmed)
         }
 
         if self.commandModeLinkedToGlobal {
+            let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
             self.commandModeSelectedProviderID = linkedProviderID
-            self.commandModeSelectedModel = model
+            self.commandModeSelectedModel = self.modelSelection(for: linkedProviderID)
         }
     }
 
@@ -3712,6 +3984,24 @@ final class SettingsStore: ObservableObject {
         }
 
         return ModelRepository.shared.defaultModels(for: providerID).first
+    }
+
+    func analyticsAIModelDescriptor(for mode: AnalyticsUsageMode) -> AnalyticsModelDescriptor? {
+        let providerID: String
+        let selectedModel: String?
+        switch mode {
+        case .edit:
+            providerID = self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+            selectedModel = self.rewriteModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.rewriteModeSelectedModel
+        case .command:
+            providerID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
+            selectedModel = self.commandModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.commandModeSelectedModel
+        case .dictation, .meeting:
+            providerID = self.selectedProviderID
+            selectedModel = self.modelSelection(for: providerID)
+        }
+        guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return AnalyticsModelDescriptor(provider: providerID, model: selectedModel ?? "unknown")
     }
 
     private func availableSelectedProviderID(for rawValue: String?) -> String {
@@ -3854,6 +4144,63 @@ final class SettingsStore: ObservableObject {
     }
 
     static let defaultPunctuationDictionaryPrefix = "literal"
+
+    enum SpokenFormattingAction: String, Codable, CaseIterable, Identifiable {
+        case newLine
+        case newParagraph
+        case tab
+        case space
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .newLine: return "New Line"
+            case .newParagraph: return "New Paragraph"
+            case .tab: return "Tab"
+            case .space: return "Space"
+            }
+        }
+
+        var displaySymbol: String {
+            switch self {
+            case .newLine: return "⏎"
+            case .newParagraph: return "¶"
+            case .tab: return "⇥"
+            case .space: return "␣"
+            }
+        }
+
+        var output: String {
+            switch self {
+            case .newLine: return "\n"
+            case .newParagraph: return "\n\n"
+            case .tab: return "\t"
+            case .space: return " "
+            }
+        }
+    }
+
+    struct SpokenFormattingActionRule: Codable, Identifiable, Hashable {
+        var action: SpokenFormattingAction
+        var aliases: [String]
+        var isEnabled: Bool
+
+        var id: SpokenFormattingAction { self.action }
+
+        init(action: SpokenFormattingAction, aliases: [String], isEnabled: Bool = true) {
+            self.action = action
+            self.aliases = PunctuationDictionaryRule.normalizedAliases(aliases)
+            self.isEnabled = isEnabled && !self.aliases.isEmpty
+        }
+    }
+
+    static let defaultSpokenFormattingActionRules: [SpokenFormattingActionRule] = [
+        SpokenFormattingActionRule(action: .newLine, aliases: ["new line", "next line"]),
+        SpokenFormattingActionRule(action: .newParagraph, aliases: ["new paragraph", "next paragraph"]),
+        SpokenFormattingActionRule(action: .tab, aliases: ["tab"]),
+        SpokenFormattingActionRule(action: .space, aliases: ["space"]),
+    ]
 
     static let defaultPunctuationDictionaryRules: [PunctuationDictionaryRule] = [
         PunctuationDictionaryRule(aliases: ["comma"], symbol: ","),
@@ -4009,6 +4356,68 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var spokenFormattingActionRules: [SpokenFormattingActionRule] {
+        get {
+            guard let data = defaults.data(forKey: Keys.spokenFormattingActionRules),
+                  let decoded = try? JSONDecoder().decode([SpokenFormattingActionRule].self, from: data)
+            else {
+                return Self.defaultSpokenFormattingActionRules
+            }
+
+            var rulesByAction: [SpokenFormattingAction: SpokenFormattingActionRule] = [:]
+            for rule in decoded where rulesByAction[rule.action] == nil {
+                rulesByAction[rule.action] = rule
+            }
+            let orderedRules = SpokenFormattingAction.allCases.map { action in
+                guard let rule = rulesByAction[action] else {
+                    return Self.defaultSpokenFormattingActionRules.first { $0.action == action }
+                        ?? SpokenFormattingActionRule(action: action, aliases: [], isEnabled: false)
+                }
+                return SpokenFormattingActionRule(
+                    action: action,
+                    aliases: rule.aliases,
+                    isEnabled: rule.isEnabled
+                )
+            }
+            return self.removingDuplicateSpokenFormattingAliases(from: orderedRules)
+        }
+        set {
+            objectWillChange.send()
+            var rulesByAction: [SpokenFormattingAction: SpokenFormattingActionRule] = [:]
+            for rule in newValue where rulesByAction[rule.action] == nil {
+                rulesByAction[rule.action] = rule
+            }
+            let orderedRules = SpokenFormattingAction.allCases.map { action in
+                guard let rule = rulesByAction[action] else {
+                    return SpokenFormattingActionRule(action: action, aliases: [], isEnabled: false)
+                }
+                return SpokenFormattingActionRule(
+                    action: action,
+                    aliases: rule.aliases,
+                    isEnabled: rule.isEnabled
+                )
+            }
+            let normalizedRules = self.removingDuplicateSpokenFormattingAliases(from: orderedRules)
+            if let encoded = try? JSONEncoder().encode(normalizedRules) {
+                self.defaults.set(encoded, forKey: Keys.spokenFormattingActionRules)
+            }
+        }
+    }
+
+    private func removingDuplicateSpokenFormattingAliases(
+        from rules: [SpokenFormattingActionRule]
+    ) -> [SpokenFormattingActionRule] {
+        var claimedAliases = Set(self.punctuationDictionaryRules.flatMap(\.aliases))
+        return rules.map { rule in
+            let uniqueAliases = rule.aliases.filter { claimedAliases.insert($0).inserted }
+            return SpokenFormattingActionRule(
+                action: rule.action,
+                aliases: uniqueAliases,
+                isEnabled: rule.isEnabled
+            )
+        }
+    }
+
     // MARK: - GAAV Mode
 
     /// Legacy combined GAAV setting. New behavior uses the split formatting toggles below.
@@ -4108,6 +4517,13 @@ final class SettingsStore: ObservableObject {
             self.id = id
             self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             self.replacement = replacement
+        }
+
+        /// Trims padding around visible replacement text while preserving an intentional
+        /// all-whitespace payload such as a newline, space, or tab.
+        static func sanitizedReplacement(_ text: String) -> String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? text : trimmed
         }
     }
 
@@ -4268,7 +4684,7 @@ final class SettingsStore: ObservableObject {
             case .whisperBase: return 84_962_880
             case .whisperSmall: return 269_751_136
             case .whisperMedium: return 831_538_144
-            case .whisperLargeTurbo: return 886_381_824
+            case .whisperLargeTurbo: return 886_381_760
             case .whisperLarge: return 1_668_741_440
             case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
@@ -4909,6 +5325,8 @@ private extension SettingsStore {
     enum Keys {
         static let enableAIProcessing = "EnableAIProcessing"
         static let showMainWindowAtLoginLaunch = "ShowMainWindowAtLoginLaunch"
+        static let fileTranscriptionSpeakerLabelsEnabled = "FileTranscriptionSpeakerLabelsEnabled"
+        static let fileTranscriptionExpectedSpeakerCount = "FileTranscriptionExpectedSpeakerCount"
         static let dictationPromptOff = "DictationPromptOff"
         static let enableDebugLogs = "EnableDebugLogs"
         static let availableAIModels = "AvailableAIModels"
@@ -4925,14 +5343,19 @@ private extension SettingsStore {
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
         static let verifiedProviderFingerprints = "VerifiedProviderFingerprints"
+        static let verifiedPrivateAIModelFingerprints = "VerifiedPrivateAIModelFingerprints"
         static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
         static let privateAIInterestCaptured = "PrivateAIProviderInterestCaptured"
         static let hotkeyShortcutKey = "HotkeyShortcutKey"
         static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
         static let preferredInputDeviceUID = "PreferredInputDeviceUID"
+        static let microphonePriority = "MicrophonePriority"
+        static let suppressedMicrophoneUIDs = "SuppressedMicrophoneUIDs"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
-        static let systemInputDeviceUIDBeforeManual = "SystemInputDeviceUIDBeforeManual"
+        // Keep the original persisted key so existing installs migrate in place.
+        static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
+        static let showMicrophoneChangeAlerts = "ShowMicrophoneChangeAlerts"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
@@ -4945,13 +5368,15 @@ private extension SettingsStore {
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
         static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
-        static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
-        static let experimentalDirectAudioCaptureForcedOff = "ExperimentalDirectAudioCaptureForcedOff"
-        static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
+        static let spokenSendEnabled = "SpokenSendEnabled"
+        static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
+        static let spokenSendPhrase = "SpokenSendPhrase"
+        static let spokenSendKey = "SpokenSendKey"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let betaReleasesEnabled = "BetaReleasesEnabled"
         static let lastUpdateCheckDate = "LastUpdateCheckDate"
@@ -5015,6 +5440,7 @@ private extension SettingsStore {
         static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"
         static let punctuationDictionaryPrefix = "PunctuationDictionaryPrefix"
         static let punctuationDictionaryRules = "PunctuationDictionaryRules"
+        static let spokenFormattingActionRules = "SpokenFormattingActionRules"
 
         /// GAAV Mode (removes capitalization and trailing punctuation)
         static let gaavModeEnabled = "GAAVModeEnabled"
@@ -5038,6 +5464,7 @@ private extension SettingsStore {
 
         /// Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+        static let selectedWhisperLanguageCode = "SelectedWhisperLanguageCode"
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
@@ -5082,6 +5509,77 @@ private extension SettingsStore {
 }
 
 extension SettingsStore {
+    enum SpokenSendKey: String, CaseIterable, Identifiable, Codable {
+        case enter
+        case shiftEnter
+        case commandEnter
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .enter:
+                return "Enter"
+            case .shiftEnter:
+                return "Shift + Enter"
+            case .commandEnter:
+                return "Command + Enter"
+            }
+        }
+
+        var eventFlags: CGEventFlags {
+            switch self {
+            case .enter:
+                return []
+            case .shiftEnter:
+                return .maskShift
+            case .commandEnter:
+                return .maskCommand
+            }
+        }
+    }
+
+    var spokenSendEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.spokenSendEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendEnabled)
+        }
+    }
+
+    var spokenSendImmediatelyEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.spokenSendImmediatelyEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendImmediatelyEnabled)
+        }
+    }
+
+    var spokenSendPhrase: String {
+        get { self.defaults.string(forKey: Keys.spokenSendPhrase) ?? "send it" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendPhrase)
+        }
+    }
+
+    var spokenSendKey: SpokenSendKey {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.spokenSendKey),
+                  let key = SpokenSendKey(rawValue: raw)
+            else {
+                return .enter
+            }
+            return key
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendKey)
+        }
+    }
+
     enum TextInsertionMode: String, CaseIterable, Identifiable, Codable {
         case standard
         case reliablePaste
@@ -5104,7 +5602,7 @@ extension SettingsStore {
             case .standard:
                 return "Fastest path. Inserts text without changing the clipboard, with paste fallback if direct insertion is unavailable."
             case .reliablePaste:
-                return "Compatibility path. Uses a temporary clipboard paste, so clipboard history apps may briefly record dictated text."
+                return "Compatibility path. Uses a temporary clipboard paste and restores your previous clipboard after insertion."
             }
         }
     }
@@ -5294,6 +5792,31 @@ extension SettingsStore {
             let model = newValue == .nemotronStreaming320 ? SpeechModel.nemotronStreaming : newValue
             self.defaults.set(model.rawValue, forKey: Keys.selectedSpeechModel)
         }
+    }
+
+    /// The language Whisper should transcribe, or `nil` to detect it from each recording.
+    /// Existing installs keep automatic detection until the user selects a language.
+    var selectedWhisperLanguageCode: String? {
+        get {
+            Self.whisperLanguageCode(fromStoredValue: self.defaults.string(forKey: Keys.selectedWhisperLanguageCode))
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue ?? Self.automaticWhisperLanguageCode, forKey: Keys.selectedWhisperLanguageCode)
+        }
+    }
+
+    static func whisperLanguageCode(fromStoredValue value: String?) -> String? {
+        guard let value, value != self.automaticWhisperLanguageCode else { return nil }
+        return VoiceEngineLanguageCatalog.whisperLanguage(forCode: value) == nil ? nil : value
+    }
+
+    static func whisperLanguageBackupValue(for languageCode: String?) -> String {
+        languageCode ?? self.automaticWhisperLanguageCode
+    }
+
+    static func whisperLanguageCode(fromBackupValue value: String) -> String? {
+        value == self.automaticWhisperLanguageCode ? nil : value
     }
 
     var selectedCohereLanguage: CohereLanguage {

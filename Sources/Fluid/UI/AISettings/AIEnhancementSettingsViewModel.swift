@@ -384,9 +384,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             let status = try await PrivateAIIntegrationService.shared.loadModel(currentModel)
             switch status.state {
             case .ready:
+                let fingerprint = self.privateAIFingerprint(for: currentModel.id)
                 var fingerprints = self.settings.verifiedProviderFingerprints
-                fingerprints[key] = self.privateAIFingerprint(for: currentModel.id)
+                fingerprints[key] = fingerprint
                 self.settings.verifiedProviderFingerprints = fingerprints
+                var modelFingerprints = self.settings.verifiedPrivateAIModelFingerprints
+                modelFingerprints[currentModel.id] = fingerprint
+                self.settings.verifiedPrivateAIModelFingerprints = modelFingerprints
                 self.selectedModelByProvider[key] = currentModel.id
                 self.settings.selectedModelByProvider = self.selectedModelByProvider
                 self.selectProviderForUse(providerID)
@@ -415,6 +419,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func resetVerification(for providerID: String) {
         let key = self.providerKey(for: providerID)
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
+        if providerID == PrivateAIProviderFeature.shared.providerID {
+            let selectedModelID = self.settings.selectedModelByProvider[key]
+                ?? PrivateAIIntegrationService.configuredModelID
+            if let modelID = PrivateAIModelRegistry.canonicalModelID(for: selectedModelID) {
+                self.settings.verifiedPrivateAIModelFingerprints.removeValue(forKey: modelID)
+            }
+        }
         self.updateConnectionStatus(.unknown, for: providerID)
         self.refreshProviderItems()
     }

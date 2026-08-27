@@ -13,6 +13,7 @@ extension ASRService {
             text,
             prefix: settings.punctuationDictionaryPrefix,
             rules: settings.punctuationDictionaryRules,
+            actionRules: settings.spokenFormattingActionRules,
             appName: appName,
             bundleID: bundleID,
             windowTitle: windowTitle
@@ -57,6 +58,10 @@ private enum SpokenPunctuationFormatter {
         case spaceAround
         case toggleDoubleQuote
         case toggleSingleQuote
+        case lineBreak
+        case paragraphBreak
+        case tab
+        case singleSpace
     }
 
     private struct PhraseRule {
@@ -101,12 +106,28 @@ private enum SpokenPunctuationFormatter {
             guard case let .text(text) = self, !text.isEmpty else { return false }
             return text.allSatisfy(\.isHorizontalWhitespace)
         }
+
+        var isFormattingAction: Bool {
+            guard case let .punctuation(_, spacing) = self else { return false }
+            switch spacing {
+            case .lineBreak, .paragraphBreak, .tab, .singleSpace:
+                return true
+            default:
+                return false
+            }
+        }
+
+        var startsNewLine: Bool {
+            guard case let .punctuation(_, spacing) = self else { return false }
+            return spacing == .lineBreak || spacing == .paragraphBreak
+        }
     }
 
     static func apply(
         _ text: String,
         prefix: String,
         rules dictionaryRules: [SettingsStore.PunctuationDictionaryRule],
+        actionRules: [SettingsStore.SpokenFormattingActionRule],
         appName: String? = nil,
         bundleID: String? = nil,
         windowTitle: String? = nil
@@ -117,7 +138,7 @@ private enum SpokenPunctuationFormatter {
 
         let context = FormattingContext(appName: appName, bundleID: bundleID, windowTitle: windowTitle)
         let prefixWords = self.words(in: prefix)
-        let phraseRules = self.makeRules(from: dictionaryRules)
+        let phraseRules = self.makeRules(from: dictionaryRules) + self.makeActionRules(from: actionRules)
         guard !prefixWords.isEmpty, !phraseRules.isEmpty else { return text }
 
         let rulesByFirstWord = self.groupedRulesByFirstWord(for: phraseRules)
@@ -146,7 +167,8 @@ private enum SpokenPunctuationFormatter {
             }
         }
 
-        return self.render(self.removingGeneratedCommaNoise(from: output))
+        let withoutGeneratedCommas = self.removingGeneratedCommaNoise(from: output)
+        return self.render(self.removingGeneratedSentencePunctuationBesideActions(from: withoutGeneratedCommas))
     }
 
     private static func groupedRulesByFirstWord(for rules: [PhraseRule]) -> [String: [PhraseRule]] {
@@ -164,6 +186,26 @@ private enum SpokenPunctuationFormatter {
             self.rules(
                 symbol: rule.symbol,
                 spacing: self.spacing(for: rule),
+                phrases: rule.aliases
+            )
+        }
+    }
+
+    private static func makeActionRules(
+        from actionRules: [SettingsStore.SpokenFormattingActionRule]
+    ) -> [PhraseRule] {
+        actionRules.flatMap { rule -> [PhraseRule] in
+            guard rule.isEnabled, !rule.aliases.isEmpty else { return [] }
+            let spacing: Spacing
+            switch rule.action {
+            case .newLine: spacing = .lineBreak
+            case .newParagraph: spacing = .paragraphBreak
+            case .tab: spacing = .tab
+            case .space: spacing = .singleSpace
+            }
+            return self.rules(
+                symbol: rule.action.output,
+                spacing: spacing,
                 phrases: rule.aliases
             )
         }
@@ -778,6 +820,57 @@ private enum SpokenPunctuationFormatter {
         return result
     }
 
+    private static func removingGeneratedSentencePunctuationBesideActions(from parts: [OutputPart]) -> [OutputPart] {
+        var cleaned = parts
+        for index in cleaned.indices where cleaned[index].isFormattingAction {
+            if index > cleaned.startIndex, case let .text(text) = cleaned[index - 1] {
+                cleaned[index - 1] = .text(self.removingTrailingGeneratedPeriod(from: text))
+            }
+            if index + 1 < cleaned.endIndex, case let .text(text) = cleaned[index + 1] {
+                cleaned[index + 1] = .text(
+                    self.removingLeadingGeneratedPunctuation(
+                        from: text,
+                        includesComma: cleaned[index].startsNewLine
+                    )
+                )
+            }
+        }
+        return cleaned
+    }
+
+    private static func removingTrailingGeneratedPeriod(from text: String) -> String {
+        var cleaned = text
+        while cleaned.last?.isHorizontalWhitespace == true {
+            cleaned.removeLast()
+        }
+        guard cleaned.last == "." else { return text }
+        let periodIndex = cleaned.index(before: cleaned.endIndex)
+        guard periodIndex == cleaned.startIndex || cleaned[cleaned.index(before: periodIndex)] != "." else {
+            return text
+        }
+        cleaned.removeLast()
+        return cleaned
+    }
+
+    private static func removingLeadingGeneratedPunctuation(from text: String, includesComma: Bool) -> String {
+        var punctuationIndex = text.startIndex
+        while punctuationIndex < text.endIndex, text[punctuationIndex].isHorizontalWhitespace {
+            punctuationIndex = text.index(after: punctuationIndex)
+        }
+        guard punctuationIndex < text.endIndex else { return text }
+        let punctuation = text[punctuationIndex]
+        guard punctuation == "." || (includesComma && punctuation == ",") else { return text }
+
+        let afterPunctuation = text.index(after: punctuationIndex)
+        guard afterPunctuation == text.endIndex || text[afterPunctuation] != punctuation else { return text }
+
+        var remainderStart = afterPunctuation
+        while remainderStart < text.endIndex, text[remainderStart].isHorizontalWhitespace {
+            remainderStart = text.index(after: remainderStart)
+        }
+        return String(text[remainderStart...])
+    }
+
     private static func shouldRemoveGeneratedComma(at index: Int, in parts: [OutputPart]) -> Bool {
         let previous = self.significantPart(before: index, in: parts)
         let next = self.significantPart(after: index, in: parts)
@@ -884,6 +977,22 @@ private enum SpokenPunctuationFormatter {
                     if self.hasFollowingNonWhitespacePart(in: parts, from: index) {
                         result += " "
                     }
+                case .lineBreak:
+                    self.removeTrailingHorizontalWhitespace(from: &result)
+                    result += "\n"
+                    index = self.indexSkippingWhitespace(after: index, in: parts)
+                case .paragraphBreak:
+                    self.removeTrailingHorizontalWhitespace(from: &result)
+                    result += "\n\n"
+                    index = self.indexSkippingWhitespace(after: index, in: parts)
+                case .tab:
+                    self.removeTrailingHorizontalWhitespace(from: &result)
+                    result += "\t"
+                    index = self.indexSkippingWhitespace(after: index, in: parts)
+                case .singleSpace:
+                    self.removeTrailingHorizontalWhitespace(from: &result)
+                    result += " "
+                    index = self.indexSkippingWhitespace(after: index, in: parts)
                 case .toggleDoubleQuote, .toggleSingleQuote:
                     index += 1
                 }
