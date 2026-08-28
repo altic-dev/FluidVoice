@@ -728,14 +728,14 @@ final class ASRService: ObservableObject {
     private var audioStartAttemptInputName: String?
     private var audioStartAttemptIsBluetooth = false
     private var audioStartAttemptIsInternalMicrophone = false
-    private var usesBuiltInMicrophoneCompatibilityCapture: Bool {
+    private var usesBuiltInMicCompatibilityCapture: Bool {
         #if arch(arm64)
-        BuiltInMicrophoneCompatibilityCapturePolicy.shouldUse(
+        BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: true,
             isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone
         )
         #else
-        BuiltInMicrophoneCompatibilityCapturePolicy.shouldUse(
+        BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: false,
             isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone
         )
@@ -1019,7 +1019,7 @@ final class ASRService: ObservableObject {
                 self.audioStartAttemptInputName = attemptIdentity.name
                 self.audioStartAttemptIsBluetooth = attemptIdentity.isBluetooth
                 self.audioStartAttemptIsInternalMicrophone = attemptIdentity.isInternalMicrophone
-                if self.usesBuiltInMicrophoneCompatibilityCapture {
+                if self.usesBuiltInMicCompatibilityCapture {
                     await self.directAudioLifecycleController.invalidate(
                         reason: "built_in_microphone_av_audio_engine_selected"
                     )
@@ -2900,7 +2900,7 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
 
         // Rebinding AVAudioEngine's private aggregate crashes installTap.
-        if self.usesBuiltInMicrophoneCompatibilityCapture { return true }
+        if self.usesBuiltInMicCompatibilityCapture { return true }
 
         guard let device = self.resolvedInputDeviceForCapture() else {
             DebugLogger.shared.error(
@@ -3328,7 +3328,8 @@ final class ASRService: ObservableObject {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(
-                domain: "ASRService", code: -1,
+                domain: "ASRService",
+                code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "The built-in microphone format is unavailable."]
             )
         }
@@ -3336,7 +3337,11 @@ final class ASRService: ObservableObject {
         self.inputFormat = format
         self.removeEngineTap()
         let pipeline = self.audioCapturePipeline
-        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, time in
+        input.installTap(
+            onBus: 0,
+            bufferSize: 4096,
+            format: nil
+        ) { buffer, time in
             pipeline.handle(buffer: buffer, time: time)
         }
         self.isEngineTapInstalled = true
@@ -4045,10 +4050,10 @@ final class ASRService: ObservableObject {
 
         // Perform CoreAudio queries off the main thread — during a device topology change
         // the HAL may still be settling, and synchronous queries on main can deadlock.
-        let hidesCompatibilityAggregate = self.usesBuiltInMicrophoneCompatibilityCapture
+        let hidesCompatibilityAggregate = self.usesBuiltInMicCompatibilityCapture
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let currentDevices = AudioDevice.listInputDevicesRefreshingLiveness().filter {
-                BuiltInMicrophoneCompatibilityCapturePolicy.shouldIncludeInputDevice(
+                BuiltInMicCompatibilityCapturePolicy.shouldIncludeInputDevice(
                     uid: $0.uid,
                     name: $0.name,
                     isCompatibilityCapture: hidesCompatibilityAggregate
@@ -5304,7 +5309,7 @@ private extension ASRService {
     }
 }
 
-enum BuiltInMicrophoneCompatibilityCapturePolicy {
+enum BuiltInMicCompatibilityCapturePolicy {
     static func shouldUse(isAppleSilicon: Bool, isInternalMicrophone: Bool) -> Bool {
         isAppleSilicon && isInternalMicrophone
     }
