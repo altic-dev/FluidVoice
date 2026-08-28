@@ -2,18 +2,30 @@
 import XCTest
 
 final class BuiltInMicCompatibilityCaptureTests: XCTestCase {
-    func testCompatibilityCaptureIsLimitedToAppleSiliconBuiltInMicrophones() {
+    func testCompatibilityCaptureIsLimitedToTheDefaultAppleSiliconBuiltInMicrophone() {
         XCTAssertTrue(BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: true,
-            isInternalMicrophone: true
+            isInternalMicrophone: true,
+            selectedInputUID: "BuiltInMicrophoneDevice",
+            defaultInputUID: "BuiltInMicrophoneDevice"
         ))
         XCTAssertFalse(BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: true,
-            isInternalMicrophone: false
+            isInternalMicrophone: true,
+            selectedInputUID: "BuiltInMicrophoneDevice",
+            defaultInputUID: "ExternalMicrophoneDevice"
+        ))
+        XCTAssertFalse(BuiltInMicCompatibilityCapturePolicy.shouldUse(
+            isAppleSilicon: true,
+            isInternalMicrophone: false,
+            selectedInputUID: "ExternalMicrophoneDevice",
+            defaultInputUID: "ExternalMicrophoneDevice"
         ))
         XCTAssertFalse(BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: false,
-            isInternalMicrophone: true
+            isInternalMicrophone: true,
+            selectedInputUID: "BuiltInMicrophoneDevice",
+            defaultInputUID: "BuiltInMicrophoneDevice"
         ))
     }
 

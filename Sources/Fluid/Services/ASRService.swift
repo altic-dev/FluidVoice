@@ -725,6 +725,7 @@ final class ASRService: ObservableObject {
 
     private var activeAudioCaptureBackend: AudioCaptureBackend = .none
     private var audioStartAttemptInputUID: String?
+    private var audioStartAttemptDefaultInputUID: String?
     private var audioStartAttemptInputName: String?
     private var audioStartAttemptIsBluetooth = false
     private var audioStartAttemptIsInternalMicrophone = false
@@ -732,12 +733,16 @@ final class ASRService: ObservableObject {
         #if arch(arm64)
         BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: true,
-            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone
+            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone,
+            selectedInputUID: self.audioStartAttemptInputUID,
+            defaultInputUID: self.audioStartAttemptDefaultInputUID
         )
         #else
         BuiltInMicCompatibilityCapturePolicy.shouldUse(
             isAppleSilicon: false,
-            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone
+            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone,
+            selectedInputUID: self.audioStartAttemptInputUID,
+            defaultInputUID: self.audioStartAttemptDefaultInputUID
         )
         #endif
     }
@@ -966,6 +971,7 @@ final class ASRService: ObservableObject {
             )
         }
         self.audioStartAttemptInputUID = nil
+        self.audioStartAttemptDefaultInputUID = nil
         self.audioStartAttemptInputName = nil
         self.audioStartAttemptIsBluetooth = false
         self.audioStartAttemptIsInternalMicrophone = false
@@ -1016,6 +1022,7 @@ final class ASRService: ObservableObject {
                 // Preserve the selected endpoint's identity before the async UID
                 // resolution, where Bluetooth topology churn can make it vanish.
                 self.audioStartAttemptInputUID = attemptIdentity.uid
+                self.audioStartAttemptDefaultInputUID = deviceSnapshot.defaultInputUID
                 self.audioStartAttemptInputName = attemptIdentity.name
                 self.audioStartAttemptIsBluetooth = attemptIdentity.isBluetooth
                 self.audioStartAttemptIsInternalMicrophone = attemptIdentity.isInternalMicrophone
@@ -5310,8 +5317,16 @@ private extension ASRService {
 }
 
 enum BuiltInMicCompatibilityCapturePolicy {
-    static func shouldUse(isAppleSilicon: Bool, isInternalMicrophone: Bool) -> Bool {
-        isAppleSilicon && isInternalMicrophone
+    static func shouldUse(
+        isAppleSilicon: Bool,
+        isInternalMicrophone: Bool,
+        selectedInputUID: String?,
+        defaultInputUID: String?
+    ) -> Bool {
+        isAppleSilicon &&
+            isInternalMicrophone &&
+            selectedInputUID != nil &&
+            selectedInputUID == defaultInputUID
     }
 
     static func shouldIncludeInputDevice(
