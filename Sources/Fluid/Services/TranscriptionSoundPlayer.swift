@@ -9,29 +9,43 @@ final class TranscriptionSoundPlayer {
     private var players: [String: AVAudioPlayer] = [:]
     private var savedSystemVolume: Float?
 
+    /// Ducking-precedence decision captured when the start cue plays, reused by the
+    /// stop cue so both cues of one session behave consistently even if the user
+    /// toggles the ducking setting mid-dictation.
+    private var sessionDuckingPrecedence: Bool?
+
     private init() {}
 
     func playStartSound() {
+        self.sessionDuckingPrecedence = nil
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
+        let duckingPrecedence = self.duckingOwnsSystemVolume(settings)
+        self.sessionDuckingPrecedence = duckingPrecedence
         self.play(
             soundName: soundName,
             desiredVolume: settings.transcriptionSoundVolume,
-            independentVolume: settings.transcriptionSoundIndependentVolume
+            independentVolume: settings.transcriptionSoundIndependentVolume && !duckingPrecedence
         )
     }
 
     func playStopSound() {
+        let sessionDuckingPrecedence = self.sessionDuckingPrecedence
+        self.sessionDuckingPrecedence = nil
         let settings = SettingsStore.shared
         guard settings.enableTranscriptionSounds else { return }
         let selected = settings.transcriptionStartSound
         guard let soundName = selected.stopSoundFileName else { return }
+        // Reuse the decision captured at session start: the ducking revert is keyed to
+        // what MediaPlaybackService actually did when the session began, so a settings
+        // toggle mid-dictation must not re-enable the cue's system-volume override here.
+        let duckingPrecedence = sessionDuckingPrecedence ?? self.duckingOwnsSystemVolume(settings)
         self.play(
             soundName: soundName,
             desiredVolume: settings.transcriptionSoundVolume,
-            independentVolume: settings.transcriptionSoundIndependentVolume
+            independentVolume: settings.transcriptionSoundIndependentVolume && !duckingPrecedence
         )
     }
 
@@ -55,6 +69,21 @@ final class TranscriptionSoundPlayer {
             desiredVolume: volume,
             independentVolume: SettingsStore.shared.transcriptionSoundIndependentVolume
         )
+    }
+
+    /// When "lower volume instead of pausing" (ducking) is enabled, MediaPlaybackService
+    /// owns the system output volume for the duration of a dictation session. The cue's
+    /// independent-volume mode also temporarily sets and *asynchronously* restores the
+    /// system volume, and the two would race: a late cue restore can undo the duck at
+    /// session start, or overwrite the final restore and leave the Mac stuck at the ducked
+    /// level. So for the session start/stop cues, ducking takes precedence — the cue plays
+    /// at its own player volume and leaves the system volume alone. The decision is
+    /// captured at start-cue time (see `sessionDuckingPrecedence`) so a mid-dictation
+    /// settings toggle can't hand the stop cue back the system volume while a duck is
+    /// still active. Settings previews never run during a session, so they always honor
+    /// the independent-volume setting.
+    private func duckingOwnsSystemVolume(_ settings: SettingsStore) -> Bool {
+        settings.pauseMediaDuringTranscription && settings.duckMediaInsteadOfPausing
     }
 
     private func play(

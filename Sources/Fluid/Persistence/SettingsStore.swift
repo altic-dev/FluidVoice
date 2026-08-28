@@ -3317,6 +3317,8 @@ final class SettingsStore: ObservableObject {
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
             automaticDictionaryLearningEnabled: self.automaticDictionaryLearningEnabled,
             pronunciationMatchingEnabled: self.pronunciationMatchingEnabled,
+            duckMediaInsteadOfPausing: self.duckMediaInsteadOfPausing,
+            duckMediaVolumeLevel: self.duckMediaVolumeLevel,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
             selectedDictationPromptID: self.selectedDictationPromptID,
@@ -3493,6 +3495,10 @@ final class SettingsStore: ObservableObject {
         }
         if let pronunciationMatchingEnabled = payload.pronunciationMatchingEnabled {
             self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
+        }
+        self.duckMediaInsteadOfPausing = payload.duckMediaInsteadOfPausing ?? false
+        if let duckLevel = payload.duckMediaVolumeLevel {
+            self.duckMediaVolumeLevel = duckLevel
         }
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
@@ -4470,6 +4476,29 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.pauseMediaDuringTranscription)
+        }
+    }
+
+    /// When enabled (and `pauseMediaDuringTranscription` is on), lowers the system
+    /// output volume during transcription instead of fully pausing playback.
+    var duckMediaInsteadOfPausing: Bool {
+        get { self.defaults.object(forKey: Keys.duckMediaInsteadOfPausing) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.duckMediaInsteadOfPausing)
+        }
+    }
+
+    /// Target output volume while ducking, expressed as a fraction (0.05–1.0) of
+    /// the volume at the moment transcription starts. Defaults to 0.2 (20%).
+    var duckMediaVolumeLevel: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.duckMediaVolumeLevel) as? Double ?? 0.2
+            return min(1.0, max(0.05, stored))
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(min(1.0, max(0.05, newValue)), forKey: Keys.duckMediaVolumeLevel)
         }
     }
 
@@ -5458,6 +5487,8 @@ private extension SettingsStore {
 
         /// Media Playback Control
         static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"
+        static let duckMediaInsteadOfPausing = "DuckMediaInsteadOfPausing"
+        static let duckMediaVolumeLevel = "DuckMediaVolumeLevel"
 
         /// Custom Dictation Prompt
         static let customDictationPrompt = "CustomDictationPrompt"
