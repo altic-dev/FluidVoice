@@ -10,6 +10,9 @@ struct BackupFileVersion: Codable, Equatable {
 struct SettingsBackupPayload: Codable, Equatable {
     let selectedProviderID: String
     let selectedModelByProvider: [String: String]
+    // Optional so backups created before custom model persistence still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let customModelsByProvider: [String: [String]]?
     let savedProviders: [SettingsStore.SavedProvider]
     let modelReasoningConfigs: [String: SettingsStore.ModelReasoningConfig]
     let privateAIPrefixKVCacheEnabled: Bool?

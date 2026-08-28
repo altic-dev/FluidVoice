@@ -1434,6 +1434,18 @@ extension AIEnhancementSettingsView {
                         self.activateProvider(item.id)
                         Task { await self.viewModel.fetchModelsForCurrentProvider() }
                     }
+
+                    self.companionIconButton(systemName: "plus", help: "Add custom model") {
+                        self.activateProvider(item.id)
+                        self.viewModel.newModelName = ""
+                        self.viewModel.showingAddModel = true
+                    }
+
+                    self.deleteCustomModelButton(for: item.id)
+                }
+
+                if self.viewModel.showingAddModel && self.viewModel.selectedProviderID == item.id {
+                    self.addModelSection
                 }
 
                 HStack(spacing: 8) {
@@ -1713,6 +1725,16 @@ extension AIEnhancementSettingsView {
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
+                        self.companionIconButton(systemName: "plus", help: "Add custom model") {
+                            self.activateProvider(item.id)
+                            self.viewModel.newModelName = ""
+                            self.viewModel.showingAddModel = true
+                        }
+                        .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+
+                        self.deleteCustomModelButton(for: item.id)
+                            .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+
                         self.reasoningButton(for: item.id)
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
@@ -1746,6 +1768,14 @@ extension AIEnhancementSettingsView {
                     showsLoadingIndicator: isFluidLoading || isFluidTesting
                 )
                 .padding(.top, 8)
+            }
+
+            if !isPrivateAIProvider,
+               self.viewModel.showingAddModel,
+               self.viewModel.selectedProviderID == item.id
+            {
+                self.addModelSection
+                    .padding(.top, 8)
             }
 
             if isPrivateAIProvider, isEditing {
@@ -1942,6 +1972,16 @@ extension AIEnhancementSettingsView {
                 self.viewModel.selectModel(newValue, for: providerID)
             }
         )
+    }
+
+    @ViewBuilder
+    private func deleteCustomModelButton(for providerID: String) -> some View {
+        if self.viewModel.canDeleteSelectedModel(for: providerID) {
+            self.companionIconButton(systemName: "trash", help: "Delete custom model") {
+                self.activateProvider(providerID)
+                self.viewModel.deleteSelectedModel(for: providerID)
+            }
+        }
     }
 
     private func reasoningButton(for providerID: String) -> some View {
@@ -2393,7 +2433,7 @@ extension AIEnhancementSettingsView {
                 controlHeight: AISettingsLayout.controlHeight
             )
 
-            if !ModelRepository.shared.isBuiltIn(self.viewModel.selectedProviderID) {
+            if self.viewModel.canDeleteSelectedModel() {
                 Button(action: { self.viewModel.deleteSelectedModel() }) {
                     HStack(spacing: 4) { Image(systemName: "trash"); Text("Delete") }.font(.caption)
                 }
