@@ -725,27 +725,9 @@ final class ASRService: ObservableObject {
 
     private var activeAudioCaptureBackend: AudioCaptureBackend = .none
     private var audioStartAttemptInputUID: String?
-    private var audioStartAttemptDefaultInputUID: String?
     private var audioStartAttemptInputName: String?
     private var audioStartAttemptIsBluetooth = false
     private var audioStartAttemptIsInternalMicrophone = false
-    private var usesBuiltInMicCompatibilityCapture: Bool {
-        #if arch(arm64)
-        BuiltInMicCompatibilityCapturePolicy.shouldUse(
-            isAppleSilicon: true,
-            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone,
-            selectedInputUID: self.audioStartAttemptInputUID,
-            defaultInputUID: self.audioStartAttemptDefaultInputUID
-        )
-        #else
-        BuiltInMicCompatibilityCapturePolicy.shouldUse(
-            isAppleSilicon: false,
-            isInternalMicrophone: self.audioStartAttemptIsInternalMicrophone,
-            selectedInputUID: self.audioStartAttemptInputUID,
-            defaultInputUID: self.audioStartAttemptDefaultInputUID
-        )
-        #endif
-    }
     private var deferredBluetoothStartupRouteRecovery =
         AudioCaptureIdlePolicy.DeferredBluetoothRouteRecovery()
     private var silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
@@ -971,7 +953,6 @@ final class ASRService: ObservableObject {
             )
         }
         self.audioStartAttemptInputUID = nil
-        self.audioStartAttemptDefaultInputUID = nil
         self.audioStartAttemptInputName = nil
         self.audioStartAttemptIsBluetooth = false
         self.audioStartAttemptIsInternalMicrophone = false
@@ -1022,17 +1003,9 @@ final class ASRService: ObservableObject {
                 // Preserve the selected endpoint's identity before the async UID
                 // resolution, where Bluetooth topology churn can make it vanish.
                 self.audioStartAttemptInputUID = attemptIdentity.uid
-                self.audioStartAttemptDefaultInputUID = deviceSnapshot.defaultInputUID
                 self.audioStartAttemptInputName = attemptIdentity.name
                 self.audioStartAttemptIsBluetooth = attemptIdentity.isBluetooth
                 self.audioStartAttemptIsInternalMicrophone = attemptIdentity.isInternalMicrophone
-                if self.usesBuiltInMicCompatibilityCapture {
-                    await self.directAudioLifecycleController.invalidate(
-                        reason: "built_in_microphone_av_audio_engine_selected"
-                    )
-                    try await self.startBuiltInMicrophoneCompatibilityCapture()
-                    return
-                }
                 let device = try await self.directAudioLifecycleController.resolveDevice(
                     selection: selection,
                     reason: "recording_start"
@@ -1083,15 +1056,6 @@ final class ASRService: ObservableObject {
         try self.configureSession()
         try await self.startEngine()
         try self.setupEngineTap()
-        self.activeAudioCaptureBackend = .audioEngine
-    }
-
-    private func startBuiltInMicrophoneCompatibilityCapture() async throws {
-        await self.audioEngineRetirementDrain.waitForScheduledReleases()
-        self.benchmarkLog("audio_backend kind=av_audio_engine reason=built_in_microphone_corespeech_mute_compatibility")
-        try self.configureSession()
-        try await self.startEngine()
-        try self.setupBuiltInMicrophoneCompatibilityTap()
         self.activeAudioCaptureBackend = .audioEngine
     }
 
@@ -2906,9 +2870,6 @@ final class ASRService: ObservableObject {
     private func bindPreferredInputDeviceIfNeeded() -> Bool {
         DebugLogger.shared.debug("bindPreferredInputDeviceIfNeeded() - Starting input device binding", source: "ASRService")
 
-        // Rebinding AVAudioEngine's private aggregate crashes installTap.
-        if self.usesBuiltInMicCompatibilityCapture { return true }
-
         guard let device = self.resolvedInputDeviceForCapture() else {
             DebugLogger.shared.error(
                 "No input device available for manual microphone capture.",
@@ -3328,30 +3289,6 @@ final class ASRService: ObservableObject {
         }
         self.isEngineTapInstalled = true
         DebugLogger.shared.debug("✅ setupEngineTap() - COMPLETED", source: "ASRService")
-    }
-
-    private func setupBuiltInMicrophoneCompatibilityTap() throws {
-        let input = self.engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw NSError(
-                domain: "ASRService",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "The built-in microphone format is unavailable."]
-            )
-        }
-
-        self.inputFormat = format
-        self.removeEngineTap()
-        let pipeline = self.audioCapturePipeline
-        input.installTap(
-            onBus: 0,
-            bufferSize: 4096,
-            format: nil
-        ) { buffer, time in
-            pipeline.handle(buffer: buffer, time: time)
-        }
-        self.isEngineTapInstalled = true
     }
 
     private func scheduleAudioRouteRecovery(
@@ -4057,15 +3994,8 @@ final class ASRService: ObservableObject {
 
         // Perform CoreAudio queries off the main thread — during a device topology change
         // the HAL may still be settling, and synchronous queries on main can deadlock.
-        let hidesCompatibilityAggregate = self.usesBuiltInMicCompatibilityCapture
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let currentDevices = AudioDevice.listInputDevicesRefreshingLiveness().filter {
-                BuiltInMicCompatibilityCapturePolicy.shouldIncludeInputDevice(
-                    uid: $0.uid,
-                    name: $0.name,
-                    isCompatibilityCapture: hidesCompatibilityAggregate
-                )
-            }
+            let currentDevices = AudioDevice.listInputDevicesRefreshingLiveness()
             let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
 
             DispatchQueue.main.async { [weak self] in
@@ -5313,30 +5243,6 @@ private extension ASRService {
     func stopStreamingTimer() {
         self.streamingTask?.cancel()
         self.streamingTask = nil
-    }
-}
-
-enum BuiltInMicCompatibilityCapturePolicy {
-    static func shouldUse(
-        isAppleSilicon: Bool,
-        isInternalMicrophone: Bool,
-        selectedInputUID: String?,
-        defaultInputUID: String?
-    ) -> Bool {
-        isAppleSilicon &&
-            isInternalMicrophone &&
-            selectedInputUID != nil &&
-            selectedInputUID == defaultInputUID
-    }
-
-    static func shouldIncludeInputDevice(
-        uid: String,
-        name: String,
-        isCompatibilityCapture: Bool
-    ) -> Bool {
-        isCompatibilityCapture == false ||
-            (uid.hasPrefix("CADefaultDeviceAggregate-") == false &&
-                name.hasPrefix("CADefaultDeviceAggregate-") == false)
     }
 }
 
