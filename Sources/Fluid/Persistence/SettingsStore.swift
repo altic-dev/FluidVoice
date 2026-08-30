@@ -18,6 +18,7 @@ final class SettingsStore: ObservableObject {
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
+    static let defaultVisualizerNoiseThreshold = 0.12
     static let privateAIContextTokenLimitRange: ClosedRange<Int> = 2048...8192
     static let privateAIContextTokenLimitStep = 512
     static let defaultPrivateAIContextTokenLimit = 4096
@@ -2052,7 +2053,7 @@ final class SettingsStore: ObservableObject {
     var visualizerNoiseThreshold: Double {
         get {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
-            return value == 0.0 ? 0.4 : value // Default to 0.4 if not set
+            return value == 0.0 ? Self.defaultVisualizerNoiseThreshold : value
         }
         set {
             // Clamp between 0.0 and 0.95 to avoid division by zero issues in visualizers
@@ -2893,6 +2894,28 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var commandModeRouteToCodex: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.commandModeRouteToCodex)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.commandModeRouteToCodex)
+        }
+    }
+
+    var commandModeCodexHandoffStyle: String {
+        get {
+            let value = self.defaults.string(forKey: Keys.commandModeCodexHandoffStyle) ?? "notch"
+            return ["notch", "app"].contains(value) ? value : "notch"
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.commandModeCodexHandoffStyle)
+        }
+    }
+
     // MARK: - Rewrite Mode Settings
 
     var rewriteModeHotkeyShortcut: HotkeyShortcut {
@@ -3026,7 +3049,7 @@ final class SettingsStore: ObservableObject {
     var rewriteModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
-            return value as? Bool ?? true
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()
@@ -5145,11 +5168,8 @@ final class SettingsStore: ObservableObject {
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                    .appendingPathComponent("WhisperModels")
-                let modelURL = directory?.appendingPathComponent(whisperFile)
+                let modelURL = WhisperModelStorage.persistentDirectory.appendingPathComponent(whisperFile)
                 guard
-                    let modelURL,
                     let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL.path),
                     let size = attributes[.size] as? NSNumber,
                     size.int64Value > 0
@@ -5383,6 +5403,8 @@ private extension SettingsStore {
         static let pasteLastTranscriptionShortcutEnabled = "PasteLastTranscriptionShortcutEnabled"
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
         static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
+        static let commandModeRouteToCodex = "CommandModeRouteToCodex"
+        static let commandModeCodexHandoffStyle = "CommandModeCodexHandoffStyle"
 
         // Prompt Mode Keys (Transcribe with Prompt)
         static let promptModeHotkeyShortcut = "PromptModeHotkeyShortcut"

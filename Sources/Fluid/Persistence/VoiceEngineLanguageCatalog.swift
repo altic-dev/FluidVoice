@@ -141,6 +141,13 @@ enum VoiceEngineLanguageCatalog {
     private static func routeCandidates(for language: VoiceEngineLanguage) -> [VoiceEngineLanguageRoute] {
         var routes: [VoiceEngineLanguageRoute] = []
 
+        if language.id == "en-hi-te" {
+            return [
+                Self.route(language, .whisperLargeTurbo, .whisper(languageCode: "auto")),
+                Self.route(language, .whisperSmall, .whisper(languageCode: "auto")),
+            ]
+        }
+
         if language.id == "en" {
             routes.append(Self.route(language, .parakeetTDTv2, .automatic))
             routes.append(Self.route(language, .parakeetRealtime, .automatic))
@@ -210,6 +217,7 @@ enum VoiceEngineLanguageCatalog {
     }
 
     private static let popularLanguageIDs: Set<String> = [
+        "en-hi-te",
         "en",
         "es",
         "fr",
@@ -382,6 +390,11 @@ enum VoiceEngineLanguageCatalog {
     ]
 
     private static let languageDefinitions: [VoiceEngineLanguage] = [
+        Self.language(
+            "en-hi-te",
+            "English + Hindi + Telugu",
+            aliases: ["Mixed", "Multilingual", "Code switching", "Hinglish", "Tenglish"]
+        ),
         Self.language("af", "Afrikaans"),
         Self.language("am", "Amharic"),
         Self.language("ar", "Arabic", aliases: ["Arab"]),

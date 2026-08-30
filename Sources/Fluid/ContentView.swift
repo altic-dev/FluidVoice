@@ -3392,9 +3392,10 @@ struct ContentView: View {
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
-            self.asr.typeTextToActiveField(
-                self.rewriteModeService.rewrittenText,
-                preferredTargetPID: typingTarget.pid
+            self.rewriteModeService.acceptRewrite(
+                preferredTargetPID: typingTarget.pid,
+                hideApp: false,
+                recordAnalytics: false
             )
             // Clear the rewrite service state for next use
             self.rewriteModeService.clearState()

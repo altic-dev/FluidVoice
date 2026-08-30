@@ -3301,6 +3301,8 @@ struct BottomWaveformView: View {
     // Initialize with max possible bar count (11 for large) to prevent index-out-of-range before onAppear
     @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 11)
     @State private var noiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
+    @State private var recentLevels: [CGFloat] = Array(repeating: 0, count: 6)
+    @State private var lastLevelUpdateTime: TimeInterval = 0
 
     private var barCount: Int {
         self.visibleBarCount ?? self.layout.barCount
@@ -3391,8 +3393,9 @@ struct BottomWaveformView: View {
                 self.updateBars(level: 0)
             }
         }
-        .onChange(of: self.layout.barCount) { _, newCount in
+        .onChange(of: self.barCount) { _, newCount in
             self.barHeights = Array(repeating: self.minHeight, count: newCount)
+            self.resetRecentLevels()
         }
         .onAppear {
             // Ensure bar count matches current layout
@@ -3435,8 +3438,12 @@ struct BottomWaveformView: View {
     }
 
     private func displayHeight(at index: Int) -> CGFloat {
-        if self.isReleaseAnimationActive || self.contentState.isProcessing {
+        if self.isReleaseAnimationActive {
             return self.minHeight
+        }
+        if self.contentState.isProcessing {
+            let peakHeight = self.visualizerPeakHeight(at: index)
+            return self.minHeight + (peakHeight - self.minHeight) * 0.55
         }
         return self.safeBarHeight(at: index)
     }
@@ -3459,6 +3466,7 @@ struct BottomWaveformView: View {
                 self.barHeights[i] = self.minHeight
             }
         }
+        self.resetRecentLevels()
     }
 
     private func updateBars(level: CGFloat) {
@@ -3471,13 +3479,38 @@ struct BottomWaveformView: View {
         // Lower exponent => normal speech pushes the bars higher (taller "waves" while talking).
         let amplifiedLevel = pow(adjustedLevel, 0.55)
 
-        withAnimation(.easeOut(duration: 0.08)) {
+        // Keep a short time-domain history so the bars visibly travel instead of
+        // expanding as one static arch. Allow sudden speech through immediately,
+        // while limiting steady-state redraws to roughly 30 FPS.
+        let now = ProcessInfo.processInfo.systemUptime
+        let previousLevel = self.recentLevels.first ?? 0
+        let isFastAttack = amplifiedLevel > previousLevel + 0.08
+        guard isFastAttack || now - self.lastLevelUpdateTime >= 1.0 / 30.0 else { return }
+        self.lastLevelUpdateTime = now
+
+        self.recentLevels.insert(amplifiedLevel, at: 0)
+        let requiredHistoryCount = max((self.barCount + 1) / 2, 1)
+        if self.recentLevels.count > requiredHistoryCount {
+            self.recentLevels.removeLast(self.recentLevels.count - requiredHistoryCount)
+        } else if self.recentLevels.count < requiredHistoryCount {
+            self.recentLevels.append(contentsOf: repeatElement(0, count: requiredHistoryCount - self.recentLevels.count))
+        }
+
+        withAnimation(.easeOut(duration: isFastAttack ? 0.035 : 0.085)) {
             for i in 0..<self.barCount {
                 let peakHeight = self.visualizerPeakHeight(at: i)
-                let variation = 0.92 + 0.08 * cos(CGFloat(i) * 1.45)
-                let nextHeight = self.minHeight + (peakHeight - self.minHeight) * amplifiedLevel * variation
+                let center = CGFloat(self.barCount - 1) / 2
+                let historyIndex = min(Int(abs(CGFloat(i) - center)), self.recentLevels.count - 1)
+                let historicalLevel = self.recentLevels[historyIndex]
+                let variation = 0.94 + 0.06 * cos(CGFloat(i) * 1.45)
+                let nextHeight = self.minHeight + (peakHeight - self.minHeight) * historicalLevel * variation
                 self.barHeights[i] = min(self.maxHeight, max(self.minHeight, nextHeight))
             }
         }
+    }
+
+    private func resetRecentLevels() {
+        self.recentLevels = Array(repeating: 0, count: max((self.barCount + 1) / 2, 1))
+        self.lastLevelUpdateTime = 0
     }
 }

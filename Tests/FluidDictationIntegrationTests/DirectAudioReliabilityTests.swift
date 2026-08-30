@@ -4,6 +4,77 @@ import Foundation
 import XCTest
 
 final class DirectAudioReliabilityTests: XCTestCase {
+    func testHardenedRuntimeEntitlementsAllowMicrophoneInput() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(contentsOf: repositoryRoot.appendingPathComponent("Fluid.entitlements"))
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        )
+
+        XCTAssertEqual(plist["com.apple.security.device.audio-input"] as? Bool, true)
+    }
+
+    func testOutputKeepAliveTargetsTheBuiltInSpeakerForAppleSiliconInternalInput() {
+        XCTAssertEqual(
+            BuiltInOutputKeepAlivePolicy.outputDeviceID(
+                inputDeviceID: 100,
+                devices: [Self.internalMicrophone, Self.builtInSpeaker(id: 200)],
+                isAppleSilicon: true,
+                isOutputAlive: { _ in true }
+            ),
+            200
+        )
+    }
+
+    func testOutputKeepAliveDoesNotAffectOtherInputsOrIntelMacs() {
+        let devices = [
+            Self.internalMicrophone,
+            Self.externalMicrophone,
+            Self.builtInSpeaker(id: 200),
+        ]
+
+        XCTAssertNil(BuiltInOutputKeepAlivePolicy.outputDeviceID(
+            inputDeviceID: 100,
+            devices: devices,
+            isAppleSilicon: false,
+            isOutputAlive: { _ in true }
+        ))
+        XCTAssertNil(BuiltInOutputKeepAlivePolicy.outputDeviceID(
+            inputDeviceID: 101,
+            devices: devices,
+            isAppleSilicon: true,
+            isOutputAlive: { _ in true }
+        ))
+    }
+
+    func testOutputKeepAliveRejectsAnUnavailableBuiltInSpeaker() {
+        XCTAssertNil(BuiltInOutputKeepAlivePolicy.outputDeviceID(
+            inputDeviceID: 100,
+            devices: [Self.internalMicrophone, Self.builtInSpeaker(id: 200)],
+            isAppleSilicon: true,
+            isOutputAlive: { _ in false }
+        ))
+    }
+
+    func testOutputKeepAliveUsesTheCurrentBuiltInSpeaker() {
+        XCTAssertEqual(
+            BuiltInOutputKeepAlivePolicy.outputDeviceID(
+                inputDeviceID: 100,
+                devices: [
+                    Self.internalMicrophone,
+                    Self.builtInSpeaker(id: 200),
+                    Self.builtInSpeaker(id: 201),
+                ],
+                isAppleSilicon: true,
+                isOutputAlive: { $0 == 201 }
+            ),
+            201
+        )
+    }
+
     func testReadinessGatePreservesFirstPCMThatArrivesBeforeWait() async {
         let gate = AudioCaptureReadinessGate()
         gate.arm(sessionID: 41, attemptID: 1)
@@ -421,6 +492,35 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertEqual(factory.creationCount, 2)
         XCTAssertEqual(recorder.events, ["quarantine", "make:24000"])
         await controller.shutdown(reason: "test_complete")
+    }
+
+    private static let internalMicrophone = AudioDevice.Device(
+        id: 100,
+        uid: "BuiltInMicrophoneDevice",
+        name: "MacBook Pro Microphone",
+        hasInput: true,
+        hasOutput: false,
+        transportType: kAudioDeviceTransportTypeBuiltIn
+    )
+
+    private static let externalMicrophone = AudioDevice.Device(
+        id: 101,
+        uid: "ExternalMicrophoneDevice",
+        name: "USB Microphone",
+        hasInput: true,
+        hasOutput: false,
+        transportType: kAudioDeviceTransportTypeUSB
+    )
+
+    private static func builtInSpeaker(id: AudioObjectID) -> AudioDevice.Device {
+        AudioDevice.Device(
+            id: id,
+            uid: "BuiltInSpeakerDevice",
+            name: "MacBook Pro Speakers",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBuiltIn
+        )
     }
 }
 

@@ -18,6 +18,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     let processingTime: TimeInterval
     let confidence: Float
     let text: String
+    let subtitleCues: [SubtitleCue]
     /// Speaker-attributed segments when diarization was enabled; empty otherwise.
     let speakerSegments: [SpeakerTranscriptSegment]
     let speakerLabelingNotice: String?
@@ -31,6 +32,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         processingTime: TimeInterval,
         confidence: Float,
         text: String,
+        subtitleCues: [SubtitleCue] = [],
         speakerSegments: [SpeakerTranscriptSegment] = [],
         speakerLabelingNotice: String? = nil,
         speakerLabelingGaps: [SpeakerTranscriptGap] = []
@@ -42,6 +44,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = processingTime
         self.confidence = confidence
         self.text = text
+        self.subtitleCues = subtitleCues
         self.speakerSegments = speakerSegments
         self.speakerLabelingNotice = speakerLabelingNotice
         self.speakerLabelingGaps = speakerLabelingGaps
@@ -55,13 +58,14 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = result.processingTime
         self.confidence = result.confidence
         self.text = result.text
+        self.subtitleCues = result.subtitleCues
         self.speakerSegments = result.speakerSegments
         self.speakerLabelingNotice = result.speakerLabelingNotice
         self.speakerLabelingGaps = result.speakerLabelingGaps
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, fileName, duration, processingTime, confidence, text, speakerSegments
+        case id, timestamp, fileName, duration, processingTime, confidence, text, subtitleCues, speakerSegments
         case speakerLabelingNotice, speakerLabelingGaps
     }
 
@@ -74,6 +78,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = try c.decode(TimeInterval.self, forKey: .processingTime)
         self.confidence = try c.decode(Float.self, forKey: .confidence)
         self.text = try c.decode(String.self, forKey: .text)
+        self.subtitleCues = try c.decodeIfPresent([SubtitleCue].self, forKey: .subtitleCues) ?? []
         // Older history entries predate speaker labels — tolerate a missing key.
         self.speakerSegments = try c.decodeIfPresent([SpeakerTranscriptSegment].self, forKey: .speakerSegments) ?? []
         self.speakerLabelingNotice = try c.decodeIfPresent(String.self, forKey: .speakerLabelingNotice)
@@ -89,6 +94,9 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         try c.encode(self.processingTime, forKey: .processingTime)
         try c.encode(self.confidence, forKey: .confidence)
         try c.encode(self.text, forKey: .text)
+        if !self.subtitleCues.isEmpty {
+            try c.encode(self.subtitleCues, forKey: .subtitleCues)
+        }
         if !self.speakerSegments.isEmpty {
             try c.encode(self.speakerSegments, forKey: .speakerSegments)
         }
@@ -132,6 +140,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
             processingTime: self.processingTime,
             fileName: self.fileName,
             timestamp: self.timestamp,
+            subtitleCues: self.subtitleCues,
             speakerSegments: self.speakerSegments,
             speakerLabelingNotice: self.speakerLabelingNotice,
             speakerLabelingGaps: self.speakerLabelingGaps

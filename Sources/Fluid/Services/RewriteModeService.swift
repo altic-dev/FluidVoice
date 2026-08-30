@@ -13,6 +13,7 @@ final class RewriteModeService: ObservableObject {
     @Published var conversationHistory: [Message] = []
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
+    private var selectionTargetPID: pid_t?
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
@@ -48,12 +49,15 @@ final class RewriteModeService: ObservableObject {
     }
 
     func captureSelectedText() -> Bool {
+        let targetPID = TypingService.captureSystemFocusedPID()
+            ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         if let text = textSelectionService.getSelectedText(), !text.isEmpty {
             self.originalText = text
             self.selectedContextText = text
             self.rewrittenText = ""
             self.conversationHistory = []
             self.isWriteMode = false
+            self.selectionTargetPID = targetPID
             if self.shouldTracePromptProcessing {
                 self.logPromptTrace("Captured selected context", value: text)
             }
@@ -69,6 +73,8 @@ final class RewriteModeService: ObservableObject {
         self.rewrittenText = ""
         self.conversationHistory = []
         self.isWriteMode = true
+        self.selectionTargetPID = TypingService.captureSystemFocusedPID()
+            ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         if self.shouldTracePromptProcessing {
             self.logPromptTrace("Starting edit with no selected context", value: "<empty>")
         }
@@ -146,10 +152,20 @@ final class RewriteModeService: ObservableObject {
         }
     }
 
-    func acceptRewrite() {
+    func acceptRewrite(
+        preferredTargetPID: pid_t? = nil,
+        hideApp: Bool = true,
+        recordAnalytics _: Bool = true
+    ) {
         guard !self.rewrittenText.isEmpty else { return }
-        NSApp.hide(nil) // Restore focus to the previous app
-        self.typingService.typeTextInstantly(self.rewrittenText)
+        if hideApp {
+            NSApp.hide(nil) // Restore focus to the previous app
+        }
+        self.typingService.typeTextReliably(
+            self.rewrittenText,
+            preferredTargetPID: preferredTargetPID ?? self.selectionTargetPID
+        )
+
     }
 
     func clearState() {
@@ -161,6 +177,7 @@ final class RewriteModeService: ObservableObject {
         self.isWriteMode = false
         self.thinkingBuffer = []
         self.promptAppBundleID = nil
+        self.selectionTargetPID = nil
     }
 
     func setPromptAppBundleID(_ bundleID: String?) {

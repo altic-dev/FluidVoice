@@ -1,6 +1,56 @@
 import Foundation
 import TranscribeCpp
 
+struct WhisperTimedSegment: Sendable {
+    let startSeconds: Double
+    let endSeconds: Double
+    let text: String
+}
+
+enum WhisperModelStorage {
+    static var persistentDirectory: URL {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            preconditionFailure("Could not find Application Support directory")
+        }
+        return base
+            .appendingPathComponent("FluidVoice", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent("Whisper", isDirectory: true)
+    }
+
+    static var legacyCacheDirectory: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("WhisperModels", isDirectory: true)
+    }
+
+    static func migrateLegacyCacheIfNeeded(fileManager: FileManager = .default) throws {
+        guard let legacyDirectory = self.legacyCacheDirectory,
+              fileManager.fileExists(atPath: legacyDirectory.path)
+        else {
+            return
+        }
+
+        let destination = self.persistentDirectory
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        for source in try fileManager.contentsOfDirectory(
+            at: legacyDirectory,
+            includingPropertiesForKeys: nil
+        ) {
+            let target = destination.appendingPathComponent(source.lastPathComponent)
+            guard !fileManager.fileExists(atPath: target.path) else { continue }
+            try fileManager.moveItem(at: source, to: target)
+            DebugLogger.shared.info(
+                "WhisperProvider: Migrated \(source.lastPathComponent) to persistent model storage",
+                source: "WhisperProvider"
+            )
+        }
+
+        if (try? fileManager.contentsOfDirectory(atPath: legacyDirectory.path).isEmpty) == true {
+            try? fileManager.removeItem(at: legacyDirectory)
+        }
+    }
+}
+
 /// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
 final class WhisperProvider: TranscriptionProvider {
     let name = "Whisper (Universal)"
@@ -75,10 +125,7 @@ final class WhisperProvider: TranscriptionProvider {
         if let overriddenModelDirectory {
             return overriddenModelDirectory
         }
-        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            preconditionFailure("Could not find caches directory")
-        }
-        return cacheDir.appendingPathComponent("WhisperModels")
+        return WhisperModelStorage.persistentDirectory
     }
 
     private var modelDownloadURL: URL? {
@@ -174,6 +221,9 @@ final class WhisperProvider: TranscriptionProvider {
         try Self.backendInitialization.get()
         try self.validateBackendAvailability(for: targetModel)
 
+        if self.overriddenModelDirectory == nil {
+            try WhisperModelStorage.migrateLegacyCacheIfNeeded()
+        }
         try FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
 
         if FileManager.default.fileExists(atPath: self.modelURL.path),
@@ -322,8 +372,67 @@ final class WhisperProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
+    func transcribeTimed(
+        _ samples: [Float],
+        chunkDurationSeconds: Double = 90,
+        progressHandler: (@MainActor @Sendable ([WhisperTimedSegment], Double) -> Void)? = nil
+    ) async throws -> [WhisperTimedSegment] {
+        let minSamples = 16_000
+        guard samples.count >= minSamples else {
+            throw NSError(
+                domain: "WhisperProvider",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Audio too short for Whisper transcription"]
+            )
+        }
+
+        guard let session = self.activeSession() else {
+            throw NSError(
+                domain: "WhisperProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Whisper model not loaded"]
+            )
+        }
+
+        let samplesPerChunk = max(minSamples, Int(chunkDurationSeconds * 16_000))
+        var allSegments: [WhisperTimedSegment] = []
+        for startSample in stride(from: 0, to: samples.count, by: samplesPerChunk) {
+            let endSample = min(samples.count, startSample + samplesPerChunk)
+            var chunk = Array(samples[startSample ..< endSample])
+            if chunk.count < minSamples {
+                chunk.append(contentsOf: repeatElement(0, count: minSamples - chunk.count))
+            }
+            let languageCode = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+            let transcript = try await session.run(chunk, options: Self.runOptions(languageCode: languageCode))
+            let offset = Double(startSample) / 16_000
+            let chunkSegments = transcript.segments.compactMap { segment -> WhisperTimedSegment? in
+                let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty, segment.t1Ms > segment.t0Ms else { return nil }
+                return WhisperTimedSegment(
+                    startSeconds: offset + (Double(segment.t0Ms) / 1000),
+                    endSeconds: min(Double(samples.count) / 16_000, offset + (Double(segment.t1Ms) / 1000)),
+                    text: text
+                )
+            }
+            allSegments.append(contentsOf: chunkSegments)
+            await progressHandler?(chunkSegments, Double(endSample) / 16_000)
+        }
+        return allSegments
+    }
+
     static func runOptions(languageCode: String?) -> RunOptions {
-        RunOptions(timestamps: .segment, language: languageCode)
+        RunOptions(
+            timestamps: .segment,
+            language: languageCode,
+            family: .whisper(WhisperRunOptions(
+                conditionOnPrevTokens: false,
+                temperature: 0,
+                temperatureInc: 0.2,
+                compressionRatioThold: 2.4,
+                logprobThold: -1,
+                noSpeechThold: 0.6
+            ))
+        )
     }
 
     func modelsExistOnDisk() -> Bool {

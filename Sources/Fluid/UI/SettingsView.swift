@@ -1270,7 +1270,7 @@ struct SettingsView: View {
                                 Spacer()
 
                                 Button("Reset") {
-                                    self.visualizerNoiseThreshold = 0.4
+                                    self.visualizerNoiseThreshold = SettingsStore.defaultVisualizerNoiseThreshold
                                     SettingsStore.shared.visualizerNoiseThreshold = self.visualizerNoiseThreshold
                                 }
                                 .buttonStyle(.bordered)

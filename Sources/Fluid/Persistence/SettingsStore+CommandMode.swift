@@ -50,6 +50,10 @@ extension SettingsStore {
     }
 
     var commandModeReadinessIssue: String? {
+        if self.commandModeRouteToCodex {
+            return nil
+        }
+
         let sourceProviderID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
         if self.isPrivateAIProviderID(sourceProviderID) {
             return "\(PrivateAIProviderFeature.displayName) for Command Mode is coming soon. Choose a verified chat provider or turn Sync off."

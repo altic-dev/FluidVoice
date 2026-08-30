@@ -30,6 +30,7 @@ final class DictationE2ETests: XCTestCase {
     private let commandModeLinkedToGlobalKey = "CommandModeLinkedToGlobal"
     private let commandModeSelectedProviderIDKey = "CommandModeSelectedProviderID"
     private let commandModeSelectedModelKey = "CommandModeSelectedModel"
+    private let visualizerNoiseThresholdKey = "VisualizerNoiseThreshold"
     private let rewriteModeSelectedProviderIDKey = "RewriteModeSelectedProviderID"
     private let rewriteModeSelectedModelKey = "RewriteModeSelectedModel"
     private var privateAISelectedModelIDKey: String {
@@ -1218,6 +1219,22 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertEqual(state.customWords.map(\.text), ["FluidVoice", "Barath"])
         XCTAssertEqual(state.customWords.map(\.weight), [10.0, 10.0])
         XCTAssertEqual(state.customWords.map(\.aliases), [[], []])
+    }
+
+    func testVisualizerNoiseThreshold_defaultIsSensitiveEnoughForQuietSpeechFeedback() {
+        self.withRestoredDefaults(keys: [self.visualizerNoiseThresholdKey]) {
+            let defaults = UserDefaults.standard
+            defaults.removeObject(forKey: self.visualizerNoiseThresholdKey)
+
+            let threshold = SettingsStore.shared.visualizerNoiseThreshold
+
+            XCTAssertEqual(threshold, SettingsStore.defaultVisualizerNoiseThreshold, accuracy: 0.001)
+            XCTAssertLessThan(
+                threshold,
+                0.2,
+                "Default visualizer sensitivity should show movement for quiet but valid mic input."
+            )
+        }
     }
 
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {

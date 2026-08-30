@@ -33,7 +33,13 @@ final class CommandModeService: ObservableObject {
     }
 
     private var shouldSyncCommandNotchState: Bool {
-        self.enableNotchOutput && NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
+        (self.enableNotchOutput || self.shouldForceCodexNotchOutput) &&
+            NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
+    }
+
+    private var shouldForceCodexNotchOutput: Bool {
+        SettingsStore.shared.commandModeRouteToCodex &&
+            SettingsStore.shared.commandModeCodexHandoffStyle == "notch"
     }
 
     private func loadCurrentChatFromStore() {
@@ -306,6 +312,10 @@ final class CommandModeService: ObservableObject {
     func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        if SettingsStore.shared.commandModeRouteToCodex {
+            await self.processCodexHandoff(text)
+            return
+        }
         AnalyticsService.shared.recordUsage(
             mode: .command,
             aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
@@ -327,10 +337,54 @@ final class CommandModeService: ObservableObject {
         await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest)
     }
 
+    private func processCodexHandoff(_ text: String) async {
+        self.isProcessing = true
+        self.currentTurnCount = 0
+        self.pendingCommand = nil
+        let handoffStyle = CodexHandoffService.HandoffStyle(rawValue: SettingsStore.shared.commandModeCodexHandoffStyle)
+        let statusMessage = handoffStyle == .notch ? "Running Codex in notch..." : "Sending to Codex..."
+        self.currentStep = .executing(handoffStyle == .notch ? "Running Codex" : "Sending to Codex")
+
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.conversationHistory.append(Message(role: .user, content: cleanText))
+        self.saveCurrentChat()
+
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.addCommandMessage(role: .user, content: cleanText)
+            NotchContentState.shared.addCommandMessage(role: .status, content: statusMessage)
+            NotchContentState.shared.setCommandProcessing(true)
+            if handoffStyle == .notch {
+                self.showExpandedNotchIfNeeded()
+            }
+        }
+
+        let result = await CodexHandoffService.shared.sendToCodex(cleanText, style: handoffStyle)
+        self.conversationHistory.append(Message(
+            role: .assistant,
+            content: result.message,
+            stepType: result.success ? .success : .failure
+        ))
+        self.isProcessing = false
+        self.currentStep = .completed(result.success)
+        self.saveCurrentChat()
+
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.addCommandMessage(role: result.success ? .assistant : .status, content: result.message)
+            NotchContentState.shared.setCommandProcessing(false)
+            if handoffStyle == .notch {
+                self.showExpandedNotchIfNeeded()
+            }
+        }
+    }
+
     /// Process follow-up command from notch input
     func processFollowUpCommand(_ text: String) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        if SettingsStore.shared.commandModeRouteToCodex {
+            await self.processCodexHandoff(text)
+            return
+        }
         AnalyticsService.shared.recordUsage(
             mode: .command,
             aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)

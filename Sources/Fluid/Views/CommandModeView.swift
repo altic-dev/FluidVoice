@@ -65,6 +65,8 @@ struct CommandModeView: View {
         }
         .onAppear {
             self.updateAvailableModels()
+            // Disable notch output when using in-app UI (conversation is shared but notch shouldn't show)
+            self.updateNotchOutputPreference()
             self.updatePresentationActivity(self.isActive)
         }
         .onDisappear {
@@ -88,6 +90,13 @@ struct CommandModeView: View {
         }
         .onChange(of: self.settings.commandModeLinkedToGlobal) { _, _ in
             self.updateAvailableModels()
+        }
+        .onChange(of: self.settings.commandModeRouteToCodex) { _, _ in
+            self.updateAvailableModels()
+            self.updateNotchOutputPreference()
+        }
+        .onChange(of: self.settings.commandModeCodexHandoffStyle) { _, _ in
+            self.updateNotchOutputPreference()
         }
         .onChange(of: self.settings.selectedProviderID) { _, _ in
             self.updateAvailableModels()
@@ -184,6 +193,25 @@ struct CommandModeView: View {
             }
             .toggleStyle(.checkbox)
             .help("Ask for confirmation before running commands")
+            .disabled(self.settings.commandModeRouteToCodex)
+
+            Toggle(isOn: self.$settings.commandModeRouteToCodex) {
+                Label("Codex", systemImage: "sparkles")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .help("Send Command Mode input to Codex")
+
+            if self.settings.commandModeRouteToCodex {
+                Picker("Codex style", selection: self.$settings.commandModeCodexHandoffStyle) {
+                    Text("Notch").tag("notch")
+                    Text("App").tag("app")
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 112)
+                .help("Choose whether Codex runs in the notch or receives input in the app")
+            }
         }
         .padding()
         .background(self.theme.palette.windowBackground)
@@ -477,7 +505,7 @@ struct CommandModeView: View {
 
     private var inputArea: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let issue = self.settings.commandModeReadinessIssue {
+            if let issue = self.commandModeReadinessIssue {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -516,6 +544,8 @@ struct CommandModeView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: true, vertical: false)
                         .help("Use the same provider and model selected in AI Enhancement.")
+                        .disabled(self.settings.commandModeRouteToCodex)
+                        .opacity(self.settings.commandModeRouteToCodex ? 0.55 : 1)
 
                     SearchableProviderPicker(
                         builtInProviders: self.verifiedBuiltInProvidersList,
@@ -532,8 +562,8 @@ struct CommandModeView: View {
                         controlWidth: 140,
                         controlHeight: 30
                     )
-                    .disabled(self.settings.commandModeLinkedToGlobal)
-                    .opacity(self.settings.commandModeLinkedToGlobal ? 0.55 : 1)
+                    .disabled(self.settings.commandModeLinkedToGlobal || self.settings.commandModeRouteToCodex)
+                    .opacity((self.settings.commandModeLinkedToGlobal || self.settings.commandModeRouteToCodex) ? 0.55 : 1)
 
                     SearchableModelPicker(
                         models: self.availableModels,
@@ -550,7 +580,8 @@ struct CommandModeView: View {
                         controlWidth: 180,
                         controlHeight: 30
                     )
-                    .disabled(self.settings.commandModeLinkedToGlobal)
+                    .disabled(self.settings.commandModeLinkedToGlobal || self.settings.commandModeRouteToCodex)
+                    .opacity(self.settings.commandModeRouteToCodex ? 0.55 : 1)
 
                     Spacer(minLength: 12)
 
@@ -598,10 +629,14 @@ struct CommandModeView: View {
 
     // MARK: - Actions
 
+    private var commandModeReadinessIssue: String? {
+        self.settings.commandModeRouteToCodex ? nil : self.settings.commandModeReadinessIssue
+    }
+
     private var canSubmitCommand: Bool {
         !self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !self.service.isProcessing &&
-            self.settings.commandModeReadinessIssue == nil
+            self.commandModeReadinessIssue == nil
     }
 
     private func updatePresentationActivity(_ isActive: Bool) {
@@ -630,7 +665,7 @@ struct CommandModeView: View {
                 await MainActor.run {
                     self.inputText = command
                 }
-                guard self.settings.commandModeReadinessIssue == nil else { return }
+                guard self.commandModeReadinessIssue == nil else { return }
                 await self.service.processUserCommand(command)
                 await MainActor.run {
                     self.inputText = ""
@@ -659,7 +694,7 @@ struct CommandModeView: View {
     private func submitCommand() {
         let text = self.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        guard self.settings.commandModeReadinessIssue == nil else { return }
+        guard self.commandModeReadinessIssue == nil else { return }
         self.inputText = ""
         Task {
             await self.service.processUserCommand(text)
@@ -667,6 +702,11 @@ struct CommandModeView: View {
     }
 
     private func updateAvailableModels() {
+        if self.settings.commandModeRouteToCodex {
+            self.availableModels = []
+            return
+        }
+
         let currentProviderID = self.settings.effectiveCommandModeProviderID
         let currentModel = self.settings.commandModeSelectedModel ?? ""
         guard !currentProviderID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -679,6 +719,11 @@ struct CommandModeView: View {
         if !self.settings.commandModeLinkedToGlobal, !self.availableModels.contains(currentModel) {
             self.settings.commandModeSelectedModel = self.availableModels.first
         }
+    }
+
+    private func updateNotchOutputPreference() {
+        self.service.enableNotchOutput = self.settings.commandModeRouteToCodex &&
+            self.settings.commandModeCodexHandoffStyle == "notch"
     }
 
     private var builtInProvidersList: [(id: String, name: String)] {

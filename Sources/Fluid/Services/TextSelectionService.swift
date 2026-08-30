@@ -4,6 +4,7 @@ import Foundation
 
 final class TextSelectionService {
     static let shared = TextSelectionService()
+    private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
 
     private init() {}
 
@@ -42,11 +43,25 @@ final class TextSelectionService {
             }
         }
 
+        if let copiedSelection = self.getSelectedTextByCopyFallback() {
+            self.diag("Selection capture success via clipboard fallback (chars=\(copiedSelection.count))")
+            return copiedSelection
+        }
+
         self.diag("Selection capture failed: no selected text found")
         return nil
     }
 
     // MARK: - Private Helpers
+
+    private struct PasteboardItemSnapshot {
+        let dataByType: [NSPasteboard.PasteboardType: Data]
+    }
+
+    private struct PasteboardSnapshot {
+        let items: [PasteboardItemSnapshot]
+        let changeCount: Int
+    }
 
     private func getFocusedElement() -> AXUIElement? {
         let systemWideElement = AXUIElementCreateSystemWide()
@@ -132,6 +147,91 @@ final class TextSelectionService {
         let extracted = nsText.substring(with: NSRange(location: range.location, length: range.length))
         self.diag("Selected range extraction succeeded (chars=\(extracted.count))")
         return extracted
+    }
+
+    private func getSelectedTextByCopyFallback() -> String? {
+        Self.pasteboardSessionSemaphore.wait()
+        defer { Self.pasteboardSessionSemaphore.signal() }
+
+        let pasteboard = NSPasteboard.general
+        let snapshot = self.capturePasteboardSnapshot(pasteboard)
+
+        pasteboard.clearContents()
+        let clearedChangeCount = pasteboard.changeCount
+
+        guard self.sendCopyShortcut() else {
+            self.restorePasteboardSnapshot(snapshot, to: pasteboard)
+            self.diag("Clipboard fallback failed: could not dispatch Cmd+C")
+            return nil
+        }
+
+        // Google Docs and other browser editors can update the system pasteboard
+        // noticeably later than native text fields after Cmd+C.
+        let deadline = Date().addingTimeInterval(1.0)
+        var copiedText: String?
+        repeat {
+            if pasteboard.changeCount != clearedChangeCount,
+               let text = pasteboard.string(forType: .string),
+               !text.isEmpty
+            {
+                copiedText = text
+                break
+            }
+            usleep(15_000)
+        } while Date() < deadline
+
+        self.restorePasteboardSnapshot(snapshot, to: pasteboard)
+
+        guard let copiedText else {
+            self.diag("Clipboard fallback failed: clipboard did not receive selected text")
+            return nil
+        }
+
+        return copiedText
+    }
+
+    private func sendCopyShortcut() -> Bool {
+        guard let copyDown = CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true),
+              let copyUp = CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: false)
+        else {
+            return false
+        }
+
+        copyDown.flags = .maskCommand
+        copyUp.flags = .maskCommand
+        copyDown.post(tap: .cghidEventTap)
+        usleep(10_000)
+        copyUp.post(tap: .cghidEventTap)
+        return true
+    }
+
+    private func capturePasteboardSnapshot(_ pasteboard: NSPasteboard) -> PasteboardSnapshot {
+        let items: [PasteboardItemSnapshot] = pasteboard.pasteboardItems?.map { item in
+            var dataByType: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    dataByType[type] = data
+                }
+            }
+            return PasteboardItemSnapshot(dataByType: dataByType)
+        } ?? []
+        return PasteboardSnapshot(items: items, changeCount: pasteboard.changeCount)
+    }
+
+    private func restorePasteboardSnapshot(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
+        guard pasteboard.changeCount != snapshot.changeCount else { return }
+
+        pasteboard.clearContents()
+        guard !snapshot.items.isEmpty else { return }
+
+        let restoredItems = snapshot.items.map { snap -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in snap.dataByType {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+        _ = pasteboard.writeObjects(restoredItems)
     }
 
     private func describe(_ error: AXError) -> String {

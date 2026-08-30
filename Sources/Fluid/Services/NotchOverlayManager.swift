@@ -509,32 +509,39 @@ final class NotchOverlayManager {
     /// Show expanded command output notch
     func showExpandedCommandOutput() {
         guard self.canShowExpandedCommandOutput else { return }
+        guard self.commandOutputState == .idle else { return }
+
+        self.commandOutputState = .showing
+        self.isCommandOutputExpanded = true
+        NotchContentState.shared.mode = .command
+        NotchContentState.shared.isExpandedForCommandOutput = true
 
         // Hide regular notch first if visible
-        if self.notch != nil {
+        let needsRegularNotchCleanup = self.notch != nil
+        if needsRegularNotchCleanup {
             self.hide()
         }
 
-        // Wait a bit for cleanup
+        let delay: UInt64 = needsRegularNotchCleanup ? 100_000_000 : 0
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
             await self?.showExpandedCommandOutputInternal()
         }
     }
 
     private func showExpandedCommandOutputInternal() async {
-        guard self.canShowExpandedCommandOutput else { return }
-        guard self.commandOutputState == .idle else { return }
+        guard self.canShowExpandedCommandOutput else {
+            self.commandOutputState = .idle
+            self.isCommandOutputExpanded = false
+            NotchContentState.shared.collapseCommandOutput()
+            return
+        }
+        guard self.commandOutputState == .showing else { return }
 
         self.commandOutputGeneration &+= 1
         let currentGeneration = self.commandOutputGeneration
-
-        self.commandOutputState = .showing
-        self.isCommandOutputExpanded = true
-
-        // Update content state
-        NotchContentState.shared.mode = .command
-        NotchContentState.shared.isExpandedForCommandOutput = true
 
         let publisher = self.lastAudioPublisher ?? Empty<CGFloat, Never>().eraseToAnyPublisher()
 

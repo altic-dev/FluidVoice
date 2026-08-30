@@ -86,24 +86,26 @@ We're keeping Fluid Intelligence private for now so we can sustainably offer the
 
 https://github.com/user-attachments/assets/ffb47afd-1621-432a-bdca-baa4b8526301
 
-### Write Mode — Write or rewrite text in any text box in any app
+### Write Mode — Optional text rewriting workflow
 
 https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 
+> Write/Edit Mode is optional and disabled by default in the hotkey flow. The default setup prioritizes stable global dictation with the regular dictation hotkey.
 ---
 
 ## Features
 
 - **Fluid Intelligence** — on-device AI enhancement for smart formatting, context-aware capitalization, and post-processing, all running locally on your Mac with zero data leaving your machine
 - **Command Mode** — control your Mac by voice: launch apps, run shortcuts, trigger system actions, and automate workflows without touching the keyboard
-- **Write Mode** — write or rewrite text directly in any text field across any app. Select text and rewrite it, or dictate new content inline
+- **Dictation-First Hotkey Flow** — global dictation is the default path, optimized for quick push-to-talk captures and longer automatic sessions without app switching
+- **Optional Write/Edit Mode** — write or rewrite text workflows remain available, but the shortcut is disabled by default so regular dictation stays predictable across apps and web editors
 - **Live Preview** — real-time transcription overlay with notch support, so you see words appear as you speak
 - **Multiple Speech Models** — Nemotron Speech 3.5, Parakeet Flash, Parakeet TDT v3 & v2, Cohere Transcribe, Apple Speech, and Whisper. Pick the model that fits your language and latency needs
 - **AI Enhancement** — optional post-processing via OpenAI, Groq, custom providers, or local Fluid Intelligence for cleaner, more accurate transcripts
 - **Audio History** — optional local recording history with budget controls and ZIP export, so you can review past dictations without cloud storage
 - **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
 - **Adaptive Theming** — light/dark theme that follows your system, with a compact toolbar switcher
-- **Global Hotkey** — instant voice capture from anywhere, no app switching needed
+- **Global Hotkey** — instant voice capture from anywhere, no app switching needed, with automatic mode for both short push-to-talk captures and longer click-to-start sessions
 - **Smart Typing** — direct insertion into any app via accessibility APIs for reliable, app-independent text entry
 - **Menu Bar Integration** — quick access, status, and settings from the menu bar
 - **Auto-Updates** — seamless updates with an optional beta channel for early previews
@@ -161,7 +163,7 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 2. **Grant permissions** — FluidVoice will ask for microphone and accessibility access. Both are required for dictation and typing into other apps.
 
-3. **Set your hotkey** — pick a global hotkey in settings that triggers voice capture from anywhere.
+3. **Set your hotkey** — pick a global hotkey in settings that triggers voice capture from anywhere. Automatic mode supports both short push-to-talk captures and longer click-to-start/click-to-stop sessions.
 
 4. **Go through onboarding** — choose your voice model based on your language and latency needs. Models range from zero-download Apple Speech to high-accuracy Nemotron and Whisper.
 
@@ -169,7 +171,9 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 
 6. **(Optional) Bring your own AI provider** — add an OpenAI, Groq, or custom provider API key for cloud-based enhancement. Keys are stored securely in macOS Keychain. Select "Always allow" for key access.
 
-7. **(Optional) Opt in to beta builds** — `Settings → Automatic Updates → Beta Releases` for early access to new features.
+7. **(Optional) Enable Write/Edit Mode** — the rewrite shortcut is off by default. Turn it on in settings only if you want text rewriting workflows in addition to regular dictation.
+
+8. **(Optional) Opt in to beta builds** — `Settings → Automatic Updates → Beta Releases` for early access to new features.
 
 ---
 

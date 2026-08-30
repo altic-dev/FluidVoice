@@ -1,12 +1,18 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private extension UTType {
+    static let subRipSubtitle = UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText
+}
+
 struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
     @State private var selectedFileURL: URL?
+    @AppStorage("FileTranscriptionSpeechModel") private var selectedModelRawValue = SettingsStore.SpeechModel.whisperLargeTurbo.rawValue
+    @AppStorage("FileTranscriptionSpeakerDiarization") private var speakerDiarizationEnabled = true
     @Environment(\.theme) private var theme
 
     init(asrService: ASRService) {
@@ -25,11 +31,13 @@ struct MeetingTranscriptionView: View {
     enum ExportFormat: String, CaseIterable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
+        case srt = "Subtitles (.srt)"
 
         var fileExtension: String {
             switch self {
             case .text: return "txt"
             case .json: return "json"
+            case .srt: return "srt"
             }
         }
     }
@@ -116,8 +124,8 @@ struct MeetingTranscriptionView: View {
                 format: self.exportFormat,
                 service: self.transcriptionService
             ),
-            contentType: self.exportFormat == .text ? .plainText : .json,
-            defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
+            contentType: self.exportContentType,
+            defaultFilename: self.exportDefaultFilename
         ) { exportCompletion in
             switch exportCompletion {
             case .success:
@@ -131,8 +139,62 @@ struct MeetingTranscriptionView: View {
 
     // MARK: - File Selection Card
 
+    private var exportContentType: UTType {
+        switch self.exportFormat {
+        case .text: return .plainText
+        case .json: return .json
+        case .srt: return .subRipSubtitle
+        }
+    }
+
+    private var exportDefaultFilename: String {
+        guard let fileName = self.exportResult?.fileName else { return "transcript" }
+        let baseName = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+        return self.exportFormat == .srt ? baseName : "\(baseName)_transcript"
+    }
+
+    private var selectedModel: SettingsStore.SpeechModel {
+        SettingsStore.SpeechModel(rawValue: self.selectedModelRawValue) ?? .whisperLargeTurbo
+    }
+
+    private var availableFileModels: [SettingsStore.SpeechModel] {
+        SettingsStore.SpeechModel.availableModels
+    }
+
     private var fileSelectionCard: some View {
         VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                Label("Transcription model", systemImage: "waveform.badge.magnifyingglass")
+                    .font(.subheadline.weight(.medium))
+
+                Spacer()
+
+                Picker("Transcription model", selection: self.$selectedModelRawValue) {
+                    ForEach(self.availableFileModels) { model in
+                        Text(model.displayName).tag(model.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 300)
+                .disabled(self.transcriptionService.isTranscribing)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(self.theme.palette.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                    )
+            )
+
+            Toggle(isOn: self.$speakerDiarizationEnabled) {
+                Label("Identify speakers", systemImage: "person.2.wave.2")
+                    .font(.subheadline.weight(.medium))
+            }
+            .toggleStyle(.switch)
+            .disabled(self.transcriptionService.isTranscribing)
+
             if let fileURL = selectedFileURL {
                 // Show selected file
                 HStack {
@@ -306,6 +368,15 @@ struct MeetingTranscriptionView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
+
+            if !self.transcriptionService.liveTranscript.isEmpty {
+                Text(self.transcriptionService.liveTranscript)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
         .padding()
         .background(
@@ -331,10 +402,16 @@ struct MeetingTranscriptionView: View {
                     HStack(spacing: 16) {
                         Label("\(String(format: "%.1f", result.duration))s", systemImage: "clock")
                         Label("\(String(format: "%.0f%%", result.confidence * 100))", systemImage: "checkmark.circle")
-                        Label(
-                            "\(String(format: "%.1f", result.duration / result.processingTime))x",
-                            systemImage: "speedometer"
-                        )
+                        if result.processingTime > 0, result.duration > 0 {
+                            Label(
+                                "\(String(format: "%.1f", result.duration / result.processingTime))x realtime",
+                                systemImage: "speedometer"
+                            )
+                            Label(
+                                "\(String(format: "%.1f", result.processingTime))s processing",
+                                systemImage: "timer"
+                            )
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -369,6 +446,21 @@ struct MeetingTranscriptionView: View {
             }
 
             Divider()
+
+            if !result.subtitleCues.isEmpty {
+                HStack(spacing: 10) {
+                    Button {
+                        self.exportFormat = .srt
+                        self.exportResult = result
+                        self.showingExportDialog = true
+                    } label: {
+                        Label("Export SRT", systemImage: "captions.bubble")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+                }
+            }
 
             // Transcription text
             ScrollView {
@@ -541,6 +633,19 @@ struct MeetingTranscriptionView: View {
                     .foregroundColor(.secondary)
             }
             Divider()
+            if !result.subtitleCues.isEmpty {
+                HStack(spacing: 10) {
+                    Button {
+                        self.exportFormat = .srt
+                        self.exportResult = result
+                        self.showingExportDialog = true
+                    } label: {
+                        Label("Export SRT", systemImage: "captions.bubble")
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                }
+            }
             ScrollView {
                 Text(entry.text)
                     .font(.body)
@@ -659,7 +764,11 @@ struct MeetingTranscriptionView: View {
         guard let fileURL = selectedFileURL else { return }
 
         do {
-            _ = try await self.transcriptionService.transcribeFile(fileURL)
+            _ = try await self.transcriptionService.transcribeFile(
+                fileURL,
+                model: self.selectedModel,
+                diarizeSpeakers: self.speakerDiarizationEnabled
+            )
         } catch {
             DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
         }
@@ -691,13 +800,14 @@ struct MeetingTranscriptionView: View {
             }
         }
     }
+
 }
 
 // MARK: - Document for Export
 
 struct TranscriptionDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.plainText, .json]
+        [.plainText, .json, .subRipSubtitle]
     }
 
     let result: TranscriptionResult
@@ -726,6 +836,8 @@ struct TranscriptionDocument: FileDocument {
             try self.service.exportToText(self.result, to: tempURL)
         case .json:
             try self.service.exportToJSON(self.result, to: tempURL)
+        case .srt:
+            try self.service.exportToSRT(self.result, to: tempURL)
         }
 
         let data = try Data(contentsOf: tempURL)
