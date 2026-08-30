@@ -1507,28 +1507,45 @@ final class ASRService: ObservableObject {
     }
 
     func requestMicAccess() {
-        guard self.isRequestingMicrophoneAccess == false else { return }
-        self.isRequestingMicrophoneAccess = true
         Task { @MainActor [weak self] in
+            guard let self else { return }
+            if await self.ensureMicrophoneAccess(), self.isRunningOrStarting == false {
+                await self.prewarmConfiguredAudioCaptureIfPossible(reason: "permission_granted")
+            }
+        }
+    }
+
+    private func ensureMicrophoneAccess() async -> Bool {
+        let currentStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        self.micStatus = currentStatus
+        self.micPermissionGranted = currentStatus == .authorized
+
+        switch currentStatus {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            guard self.isRequestingMicrophoneAccess == false, self.isTerminating == false else {
+                return false
+            }
+            self.isRequestingMicrophoneAccess = true
+            defer { self.isRequestingMicrophoneAccess = false }
+
             await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
             await AudioStartupGate.shared.waitUntilOpen()
-            guard let self else { return }
-            guard self.isTerminating == false else {
-                self.isRequestingMicrophoneAccess = false
-                return
-            }
+            guard self.isTerminating == false else { return false }
 
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                guard let self else { return }
-                Task { @MainActor in
-                    self.isRequestingMicrophoneAccess = false
-                    self.micPermissionGranted = granted
-                    self.micStatus = granted ? .authorized : .denied
-                    if granted {
-                        await self.prewarmConfiguredAudioCaptureIfPossible(reason: "permission_granted")
-                    }
+            let granted = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    continuation.resume(returning: granted)
                 }
             }
+            self.micPermissionGranted = granted
+            self.micStatus = granted ? .authorized : .denied
+            return granted
+        @unknown default:
+            return false
         }
     }
 
@@ -1728,7 +1745,7 @@ final class ASRService: ObservableObject {
     ) async -> AudioCaptureStartOutcome {
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
-        guard self.micStatus == .authorized else {
+        guard await self.ensureMicrophoneAccess() else {
             DebugLogger.shared.error("❌ START() blocked - mic not authorized", source: "ASRService")
             return .failed
         }

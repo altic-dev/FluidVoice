@@ -4,6 +4,19 @@ import Foundation
 import XCTest
 
 final class DirectAudioReliabilityTests: XCTestCase {
+    func testHardenedRuntimeEntitlementsAllowMicrophoneInput() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(contentsOf: repositoryRoot.appendingPathComponent("Fluid.entitlements"))
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
+        )
+
+        XCTAssertEqual(plist["com.apple.security.device.audio-input"] as? Bool, true)
+    }
+
     func testOutputKeepAliveTargetsTheBuiltInSpeakerForAppleSiliconInternalInput() {
         XCTAssertEqual(
             BuiltInOutputKeepAlivePolicy.outputDeviceID(
