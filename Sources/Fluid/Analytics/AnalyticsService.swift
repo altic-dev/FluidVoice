@@ -92,6 +92,53 @@ final class AnalyticsService {
         }
     }
 
+    func recordOnboardingTryoutAttemptStarted(startMethod: AnalyticsOnboardingTryoutStartMethod) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.recordOnboardingTryoutAttemptStarted(
+                startMethod: startMethod,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func recordOnboardingTryoutAttemptResult(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage? = nil
+    ) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.recordOnboardingTryoutAttemptResult(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func finishOnboardingTryout(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage? = nil
+    ) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.finishOnboardingTryout(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func skipOnboardingTryout(origin: AnalyticsOnboardingOrigin) {
+        self.submit { core, context in
+            await core.skipOnboardingTryout(origin: origin, context: context)
+        }
+    }
+
     func recordModelDownloadStarted(
         id: UUID,
         descriptor: AnalyticsModelDescriptor,
@@ -285,6 +332,58 @@ private actor AnalyticsCore {
                 completesFlow: completesFlow,
                 at: date
             )
+        }
+    }
+
+    func recordOnboardingTryoutAttemptStarted(
+        startMethod: AnalyticsOnboardingTryoutStartMethod,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.recordOnboardingTryoutAttemptStarted(
+                startMethod: startMethod,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func recordOnboardingTryoutAttemptResult(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage?,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.recordOnboardingTryoutAttemptResult(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func finishOnboardingTryout(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage?,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.finishOnboardingTryout(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func skipOnboardingTryout(origin: AnalyticsOnboardingOrigin, context: AnalyticsContext) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.skipOnboardingTryout(origin: origin, at: date)
         }
     }
 

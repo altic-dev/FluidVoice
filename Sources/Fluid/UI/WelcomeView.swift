@@ -1958,6 +1958,8 @@ struct OnboardingFlowView: View {
                         skipTitle: "Skip",
                         canSkip: !self.asr.isRunning && !self.isRecordingAnyShortcut,
                         skipAction: {
+                            let origin = self.settings.analyticsOnboardingOrigin
+                            AnalyticsService.shared.skipOnboardingTryout(origin: origin)
                             self.settings.onboardingPlaygroundSkipped = true
                             self.goNext(outcome: .skipped)
                         }

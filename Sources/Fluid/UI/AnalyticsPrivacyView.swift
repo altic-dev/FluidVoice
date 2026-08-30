@@ -30,7 +30,7 @@ struct AnalyticsPrivacyView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     self.sectionTitle("Always collected")
-                    self.bullet("A random installation ID, app version, and the operating-system label macOS.")
+                    self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
                     self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
 
                     self.sectionTitle("When detailed analytics is enabled")
@@ -44,7 +44,7 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("Selected text, rewrite prompts, or AI responses.")
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
-                    self.bullet("Hardware identifiers, CPU/chip details, performance timings, or individual transcription events.")
+                    self.bullet("Hardware serial numbers or other unique device identifiers, performance timings, or individual transcription events.")
 
                     self.sectionTitle("How it’s used")
                     self.bullet("Daily activity measures active installations and retention without requiring accounts.")

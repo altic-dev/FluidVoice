@@ -54,6 +54,12 @@ enum AudioCaptureStartOutcome: Equatable {
     case failed
 }
 
+enum ASRStopOutcome: Equatable {
+    case success
+    case empty
+    case failed
+}
+
 // swiftlint:disable file_length type_body_length
 /// A comprehensive speech recognition service that handles real-time audio transcription.
 ///
@@ -192,6 +198,7 @@ final class ASRService: ObservableObject {
     private var microphonePreviewOperationGeneration: UInt64 = 0
     private var isMicrophonePreviewRequested = false
     private(set) var lastDictionaryTrainingResult: ASRTranscriptionResult?
+    private(set) var lastStopOutcome: ASRStopOutcome = .empty
     private(set) var dictionaryTrainingAudioGeneration = 0
 
     @Published private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
@@ -2328,6 +2335,7 @@ final class ASRService: ObservableObject {
         forDictionaryTraining: Bool = false
     ) async -> String {
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
+        self.lastStopOutcome = .empty
         if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
             self.lastDictionaryTrainingResult = nil
         }
@@ -2509,6 +2517,7 @@ final class ASRService: ObservableObject {
 
             guard provider.isReady else {
                 DebugLogger.shared.error("Transcription provider is not ready", source: "ASRService")
+                self.lastStopOutcome = .failed
                 // Resume media playback if we paused it
                 if shouldResumeMedia {
                     await MediaPlaybackService.shared.resumeIfWePaused(true)
@@ -2592,8 +2601,12 @@ final class ASRService: ObservableObject {
                 DebugLogger.shared.info("🎵 Resumed system media after transcription", source: "ASRService")
             }
 
+            self.lastStopOutcome = outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .empty
+                : .success
             return outputText
         } catch {
+            self.lastStopOutcome = .failed
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
             DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
             let nsError = error as NSError
@@ -2673,7 +2686,7 @@ final class ASRService: ObservableObject {
             )
         }
 
-        let estimatedSamples = try LocalAPIAudioDecoder.validateDurationWithinLimit(for: fileURL)
+        let estimatedSamples = try LocalAPIAudioDecoder.estimatedSampleCount(for: fileURL)
 
         try await self.ensureAsrReady()
         let provider = self.transcriptionProvider
@@ -2685,10 +2698,63 @@ final class ASRService: ObservableObject {
             )
         }
 
-        guard provider.prefersNativeFileTranscription else {
-            let samples = try LocalAPIAudioDecoder.samples(from: fileURL)
+        if provider.prefersNativeFileTranscription,
+           estimatedSamples > 0,
+           estimatedSamples < 16_000
+        {
+            let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL)
+            let samples = try await reader.nextSamples()
             let result = try await self.transcribeSamplesForAPI(samples)
-            return (result, samples.count)
+            return (result, sampleCount: estimatedSamples)
+        }
+
+        guard provider.prefersNativeFileTranscription else {
+            let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL)
+            let (combinedText, confidence, processedSampleCount) = try await transcriptionExecutor.run { [provider] in
+                var textParts: [String] = []
+                var weightedConfidence = 0.0
+                var processedSampleCount = 0
+
+                while true {
+                    var samples = try await reader.nextSamples()
+                    let sampleCount = samples.count
+                    guard sampleCount > 0 else { break }
+                    if sampleCount < 16_000 {
+                        samples.append(contentsOf: repeatElement(0.0, count: 16_000 - sampleCount))
+                    }
+
+                    let result = try await provider.transcribeFinal(samples)
+                    if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        textParts.append(result.text)
+                    }
+                    weightedConfidence += Double(result.confidence) * Double(sampleCount)
+                    processedSampleCount += sampleCount
+                }
+
+                let confidence = processedSampleCount > 0
+                    ? Float(weightedConfidence / Double(processedSampleCount))
+                    : 0
+                return (textParts.joined(separator: " "), confidence, processedSampleCount)
+            }
+
+            guard processedSampleCount > 0 else {
+                return (ASRTranscriptionResult(text: "", confidence: 0), sampleCount: 0)
+            }
+
+            if !self.hasCompletedFirstTranscription {
+                self.hasCompletedFirstTranscription = true
+                self.isLoadingModel = false
+                self.modelPreparationPhase = nil
+            }
+
+            let cleanedText = ASRService.applySpokenPunctuationFormatting(
+                ASRService.applyCustomDictionary(ASRService.removeFillerWords(combinedText))
+            )
+            self.recordWordBoostHitIfAny(transcribedText: cleanedText)
+            return (
+                ASRTranscriptionResult(text: cleanedText, confidence: confidence),
+                sampleCount: estimatedSamples
+            )
         }
 
         let result = try await transcriptionExecutor.run { [provider] in

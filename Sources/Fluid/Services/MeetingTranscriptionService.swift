@@ -349,14 +349,16 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// File extensions the OS can actually decode, queried dynamically from AVFoundation.
     /// Filtered to audio/video types only — excludes subtitles, playlists, etc.
+    /// Uses every extension tag of each type, not just the preferred one: `.opus`/`.oga`
+    /// (e.g. WhatsApp voice notes) map to the same UTType as `.ogg` and decode natively.
     static let supportedFileExtensions: Set<String> = {
         let avTypes = AVURLAsset.audiovisualTypes()
-        let extensions = avTypes.compactMap { fileType -> String? in
-            guard let utType = UTType(fileType.rawValue) else { return nil }
-            guard utType.conforms(to: .audio) || utType.conforms(to: .movie) else { return nil }
-            return utType.preferredFilenameExtension
+        let extensions = avTypes.flatMap { fileType -> [String] in
+            guard let utType = UTType(fileType.rawValue) else { return [] }
+            guard utType.conforms(to: .audio) || utType.conforms(to: .movie) else { return [] }
+            return utType.tags[.filenameExtension] ?? []
         }
-        return Set(extensions).union(["mkv"])
+        return Set(extensions.map { $0.lowercased() }).union(["mkv"])
     }()
 
     /// Content types accepted by the file picker — broad categories so the OS filters naturally.
@@ -367,10 +369,10 @@ final class MeetingTranscriptionService: ObservableObject {
     ]
 
     /// User-facing description of supported formats (curated for readability).
-    static let supportedFormatsDescription = "Supported: WAV, MP3, M4A, OGG, MP4, MOV, MKV, and more"
+    static let supportedFormatsDescription = "Supported: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, MKV, and more"
 
     /// Error copy shown when a dropped file is not accepted.
-    static let dropErrorCopy = "Accepted file types: WAV, MP3, M4A, OGG, MP4, MOV, MKV, and more."
+    static let dropErrorCopy = "Accepted file types: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, MKV, and more."
 
     /// Share the ASR service instance to avoid loading models twice
     private let asrService: ASRService

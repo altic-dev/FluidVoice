@@ -9,6 +9,7 @@ enum AnalyticsEvent: String {
     case onboardingStepViewed = "onboarding_step_viewed"
     case onboardingStepCompleted = "onboarding_step_completed"
     case onboardingCompleted = "onboarding_completed"
+    case onboardingTryoutFinished = "onboarding_tryout_finished"
     case modelDownloadStarted = "model_download_started"
     case modelDownloadFinished = "model_download_finished"
 }
@@ -67,6 +68,26 @@ enum AnalyticsOnboardingOutcome: String {
     case skipped
     case completed
     case openedSettings = "opened_settings"
+}
+
+enum AnalyticsOnboardingTryoutOutcome: String {
+    case success
+    case empty
+    case error
+    case cancelled
+    case skippedBeforeAttempt = "skipped_before_attempt"
+    case skippedAfterAttempt = "skipped_after_attempt"
+}
+
+enum AnalyticsOnboardingTryoutStartMethod: String {
+    case hotkey
+    case button
+}
+
+enum AnalyticsOnboardingTryoutFailureStage: String {
+    case audioStart = "audio_start"
+    case transcription
+    case postProcessing = "post_processing"
 }
 
 enum AnalyticsModelDownloadSource: String {

@@ -6,7 +6,7 @@ import SwiftUI
 enum MenuBarNavigationDestination: String {
     case customDictionary
     case microphoneSettings
-    case preferences
+    case settings
 }
 
 @MainActor
@@ -911,7 +911,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     @objc private func openPreferences() {
-        self.openNavigationDestination(.preferences)
+        self.openNavigationDestination(.settings)
     }
 
     @objc private func openCustomDictionary() {

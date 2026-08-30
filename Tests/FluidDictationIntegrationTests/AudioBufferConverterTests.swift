@@ -63,6 +63,48 @@ final class AudioBufferConverterTests: XCTestCase {
         XCTAssertGreaterThan(samples.map(abs).max() ?? 0, 0.4)
     }
 
+    func testLocalAPIAudioChunkReaderBoundsMemoryAndPreservesFinalChunk() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-api-chunks-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let buffer = try self.makeFloatBuffer(sampleRate: 16_000, channels: 1, frameCount: 4000)
+        do {
+            let outputFile = try AVAudioFile(forWriting: fileURL, settings: buffer.format.settings)
+            try outputFile.write(from: buffer)
+        }
+
+        let reader = try LocalAPIAudioDecoder.ChunkReader(
+            fileURL: fileURL,
+            chunkDurationSeconds: 0.1
+        )
+
+        let firstChunk = try await reader.nextSamples()
+        let secondChunk = try await reader.nextSamples()
+        let finalChunk = try await reader.nextSamples()
+
+        XCTAssertEqual(firstChunk.count, 1600)
+        XCTAssertEqual(secondChunk.count, 1600)
+        XCTAssertEqual(finalChunk.count, 800)
+        let exhaustedChunk = try await reader.nextSamples()
+        XCTAssertTrue(exhaustedChunk.isEmpty)
+        XCTAssertEqual(LocalAPIAudioDecoder.maxChunkDurationSeconds, 20 * 60)
+    }
+
+    func testLocalAPIExtensionlessUploadUsesTemporaryWAVAndCleansUp() async throws {
+        let expectedData = Data([0, 1, 2, 3])
+        let fileURL = try await LocalAPIAudioDecoder.temporaryFile(
+            fromAudioData: expectedData,
+            suggestedExtension: ""
+        )
+
+        XCTAssertEqual(fileURL.pathExtension, "wav")
+        XCTAssertEqual(try Data(contentsOf: fileURL), expectedData)
+
+        await LocalAPIAudioDecoder.removeTemporaryFile(at: fileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     private func makeFloatBuffer(
         sampleRate: Double,
         channels: AVAudioChannelCount,
