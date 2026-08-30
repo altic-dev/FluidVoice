@@ -11,6 +11,7 @@
 // realtime producer strictly allocation-free.
 #define FV_RING_CAPACITY 64u
 #define FV_MAX_FRAMES_PER_PACKET 8192u
+#define FV_OUTPUT_START_TIMEOUT_MILLISECONDS 1000u
 
 typedef struct {
     float samples[FV_MAX_FRAMES_PER_PACKET];
@@ -24,18 +25,197 @@ typedef struct {
     AudioObjectID deviceID;
     AudioStreamID streamID;
     AudioDeviceIOProcID ioProcID;
+    AudioObjectID outputKeepAliveDeviceID;
+    AudioDeviceIOProcID outputKeepAliveIOProcID;
     AudioStreamBasicDescription format;
     uint32_t bufferFrameSize;
     uint32_t bytesPerSample;
     dispatch_semaphore_t packetSemaphore;
+    dispatch_semaphore_t outputStartSemaphore;
     _Atomic uint64_t writeIndex;
     _Atomic uint64_t readIndex;
     _Atomic uint64_t droppedPackets;
     _Atomic bool running;
     _Atomic bool formatDirty;
     _Atomic bool packetGateOpen;
+    _Atomic bool outputKeepAliveRunning;
+    _Atomic bool awaitingOutputCallback;
     FVPacketSlot slots[FV_RING_CAPACITY];
 } FVCapture;
+
+static OSStatus fv_output_io_proc(
+    AudioObjectID inDevice,
+    const AudioTimeStamp *inNow,
+    const AudioBufferList *inInputData,
+    const AudioTimeStamp *inInputTime,
+    AudioBufferList *outOutputData,
+    const AudioTimeStamp *inOutputTime,
+    void *inClientData
+) {
+    (void) inDevice;
+    (void) inNow;
+    (void) inInputData;
+    (void) inInputTime;
+    // Core Audio clears output buffers before calling an AudioDeviceIOProc.
+    // Leaving them untouched produces silence.
+    (void) outOutputData;
+    (void) inOutputTime;
+
+    FVCapture *capture = (FVCapture *) inClientData;
+    if (capture != NULL && atomic_exchange_explicit(
+        &capture->awaitingOutputCallback,
+        false,
+        memory_order_acq_rel
+    )) {
+        dispatch_semaphore_signal(capture->outputStartSemaphore);
+    }
+    return noErr;
+}
+
+static OSStatus fv_prepare_output_keep_alive(
+    FVCapture *capture,
+    AudioObjectID deviceID
+) {
+    if (deviceID == kAudioObjectUnknown) {
+        return noErr;
+    }
+    if (capture->outputKeepAliveIOProcID != NULL) {
+        return kAudioHardwareIllegalOperationError;
+    }
+
+    capture->outputKeepAliveDeviceID = deviceID;
+    OSStatus status = AudioDeviceCreateIOProcID(
+        deviceID,
+        fv_output_io_proc,
+        capture,
+        &capture->outputKeepAliveIOProcID
+    );
+    if (status != noErr) {
+        capture->outputKeepAliveDeviceID = kAudioObjectUnknown;
+    }
+    return status;
+}
+
+static OSStatus fv_start_output_keep_alive(FVCapture *capture) {
+    if (capture->outputKeepAliveIOProcID == NULL ||
+        atomic_load_explicit(&capture->outputKeepAliveRunning, memory_order_acquire)) {
+        return noErr;
+    }
+    while (dispatch_semaphore_wait(
+        capture->outputStartSemaphore,
+        DISPATCH_TIME_NOW
+    ) == 0) {}
+    atomic_store_explicit(
+        &capture->awaitingOutputCallback,
+        true,
+        memory_order_release
+    );
+    atomic_store_explicit(
+        &capture->outputKeepAliveRunning,
+        true,
+        memory_order_release
+    );
+    OSStatus status = AudioDeviceStart(
+        capture->outputKeepAliveDeviceID,
+        capture->outputKeepAliveIOProcID
+    );
+    if (status != noErr) {
+        atomic_store_explicit(
+            &capture->outputKeepAliveRunning,
+            false,
+            memory_order_release
+        );
+        atomic_store_explicit(
+            &capture->awaitingOutputCallback,
+            false,
+            memory_order_release
+        );
+        return status;
+    }
+
+    dispatch_time_t timeout = dispatch_time(
+        DISPATCH_TIME_NOW,
+        (int64_t) FV_OUTPUT_START_TIMEOUT_MILLISECONDS * NSEC_PER_MSEC
+    );
+    if (dispatch_semaphore_wait(capture->outputStartSemaphore, timeout) != 0) {
+        atomic_store_explicit(
+            &capture->awaitingOutputCallback,
+            false,
+            memory_order_release
+        );
+        OSStatus stopStatus = AudioDeviceStop(
+            capture->outputKeepAliveDeviceID,
+            capture->outputKeepAliveIOProcID
+        );
+        if (stopStatus == noErr) {
+            atomic_store_explicit(
+                &capture->outputKeepAliveRunning,
+                false,
+                memory_order_release
+            );
+        }
+        return stopStatus == noErr ? kAudioHardwareNotReadyError : stopStatus;
+    }
+    return noErr;
+}
+
+static OSStatus fv_stop_output_keep_alive(FVCapture *capture) {
+    if (capture->outputKeepAliveIOProcID == NULL ||
+        !atomic_load_explicit(
+            &capture->outputKeepAliveRunning,
+            memory_order_acquire
+        )) {
+        return noErr;
+    }
+    atomic_store_explicit(
+        &capture->awaitingOutputCallback,
+        false,
+        memory_order_release
+    );
+    OSStatus status = AudioDeviceStop(
+        capture->outputKeepAliveDeviceID,
+        capture->outputKeepAliveIOProcID
+    );
+    if (status == noErr) {
+        atomic_store_explicit(
+            &capture->outputKeepAliveRunning,
+            false,
+            memory_order_release
+        );
+    }
+    return status;
+}
+
+static OSStatus fv_destroy_output_keep_alive(FVCapture *capture) {
+    if (capture->outputKeepAliveIOProcID == NULL) {
+        capture->outputKeepAliveDeviceID = kAudioObjectUnknown;
+        return noErr;
+    }
+    if (atomic_load_explicit(
+        &capture->outputKeepAliveRunning,
+        memory_order_acquire
+    )) {
+        return kAudioHardwareIllegalOperationError;
+    }
+
+    OSStatus status = AudioDeviceDestroyIOProcID(
+        capture->outputKeepAliveDeviceID,
+        capture->outputKeepAliveIOProcID
+    );
+    if (status == noErr) {
+        capture->outputKeepAliveDeviceID = kAudioObjectUnknown;
+        capture->outputKeepAliveIOProcID = NULL;
+    }
+    return status;
+}
+
+static OSStatus fv_stop_and_destroy_output_keep_alive(FVCapture *capture) {
+    OSStatus status = fv_stop_output_keep_alive(capture);
+    if (status != noErr) {
+        return status;
+    }
+    return fv_destroy_output_keep_alive(capture);
+}
 
 static OSStatus fv_get_input_stream_format(
     AudioObjectID deviceID,
@@ -369,6 +549,7 @@ int32_t fv_core_audio_capture_create(
         return kAudioHardwareUnspecifiedError;
     }
     capture->deviceID = deviceID;
+    capture->outputKeepAliveDeviceID = kAudioObjectUnknown;
 
     OSStatus status = fv_get_input_stream_format(
         deviceID,
@@ -401,7 +582,16 @@ int32_t fv_core_audio_capture_create(
     }
 
     capture->packetSemaphore = dispatch_semaphore_create(0);
-    if (capture->packetSemaphore == NULL) {
+    capture->outputStartSemaphore = dispatch_semaphore_create(0);
+    if (capture->packetSemaphore == NULL || capture->outputStartSemaphore == NULL) {
+#if !OS_OBJECT_USE_OBJC
+        if (capture->packetSemaphore != NULL) {
+            dispatch_release(capture->packetSemaphore);
+        }
+        if (capture->outputStartSemaphore != NULL) {
+            dispatch_release(capture->outputStartSemaphore);
+        }
+#endif
         free(capture);
         return kAudioHardwareUnspecifiedError;
     }
@@ -411,6 +601,8 @@ int32_t fv_core_audio_capture_create(
     atomic_init(&capture->running, false);
     atomic_init(&capture->formatDirty, false);
     atomic_init(&capture->packetGateOpen, false);
+    atomic_init(&capture->outputKeepAliveRunning, false);
+    atomic_init(&capture->awaitingOutputCallback, false);
 
     status = AudioDeviceCreateIOProcID(
         deviceID,
@@ -421,6 +613,7 @@ int32_t fv_core_audio_capture_create(
     if (status != noErr) {
 #if !OS_OBJECT_USE_OBJC
         dispatch_release(capture->packetSemaphore);
+        dispatch_release(capture->outputStartSemaphore);
 #endif
         free(capture);
         return status;
@@ -430,7 +623,10 @@ int32_t fv_core_audio_capture_create(
     return noErr;
 }
 
-int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
+int32_t fv_core_audio_capture_start(
+    FVCoreAudioCaptureRef captureRef,
+    AudioObjectID outputKeepAliveDeviceID
+) {
     FVCapture *capture = (FVCapture *) captureRef;
     if (capture == NULL || capture->ioProcID == NULL) {
         return kAudioHardwareBadObjectError;
@@ -439,12 +635,25 @@ int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef captureRef) {
         return noErr;
     }
 
+    OSStatus status = fv_prepare_output_keep_alive(
+        capture,
+        outputKeepAliveDeviceID
+    );
+    if (status != noErr) {
+        return status;
+    }
+    status = fv_start_output_keep_alive(capture);
+    if (status != noErr) {
+        (void) fv_stop_and_destroy_output_keep_alive(capture);
+        return status;
+    }
     atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
     atomic_store_explicit(&capture->running, true, memory_order_release);
-    OSStatus status = AudioDeviceStart(capture->deviceID, capture->ioProcID);
+    status = AudioDeviceStart(capture->deviceID, capture->ioProcID);
     if (status != noErr) {
         atomic_store_explicit(&capture->running, false, memory_order_release);
         dispatch_semaphore_signal(capture->packetSemaphore);
+        (void) fv_stop_and_destroy_output_keep_alive(capture);
     }
     return status;
 }
@@ -454,18 +663,17 @@ int32_t fv_core_audio_capture_stop(FVCoreAudioCaptureRef captureRef) {
     if (capture == NULL || capture->ioProcID == NULL) {
         return kAudioHardwareBadObjectError;
     }
-    if (!atomic_load_explicit(&capture->running, memory_order_acquire)) {
-        dispatch_semaphore_signal(capture->packetSemaphore);
-        return noErr;
+    OSStatus inputStatus = noErr;
+    if (atomic_load_explicit(&capture->running, memory_order_acquire)) {
+        // Close publication before synchronizing with the IOProc. The consumer
+        // still drains every packet already committed to the ring.
+        atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
+        inputStatus = AudioDeviceStop(capture->deviceID, capture->ioProcID);
+        atomic_store_explicit(&capture->running, false, memory_order_release);
     }
-
-    // Close publication before synchronizing with the IOProc. The consumer
-    // still drains every packet already committed to the ring.
-    atomic_store_explicit(&capture->packetGateOpen, false, memory_order_release);
-    OSStatus status = AudioDeviceStop(capture->deviceID, capture->ioProcID);
-    atomic_store_explicit(&capture->running, false, memory_order_release);
     dispatch_semaphore_signal(capture->packetSemaphore);
-    return status;
+    OSStatus outputStatus = fv_stop_and_destroy_output_keep_alive(capture);
+    return inputStatus == noErr ? outputStatus : inputStatus;
 }
 
 int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef captureRef) {
@@ -473,7 +681,11 @@ int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef captureRef) {
     if (capture == NULL) {
         return noErr;
     }
-    if (atomic_load_explicit(&capture->running, memory_order_acquire)) {
+    if (atomic_load_explicit(&capture->running, memory_order_acquire) ||
+        atomic_load_explicit(
+            &capture->outputKeepAliveRunning,
+            memory_order_acquire
+        )) {
         OSStatus stopStatus = fv_core_audio_capture_stop(captureRef);
         if (stopStatus != noErr) {
             return stopStatus;
@@ -489,8 +701,13 @@ int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef captureRef) {
         }
         capture->ioProcID = NULL;
     }
+    OSStatus outputDestroyStatus = fv_destroy_output_keep_alive(capture);
+    if (outputDestroyStatus != noErr) {
+        return outputDestroyStatus;
+    }
 #if !OS_OBJECT_USE_OBJC
     dispatch_release(capture->packetSemaphore);
+    dispatch_release(capture->outputStartSemaphore);
 #endif
     free(capture);
     return noErr;

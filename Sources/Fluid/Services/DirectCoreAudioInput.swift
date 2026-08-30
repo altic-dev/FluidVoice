@@ -385,6 +385,29 @@ nonisolated protocol DirectCoreAudioInputControlling: AnyObject, Sendable {
     func invalidate() -> OSStatus
 }
 
+nonisolated enum BuiltInOutputKeepAlivePolicy {
+    static func outputDeviceID(
+        inputDeviceID: AudioObjectID,
+        devices: [AudioDevice.Device],
+        isAppleSilicon: Bool,
+        isOutputAlive: (AudioObjectID) -> Bool
+    ) -> AudioObjectID? {
+        guard isAppleSilicon,
+              let input = devices.first(where: { $0.id == inputDeviceID }),
+              input.hasInput,
+              input.isUnavailableWhenClamshellClosed
+        else {
+            return nil
+        }
+
+        let outputs = devices.filter {
+            $0.hasOutput && $0.isBuiltIn && isOutputAlive($0.id)
+        }
+        guard outputs.count == 1 else { return nil }
+        return outputs[0].id
+    }
+}
+
 private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputControlling, @unchecked Sendable {
     private struct SendableCaptureHandle: @unchecked Sendable {
         let rawValue: FVCoreAudioCaptureRef
@@ -465,7 +488,13 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
         guard fv_core_audio_capture_is_running(capture) == false else { return }
 
         fv_core_audio_capture_clear(capture)
-        let status = fv_core_audio_capture_start(capture)
+        let outputKeepAliveDeviceID = Self.outputKeepAliveDeviceID(
+            inputDeviceID: self.deviceID
+        ) ?? AudioObjectID(kAudioObjectUnknown)
+        let status = fv_core_audio_capture_start(
+            capture,
+            outputKeepAliveDeviceID
+        )
         guard status == noErr else {
             throw Self.error(status: status, operation: "start direct Core Audio input")
         }
@@ -526,6 +555,22 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
         }
         self.capture = nil
         return noErr
+    }
+
+    private static func outputKeepAliveDeviceID(
+        inputDeviceID: AudioObjectID
+    ) -> AudioObjectID? {
+        #if arch(arm64)
+        let isAppleSilicon = true
+        #else
+        let isAppleSilicon = false
+        #endif
+        return BuiltInOutputKeepAlivePolicy.outputDeviceID(
+            inputDeviceID: inputDeviceID,
+            devices: AudioDevice.listAllDevices(),
+            isAppleSilicon: isAppleSilicon,
+            isOutputAlive: AudioDevice.isOutputDeviceAlive(deviceID:)
+        )
     }
 
     private nonisolated static func consumePackets(

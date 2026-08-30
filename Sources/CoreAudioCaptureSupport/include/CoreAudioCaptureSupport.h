@@ -31,14 +31,18 @@ uint32_t fv_core_audio_buffer_frame_count(
     uint32_t channelCount
 );
 
-/// Creates a prepared, input-only capture for one physical Core Audio device.
+/// Creates a prepared capture for one physical Core Audio input device.
 /// The device is not started and the microphone is not active until start.
 int32_t fv_core_audio_capture_create(
     AudioObjectID deviceID,
     FVCoreAudioCaptureRef *outCapture
 );
 
-int32_t fv_core_audio_capture_start(FVCoreAudioCaptureRef capture);
+/// Starts input capture and optionally keeps one output device active and silent.
+int32_t fv_core_audio_capture_start(
+    FVCoreAudioCaptureRef capture,
+    AudioObjectID outputKeepAliveDeviceID
+);
 int32_t fv_core_audio_capture_stop(FVCoreAudioCaptureRef capture);
 int32_t fv_core_audio_capture_destroy(FVCoreAudioCaptureRef capture);
 

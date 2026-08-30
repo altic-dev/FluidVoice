@@ -208,6 +208,10 @@ nonisolated enum AudioDevice {
         return isAlive
     }
 
+    static func isOutputDeviceAlive(deviceID: AudioObjectID) -> Bool {
+        self.queryDeviceLiveness(deviceID, failureValue: false)
+    }
+
     static func listOutputDevices() -> [Device] {
         return self.listAllDevices().filter { $0.hasOutput }
     }
@@ -253,6 +257,13 @@ nonisolated enum AudioDevice {
     /// Core Audio may continue enumerating an input after it has stopped being usable.
     /// Fail open when HAL cannot answer so unusual and virtual devices still work.
     private static func queryInputDeviceLiveness(_ deviceID: AudioObjectID) -> Bool {
+        self.queryDeviceLiveness(deviceID, failureValue: true)
+    }
+
+    private static func queryDeviceLiveness(
+        _ deviceID: AudioObjectID,
+        failureValue: Bool
+    ) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsAlive,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -268,7 +279,7 @@ nonisolated enum AudioDevice {
             &dataSize,
             &value
         )
-        return status != noErr || value != 0
+        return status == noErr ? value != 0 : failureValue
     }
 
     /// The built-in microphone remains enumerated and may still report itself
