@@ -1293,6 +1293,18 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
 
         let invalidationHandler = self.onFormatInvalidated
         let block: AudioObjectPropertyListenerBlock = { [weak self, weak input] listenerObjectID, _ in
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callback,
+                    owner: .directCoreAudio,
+                    objectID: listenerObjectID,
+                    selector: selector,
+                    scope: scope,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .dedicatedDelivery,
+                    generation: generation
+                )
+            #endif
             let deviceIsAlive =
                 name == "device_is_alive"
                     ? Self.readDeviceLiveness(objectID: listenerObjectID)
@@ -1329,12 +1341,18 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                 )
             }
         }
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .directCoreAudio, objectID: objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, generation: generation)
+        #endif
         let status = AudioObjectAddPropertyListenerBlock(
             objectID,
             &address,
             self.listenerQueue,
             block
         )
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .directCoreAudio, objectID: objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status, generation: generation)
+        #endif
         guard status == noErr else {
             if policy != .optional {
                 throw Self.error(
@@ -1408,6 +1426,9 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         )
         var isAlive: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.halQueryBegin, owner: .directCoreAudio, objectID: objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedDelivery, phase: .listener)
+        #endif
         let status = AudioObjectGetPropertyData(
             objectID,
             &address,
@@ -1416,6 +1437,9 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             &size,
             &isAlive
         )
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.halQueryEnd, owner: .directCoreAudio, objectID: objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedDelivery, phase: .listener, status: status)
+        #endif
         guard status == noErr, size == UInt32(MemoryLayout<UInt32>.size) else {
             return nil
         }
@@ -1466,12 +1490,18 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     ) {
         for registration in registrations {
             var address = registration.address
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .directCoreAudio, objectID: registration.objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
+            #endif
             let status = AudioObjectRemovePropertyListenerBlock(
                 registration.objectID,
                 &address,
                 queue,
                 registration.block
             )
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .directCoreAudio, objectID: registration.objectID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+            #endif
             if status != noErr, status != kAudioHardwareBadObjectError {
                 Self.log(
                     "Direct capture listener removal failed object=\(registration.objectID) " +

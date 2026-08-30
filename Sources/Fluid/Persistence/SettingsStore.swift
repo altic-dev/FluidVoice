@@ -1937,6 +1937,28 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Tier 1 native (Zoom/Teams/Webex) meeting auto-detection (default: ON).
+    var meetingAutoDetectEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingAutoDetectEnabled)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingAutoDetectEnabled)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectEnabled)
+        }
+    }
+
+    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    var meetingAutoDetectBrowserEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
+        }
+    }
+
     var preferredOutputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
@@ -2212,6 +2234,21 @@ final class SettingsStore: ObservableObject {
 
             // Post notification for live update if overlay is visible
             NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
+    }
+
+    var meetingOverlayPreference: MeetingOverlayPreference {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.meetingOverlayPreference),
+                  let preference = MeetingOverlayPreference(rawValue: raw)
+            else {
+                return .pill
+            }
+            return preference
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.meetingOverlayPreference)
         }
     }
 
@@ -3329,6 +3366,7 @@ final class SettingsStore: ObservableObject {
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
             overlaySize: self.overlaySize,
+            meetingOverlayPreference: self.meetingOverlayPreference,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
             saveTranscriptionHistory: self.saveTranscriptionHistory,
@@ -3482,6 +3520,9 @@ final class SettingsStore: ObservableObject {
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
         self.overlaySize = payload.overlaySize
+        if let meetingOverlayPreference = payload.meetingOverlayPreference {
+            self.meetingOverlayPreference = meetingOverlayPreference
+        }
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
         self.saveTranscriptionHistory = payload.saveTranscriptionHistory
@@ -5370,6 +5411,8 @@ private extension SettingsStore {
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let meetingRecordingDefaults = "MeetingRecordingDefaults"
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
+        static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
+        static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
@@ -5492,6 +5535,7 @@ private extension SettingsStore {
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"
         static let overlaySize = "OverlaySize"
+        static let meetingOverlayPreference = "MeetingOverlayPreference"
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
 
         /// Media Playback Control

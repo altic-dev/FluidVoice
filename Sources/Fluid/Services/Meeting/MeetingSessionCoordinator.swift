@@ -195,21 +195,35 @@ final class MeetingSessionCoordinator: ObservableObject {
         mode: MeetingCaptureMode,
         title: String
     ) async throws -> MeetingCaptureConfiguration {
+        try await self.defaultConfiguration(mode: mode, title: title, preferredBundleIdentifier: nil, preferredWindowID: nil)
+    }
+
+    /// Used by the auto-detection Start path: `preferredBundleIdentifier` is the detected app.
+    /// When `requirePreferredApplication` is true, that app must be available — no Zoom/Chrome/Teams
+    /// fallback. `preferredWindowID` is threaded onto the resulting identity when it still matches.
+    /// SCK content and microphone identities are refreshed here rather than reused.
+    func defaultConfiguration(
+        mode: MeetingCaptureMode,
+        title: String,
+        preferredBundleIdentifier: String?,
+        preferredWindowID: UInt32?,
+        requirePreferredApplication: Bool = false
+    ) async throws -> MeetingCaptureConfiguration {
         let microphone = try MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
-        let application: MeetingApplicationIdentity?
+        var application: MeetingApplicationIdentity?
         if mode == .onlineCall {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
-            let preferredBundleIdentifiers = [
-                "us.zoom.xos",
-                "com.google.Chrome",
-                "com.microsoft.teams2",
-            ]
-            application = preferredBundleIdentifiers.lazy.compactMap { bundleIdentifier in
-                applications.first(where: { $0.bundleIdentifier == bundleIdentifier })
-            }.first ?? applications.first
-            guard application != nil else { throw MeetingCaptureError.applicationNotSelected }
+            var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
+                from: applications,
+                preferredBundleIdentifier: preferredBundleIdentifier,
+                requirePreferredApplication: requirePreferredApplication
+            )
+            if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
+                resolved.windowID = preferredWindowID
+            }
+            application = resolved
         } else {
             application = nil
         }

@@ -1375,7 +1375,7 @@ struct SettingsView: View {
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(self.settings.overlayPosition == .bottom ? "Overlay Size" : "Notch Style")
+                                    Text(self.settings.overlayPosition == .bottom ? "Dictation Overlay Size" : "Notch Style")
                                         .font(self.theme.typography.bodyStrong)
                                         .foregroundStyle(self.settingsTitleText)
                                     Text(
@@ -1408,6 +1408,29 @@ struct SettingsView: View {
                                 }
                             }
                             .settingsSearchTarget(.overlayStyle)
+
+                            Divider().padding(.vertical, 4)
+
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Meeting Overlay")
+                                        .font(self.theme.typography.bodyStrong)
+                                        .foregroundStyle(self.settingsTitleText)
+                                    Text("Choose the display used when your next meeting starts")
+                                        .font(self.theme.typography.bodySmall)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: self.$settings.meetingOverlayPreference) {
+                                    ForEach(MeetingOverlayPreference.allCases, id: \.self) { preference in
+                                        Text(preference == .pill ? "Pill" : "Captions").tag(preference)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 170, alignment: .trailing)
+                            }
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {

@@ -24,8 +24,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+            // Must precede every Core Audio observer. Disabled unless explicitly
+            // requested through the Phase 0 diagnostics environment.
+            AudioTopologyDiagnostics.shared.startIfRequested()
+        #endif
         // Bring up file logging + crash handlers immediately during launch.
         _ = FileLogger.shared
+        #if DEBUG
+            MeetingDetectorFeasibilityProbe.startIfRequested()
+        #endif
         // Must be read during the launch callback - the current Apple Event identifies
         // login-item launches (used to optionally start silently, see issue #369).
         self.wasLaunchedAsLoginItem = Self.detectLoginItemLaunch()
@@ -57,6 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Login Items can launch hidden; reveal the real SwiftUI window so ContentView startup runs.
         self.openMainWindowOnLaunch()
+        self.scheduleMeetingAutoDetectorStart()
 
         // Note: App UI is designed with dark color scheme in mind
         // All gradients and effects are optimized for dark mode
@@ -70,6 +79,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Clean up the update check timer
         self.updateCheckTimer?.invalidate()
         self.updateCheckTimer = nil
+        #if DEBUG
+            AudioTopologyDiagnostics.shared.stop()
+        #endif
     }
 
     private func shutdownASRRuntimeForTermination() {
@@ -218,6 +230,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
+    private func scheduleMeetingAutoDetectorStart() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            Task { @MainActor in
+                _ = AppServices.shared.meetingAutoDetector
+            }
+        }
+    }
     /// Realize the main window invisibly so ContentView's startup runs, then order it out.
     /// Used for login-item launches when "Show window when launched at login" is off.
     @discardableResult

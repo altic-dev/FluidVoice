@@ -65,6 +65,66 @@ double fv_core_audio_capture_sample_rate(FVCoreAudioCaptureRef capture);
 uint32_t fv_core_audio_capture_buffer_frame_size(FVCoreAudioCaptureRef capture);
 uint64_t fv_core_audio_capture_dropped_packet_count(FVCoreAudioCaptureRef capture);
 
+// MARK: - Audio topology diagnostics
+
+/// Fixed-size, numeric-only event captured without allocation, locks, dispatch,
+/// file I/O, environment reads, or Core Audio calls. String rendering happens
+/// later on a diagnostics drain queue.
+typedef struct {
+    uint64_t sequence;
+    uint64_t continuousTime;
+    uint64_t generation;
+    uint32_t event;
+    uint32_t owner;
+    AudioObjectID objectID;
+    AudioObjectPropertySelector selector;
+    AudioObjectPropertyScope scope;
+    AudioObjectPropertyElement element;
+    uint32_t queueRole;
+    uint32_t phase;
+    uint32_t transport;
+    int32_t status;
+} FVAudioTopologyTraceEvent;
+
+void fv_audio_topology_trace_set_enabled(bool enabled);
+bool fv_audio_topology_trace_is_enabled(void);
+
+/// Captures one event and returns its monotonically increasing sequence, or 0
+/// when tracing is disabled.
+uint64_t fv_audio_topology_trace_record(
+    uint32_t event,
+    uint32_t owner,
+    AudioObjectID objectID,
+    AudioObjectPropertySelector selector,
+    AudioObjectPropertyScope scope,
+    AudioObjectPropertyElement element,
+    uint32_t queueRole,
+    uint32_t phase,
+    uint32_t transport,
+    int32_t status,
+    uint64_t generation
+);
+
+/// Copies fully published events newer than afterSequence in sequence order.
+/// Overwritten or concurrently mutating slots are skipped. latestSequence is
+/// the highest sequence reserved when the snapshot began.
+uint32_t fv_audio_topology_trace_snapshot(
+    uint64_t afterSequence,
+    FVAudioTopologyTraceEvent *events,
+    uint32_t capacity,
+    uint64_t *latestSequence
+);
+
+uint32_t fv_audio_topology_trace_capacity(void);
+uint64_t fv_audio_topology_trace_latest_sequence(void);
+
+/// Main-runloop heartbeat; both functions are atomic and non-blocking.
+void fv_audio_topology_trace_main_heartbeat(void);
+uint64_t fv_audio_topology_trace_last_main_heartbeat(void);
+
+/// Test-only in intent. Call only while no producers are active.
+void fv_audio_topology_trace_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

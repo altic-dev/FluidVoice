@@ -321,11 +321,15 @@ nonisolated enum MeetingWindowSelector {
     static let minimumWidth: CGFloat = 200
     static let minimumHeight: CGFloat = 100
 
-    static func selectWindow(from candidates: [MeetingWindowCandidate]) -> MeetingWindowCandidate? {
-        candidates
+    /// `preferredWindowID` — typically the window auto-detection found evidence in — wins outright
+    /// when it is still among the eligible candidates; otherwise falls back to ranked selection.
+    static func selectWindow(from candidates: [MeetingWindowCandidate], preferredWindowID: UInt32? = nil) -> MeetingWindowCandidate? {
+        let eligible = candidates
             .filter { $0.layer == 0 && $0.frame.width >= self.minimumWidth && $0.frame.height >= self.minimumHeight }
-            .sorted(by: self.isRanked)
-            .first
+        if let preferredWindowID, let preferred = eligible.first(where: { $0.windowID == preferredWindowID }) {
+            return preferred
+        }
+        return eligible.sorted(by: self.isRanked).first
     }
 
     /// True when `lhs` should be preferred over `rhs`: non-empty title, then frontmost
@@ -450,7 +454,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
         let filter: SCContentFilter
         let scope: MeetingCaptureScope
-        if let window = Self.selectWindow(for: runningApplication, in: content) {
+        if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
             filter = SCContentFilter(desktopIndependentWindow: window)
             scope = .window
         } else {
@@ -480,7 +484,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Window titles are PII and must never be logged or persisted.
     private static func selectWindow(
         for runningApplication: SCRunningApplication,
-        in content: SCShareableContent
+        in content: SCShareableContent,
+        preferredWindowID: UInt32? = nil
     ) -> SCWindow? {
         let ownedWindows = content.windows.enumerated().filter { _, window in
             window.owningApplication?.processID == runningApplication.processID
@@ -494,7 +499,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 zOrderIndex: index
             )
         }
-        guard let winner = MeetingWindowSelector.selectWindow(from: candidates) else { return nil }
+        guard let winner = MeetingWindowSelector.selectWindow(from: candidates, preferredWindowID: preferredWindowID) else { return nil }
         return ownedWindows.first(where: { _, window in window.windowID == winner.windowID })?.element
     }
 
@@ -1190,6 +1195,39 @@ nonisolated enum MeetingCaptureError: LocalizedError {
 }
 
 enum MeetingCaptureSourceCatalog {
+    static let preferredFallbackBundleIdentifiers = [
+        "us.zoom.xos",
+        "com.google.Chrome",
+        "com.microsoft.teams2",
+    ]
+
+    /// Manual setup keeps Zoom/Chrome/Teams fallback. Auto-detect must capture the
+    /// detected app or fail — never a different meeting.
+    static func resolveApplication(
+        from applications: [MeetingApplicationIdentity],
+        preferredBundleIdentifier: String?,
+        requirePreferredApplication: Bool
+    ) throws -> MeetingApplicationIdentity {
+        if requirePreferredApplication {
+            guard let preferredBundleIdentifier else {
+                throw MeetingCaptureError.applicationNotSelected
+            }
+            guard let match = applications.first(where: { $0.bundleIdentifier == preferredBundleIdentifier }) else {
+                throw MeetingCaptureError.applicationUnavailable(preferredBundleIdentifier)
+            }
+            return match
+        }
+
+        let preferredBundleIdentifiers = [preferredBundleIdentifier].compactMap { $0 }
+            + Self.preferredFallbackBundleIdentifiers
+        if let application = preferredBundleIdentifiers.lazy.compactMap({ bundleIdentifier in
+            applications.first(where: { $0.bundleIdentifier == bundleIdentifier })
+        }).first ?? applications.first {
+            return application
+        }
+        throw MeetingCaptureError.applicationNotSelected
+    }
+
     static func availableApplications() async throws -> [MeetingApplicationIdentity] {
         let content = try await SCShareableContent.current
         let ownBundleIdentifier = Bundle.main.bundleIdentifier
@@ -1218,11 +1256,30 @@ enum MeetingCaptureSourceCatalog {
 
     static func availableMicrophones() -> [MeetingMicrophoneIdentity] {
         let coreAudioDevices = AudioDevice.listInputDevices()
-        return AVCaptureDevice.DiscoverySession(
+        #if DEBUG
+            if Self.usesCoreAudioOnlyIsolationCatalog {
+                return coreAudioDevices.compactMap { device in
+                    guard device.uid.isEmpty == false else { return nil }
+                    return MeetingMicrophoneIdentity(
+                        captureDeviceID: device.uid,
+                        coreAudioUID: device.uid,
+                        displayName: device.name
+                    )
+                }
+            }
+        #endif
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.avfDiscoveryBegin, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog)
+        #endif
+        let devices = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .external],
             mediaType: .audio,
             position: .unspecified
-        ).devices.map { device in
+        ).devices
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.avfDiscoveryEnd, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog, status: Int32(clamping: devices.count))
+        #endif
+        return devices.map { device in
             let sameName = coreAudioDevices.filter { $0.name == device.localizedName }
             return MeetingMicrophoneIdentity(
                 captureDeviceID: device.uniqueID,
@@ -1239,11 +1296,35 @@ enum MeetingCaptureSourceCatalog {
         {
             return preferred
         }
-        guard let defaultDevice = AVCaptureDevice.default(for: .audio),
+        #if DEBUG
+            if Self.usesCoreAudioOnlyIsolationCatalog {
+                guard let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
+                      let microphone = microphones.first(where: { $0.coreAudioUID == defaultUID })
+                else { throw MeetingCaptureError.microphoneUnavailable }
+                return microphone
+            }
+        #endif
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.avfDefaultBegin, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog)
+        #endif
+        let defaultDevice = AVCaptureDevice.default(for: .audio)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.avfDefaultEnd, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog, status: defaultDevice == nil ? -1 : noErr)
+        #endif
+        guard let defaultDevice,
               let microphone = microphones.first(where: { $0.captureDeviceID == defaultDevice.uniqueID })
         else { throw MeetingCaptureError.microphoneUnavailable }
         return microphone
     }
+
+    #if DEBUG
+        /// Phase-0 isolation only. This is intentionally meeting-catalog scoped and inert unless
+        /// the signed Debug app is launched with the exact opt-in value. It does not alter the
+        /// dictation catalog, preferred microphone, or Core Audio listener ownership.
+        private static var usesCoreAudioOnlyIsolationCatalog: Bool {
+            ProcessInfo.processInfo.environment["FLUIDVOICE_MEETING_COREAUDIO_CATALOG_ISOLATION"] == "1"
+        }
+    #endif
 }
 
 private extension CGRect {
@@ -1458,17 +1539,43 @@ private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable 
             mElement: kAudioObjectPropertyElementMain
         )
         let defaultOutToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            #endif
             self?.reattachDataSourceListener()
             self?.reevaluate()
         }
         let restartedToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyServiceRestarted, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            #endif
             self?.reregisterAfterServiceRestart()
         }
-        guard AudioObjectAddPropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken) == noErr else {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let defaultStatus = AudioObjectAddPropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: defaultStatus)
+        #endif
+        guard defaultStatus == noErr else {
             return false
         }
-        guard AudioObjectAddPropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, restartedToken) == noErr else {
-            _ = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let restartedStatus = AudioObjectAddPropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, restartedToken)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: restartedStatus)
+        #endif
+        guard restartedStatus == noErr else {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+            #endif
+            let cleanupStatus = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: cleanupStatus)
+            #endif
             return false
         }
         self.defaultOutputToken = defaultOutToken
@@ -1487,8 +1594,20 @@ private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable 
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain
         )
-        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.reevaluate() }
-        guard AudioObjectAddPropertyListenerBlock(device.id, &address, DispatchQueue.main, token) == noErr else { return false }
+        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: device.id, selector: kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            #endif
+            self?.reevaluate()
+        }
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: device.id, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let status = AudioObjectAddPropertyListenerBlock(device.id, &address, DispatchQueue.main, token)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: device.id, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+        #endif
+        guard status == noErr else { return false }
         self.dataSourceToken = token
         self.dataSourceDeviceID = device.id
         return true
@@ -1501,7 +1620,13 @@ private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable 
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain
         )
-        _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+        #endif
         self.dataSourceToken = nil
         self.dataSourceDeviceID = nil
     }
@@ -1533,10 +1658,22 @@ private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable 
             mElement: kAudioObjectPropertyElementMain
         )
         if let token = self.defaultOutputToken {
-            _ = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, token)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, token)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+            #endif
         }
         if let token = self.serviceRestartedToken {
-            _ = AudioObjectRemovePropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, token)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, token)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+            #endif
         }
         self.defaultOutputToken = nil
         self.serviceRestartedToken = nil

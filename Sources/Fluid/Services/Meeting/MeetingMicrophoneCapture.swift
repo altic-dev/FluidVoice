@@ -637,7 +637,21 @@ actor MeetingMicrophoneCapture {
         guard !self.isRunning else { throw MeetingMicrophoneCaptureError.alreadyStarted }
         let currentGeneration = self.generationBox.advance()
 
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+        #if DEBUG
+            var diagnosticsPhaseEnded = false
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingMicrophone, queueRole: .actorControl, phase: .handoff, generation: currentGeneration)
+            AudioTopologyDiagnostics.record(.avfAuthorizationBegin, owner: .meetingMicrophone, queueRole: .actorControl, phase: .catalog, generation: currentGeneration)
+            defer {
+                if diagnosticsPhaseEnded == false {
+                    AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .handoff, status: -1, generation: currentGeneration)
+                }
+            }
+        #endif
+        let authorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.avfAuthorizationEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .catalog, status: Int32(authorizationStatus.rawValue), generation: currentGeneration)
+        #endif
+        guard authorizationStatus == .authorized else {
             return self.fail(microphone: microphone, reason: "Microphone permission is not granted.")
         }
 
@@ -652,9 +666,18 @@ actor MeetingMicrophoneCapture {
         let input = engine.inputNode
 
         // VPIO replaces the I/O unit: enable before any format read or device bind.
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.vpioEnableBegin, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .vpio, generation: currentGeneration)
+        #endif
         do {
             try input.setVoiceProcessingEnabled(true)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.vpioEnableEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .vpio, status: noErr, generation: currentGeneration)
+            #endif
         } catch {
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.vpioEnableEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .vpio, status: -1, generation: currentGeneration)
+            #endif
             return self.fail(microphone: microphone, reason: "Voice processing could not be enabled: \(error.localizedDescription)")
         }
         var ducking = AVAudioVoiceProcessingOtherAudioDuckingConfiguration()
@@ -667,7 +690,13 @@ actor MeetingMicrophoneCapture {
         }
 
         // TODO(probe): bind order is a Phase-1 measurement; this hard-codes one attempt.
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.audioUnitBindBegin, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .vpio, generation: currentGeneration)
+        #endif
         let bindStatus = Self.bindInputDevice(audioUnit, to: requestedDeviceID)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.audioUnitBindEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .vpio, status: bindStatus, generation: currentGeneration)
+        #endif
 
         // Tap before start(): added afterwards it sits on an inactive node — measured as
         // 10 minutes of zero callbacks with healthy telemetry.
@@ -683,10 +712,25 @@ actor MeetingMicrophoneCapture {
             tapState.handle(buffer: buffer, time: time)
         }
 
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.enginePrepareBegin, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, generation: currentGeneration)
+        #endif
         engine.prepare()
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.enginePrepareEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, status: noErr, generation: currentGeneration)
+        #endif
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.engineStartBegin, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, generation: currentGeneration)
+        #endif
         do {
             try engine.start()
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.engineStartEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, status: noErr, generation: currentGeneration)
+            #endif
         } catch {
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.engineStartEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, status: -1, generation: currentGeneration)
+            #endif
             input.removeTap(onBus: 0)
             return self.fail(microphone: microphone, reason: "AVAudioEngine failed to start: \(error.localizedDescription)")
         }
@@ -732,6 +776,11 @@ actor MeetingMicrophoneCapture {
             outputChannelDecision: "mono (explicit downmix); observed ch=1 on today's SCStream mic, not derived from SCStream's stereo capture config"
         )
         self.registerEventObservers(engine: engine, outcome: outcome, requestedDeviceID: requestedDeviceID, onEvent: onEvent)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.readiness, owner: .meetingMicrophone, objectID: requestedDeviceID, queueRole: .actorControl, phase: .engine, status: noErr, generation: currentGeneration)
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .handoff, status: noErr, generation: currentGeneration)
+            diagnosticsPhaseEnded = true
+        #endif
         return outcome
     }
 
@@ -739,11 +788,17 @@ actor MeetingMicrophoneCapture {
         guard self.isRunning else { return }
         self.isRunning = false
         self.tearDownEventObservers() // first: stop-time churn must not poison a stats snapshot
-        self.generationBox.advance()
+        let stopGeneration = self.generationBox.advance()
 
         if let engine = self.engine {
             engine.inputNode.removeTap(onBus: 0)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.engineStopBegin, owner: .meetingMicrophone, queueRole: .actorControl, phase: .engine, generation: stopGeneration)
+            #endif
             engine.stop()
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.engineStopEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .engine, status: noErr, generation: stopGeneration)
+            #endif
         }
         self.engine = nil
         self.tapState = nil
@@ -821,10 +876,20 @@ actor MeetingMicrophoneCapture {
                 mElement: kAudioObjectPropertyElementMain
             )
             let token: AudioObjectPropertyListenerBlock = { _, _ in
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.callback, owner: .meetingMicrophone, objectID: AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDefaultInputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+                #endif
                 statsBox.mutate { $0.defaultInputChangeEvents += 1 }
                 onEvent(.defaultInputChanged)
             }
-            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, token) == noErr {
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingMicrophone, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener)
+            #endif
+            let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingMicrophone, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener, status: status)
+            #endif
+            if status == noErr {
                 self.defaultInputListenerToken = token
             }
         }
@@ -836,10 +901,20 @@ actor MeetingMicrophoneCapture {
                 mElement: kAudioObjectPropertyElementMain
             )
             let token: AudioObjectPropertyListenerBlock = { _, _ in
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.callback, owner: .meetingMicrophone, objectID: requestedDeviceID, selector: kAudioDeviceProcessorOverload, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+                #endif
                 statsBox.mutate { $0.overloadCount += 1 }
                 onEvent(.overload)
             }
-            if AudioObjectAddPropertyListenerBlock(requestedDeviceID, &address, DispatchQueue.main, token) == noErr {
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingMicrophone, objectID: requestedDeviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener)
+            #endif
+            let status = AudioObjectAddPropertyListenerBlock(requestedDeviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingMicrophone, objectID: requestedDeviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener, status: status)
+            #endif
+            if status == noErr {
                 self.overloadListenerToken = token
                 self.overloadListenerDeviceID = requestedDeviceID
             }
@@ -857,7 +932,13 @@ actor MeetingMicrophoneCapture {
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             )
-            _ = AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingMicrophone, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingMicrophone, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener, status: status)
+            #endif
             self.defaultInputListenerToken = nil
         }
         if let token = self.overloadListenerToken, let deviceID = self.overloadListenerDeviceID {
@@ -866,7 +947,13 @@ actor MeetingMicrophoneCapture {
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             )
-            _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingMicrophone, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingMicrophone, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .actorControl, phase: .listener, status: status)
+            #endif
             self.overloadListenerToken = nil
             self.overloadListenerDeviceID = nil
         }

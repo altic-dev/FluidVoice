@@ -1714,6 +1714,9 @@ private struct MeetingHistoryRow: View {
 private struct MeetingRecordingSettingsSheet: View {
     @Binding var draft: MeetingTranscriptionSetupDraft
     @Binding var retentionPolicy: MeetingAudioRetentionPolicy
+    @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var dismissalAdvisor = MeetingAutoDetectDismissalAdvisor.shared
+    @ObservedObject private var appServices = AppServices.shared
 
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
@@ -1828,6 +1831,18 @@ private struct MeetingRecordingSettingsSheet: View {
                                 }
                             }
 
+                            if self.settings.meetingAutoDetectEnabled,
+                               self.appServices.meetingAutoDetectHealth == .zoomWindowTitleUnreadable {
+                                MeetingAdaptiveSetupRow(
+                                    title: "Zoom window access needs repair",
+                                    detail: "Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started.") {
+                                        Button("Open Screen Recording Settings") {
+                                            self.onOpenScreenRecordingSettings()
+                                        }
+                                        .fluidButton(.compact, size: .small)
+                                    }
+                            }
+
                             Divider()
                             MeetingAdaptiveSetupRow(
                                 title: "Microphone",
@@ -1889,6 +1904,52 @@ private struct MeetingRecordingSettingsSheet: View {
                                 .labelsHidden()
                                 .frame(width: 320, alignment: .trailing)
                                 .accessibilityLabel("Audio retention")
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(
+                                title: "Detect meetings automatically",
+                                detail: "Shows a \"Meeting detected\" prompt for Zoom, Teams, and Webex. Never starts recording on its own."
+                            ) {
+                                Toggle("", isOn: self.$settings.meetingAutoDetectEnabled)
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                            }
+
+                            if self.settings.meetingAutoDetectEnabled {
+                                Divider()
+                                MeetingAdaptiveSetupRow(
+                                    title: "Also check browser tabs",
+                                    detail: "Checks the address of the frontmost browser tab against a fixed list of meeting "
+                                        + "sites (Google Meet, Zoom, Teams, Whereby, Jitsi). Nothing is stored or sent."
+                                ) {
+                                    Toggle("", isOn: self.$settings.meetingAutoDetectBrowserEnabled)
+                                        .labelsHidden()
+                                        .toggleStyle(.switch)
+                                }
+                            }
+                        }
+                    }
+
+                    if self.dismissalAdvisor.shouldSuggest {
+                        ThemedCard(style: .subtle, padding: self.theme.metrics.spacing.md) {
+                            HStack(spacing: self.theme.metrics.spacing.md) {
+                                Label(
+                                    "You've dismissed several meeting-detected prompts recently.",
+                                    systemImage: "bell.slash"
+                                )
+                                .font(self.theme.typography.bodySmall)
+                                Spacer()
+                                Button("Turn Off") {
+                                    self.settings.meetingAutoDetectEnabled = false
+                                    self.settings.meetingAutoDetectBrowserEnabled = false
+                                    self.dismissalAdvisor.shouldSuggest = false
+                                }
+                                .fluidButton(.compact, size: .small)
+                                Button("Keep On") {
+                                    self.dismissalAdvisor.shouldSuggest = false
+                                }
+                                .fluidButton(.compact, size: .small)
                             }
                         }
                     }

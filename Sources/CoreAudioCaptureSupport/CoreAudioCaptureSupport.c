@@ -11,6 +11,7 @@
 // realtime producer strictly allocation-free.
 #define FV_RING_CAPACITY 64u
 #define FV_MAX_FRAMES_PER_PACKET 8192u
+#define FV_AUDIO_TOPOLOGY_TRACE_CAPACITY 2048u
 
 typedef struct {
     float samples[FV_MAX_FRAMES_PER_PACKET];
@@ -36,6 +37,220 @@ typedef struct {
     _Atomic bool packetGateOpen;
     FVPacketSlot slots[FV_RING_CAPACITY];
 } FVCapture;
+
+typedef struct {
+    _Atomic uint64_t publishedSequence;
+    _Atomic uint64_t sequence;
+    _Atomic uint64_t continuousTime;
+    _Atomic uint64_t generation;
+    _Atomic uint32_t event;
+    _Atomic uint32_t owner;
+    _Atomic uint32_t objectID;
+    _Atomic uint32_t selector;
+    _Atomic uint32_t scope;
+    _Atomic uint32_t element;
+    _Atomic uint32_t queueRole;
+    _Atomic uint32_t phase;
+    _Atomic uint32_t transport;
+    _Atomic int32_t status;
+} FVAudioTopologyTraceSlot;
+
+static _Atomic bool fvAudioTopologyTraceEnabled = false;
+static _Atomic uint64_t fvAudioTopologyTraceSequence = 0;
+static _Atomic uint64_t fvAudioTopologyMainHeartbeat = 0;
+static FVAudioTopologyTraceSlot
+    fvAudioTopologyTraceSlots[FV_AUDIO_TOPOLOGY_TRACE_CAPACITY];
+
+void fv_audio_topology_trace_set_enabled(bool enabled) {
+    atomic_store_explicit(
+        &fvAudioTopologyTraceEnabled,
+        enabled,
+        memory_order_release
+    );
+}
+
+bool fv_audio_topology_trace_is_enabled(void) {
+    return atomic_load_explicit(
+        &fvAudioTopologyTraceEnabled,
+        memory_order_acquire
+    );
+}
+
+uint64_t fv_audio_topology_trace_record(
+    uint32_t event,
+    uint32_t owner,
+    AudioObjectID objectID,
+    AudioObjectPropertySelector selector,
+    AudioObjectPropertyScope scope,
+    AudioObjectPropertyElement element,
+    uint32_t queueRole,
+    uint32_t phase,
+    uint32_t transport,
+    int32_t status,
+    uint64_t generation
+) {
+    if (!atomic_load_explicit(
+            &fvAudioTopologyTraceEnabled,
+            memory_order_relaxed
+        )) {
+        return 0;
+    }
+
+    const uint64_t sequence = atomic_fetch_add_explicit(
+        &fvAudioTopologyTraceSequence,
+        1,
+        memory_order_relaxed
+    ) + 1;
+    FVAudioTopologyTraceSlot *slot =
+        &fvAudioTopologyTraceSlots[(sequence - 1) % FV_AUDIO_TOPOLOGY_TRACE_CAPACITY];
+
+    // Zero marks the slot as being mutated. A reader that races this write
+    // discards the copy after its second acquire load.
+    atomic_store_explicit(&slot->publishedSequence, 0, memory_order_release);
+    atomic_store_explicit(&slot->sequence, sequence, memory_order_relaxed);
+    atomic_store_explicit(&slot->continuousTime, mach_continuous_time(), memory_order_relaxed);
+    atomic_store_explicit(&slot->generation, generation, memory_order_relaxed);
+    atomic_store_explicit(&slot->event, event, memory_order_relaxed);
+    atomic_store_explicit(&slot->owner, owner, memory_order_relaxed);
+    atomic_store_explicit(&slot->objectID, objectID, memory_order_relaxed);
+    atomic_store_explicit(&slot->selector, selector, memory_order_relaxed);
+    atomic_store_explicit(&slot->scope, scope, memory_order_relaxed);
+    atomic_store_explicit(&slot->element, element, memory_order_relaxed);
+    atomic_store_explicit(&slot->queueRole, queueRole, memory_order_relaxed);
+    atomic_store_explicit(&slot->phase, phase, memory_order_relaxed);
+    atomic_store_explicit(&slot->transport, transport, memory_order_relaxed);
+    atomic_store_explicit(&slot->status, status, memory_order_relaxed);
+    atomic_store_explicit(
+        &slot->publishedSequence,
+        sequence,
+        memory_order_release
+    );
+    return sequence;
+}
+
+uint32_t fv_audio_topology_trace_snapshot(
+    uint64_t afterSequence,
+    FVAudioTopologyTraceEvent *events,
+    uint32_t capacity,
+    uint64_t *latestSequence
+) {
+    const uint64_t latest = atomic_load_explicit(
+        &fvAudioTopologyTraceSequence,
+        memory_order_acquire
+    );
+    if (latestSequence != NULL) {
+        *latestSequence = latest;
+    }
+    if (events == NULL || capacity == 0 || latest <= afterSequence) {
+        return 0;
+    }
+
+    const uint64_t oldestAvailable =
+        latest > FV_AUDIO_TOPOLOGY_TRACE_CAPACITY
+            ? latest - FV_AUDIO_TOPOLOGY_TRACE_CAPACITY + 1
+            : 1;
+    uint64_t sequence = afterSequence + 1;
+    if (sequence < oldestAvailable) {
+        sequence = oldestAvailable;
+    }
+
+    uint32_t copied = 0;
+    for (; sequence <= latest && copied < capacity; ++sequence) {
+        FVAudioTopologyTraceSlot *slot =
+            &fvAudioTopologyTraceSlots[(sequence - 1) % FV_AUDIO_TOPOLOGY_TRACE_CAPACITY];
+        const uint64_t publishedBefore = atomic_load_explicit(
+            &slot->publishedSequence,
+            memory_order_acquire
+        );
+        if (publishedBefore != sequence) {
+            continue;
+        }
+        const FVAudioTopologyTraceEvent candidate = {
+            .sequence = atomic_load_explicit(&slot->sequence, memory_order_relaxed),
+            .continuousTime = atomic_load_explicit(&slot->continuousTime, memory_order_relaxed),
+            .generation = atomic_load_explicit(&slot->generation, memory_order_relaxed),
+            .event = atomic_load_explicit(&slot->event, memory_order_relaxed),
+            .owner = atomic_load_explicit(&slot->owner, memory_order_relaxed),
+            .objectID = atomic_load_explicit(&slot->objectID, memory_order_relaxed),
+            .selector = atomic_load_explicit(&slot->selector, memory_order_relaxed),
+            .scope = atomic_load_explicit(&slot->scope, memory_order_relaxed),
+            .element = atomic_load_explicit(&slot->element, memory_order_relaxed),
+            .queueRole = atomic_load_explicit(&slot->queueRole, memory_order_relaxed),
+            .phase = atomic_load_explicit(&slot->phase, memory_order_relaxed),
+            .transport = atomic_load_explicit(&slot->transport, memory_order_relaxed),
+            .status = atomic_load_explicit(&slot->status, memory_order_relaxed),
+        };
+        atomic_thread_fence(memory_order_acquire);
+        const uint64_t publishedAfter = atomic_load_explicit(
+            &slot->publishedSequence,
+            memory_order_acquire
+        );
+        if (publishedAfter != sequence || candidate.sequence != sequence) {
+            continue;
+        }
+        events[copied++] = candidate;
+    }
+    return copied;
+}
+
+uint32_t fv_audio_topology_trace_capacity(void) {
+    return FV_AUDIO_TOPOLOGY_TRACE_CAPACITY;
+}
+
+uint64_t fv_audio_topology_trace_latest_sequence(void) {
+    return atomic_load_explicit(
+        &fvAudioTopologyTraceSequence,
+        memory_order_acquire
+    );
+}
+
+void fv_audio_topology_trace_main_heartbeat(void) {
+    if (!atomic_load_explicit(
+            &fvAudioTopologyTraceEnabled,
+            memory_order_relaxed
+        )) {
+        return;
+    }
+    atomic_store_explicit(
+        &fvAudioTopologyMainHeartbeat,
+        mach_continuous_time(),
+        memory_order_release
+    );
+}
+
+uint64_t fv_audio_topology_trace_last_main_heartbeat(void) {
+    return atomic_load_explicit(
+        &fvAudioTopologyMainHeartbeat,
+        memory_order_acquire
+    );
+}
+
+void fv_audio_topology_trace_reset(void) {
+    atomic_store_explicit(&fvAudioTopologyTraceEnabled, false, memory_order_release);
+    atomic_store_explicit(&fvAudioTopologyTraceSequence, 0, memory_order_release);
+    atomic_store_explicit(&fvAudioTopologyMainHeartbeat, 0, memory_order_release);
+    for (uint32_t index = 0; index < FV_AUDIO_TOPOLOGY_TRACE_CAPACITY; ++index) {
+        atomic_store_explicit(
+            &fvAudioTopologyTraceSlots[index].publishedSequence,
+            0,
+            memory_order_release
+        );
+        FVAudioTopologyTraceSlot *slot = &fvAudioTopologyTraceSlots[index];
+        atomic_store_explicit(&slot->sequence, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->continuousTime, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->generation, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->event, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->owner, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->objectID, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->selector, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->scope, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->element, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->queueRole, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->phase, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->transport, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->status, 0, memory_order_relaxed);
+    }
+}
 
 static OSStatus fv_get_input_stream_format(
     AudioObjectID deviceID,

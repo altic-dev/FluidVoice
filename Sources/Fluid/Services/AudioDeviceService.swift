@@ -14,6 +14,20 @@ import IOKit.pwr_mgt
 // MARK: - Audio Device Manager
 
 nonisolated enum AudioDevice {
+    enum LivenessDiagnosticsOwner: Sendable {
+        case audioHardwareObserver
+        case asrService
+
+        #if DEBUG
+        var traceOwner: AudioTopologyTraceOwner {
+            switch self {
+            case .audioHardwareObserver: .audioHardwareObserver
+            case .asrService: .asrDeviceList
+            }
+        }
+        #endif
+    }
+
     struct Device: Identifiable, Hashable, Sendable {
         static let externalMicrophoneDataSourceID: UInt32 = 0x656d6963 // 'emic'
 
@@ -175,13 +189,15 @@ nonisolated enum AudioDevice {
 
     /// Refreshes the HAL liveness snapshot. Call only from an existing background
     /// hardware-refresh path; UI and capture selection consume the cached value.
-    static func listInputDevicesRefreshingLiveness() -> [Device] {
+    static func listInputDevicesRefreshingLiveness(
+        diagnosticsOwner: LivenessDiagnosticsOwner = .audioHardwareObserver
+    ) -> [Device] {
         let devices = self.listInputDevices()
         let liveness = Dictionary(
             uniqueKeysWithValues: devices.map { device in
                 (
                     InputLivenessKey(id: device.id, uid: device.uid),
-                    self.queryInputDeviceLiveness(device.id)
+                    self.queryInputDeviceLiveness(device.id, diagnosticsOwner: diagnosticsOwner)
                 )
             }
         )
@@ -202,8 +218,11 @@ nonisolated enum AudioDevice {
 
     /// Refreshes one monitored device without blocking the listener's main queue.
     /// Callers must invoke this from a background hardware-refresh path.
-    static func refreshInputDeviceLiveness(deviceID: AudioObjectID) -> Bool {
-        let isAlive = self.queryInputDeviceLiveness(deviceID)
+    static func refreshInputDeviceLiveness(
+        deviceID: AudioObjectID,
+        diagnosticsOwner: LivenessDiagnosticsOwner = .audioHardwareObserver
+    ) -> Bool {
+        let isAlive = self.queryInputDeviceLiveness(deviceID, diagnosticsOwner: diagnosticsOwner)
         self.inputLivenessCache.update(deviceID: deviceID, isAlive: isAlive)
         return isAlive
     }
@@ -252,7 +271,10 @@ nonisolated enum AudioDevice {
 
     /// Core Audio may continue enumerating an input after it has stopped being usable.
     /// Fail open when HAL cannot answer so unusual and virtual devices still work.
-    private static func queryInputDeviceLiveness(_ deviceID: AudioObjectID) -> Bool {
+    private static func queryInputDeviceLiveness(
+        _ deviceID: AudioObjectID,
+        diagnosticsOwner: LivenessDiagnosticsOwner
+    ) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsAlive,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -260,6 +282,18 @@ nonisolated enum AudioDevice {
         )
         var value: UInt32 = 1
         var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .halQueryBegin,
+                owner: diagnosticsOwner.traceOwner,
+                objectID: deviceID,
+                selector: address.mSelector,
+                scope: address.mScope,
+                element: address.mElement,
+                queueRole: .dedicatedControl,
+                phase: .listener
+            )
+        #endif
         let status = AudioObjectGetPropertyData(
             deviceID,
             &address,
@@ -268,6 +302,19 @@ nonisolated enum AudioDevice {
             &dataSize,
             &value
         )
+        #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .halQueryEnd,
+                owner: diagnosticsOwner.traceOwner,
+                objectID: deviceID,
+                selector: address.mSelector,
+                scope: address.mScope,
+                element: address.mElement,
+                queueRole: .dedicatedControl,
+                phase: .listener,
+                status: status
+            )
+        #endif
         return status != noErr || value != 0
     }
 
@@ -437,6 +484,44 @@ extension Notification.Name {
 
 // MARK: - Audio Hardware Observer
 
+/// Production policy for `AudioHardwareObserver`'s broad per-input `DeviceIsAlive` ledger only.
+/// An aggregate device is a Core Audio *composition* of other (physical and/or virtual) devices,
+/// and VPIO capture creates and tears down transient aggregates repeatedly across meeting/dictation
+/// start and stop. In a production-shaped controlled run, excluding only aggregate membership from
+/// this observer's broad liveness ledger passed normal dictation and three meeting cycles while the
+/// normal AVFoundation catalog and all other transports remained active. This is the narrowest
+/// empirically validated mitigation for the strongest isolated inducing condition; it is not proof
+/// of Apple's complete private HAL wait graph. Excluding aggregate-transport inputs from the broad
+/// ledger removes that duplicate observation during teardown; every other transport
+/// (physical, virtual, or unknown) keeps its current liveness monitoring unchanged. This is
+/// unconditional production behavior — no environment flag gates it — and must stay reachable
+/// from Release builds.
+nonisolated enum AggregateInputLivenessLedgerPolicy {
+    static func permitsBroadLedgerMembership(transportType: UInt32) -> Bool {
+        transportType != kAudioDeviceTransportTypeAggregate
+    }
+}
+
+#if DEBUG
+    /// Prior Phase-0 diagnostic switch, broader than the production aggregate exclusion above
+    /// (it also drops virtual and unknown transports). Kept for future isolation experiments;
+    /// it is not part of the shipped policy and stays opt-in behind an environment flag. It
+    /// deliberately classifies from the already captured off-main device snapshot, so the
+    /// experiment does not add a Core Audio query during reconciliation.
+    nonisolated enum InputLivenessLedgerIsolationPolicy {
+        static func permitsListenerForTransientIsolation(transportType: UInt32) -> Bool {
+            switch transportType {
+            case kAudioDeviceTransportTypeAggregate,
+                 kAudioDeviceTransportTypeVirtual,
+                 kAudioDeviceTransportTypeUnknown:
+                false
+            default:
+                true
+            }
+        }
+    }
+#endif
+
 final class AudioHardwareObserver: ObservableObject {
     /// Incremented every time CoreAudio reports a hardware/default-device change.
     /// Using a simple `@Published` value avoids putting `AnyPublisher`/`SubscriptionView` generics into
@@ -523,30 +608,99 @@ final class AudioHardwareObserver: ObservableObject {
         let sys = AudioObjectID(kAudioObjectSystemObject)
 
         let devicesToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callback,
+                    owner: .audioHardwareObserver,
+                    objectID: sys,
+                    selector: kAudioHardwarePropertyDevices,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainDelivery,
+                    generation: self?.inputAvailabilityRefreshGeneration ?? 0
+                )
+            #endif
             self?.changeTick &+= 1
             self?.refreshInputAvailabilityListeners()
         }
         let defaultInToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callback,
+                    owner: .audioHardwareObserver,
+                    objectID: sys,
+                    selector: kAudioHardwarePropertyDefaultInputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainDelivery,
+                    generation: self?.inputAvailabilityRefreshGeneration ?? 0
+                )
+            #endif
             self?.inputAvailabilityTick &+= 1
         }
         let defaultOutToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .callback,
+                    owner: .audioHardwareObserver,
+                    objectID: sys,
+                    selector: kAudioHardwarePropertyDefaultOutputDevice,
+                    scope: kAudioObjectPropertyScopeGlobal,
+                    element: kAudioObjectPropertyElementMain,
+                    queueRole: .mainDelivery,
+                    generation: self?.inputAvailabilityRefreshGeneration ?? 0
+                )
+            #endif
             self?.changeTick &+= 1
         }
 
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener)
+        #endif
         let devicesStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDevices, queue, devicesToken)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener, status: devicesStatus)
+            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener)
+        #endif
         let defaultInStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultIn, queue, defaultInToken)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener, status: defaultInStatus)
+            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener)
+        #endif
         let defaultOutStatus = AudioObjectAddPropertyListenerBlock(sys, &addrDefaultOut, queue, defaultOutToken)
+        #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener, status: defaultOutStatus)
+            AudioTopologyDiagnostics.record(.readiness, owner: .audioHardwareObserver, queueRole: .mainControl, status: (devicesStatus == noErr && defaultInStatus == noErr && defaultOutStatus == noErr) ? noErr : -1)
+        #endif
 
         guard devicesStatus == noErr, defaultInStatus == noErr, defaultOutStatus == noErr else {
             // Best-effort cleanup for any partial installs.
             if devicesStatus == noErr {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, devicesToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, devicesToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             if defaultInStatus == noErr {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, defaultInToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, defaultInToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             if defaultOutStatus == noErr {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, defaultOutToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, defaultOutToken)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             self.devicesListenerToken = nil
             self.defaultInputListenerToken = nil
@@ -585,13 +739,31 @@ final class AudioHardwareObserver: ObservableObject {
 
         if self.installed {
             if let token = self.devicesListenerToken {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDevices, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDevices.mSelector, scope: addrDevices.mScope, element: addrDevices.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             if let token = self.defaultInputListenerToken {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultIn, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultIn.mSelector, scope: addrDefaultIn.mScope, element: addrDefaultIn.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             if let token = self.defaultOutputListenerToken {
-                _ = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener)
+                #endif
+                let status = AudioObjectRemovePropertyListenerBlock(sys, &addrDefaultOut, queue, token)
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: sys, selector: addrDefaultOut.mSelector, scope: addrDefaultOut.mScope, element: addrDefaultOut.mElement, queueRole: .mainControl, phase: .listener, status: status)
+                #endif
             }
             self.removeInputAvailabilityListeners()
         }
@@ -608,7 +780,26 @@ final class AudioHardwareObserver: ObservableObject {
         self.inputAvailabilityRefreshGeneration &+= 1
         let generation = self.inputAvailabilityRefreshGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .enumerationBegin,
+                    owner: .audioHardwareObserver,
+                    queueRole: .dedicatedControl,
+                    phase: .listener,
+                    generation: generation
+                )
+            #endif
             let devices = AudioDevice.listInputDevicesRefreshingLiveness()
+            #if DEBUG
+                AudioTopologyDiagnostics.record(
+                    .enumerationEnd,
+                    owner: .audioHardwareObserver,
+                    queueRole: .dedicatedControl,
+                    phase: .listener,
+                    status: noErr,
+                    generation: generation
+                )
+            #endif
             DispatchQueue.main.async { [weak self] in
                 guard let self,
                       self.inputAvailabilityRefreshGeneration == generation
@@ -620,17 +811,122 @@ final class AudioHardwareObserver: ObservableObject {
 
     private func replaceInputAvailabilityListeners(with devices: [AudioDevice.Device]) {
         guard self.installed else { return }
-        let currentIDs = Set(devices.map(\.id))
+        #if DEBUG
+            // Phase-0 isolation for the rebase-introduced all-input liveness ledger. The flag is
+            // deliberately scoped to this observer: default-device monitoring, ASR's existing
+            // selected-device listener, and dictation capture remain active.
+            if ProcessInfo.processInfo.environment["FLUIDVOICE_OMIT_INPUT_LIVENESS_LEDGER_ISOLATION"] == "1" {
+                AudioTopologyDiagnostics.record(
+                    .isolationActive,
+                    owner: .audioHardwareObserver,
+                    queueRole: .mainControl,
+                    phase: .listener,
+                    generation: self.inputAvailabilityRefreshGeneration
+                )
+                self.removeInputAvailabilityListeners()
+                return
+            }
+        #endif
+        #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .replaceBegin,
+                owner: .audioHardwareObserver,
+                queueRole: .mainControl,
+                phase: .listener,
+                generation: self.inputAvailabilityRefreshGeneration
+            )
+            for device in devices {
+                AudioTopologyDiagnostics.record(
+                    .topologySnapshot,
+                    owner: .audioHardwareObserver,
+                    objectID: device.id,
+                    queueRole: .mainControl,
+                    phase: .listener,
+                    transport: AudioTopologyDiagnostics.transportClassification(device.transportType),
+                    generation: self.inputAvailabilityRefreshGeneration
+                )
+            }
+        #endif
+        // Production policy: never register this observer's broad per-input DeviceIsAlive
+        // ledger for aggregate-transport inputs. See AggregateInputLivenessLedgerPolicy for the
+        // evidence and scope. Unconditional — no environment flag required — and applies in Release too.
+        let productionScopedDevices = devices.filter {
+            let permitted = AggregateInputLivenessLedgerPolicy.permitsBroadLedgerMembership(
+                transportType: $0.transportType
+            )
+            #if DEBUG
+                if permitted == false {
+                    AudioTopologyDiagnostics.record(
+                        .policyExcluded,
+                        owner: .audioHardwareObserver,
+                        objectID: $0.id,
+                        queueRole: .mainControl,
+                        phase: .listener,
+                        transport: AudioTopologyDiagnostics.transportClassification($0.transportType),
+                        generation: self.inputAvailabilityRefreshGeneration
+                    )
+                }
+            #endif
+            return permitted
+        }
+
+        #if DEBUG
+            // Opt-in diagnostic isolation on top of the production policy above, for future
+            // experiments only; see InputLivenessLedgerIsolationPolicy.
+            let excludesTransientInputs = ProcessInfo.processInfo.environment[
+                "FLUIDVOICE_EXCLUDE_TRANSIENT_INPUT_LIVENESS_ISOLATION"
+            ] == "1"
+            let listenerDevices = excludesTransientInputs
+                ? productionScopedDevices.filter {
+                    let permitted = InputLivenessLedgerIsolationPolicy.permitsListenerForTransientIsolation(
+                        transportType: $0.transportType
+                    )
+                    if permitted == false {
+                        AudioTopologyDiagnostics.record(
+                            .isolationActive,
+                            owner: .audioHardwareObserver,
+                            objectID: $0.id,
+                            queueRole: .mainControl,
+                            phase: .listener,
+                            transport: AudioTopologyDiagnostics.transportClassification($0.transportType),
+                            generation: self.inputAvailabilityRefreshGeneration
+                        )
+                    }
+                    return permitted
+                }
+                : productionScopedDevices
+        #else
+            let listenerDevices = productionScopedDevices
+        #endif
+        let currentIDs = Set(listenerDevices.map(\.id))
         for (deviceID, token) in self.inputAvailabilityListenerTokens where currentIDs.contains(deviceID) == false {
             var address = Self.inputAvailabilityAddress
-            _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, generation: self.inputAvailabilityRefreshGeneration)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status, generation: self.inputAvailabilityRefreshGeneration)
+            #endif
             self.inputAvailabilityListenerTokens.removeValue(forKey: deviceID)
         }
 
-        for device in devices where self.inputAvailabilityListenerTokens[device.id] == nil {
+        for device in listenerDevices where self.inputAvailabilityListenerTokens[device.id] == nil {
             let deviceID = device.id
             var address = Self.inputAvailabilityAddress
             let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                #if DEBUG
+                    AudioTopologyDiagnostics.record(
+                        .callback,
+                        owner: .audioHardwareObserver,
+                        objectID: deviceID,
+                        selector: kAudioDevicePropertyDeviceIsAlive,
+                        scope: kAudioObjectPropertyScopeGlobal,
+                        element: kAudioObjectPropertyElementMain,
+                        queueRole: .mainDelivery,
+                        generation: self?.inputAvailabilityRefreshGeneration ?? 0
+                    )
+                #endif
                 // Never query Core Audio synchronously from its property callback.
                 // Refresh the cached snapshot off-main before observers resolve priority.
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -646,22 +942,44 @@ final class AudioHardwareObserver: ObservableObject {
                     }
                 }
             }
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, transport: AudioTopologyDiagnostics.transportClassification(device.transportType), generation: self.inputAvailabilityRefreshGeneration)
+            #endif
             let status = AudioObjectAddPropertyListenerBlock(
                 deviceID,
                 &address,
                 DispatchQueue.main,
                 token
             )
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, transport: AudioTopologyDiagnostics.transportClassification(device.transportType), status: status, generation: self.inputAvailabilityRefreshGeneration)
+            #endif
             if status == noErr {
                 self.inputAvailabilityListenerTokens[deviceID] = token
             }
         }
+        #if DEBUG
+            AudioTopologyDiagnostics.record(
+                .replaceEnd,
+                owner: .audioHardwareObserver,
+                queueRole: .mainControl,
+                phase: .listener,
+                status: noErr,
+                generation: self.inputAvailabilityRefreshGeneration
+            )
+        #endif
     }
 
     private func removeInputAvailabilityListeners() {
         for (deviceID, token) in self.inputAvailabilityListenerTokens {
             var address = Self.inputAvailabilityAddress
-            _ = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, generation: self.inputAvailabilityRefreshGeneration)
+            #endif
+            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+            #if DEBUG
+                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .audioHardwareObserver, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status, generation: self.inputAvailabilityRefreshGeneration)
+            #endif
         }
         self.inputAvailabilityListenerTokens.removeAll()
     }

@@ -3,6 +3,7 @@ import Foundation
 enum AppNavigationDestination {
     case aiEnhancements
     case history
+    case meetingTranscription
 }
 
 @MainActor

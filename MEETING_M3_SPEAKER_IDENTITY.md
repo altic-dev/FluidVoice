@@ -12,7 +12,7 @@ participant roster the tool obtains by joining the call.
 
 | Attribution method | Products |
 |---|---|
-| Roster / attendee names from joining the call as a bot or participant | Fathom, Granola, Sembly (default), Zoom, Google Meet, most of Fireflies |
+| Roster / attendee names from joining the call as a bot or participant | Bot-based meeting assistants, Zoom, Google Meet |
 | Manual labelling only; naming by voice explicitly not offered | **Rev** ("supports speaker diarization but does not support speaker identification"), Descript |
 | True persistent voiceprints | Microsoft Teams Voice & Face Enrollment, Sembly Voice ID, Fireflies, Circleback, Read.ai |
 

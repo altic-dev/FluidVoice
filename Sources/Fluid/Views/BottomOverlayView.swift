@@ -3321,35 +3321,23 @@ struct BottomOverlayView: View {
                 ZStack {
                     // Solid pitch black background, with a soft drop shadow so the pill lifts
                     // off whatever is behind it (pill size only; outer padding reserves room).
-                    RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                        .fill(Color.black)
-                        .shadow(
-                            color: Color.black.opacity(self.isPillSize ? 0.32 : 0),
+                    FluidOverlaySurfaceBase(
+                        cornerRadius: self.layout.cornerRadius,
+                        shadow: .init(
+                            opacity: self.isPillSize ? 0.32 : 0,
                             radius: self.isPillSize ? PillShadowMetrics.radius : 0,
-                            x: 0,
                             y: self.isPillSize ? PillShadowMetrics.yOffset : 0
                         )
+                    )
 
                     if self.isPillSize {
                         // Glossy border: a bright highlight that slowly rotates around the edge.
                         // Paused under reduce-motion to avoid continuous redraws on low-resource Macs.
                         if self.reduceMotion || !self.contentState.isBottomOverlayPresented {
-                            RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                                .strokeBorder(
-                                    AngularGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .white.opacity(0.06), location: 0.00),
-                                            .init(color: .white.opacity(0.55), location: 0.13),
-                                            .init(color: .white.opacity(0.10), location: 0.30),
-                                            .init(color: .white.opacity(0.03), location: 0.55),
-                                            .init(color: .white.opacity(0.22), location: 0.80),
-                                            .init(color: .white.opacity(0.06), location: 1.00),
-                                        ]),
-                                        center: .center,
-                                        angle: .degrees(0)
-                                    ),
-                                    lineWidth: 1.2
-                                )
+                            FluidOverlayBorder(
+                                cornerRadius: self.layout.cornerRadius,
+                                style: .staticAngular(angle: .degrees(0), lineWidth: 1.2)
+                            )
                         } else {
                             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                                 let seconds = max(
@@ -3357,38 +3345,22 @@ struct BottomOverlayView: View {
                                     timeline.date.timeIntervalSince(self.borderAnimationStartedAt ?? timeline.date)
                                 )
                                 let angle = (seconds.truncatingRemainder(dividingBy: 6.0) / 6.0) * 360.0
-                                RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                                    .strokeBorder(
-                                        AngularGradient(
-                                            gradient: Gradient(stops: [
-                                                .init(color: .white.opacity(0.06), location: 0.00),
-                                                .init(color: .white.opacity(0.55), location: 0.13),
-                                                .init(color: .white.opacity(0.10), location: 0.30),
-                                                .init(color: .white.opacity(0.03), location: 0.55),
-                                                .init(color: .white.opacity(0.22), location: 0.80),
-                                                .init(color: .white.opacity(0.06), location: 1.00),
-                                            ]),
-                                            center: .center,
-                                            angle: .degrees(angle)
-                                        ),
-                                        lineWidth: 1.2
-                                    )
+                                FluidOverlayBorder(
+                                    cornerRadius: self.layout.cornerRadius,
+                                    style: .staticAngular(angle: .degrees(angle), lineWidth: 1.2)
+                                )
                             }
                         }
                     } else {
                         // Inner border
-                        RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(self.overlayBorderTopOpacity),
-                                        Color.white.opacity(self.overlayBorderBottomOpacity),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
+                        FluidOverlayBorder(
+                            cornerRadius: self.layout.cornerRadius,
+                            style: .linear(
+                                topOpacity: self.overlayBorderTopOpacity,
+                                bottomOpacity: self.overlayBorderBottomOpacity,
                                 lineWidth: self.overlayBorderLineWidth
                             )
+                        )
                     }
                 }
             )
@@ -3593,13 +3565,21 @@ struct BottomWaveformView: View {
 
     var body: some View {
         ZStack {
-            self.barsView
-                .foregroundStyle(self.barFillColor)
+            self.barsView(
+                color: self.barFillColor,
+                glowColor: self.color.opacity(self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity),
+                glowRadius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius
+            )
+            .foregroundStyle(self.barFillColor)
 
             if self.isProcessingVisualActive {
                 CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
                     .mask {
-                        self.barsView
+                        self.barsView(
+                            color: .white,
+                            glowColor: .clear,
+                            glowRadius: 0
+                        )
                     }
                     .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
             }
@@ -3647,19 +3627,16 @@ struct BottomWaveformView: View {
         }
     }
 
-    private var barsView: some View {
-        HStack(spacing: self.barSpacing) {
-            ForEach(0..<self.barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: self.barWidth / 2)
-                    .frame(width: self.barWidth, height: self.displayHeight(at: index))
-                    .shadow(
-                        color: self.color.opacity(self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity),
-                        radius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius,
-                        x: 0,
-                        y: 0
-                    )
-            }
-        }
+    private func barsView(color: Color, glowColor: Color, glowRadius: CGFloat) -> some View {
+        FluidOverlayLevelBars(
+            heights: (0..<self.barCount).map { self.displayHeight(at: $0) },
+            width: self.barWidth,
+            spacing: self.barSpacing,
+            cornerRadius: self.barWidth / 2,
+            color: color,
+            glowColor: glowColor,
+            glowRadius: glowRadius
+        )
     }
 
     private func displayHeight(at index: Int) -> CGFloat {

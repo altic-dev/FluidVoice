@@ -13,12 +13,32 @@ final class MeetingFloatingCaptionsPanel: NSPanel {
 /// Swallows first-mouse so clicks and drags work while FluidVoice is inactive — this panel's
 /// normal state, since it exists precisely so captions stay visible while another app has focus.
 final class MeetingFloatingHostingView: NSHostingView<AnyView> {
+    var overlayHitPadding: MeetingOverlayPadding?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let padding = self.overlayHitPadding {
+            let visible = NSRect(
+                x: self.bounds.minX + padding.left,
+                y: self.bounds.minY + padding.bottom,
+                width: self.bounds.width - padding.left - padding.right,
+                height: self.bounds.height - padding.top - padding.bottom
+            )
+            guard visible.contains(point) else { return nil }
+        }
+        return super.hitTest(point)
+    }
 }
 
 enum MeetingFloatingPanelFactory {
     @MainActor
-    static func make(size: NSSize, resizable: Bool, content: AnyView) -> MeetingFloatingCaptionsPanel {
+    static func make(
+        size: NSSize,
+        resizable: Bool,
+        content: AnyView,
+        overlayHitPadding: MeetingOverlayPadding? = nil
+    ) -> MeetingFloatingCaptionsPanel {
         var styleMask: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
         if resizable { styleMask.insert(.resizable) }
         let panel = MeetingFloatingCaptionsPanel(
@@ -42,6 +62,7 @@ enum MeetingFloatingPanelFactory {
         panel.sharingType = .none
 
         let hostingView = MeetingFloatingHostingView(rootView: content)
+        hostingView.overlayHitPadding = overlayHitPadding
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
@@ -78,7 +99,7 @@ final class MeetingFloatingCaptionsController: ObservableObject {
         let panel = self.panelOrCreate(coordinator: coordinator)
         self.subscribeIfNeeded(coordinator: coordinator)
 
-        let sourceFrame = MeetingRecordingPillController.shared.expandedPanelFrame
+        let sourceFrame = MeetingRecordingPillController.shared.resolveCaptionsSourceFrame()
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if let sourceFrame, !panel.isVisible, !reduceMotion {
             let targetFrame = panel.frame

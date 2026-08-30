@@ -39,7 +39,8 @@ Checkboxes should be checked only when the requirement and its acceptance criter
 - [Menu-bar lifecycle](#16-menu-bar-lifecycle-and-notifications)
 - [Privacy and retention](#17-permissions-consent-privacy-and-retention)
 - [Acceptance gates](#21-acceptance-and-release-gates)
-- [Open decisions](#22-open-decisions-for-alignment)
+- [Follow-up bugs](#22-follow-up-bugs)
+- [Open decisions](#23-open-decisions-for-alignment)
 
 ---
 
@@ -816,7 +817,23 @@ Decided 2026-08-10 from measured evidence on macOS 26.5.1; see Appendix A.
 
 ---
 
-## 22. Open decisions for alignment
+## 22. Follow-up bugs
+
+- [ ] **[P0 · CAPTURE] BUG-001 — Meeting transcription can freeze during voice-processing startup.**
+  - Formal analysis and evidence plan: [`MEETING_AUDIO_START_FREEZE_RCA.md`](MEETING_AUDIO_START_FREEZE_RCA.md).
+  - Reproduced twice on 2026-08-25. During VPIO aggregate-device teardown, main remained parked in an
+    AVFoundation listener-removal wait while HAL remained parked in synchronous notification dispatch.
+    The exact closing queue edge is not yet proven.
+  - Fix boundary: first isolate AVFoundation materialization, FluidVoice main-queue listeners, and idle
+    dictation prewarm. Ship every independently proven curative slice, then complete async topology
+    ownership for start, stop, recovery, and VPIO↔SCK switching.
+  - Verification: instrumented isolation matrix, no listener add/remove on main or its delivery queue,
+    zero topology-owner overlap, and zero failures in at least 2,995 targeted post-fix cycles. A timeout,
+    retry, forced restart, or timing-only guard is not an acceptable fix.
+
+---
+
+## 23. Open decisions for alignment
 
 These do not block writing the PRD. They must be resolved before their associated milestone begins.
 
@@ -858,7 +875,7 @@ These do not block writing the PRD. They must be resolved before their associate
 
 ---
 
-## 23. Highest-risk implementation traps
+## 24. Highest-risk implementation traps
 
 - [ ] **[MUST · FOUNDATION] RISK-001** ScreenCaptureKit microphone identifiers may not equal the current Core Audio device UID.
 - [ ] **[MUST · FOUNDATION] RISK-002** The current diarization wrapper discards the embeddings needed for remembered identity.
@@ -898,7 +915,7 @@ Both follow-ups closed 2026-08-10 on the implemented branch:
 
 ---
 
-## 24. Primary references
+## 25. Primary references
 
 - Apple ScreenCaptureKit: <https://developer.apple.com/documentation/screencapturekit>
 - Apple `SCContentFilter`: <https://developer.apple.com/documentation/screencapturekit/sccontentfilter>

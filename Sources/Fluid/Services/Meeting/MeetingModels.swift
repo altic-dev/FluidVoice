@@ -133,17 +133,24 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     var processID: Int32?
     var displayName: String
     var displayID: UInt32?
+    /// The specific window auto-detection found evidence in. Additive/optional so pre-existing
+    /// manifests still decode (synthesized Codable uses decodeIfPresent/encodeIfPresent for
+    /// Optional properties). `MeetingWindowSelector` prefers it when set and it still exists —
+    /// prevents recording a different foreground window than the one that was actually detected.
+    var windowID: UInt32?
 
     init(
         bundleIdentifier: String,
         processID: Int32? = nil,
         displayName: String,
-        displayID: UInt32? = nil
+        displayID: UInt32? = nil,
+        windowID: UInt32? = nil
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.processID = processID
         self.displayName = displayName
         self.displayID = displayID
+        self.windowID = windowID
     }
 }
 
