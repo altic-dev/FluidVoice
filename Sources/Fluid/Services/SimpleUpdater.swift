@@ -246,9 +246,10 @@ final class SimpleUpdater {
     }
 
     // Allowed Apple Developer Team IDs for code-sign validation
-    // Configured per your request; restrict to your actual Team ID only.
+    // Restrict update transitions to FluidVoice's approved signing teams.
     private let allowedTeamIDs: Set<String> = [
         "V4J43B279J",
+        "537RRRT57V",
     ]
 
     private static let githubDateFormatter: ISO8601DateFormatter = {

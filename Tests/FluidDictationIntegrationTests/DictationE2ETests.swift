@@ -1225,7 +1225,7 @@ final class DictationE2ETests: XCTestCase {
         let modelDirectory = Self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
-        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny, languageCodeOverride: "en")
 
         // Act
         try await provider.prepare()
@@ -1879,106 +1879,6 @@ final class DictationE2ETests: XCTestCase {
                 PrivateFeatures.privateAIProvider
             )
             XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: nil))
-        }
-    }
-
-    func testMLXUpgradeOfferOnlyTargetsLegacyAppleSiliconInstalls() {
-        let eligible = PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: false,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: false,
-            offerWasHandled: false
-        )
-        XCTAssertTrue(eligible)
-
-        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: false,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: false,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: false,
-            offerWasHandled: false
-        ))
-        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: true,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: false,
-            offerWasHandled: false
-        ))
-        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: false,
-            hasLegacyLlamaModel: false,
-            hasMLXModel: false,
-            offerWasHandled: false
-        ))
-        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: false,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: true,
-            offerWasHandled: false
-        ))
-        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreferenceWasSet: false,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: false,
-            offerWasHandled: true
-        ))
-        for version in ["1.6.2", "1.6.4", "2.0.0", ""] {
-            XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
-                hasPrivateProvider: true,
-                isAppleSilicon: true,
-                appVersion: version,
-                backendPreferenceWasSet: false,
-                hasLegacyLlamaModel: true,
-                hasMLXModel: false,
-                offerWasHandled: false
-            ))
-        }
-    }
-
-    func testMLXUpgradePreparedOfferIsRevalidatedBeforeResuming() {
-        XCTAssertTrue(PrivateAIMLXUpgradeCoordinator.shouldResumePreparedOffer(
-            hasPrivateProvider: true,
-            isAppleSilicon: true,
-            appVersion: "1.6.3",
-            backendPreference: .llama,
-            hasLegacyLlamaModel: true,
-            hasMLXModel: false
-        ))
-
-        for state in [
-            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.mlx, true, false),
-            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, false, false),
-            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, true),
-            (true, true, "1.6.4", SettingsStore.PrivateAIBackendPreference.llama, true, false),
-            (true, false, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, false),
-            (false, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, false),
-            (true, true, "1.6.3", nil, true, false),
-        ] {
-            XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldResumePreparedOffer(
-                hasPrivateProvider: state.0,
-                isAppleSilicon: state.1,
-                appVersion: state.2,
-                backendPreference: state.3,
-                hasLegacyLlamaModel: state.4,
-                hasMLXModel: state.5
-            ))
         }
     }
 

@@ -141,4 +141,369 @@ final class SpeakerTranscriptSegmentTests: XCTestCase {
     }
 }
 
+final class SpeakerLabeledTranscriptionPolicyTests: XCTestCase {
+    private enum StubError: Error {
+        case failed
+    }
+
+    func testEmptyLaterChunkKeepsEarlierTextAndRecordsOnlyTheMissingRange() async {
+        let ranges = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 1_200),
+            SpeakerTranscriptGap(startSeconds: 1_200, endSeconds: 1_205),
+        ]
+
+        let result = await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { range in
+            if range.startSeconds == 0 {
+                return SpeakerChunkTranscription(text: "Recognized first chunk", confidence: 0.8)
+            }
+            return SpeakerChunkTranscription(text: "", confidence: 0.1)
+        }
+
+        XCTAssertEqual(result.text, "Recognized first chunk")
+        XCTAssertEqual(result.confidence, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(result.gaps, [ranges[1]])
+    }
+
+    func testWhitespaceOnlyChunksAreGapsAndConfidenceUsesRecognizedChunksOnly() async {
+        let ranges = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 0.4),
+            SpeakerTranscriptGap(startSeconds: 0.4, endSeconds: 4),
+            SpeakerTranscriptGap(startSeconds: 4, endSeconds: 4.6),
+            SpeakerTranscriptGap(startSeconds: 4.6, endSeconds: 8),
+        ]
+        let responses = [
+            SpeakerChunkTranscription(text: "  \n", confidence: 0.1),
+            SpeakerChunkTranscription(text: "First", confidence: 0.6),
+            SpeakerChunkTranscription(text: "\t", confidence: 0.2),
+            SpeakerChunkTranscription(text: "Second", confidence: 1.0),
+        ]
+        var index = 0
+
+        let result = await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { _ in
+            defer { index += 1 }
+            return responses[index]
+        }
+
+        XCTAssertEqual(result.text, "First Second")
+        XCTAssertEqual(result.confidence, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(result.gaps, [ranges[0], ranges[2]])
+    }
+
+    func testEmptyChunksAtBeginningAndEndKeepMiddleText() async {
+        let ranges = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 0.2),
+            SpeakerTranscriptGap(startSeconds: 0.2, endSeconds: 9.8),
+            SpeakerTranscriptGap(startSeconds: 9.8, endSeconds: 10),
+        ]
+        let responses: [SpeakerChunkTranscription?] = [
+            nil,
+            SpeakerChunkTranscription(text: "Recognized middle", confidence: 0.75),
+            SpeakerChunkTranscription(text: "", confidence: 0.2),
+        ]
+        var index = 0
+
+        let result = await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { _ in
+            defer { index += 1 }
+            return responses[index]
+        }
+
+        XCTAssertEqual(result.text, "Recognized middle")
+        XCTAssertEqual(result.confidence, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(result.gaps, [ranges[0], ranges[2]])
+    }
+
+    func testAllEmptyChunksProduceOnlyGaps() async {
+        let ranges = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 1),
+            SpeakerTranscriptGap(startSeconds: 1, endSeconds: 2),
+        ]
+
+        let result = await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { _ in
+            nil
+        }
+
+        XCTAssertEqual(result.text, "")
+        XCTAssertEqual(result.confidence, 0)
+        XCTAssertEqual(result.gaps, ranges)
+    }
+
+    func testProviderErrorStillAbortsAfterEarlierSuccess() async {
+        let ranges = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 1),
+            SpeakerTranscriptGap(startSeconds: 1, endSeconds: 2),
+        ]
+        var index = 0
+
+        do {
+            _ = try await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { _ in
+                defer { index += 1 }
+                if index == 0 {
+                    return SpeakerChunkTranscription(text: "First", confidence: 0.9)
+                }
+                throw StubError.failed
+            }
+            XCTFail("A genuine provider error must fall back to the full-file transcript")
+        } catch {
+            XCTAssertTrue(error is StubError)
+        }
+    }
+
+    func testMaterialityAcceptsExactLimits() {
+        let gaps = (0..<10).map { index in
+            SpeakerTranscriptGap(startSeconds: Double(index) * 3, endSeconds: Double(index + 1) * 3)
+        }
+
+        XCTAssertTrue(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: gaps,
+            diarizedDurationSeconds: 3_000
+        ))
+    }
+
+    func testMaterialityAcceptsSmallGapAboveThreeSecondsWhenTotalIsNegligible() {
+        XCTAssertTrue(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: [SpeakerTranscriptGap(startSeconds: 10, endSeconds: 13.311)],
+            diarizedDurationSeconds: 10_000
+        ))
+    }
+
+    func testMaterialityRejectsOneGapLongerThanFiveSeconds() {
+        XCTAssertFalse(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: [SpeakerTranscriptGap(startSeconds: 10, endSeconds: 15.001)],
+            diarizedDurationSeconds: 10_000
+        ))
+    }
+
+    func testMaterialityAcceptsOneGapAtFiveSecondLimit() {
+        XCTAssertTrue(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: [SpeakerTranscriptGap(startSeconds: 10, endSeconds: 15)],
+            diarizedDurationSeconds: 10_000
+        ))
+    }
+
+    func testMaterialityRejectsMoreThanOnePercentOmitted() {
+        let gaps = [
+            SpeakerTranscriptGap(startSeconds: 0, endSeconds: 2.6),
+            SpeakerTranscriptGap(startSeconds: 10, endSeconds: 12.6),
+            SpeakerTranscriptGap(startSeconds: 20, endSeconds: 22.6),
+            SpeakerTranscriptGap(startSeconds: 30, endSeconds: 32.6),
+        ]
+
+        XCTAssertFalse(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: gaps,
+            diarizedDurationSeconds: 1_000
+        ))
+    }
+
+    func testMaterialityCapsTotalAllowanceAtThirtySeconds() {
+        let gaps = (0..<11).map { index in
+            SpeakerTranscriptGap(startSeconds: Double(index) * 4, endSeconds: Double(index) * 4 + 3)
+        }
+
+        XCTAssertFalse(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: true,
+            gaps: gaps,
+            diarizedDurationSeconds: 20_000
+        ))
+    }
+
+    func testMaterialityRejectsAllEmptyTranscriptEvenWithoutGaps() {
+        XCTAssertFalse(SpeakerLabeledTranscriptionPolicy.shouldKeepSpeakerLabels(
+            hasRecognizedText: false,
+            gaps: [],
+            diarizedDurationSeconds: 60
+        ))
+    }
+
+    func testCoverageReportsTheEvidenceUsedByTheFallbackDecision() {
+        let gaps = [
+            SpeakerTranscriptGap(startSeconds: 10, endSeconds: 11.5),
+            SpeakerTranscriptGap(startSeconds: 20, endSeconds: 24.25),
+        ]
+
+        let coverage = SpeakerLabeledTranscriptionPolicy.coverage(
+            gaps: gaps,
+            diarizedDurationSeconds: 200
+        )
+
+        XCTAssertEqual(coverage.gapCount, 2)
+        XCTAssertEqual(coverage.skippedDurationSeconds, 5.75, accuracy: 0.0001)
+        XCTAssertEqual(coverage.maxGapDurationSeconds, 4.25, accuracy: 0.0001)
+        XCTAssertEqual(coverage.diarizedDurationSeconds, 200, accuracy: 0.0001)
+        XCTAssertEqual(coverage.skippedRatio, 0.02875, accuracy: 0.000001)
+    }
+
+    func testFallbackDiagnosticNamesMissingRecognizedTextInsteadOfOmittedAudio() {
+        let description = SpeakerLabeledTranscriptionPolicy.fallbackDiagnostic(
+            hasRecognizedText: false,
+            gaps: [],
+            diarizedDurationSeconds: 100
+        )
+
+        XCTAssertEqual(description, "Speaker labeling produced no recognized text")
+    }
+
+    func testSpeakerLabelingNoticeNamesSkippedCountAndDuration() {
+        let gaps = [
+            SpeakerTranscriptGap(startSeconds: 10, endSeconds: 10.4),
+            SpeakerTranscriptGap(startSeconds: 20, endSeconds: 21),
+        ]
+
+        XCTAssertEqual(
+            SpeakerLabeledTranscriptionPolicy.limitationNotice(for: gaps),
+            "Speaker labels were kept, but 2 short audio sections totaling 1.4 seconds produced no text."
+        )
+    }
+
+    func testResultRoundTripsPersistentSpeakerLabelingDetails() throws {
+        let gaps = [SpeakerTranscriptGap(startSeconds: 10, endSeconds: 10.4)]
+        let result = TranscriptionResult(
+            text: "[0:00] Speaker 1: Hello",
+            confidence: 0.9,
+            duration: 120,
+            processingTime: 3,
+            fileName: "meeting.m4a",
+            speakerSegments: [
+                SpeakerTranscriptSegment(
+                    speaker: "Speaker 1",
+                    startSeconds: 0,
+                    endSeconds: 5,
+                    text: "Hello"
+                ),
+            ],
+            speakerLabelingNotice: "One short section was omitted.",
+            speakerLabelingGaps: gaps
+        )
+
+        let decoded = try JSONDecoder().decode(
+            TranscriptionResult.self,
+            from: JSONEncoder().encode(result)
+        )
+
+        XCTAssertEqual(decoded.speakerLabelingNotice, "One short section was omitted.")
+        XCTAssertEqual(decoded.speakerLabelingGaps, gaps)
+        XCTAssertTrue(decoded.textExport.contains("Speaker labeling: One short section was omitted."))
+        XCTAssertTrue(decoded.textExport.contains("Unlabeled audio ranges: 0:10.0-0:10.4"))
+    }
+
+    func testOlderResultWithoutSpeakerLabelingDetailsStillDecodes() throws {
+        struct LegacyResult: Encodable {
+            let text = "Hello"
+            let confidence: Float = 0.9
+            let duration: TimeInterval = 5
+            let processingTime: TimeInterval = 1
+            let fileName = "old.wav"
+            let timestamp = Date(timeIntervalSince1970: 1_000)
+        }
+
+        let decoded = try JSONDecoder().decode(
+            TranscriptionResult.self,
+            from: JSONEncoder().encode(LegacyResult())
+        )
+
+        XCTAssertNil(decoded.speakerLabelingNotice)
+        XCTAssertTrue(decoded.speakerLabelingGaps.isEmpty)
+    }
+
+    func testHistoryEntryKeepsSpeakerLabelingDetails() {
+        let gaps = [SpeakerTranscriptGap(startSeconds: 1, endSeconds: 1.2)]
+        let result = TranscriptionResult(
+            text: "Hello",
+            confidence: 0.9,
+            duration: 5,
+            processingTime: 1,
+            fileName: "meeting.wav",
+            speakerLabelingNotice: "A short section was omitted.",
+            speakerLabelingGaps: gaps
+        )
+
+        let restored = FileTranscriptionEntry(from: result).toTranscriptionResult()
+
+        XCTAssertEqual(restored.speakerLabelingNotice, result.speakerLabelingNotice)
+        XCTAssertEqual(restored.speakerLabelingGaps, gaps)
+    }
+
+    func testOlderHistoryEntryWithoutSpeakerLabelingDetailsStillDecodes() throws {
+        struct LegacyEntry: Encodable {
+            let id = UUID()
+            let timestamp = Date(timeIntervalSince1970: 1_000)
+            let fileName = "old.wav"
+            let duration: TimeInterval = 5
+            let processingTime: TimeInterval = 1
+            let confidence: Float = 0.9
+            let text = "Hello"
+        }
+
+        let decoded = try JSONDecoder().decode(
+            FileTranscriptionEntry.self,
+            from: JSONEncoder().encode(LegacyEntry())
+        )
+
+        XCTAssertNil(decoded.speakerLabelingNotice)
+        XCTAssertTrue(decoded.speakerLabelingGaps.isEmpty)
+    }
+
+    func testTinyEmptyTurnKeepsNeighboringSpeakerSegmentsInOrder() {
+        let emptyGap = SpeakerTranscriptGap(startSeconds: 500, endSeconds: 501)
+        let turns = [
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 1",
+                startSeconds: 0,
+                endSeconds: 500,
+                transcription: SpeakerTurnTranscription(text: "First", confidence: 0.8, gaps: [])
+            ),
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 2",
+                startSeconds: 500,
+                endSeconds: 501,
+                transcription: SpeakerTurnTranscription(text: "", confidence: 0, gaps: [emptyGap])
+            ),
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 3",
+                startSeconds: 501,
+                endSeconds: 1_001,
+                transcription: SpeakerTurnTranscription(text: "Last", confidence: 1, gaps: [])
+            ),
+        ]
+
+        let result = SpeakerLabeledTranscriptionPolicy.assembleTurns(turns)
+
+        XCTAssertEqual(result?.segments.map(\.speaker), ["Speaker 1", "Speaker 3"])
+        XCTAssertEqual(result?.segments.map(\.text), ["First", "Last"])
+        XCTAssertEqual(result?.confidence ?? 0, 0.9, accuracy: 0.0001)
+        XCTAssertEqual(result?.gaps, [emptyGap])
+        XCTAssertNotNil(result?.notice)
+    }
+
+    func testMaterialEmptyTurnRejectsLabeledTranscript() {
+        let materialGap = SpeakerTranscriptGap(startSeconds: 500, endSeconds: 506)
+        let turns = [
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 1",
+                startSeconds: 0,
+                endSeconds: 500,
+                transcription: SpeakerTurnTranscription(text: "First", confidence: 0.8, gaps: [])
+            ),
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 2",
+                startSeconds: 500,
+                endSeconds: 506,
+                transcription: SpeakerTurnTranscription(text: "", confidence: 0, gaps: [materialGap])
+            ),
+            SpeakerRecognizedTurn(
+                speaker: "Speaker 3",
+                startSeconds: 506,
+                endSeconds: 1_006,
+                transcription: SpeakerTurnTranscription(text: "Last", confidence: 1, gaps: [])
+            ),
+        ]
+
+        XCTAssertNil(SpeakerLabeledTranscriptionPolicy.assembleTurns(turns))
+    }
+}
+
 #endif

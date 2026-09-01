@@ -29,6 +29,7 @@ struct VoiceEngineSettingsScreen: View {
 struct AIEnhancementSettingsScreen: View {
     let menuBarManager: MenuBarManager
     let theme: AppTheme
+    @Binding var selectedConfigurationSection: AIEnhancementConfigurationSection
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
 
@@ -37,11 +38,13 @@ struct AIEnhancementSettingsScreen: View {
     init(
         menuBarManager: MenuBarManager,
         theme: AppTheme,
+        selectedConfigurationSection: Binding<AIEnhancementConfigurationSection> = .constant(.providers),
         activeShortcutRecordingTarget: Binding<ShortcutRecordingTarget?> = .constant(nil),
         shortcutRecordingMessage: Binding<String?> = .constant(nil)
     ) {
         self.menuBarManager = menuBarManager
         self.theme = theme
+        _selectedConfigurationSection = selectedConfigurationSection
         _activeShortcutRecordingTarget = activeShortcutRecordingTarget
         _shortcutRecordingMessage = shortcutRecordingMessage
         _viewModel = StateObject(wrappedValue: AIEnhancementSettingsViewModel(
@@ -59,6 +62,7 @@ struct AIEnhancementSettingsScreen: View {
                     settings: self.viewModel.settings,
                     promptTest: self.viewModel.promptTest,
                     theme: self.theme,
+                    selectedConfigurationSection: self.$selectedConfigurationSection,
                     activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
                     shortcutRecordingMessage: self.$shortcutRecordingMessage
                 )

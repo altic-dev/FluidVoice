@@ -19,9 +19,6 @@ struct WelcomeView: View {
     @Binding var selectedSidebarItem: SidebarItem?
     @Binding var playgroundUsed: Bool
     var isTranscriptionFocused: FocusState<Bool>.Binding
-    @State private var isHowToUseExpanded = false
-    @State private var isCommandModeGuideExpanded = false
-    @State private var isEditModeGuideExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.theme) private var theme
 
@@ -31,23 +28,7 @@ struct WelcomeView: View {
     let openAccessibilitySettings: () -> Void
     let restartApp: () -> Void
 
-    private var commandModeShortcutDisplay: String {
-        self.settings.commandModeHotkeyShortcut?.displayString ?? "Not set"
-    }
-
-    private var writeModeShortcutDisplay: String {
-        self.settings.rewriteModeHotkeyShortcut.displayString
-    }
-
     private let playgroundSectionID = "welcome-playground-section"
-
-    private var commandModeColor: Color {
-        self.theme.palette.warning
-    }
-
-    private var editModeColor: Color {
-        self.theme.palette.accent
-    }
 
     private var isAIEnhancementReady: Bool {
         DictationAIPostProcessingGate.isProviderConfigured()
@@ -157,7 +138,7 @@ struct WelcomeView: View {
                                     action: {
                                         self.selectedSidebarItem = .aiEnhancements
                                     },
-                                    actionButtonTitle: "Configure AI"
+                                    actionButtonTitle: "AI Providers"
                                 )
 
                                 SetupStepView(
@@ -215,24 +196,6 @@ struct WelcomeView: View {
                                         .font(self.theme.typography.caption)
                                         .foregroundStyle(.secondary)
                                 }
-                            }
-
-                            if self.settings.selectedSpeechModel == .parakeetTDT || self.settings.selectedSpeechModel == .parakeetTDTv2 {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "text.magnifyingglass")
-                                        .font(self.theme.typography.caption)
-                                        .foregroundStyle(self.theme.palette.accent)
-                                    Text(self.asr.wordBoostStatusText)
-                                        .font(self.theme.typography.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(self.theme.palette.contentBackground.opacity(0.6))
-                                )
                             }
 
                             VStack(alignment: .leading, spacing: 14) {
@@ -339,54 +302,6 @@ struct WelcomeView: View {
                         .padding(16)
                     }
                     .id(self.playgroundSectionID)
-
-                    // Secondary guidance
-                    ThemedCard(style: .subtle) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            self.guideDisclosureRow(
-                                title: "How to Use",
-                                systemImage: "play.fill",
-                                color: self.theme.palette.accent,
-                                isExpanded: self.$isHowToUseExpanded
-                            ) {
-                                EmptyView()
-                            } content: {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    self.howToStep(number: 1, title: "Start Recording", description: "Press your hotkey (default: Right Option/Alt) or click the button")
-                                    self.howToStep(number: 2, title: "Speak Clearly", description: "Speak naturally - works best in quiet environments")
-                                    self.howToStep(number: 3, title: "Auto-Type Result", description: "Transcription is automatically typed into your focused app")
-                                }
-                            }
-
-                            Divider().opacity(0.2)
-
-                            self.guideDisclosureRow(
-                                title: "Command Mode",
-                                systemImage: "terminal.fill",
-                                color: self.commandModeColor,
-                                isExpanded: self.$isCommandModeGuideExpanded
-                            ) {
-                                self.featureBadge("New", color: self.commandModeColor)
-                                self.featureBadge("Alpha", color: self.commandModeColor.opacity(0.75))
-                            } content: {
-                                self.commandModeGuide
-                            }
-
-                            Divider().opacity(0.2)
-
-                            self.guideDisclosureRow(
-                                title: "Edit Mode",
-                                systemImage: "pencil.and.outline",
-                                color: self.editModeColor,
-                                isExpanded: self.$isEditModeGuideExpanded
-                            ) {
-                                self.featureBadge("New", color: self.editModeColor)
-                            } content: {
-                                self.editModeGuide
-                            }
-                        }
-                        .padding(12)
-                    }
                 }
                 .padding(16)
             }
@@ -398,224 +313,6 @@ struct WelcomeView: View {
                 self.asr.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
                 await self.asr.checkIfModelsExistAsync()
             }
-        }
-    }
-
-    // MARK: - Helper Views
-
-    private func guideDisclosureRow<Accessories: View, Content: View>(
-        title: String,
-        systemImage: String,
-        color: Color,
-        isExpanded: Binding<Bool>,
-        @ViewBuilder accessories: () -> Accessories,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.16)) {
-                    isExpanded.wrappedValue.toggle()
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.primary.opacity(0.85))
-                        .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
-                        .frame(width: 16)
-
-                    Label(title, systemImage: systemImage)
-                        .font(self.theme.typography.sectionTitle)
-                        .foregroundStyle(color)
-
-                    accessories()
-
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(title))
-            .accessibilityValue(Text(isExpanded.wrappedValue ? "Expanded" : "Collapsed"))
-            .accessibilityHint(Text("Activates to expand or collapse"))
-
-            if isExpanded.wrappedValue {
-                content()
-                    .padding(.top, 8)
-                    .padding(.leading, 26)
-            }
-        }
-    }
-
-    private var commandModeGuide: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Control your Mac with voice commands. Execute terminal commands, open apps, and more.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button("Open") {
-                    self.selectedSidebarItem = .commandMode
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Getting Started")
-                    .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.commandModeColor)
-
-                HStack(spacing: 4) {
-                    Text("Press")
-                    self.keyboardBadge(self.commandModeShortcutDisplay)
-                    Text("to open, speak your command, then press again to send.")
-                }
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.primary.opacity(0.8))
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Examples")
-                    .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.commandModeColor)
-                self.commandModeExample(icon: "folder", text: "\"List files in my Downloads folder\"")
-                self.commandModeExample(icon: "plus.rectangle.on.folder", text: "\"Create a folder called Projects on Desktop\"")
-                self.commandModeExample(icon: "network", text: "\"What's my IP address?\"")
-                self.commandModeExample(icon: "safari", text: "\"Open Safari\"")
-            }
-
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(self.commandModeColor)
-                Text("AI can make mistakes. Avoid destructive commands.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var editModeGuide: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("AI-powered editing assistant. Write fresh content or edit selected text with voice.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button("Open AI Settings") {
-                    self.selectedSidebarItem = .aiEnhancements
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-
-            Label("Configure an AI model provider in AI Settings before using Edit Mode.", systemImage: "info.circle")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Create New Text")
-                        .font(self.theme.typography.bodySmallStrong)
-                        .foregroundStyle(self.editModeColor)
-
-                    HStack(spacing: 4) {
-                        Text("Press")
-                        self.keyboardBadge(self.writeModeShortcutDisplay)
-                        Text("and speak what you want to write.")
-                    }
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.primary.opacity(0.8))
-
-                    self.writeModeExample(text: "\"Write an email asking for time off\"")
-                    self.writeModeExample(text: "\"Draft a thank you note\"")
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Edit Selected Text")
-                        .font(self.theme.typography.bodySmallStrong)
-                        .foregroundStyle(self.editModeColor)
-
-                    HStack(spacing: 4) {
-                        Text("Select text first, then press")
-                        self.keyboardBadge(self.writeModeShortcutDisplay)
-                        Text("and speak your instruction.")
-                    }
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(.primary.opacity(0.8))
-
-                    self.writeModeExample(text: "\"Make this more formal\"")
-                    self.writeModeExample(text: "\"Fix grammar and spelling\"")
-                    self.writeModeExample(text: "\"Summarize this\"")
-                }
-            }
-        }
-    }
-
-    private func howToStep(number: Int, title: String, description: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(self.theme.palette.accent.opacity(0.15))
-                    .frame(width: 28, height: 28)
-                Text("\(number)")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(self.theme.typography.bodyStrong)
-                Text(description)
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-    }
-
-    private func featureBadge(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(self.theme.typography.badge)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-    }
-
-    private func keyboardBadge(_ text: String) -> some View {
-        Text(text)
-            .font(self.theme.typography.captionStrong)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(self.theme.palette.cardBackground.opacity(0.7), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-    }
-
-    private func commandModeExample(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(self.theme.typography.captionSmall)
-                .foregroundStyle(self.commandModeColor.opacity(0.8))
-                .frame(width: 14)
-            Text(text)
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.primary.opacity(0.8))
-        }
-    }
-
-    private func writeModeExample(text: String) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.editModeColor.opacity(0.6))
-                .frame(width: 4, height: 4)
-            Text(text)
-                .font(self.theme.typography.caption)
-                .foregroundStyle(.primary.opacity(0.8))
         }
     }
 }
@@ -1958,6 +1655,8 @@ struct OnboardingFlowView: View {
                         skipTitle: "Skip",
                         canSkip: !self.asr.isRunning && !self.isRecordingAnyShortcut,
                         skipAction: {
+                            let origin = self.settings.analyticsOnboardingOrigin
+                            AnalyticsService.shared.skipOnboardingTryout(origin: origin)
                             self.settings.onboardingPlaygroundSkipped = true
                             self.goNext(outcome: .skipped)
                         }

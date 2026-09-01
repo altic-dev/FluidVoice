@@ -1,28 +1,28 @@
 import SwiftUI
 
-enum AIEnhancementConfigurationSection: String, CaseIterable, Identifiable {
+enum AIEnhancementConfigurationSection: String {
     case providers
     case advancedPrompts
 
-    var id: String {
-        self.rawValue
-    }
-
-    var title: String {
+    var sidebarItem: SidebarItem {
         switch self {
         case .providers:
-            return "AI Providers"
+            return .aiEnhancements
         case .advancedPrompts:
-            return "Advanced Prompts"
+            return .cleanupStyles
         }
     }
+}
 
-    var systemImage: String {
+extension SidebarItem {
+    var aiEnhancementConfigurationSection: AIEnhancementConfigurationSection? {
         switch self {
-        case .providers:
-            return "cpu"
-        case .advancedPrompts:
-            return "slider.horizontal.3"
+        case .aiEnhancements:
+            return .providers
+        case .cleanupStyles:
+            return .advancedPrompts
+        default:
+            return nil
         }
     }
 }
@@ -76,14 +76,13 @@ struct AIEnhancementSettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var promptTest: DictationPromptTestCoordinator
     let theme: AppTheme
+    @Binding var selectedConfigurationSection: AIEnhancementConfigurationSection
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
     @State var expandedProviderID: String? = nil
     @State var providerSearchText: String = ""
     @State var privateAISelectedModelID: String = PrivateAIIntegrationService.configuredModelID
     @State var privateAILoadState: PrivateAIModelLoadState = .idle
-    @State var selectedConfigurationSection: AIEnhancementConfigurationSection = .providers
-    @State var hoveredConfigurationSection: AIEnhancementConfigurationSection?
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
     @State var hoveredPromptModeKey: String? = nil
@@ -101,10 +100,6 @@ struct AIEnhancementSettingsView: View {
                 self.viewModel.onAppear()
                 self.privateAISelectedModelID = PrivateAIIntegrationService.configuredModelID
                 self.refreshPrivateAILoadState()
-                if PrivateAIMLXUpgradeCoordinator.isUpgradePending() {
-                    self.selectedConfigurationSection = .providers
-                    self.expandedProviderID = PrivateAIProviderFeature.shared.providerID
-                }
             }
             .onChange(of: self.viewModel.connectionStatus) { oldValue, newValue in
                 if oldValue == .success && newValue != .success {

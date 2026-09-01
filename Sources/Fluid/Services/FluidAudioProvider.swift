@@ -5,6 +5,9 @@ import FluidAudio
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
+    private static let incrementalChunkingThresholdSamples = 240_000
+    private static let incrementalAppendBlockSamples = 240_000
+
     struct PronunciationTextReplacement {
         let wordRange: ClosedRange<Int>
         let label: String
@@ -32,6 +35,8 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var latestStreamingPreviewText: String = ""
     private var latestStreamingPreviewSampleCount: Int = 0
     private var latestStreamingPreviewFinishedAt: TimeInterval?
+    private var incrementalSession: ParakeetIncrementalSession?
+    private var incrementalAcceptedSampleCount = 0
     private(set) var isReady: Bool = false
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
@@ -166,6 +171,8 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.latestStreamingPreviewText = ""
         self.latestStreamingPreviewSampleCount = 0
         self.latestStreamingPreviewFinishedAt = nil
+        self.incrementalSession = nil
+        self.incrementalAcceptedSampleCount = 0
 
         try Task.checkCancellation()
         self.isReady = true
@@ -184,6 +191,8 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.latestStreamingPreviewText = ""
         self.latestStreamingPreviewSampleCount = 0
         self.latestStreamingPreviewFinishedAt = nil
+        self.incrementalSession = nil
+        self.incrementalAcceptedSampleCount = 0
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -196,7 +205,35 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
 
         let startedAt = Date().timeIntervalSince1970
-        let result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+        let result: ASRResult
+        if SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+           samples.count > Self.incrementalChunkingThresholdSamples,
+           let incrementalManager = self.finalAsrManager ?? self.streamingAsrManager
+        {
+            do {
+                result = try await self.transcribeIncrementalPreview(
+                    samples,
+                    manager: incrementalManager
+                )
+            } catch {
+                self.resetIncrementalSession()
+                if Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                DebugLogger.shared.warning(
+                    "FluidAudioProvider: Incremental preview failed (\(error.localizedDescription)); using full preview",
+                    source: "FluidAudioProvider"
+                )
+                result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+            }
+        } else {
+            if !SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled
+                || samples.count < self.incrementalAcceptedSampleCount
+            {
+                self.resetIncrementalSession()
+            }
+            result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+        }
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         self.latestStreamingPreviewText = text
         self.latestStreamingPreviewSampleCount = samples.count
@@ -213,6 +250,75 @@ final class FluidAudioProvider: TranscriptionProvider {
             source: "ASRBenchmark"
         )
         return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+    }
+
+    /// Returns the first sample not yet accepted by the active incremental session.
+    /// Callers can use this to copy only newly captured PCM instead of the full
+    /// growing recording on every live-preview tick.
+    func incrementalPreviewDeltaStart(totalSampleCount: Int) -> Int? {
+        Self.incrementalPreviewDeltaRange(
+            enabled: SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+            hasSession: self.incrementalSession != nil,
+            acceptedSampleCount: self.incrementalAcceptedSampleCount,
+            totalSampleCount: totalSampleCount
+        )?.lowerBound
+    }
+
+    static func incrementalPreviewDeltaRange(
+        enabled: Bool,
+        hasSession: Bool,
+        acceptedSampleCount: Int,
+        totalSampleCount: Int
+    ) -> Range<Int>? {
+        guard enabled,
+              hasSession,
+              acceptedSampleCount > self.incrementalChunkingThresholdSamples,
+              totalSampleCount > acceptedSampleCount
+        else { return nil }
+        return acceptedSampleCount..<totalSampleCount
+    }
+
+    /// Advances an existing incremental session with only the newly captured PCM.
+    /// Any failure invalidates the session; the caller should retry through
+    /// `transcribeStreaming(_:)` with the full prefix so normal fallback remains intact.
+    func transcribeStreamingDelta(
+        _ newSamples: [Float],
+        totalSampleCount: Int
+    ) async throws -> ASRTranscriptionResult {
+        guard let session = self.incrementalSession,
+              self.incrementalAcceptedSampleCount + newSamples.count == totalSampleCount
+        else {
+            self.resetIncrementalSession()
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "Incremental preview delta no longer matches the recording"]
+            )
+        }
+
+        let startedAt = Date().timeIntervalSince1970
+        do {
+            try await session.append(newSamples)
+            self.incrementalAcceptedSampleCount = totalSampleCount
+            let result = try await session.preview()
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.latestStreamingPreviewText = text
+            self.latestStreamingPreviewSampleCount = totalSampleCount
+            self.latestStreamingPreviewFinishedAt = Date().timeIntervalSince1970
+            self.logStreamingBenchmark(
+                sampleCount: totalSampleCount,
+                text: text,
+                startedAt: startedAt,
+                inputSampleCount: newSamples.count
+            )
+            return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+        } catch {
+            self.resetIncrementalSession()
+            if Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            throw error
+        }
     }
 
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -244,12 +350,38 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        defer { self.resetIncrementalSession() }
         guard let manager = self.finalAsrManager ?? self.streamingAsrManager else {
             throw NSError(
                 domain: "FluidAudioProvider",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
             )
+        }
+
+        if SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+           samples.count > Self.incrementalChunkingThresholdSamples,
+           self.incrementalSession != nil
+        {
+            do {
+                let startedAt = Date().timeIntervalSince1970
+                let result = try await self.transcribeIncrementalFinal(samples)
+                self.logFinalBenchmark(
+                    samples: samples,
+                    text: result.text,
+                    startedAt: startedAt,
+                    usedFallback: false
+                )
+                return result
+            } catch {
+                if Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                DebugLogger.shared.warning(
+                    "FluidAudioProvider: Incremental final failed (\(error.localizedDescription)); using full final",
+                    source: "FluidAudioProvider"
+                )
+            }
         }
 
         // If the boosted final manager fails, fall back to the unboosted streaming
@@ -272,6 +404,69 @@ final class FluidAudioProvider: TranscriptionProvider {
             self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: true)
             return result
         }
+    }
+
+    private func transcribeIncrementalPreview(
+        _ samples: [Float],
+        manager: AsrManager
+    ) async throws -> ASRResult {
+        if samples.count < self.incrementalAcceptedSampleCount {
+            self.resetIncrementalSession()
+        }
+        if self.incrementalSession == nil {
+            self.incrementalSession = try await manager.makeIncrementalSession(source: .microphone)
+        }
+        guard let session = self.incrementalSession else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Incremental ASR session unavailable"]
+            )
+        }
+        if samples.count > self.incrementalAcceptedSampleCount {
+            try await self.appendIncrementalSamples(samples, to: session)
+        }
+        return try await session.preview()
+    }
+
+    private func transcribeIncrementalFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        guard let session = self.incrementalSession,
+              samples.count >= self.incrementalAcceptedSampleCount
+        else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Incremental ASR session cannot finalize this recording"]
+            )
+        }
+        if samples.count > self.incrementalAcceptedSampleCount {
+            try await self.appendIncrementalSamples(samples, to: session)
+        }
+        let result = try await session.finish(finalAudioSamples: samples)
+        let reusedWindows = await session.finalizedWindowCount
+        DebugLogger.shared.info(
+            "FluidAudioProvider: Incremental final reused \(reusedWindows) stable Parakeet windows",
+            source: "FluidAudioProvider"
+        )
+        return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+    }
+
+    private func appendIncrementalSamples(
+        _ samples: [Float],
+        to session: ParakeetIncrementalSession
+    ) async throws {
+        var offset = self.incrementalAcceptedSampleCount
+        while offset < samples.count {
+            let end = min(offset + Self.incrementalAppendBlockSamples, samples.count)
+            try await session.append(Array(samples[offset..<end]))
+            offset = end
+            self.incrementalAcceptedSampleCount = offset
+        }
+    }
+
+    private func resetIncrementalSession() {
+        self.incrementalSession = nil
+        self.incrementalAcceptedSampleCount = 0
     }
 
     private func transcribeFinalResult(_ samples: [Float], manager: AsrManager) async throws -> ASRTranscriptionResult {
@@ -461,6 +656,25 @@ final class FluidAudioProvider: TranscriptionProvider {
         )
     }
 
+    private func logStreamingBenchmark(
+        sampleCount: Int,
+        text: String,
+        startedAt: TimeInterval,
+        inputSampleCount: Int
+    ) {
+        let elapsedMs = Int(((Date().timeIntervalSince1970 - startedAt) * 1000).rounded())
+        let audioMs = Int((Double(sampleCount) / 16_000.0 * 1000).rounded())
+        let rtf = audioMs > 0 ? Double(elapsedMs) / Double(audioMs) : 0
+        DebugLogger.shared.info(
+            """
+            ASR_BENCH provider_streaming_delta_done samples=\(sampleCount) inputSamples=\(inputSampleCount) \
+            audioMs=\(audioMs) elapsedMs=\(elapsedMs) textChars=\(text.count) \
+            rtf=\(String(format: "%.3f", rtf))
+            """,
+            source: "ASRBenchmark"
+        )
+    }
+
     func modelsExistOnDisk() -> Bool {
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         switch selectedModel {
@@ -472,6 +686,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
+        self.resetIncrementalSession()
         let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         DebugLogger.shared.info(

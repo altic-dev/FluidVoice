@@ -782,6 +782,10 @@ final class GlobalHotkeyManager: NSObject {
             return tapRecoveryResult
         }
 
+        if Self.isSynthesizedTypingEvent(event) {
+            return Unmanaged.passUnretained(event)
+        }
+
         if self.isShortcutCaptureActiveProvider?() ?? false {
             self.resetModifierOnlyShortcutTracking()
             return Unmanaged.passUnretained(event)
@@ -1275,6 +1279,10 @@ final class GlobalHotkeyManager: NSObject {
         } else {
             DebugLogger.shared.debug("\(label) hold (\(duration)s) ignored - no automatic start", source: "GlobalHotkeyManager")
         }
+    }
+
+    nonisolated static func isSynthesizedTypingEvent(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == TypingService.synthesizedEventUserData
     }
 
     private func handlePrimaryDictationTriggerDown() {

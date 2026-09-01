@@ -362,7 +362,7 @@ struct MeetingTranscriptionView: View {
                 .buttonStyle(.borderless)
             }
 
-            if let notice = transcriptionService.fallbackNotice {
+            if let notice = result.speakerLabelingNotice ?? transcriptionService.fallbackNotice {
                 Label(notice, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -534,6 +534,11 @@ struct MeetingTranscriptionView: View {
                     .help("Remove from history")
                 }
                 .buttonStyle(.borderless)
+            }
+            if let notice = entry.speakerLabelingNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             Divider()
             ScrollView {

@@ -21,6 +21,39 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(CustomDictionaryManualEntry.replacementDisplayText(""), "")
     }
 
+    func testInstantReplacementDoesNotEnterParakeetBoostVocabulary() {
+        let replacement = SettingsStore.CustomDictionaryEntry(
+            triggers: ["sean"],
+            replacement: "Shaun"
+        )
+        let explicitBoost = ParakeetVocabularyStore.VocabularyConfig.Term(
+            text: "FluidVoice",
+            weight: 10,
+            aliases: ["fluid voice"]
+        )
+
+        self.withRestoredDictionary([replacement]) {
+            let terms = ParakeetVocabularyStore.normalizedBoostTerms([explicitBoost])
+
+            XCTAssertEqual(terms.map(\.text), ["FluidVoice"])
+            XCTAssertEqual(terms.first?.aliases, ["fluid voice"])
+            XCTAssertFalse(terms.contains { $0.text.caseInsensitiveCompare("Shaun") == .orderedSame })
+            XCTAssertFalse(terms.contains { $0.aliases.contains("sean") })
+        }
+    }
+
+    func testInstantReplacementStillRequiresExactWholeWordTrigger() {
+        let replacement = SettingsStore.CustomDictionaryEntry(
+            triggers: ["sean"],
+            replacement: "Shaun"
+        )
+
+        self.withRestoredDictionary([replacement]) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("Did you mean Monday?"), "Did you mean Monday?")
+            XCTAssertEqual(ASRService.applyCustomDictionary("Ask sean Monday."), "Ask Shaun Monday.")
+        }
+    }
+
     func testWhitespaceReplacementSurvivesTransferAndReplacement() throws {
         let document = DictionaryTransferDocument(
             replacements: [DictionaryTransferReplacement(from: ["new line"], to: "\n")],

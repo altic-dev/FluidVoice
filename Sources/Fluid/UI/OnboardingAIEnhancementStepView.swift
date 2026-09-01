@@ -336,7 +336,7 @@ struct OnboardingAIEnhancementStepView: View {
         if self.shouldShowTryout {
             return "Try it below before finishing setup."
         }
-        return "You can change this later in AI Enhancement settings."
+        return "You can change this later in AI Providers."
     }
 
     private func playgroundSection(containerWidth: CGFloat) -> some View {
@@ -1291,8 +1291,10 @@ struct OnboardingAIEnhancementStepView: View {
         self.settings.selectedModelByProvider = selectedModelByProvider
 
         var fingerprints = self.settings.verifiedProviderFingerprints
-        fingerprints[providerKey] = PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+        let fingerprint = PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+        fingerprints[providerKey] = fingerprint
         self.settings.verifiedProviderFingerprints = fingerprints
+        self.settings.verifiedPrivateAIModelFingerprints[model.id] = fingerprint
 
         self.settings.selectedProviderID = providerID
         self.settings.setDictationPromptSelection(.privateAI)
@@ -1307,6 +1309,7 @@ struct OnboardingAIEnhancementStepView: View {
         var fingerprints = self.settings.verifiedProviderFingerprints
         fingerprints.removeValue(forKey: providerKey)
         self.settings.verifiedProviderFingerprints = fingerprints
+        self.settings.verifiedPrivateAIModelFingerprints = [:]
 
         if self.settings.selectedProviderID == providerID {
             self.settings.selectedProviderID = ""

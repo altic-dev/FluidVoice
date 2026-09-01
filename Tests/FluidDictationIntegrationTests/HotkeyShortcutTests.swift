@@ -17,6 +17,7 @@ final class HotkeyShortcutTests: XCTestCase {
     private let microphoneSelectionMigrationVersionKey = "AppOnlyMicrophoneSelectionMigrationVersion"
     private let showMicrophoneChangeAlertsKey = "ShowMicrophoneChangeAlerts"
     private let experimentalDirectAudioCaptureEnabledKey = "ExperimentalDirectAudioCaptureEnabled"
+    private let incrementalParakeetEnabledKey = "ExperimentalParakeetUnifiedFinalEnabled"
 
     @MainActor
     func testBottomOverlayRapidStopStartStopDoesNotDropFinalHide() async {
@@ -138,6 +139,72 @@ final class HotkeyShortcutTests: XCTestCase {
         let legacyData = try JSONSerialization.data(withJSONObject: root)
         let decoded = try BackupService.shared.decode(legacyData)
         XCTAssertNil(decoded.settings.skipSilentRecordingsEnabled)
+    }
+
+    @MainActor
+    func testIncrementalParakeetDefaultsOnAndRoundTripsWithoutBreakingLegacyBackups() async throws {
+        let defaults = UserDefaults.standard
+        let originalValue = defaults.object(forKey: self.incrementalParakeetEnabledKey)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: self.incrementalParakeetEnabledKey)
+            } else {
+                defaults.removeObject(forKey: self.incrementalParakeetEnabledKey)
+            }
+        }
+
+        defaults.removeObject(forKey: self.incrementalParakeetEnabledKey)
+        XCTAssertTrue(SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled)
+
+        SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled = false
+        let document = await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.experimentalParakeetUnifiedFinalEnabled, false)
+
+        let encoded = try BackupService.shared.encode(document)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var settings = try XCTUnwrap(root["settings"] as? [String: Any])
+        settings.removeValue(forKey: "experimentalParakeetUnifiedFinalEnabled")
+        root["settings"] = settings
+
+        let legacyBackup = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacyBackup.settings.experimentalParakeetUnifiedFinalEnabled)
+    }
+
+    @MainActor
+    func testIncrementalParakeetCopiesOnlyTheUnacceptedTailAfterSessionStarts() {
+        XCTAssertEqual(
+            FluidAudioProvider.incrementalPreviewDeltaRange(
+                enabled: true,
+                hasSession: true,
+                acceptedSampleCount: 320_000,
+                totalSampleCount: 330_000
+            ),
+            320_000..<330_000
+        )
+        XCTAssertNil(
+            FluidAudioProvider.incrementalPreviewDeltaRange(
+                enabled: false,
+                hasSession: true,
+                acceptedSampleCount: 320_000,
+                totalSampleCount: 330_000
+            )
+        )
+        XCTAssertNil(
+            FluidAudioProvider.incrementalPreviewDeltaRange(
+                enabled: true,
+                hasSession: false,
+                acceptedSampleCount: 320_000,
+                totalSampleCount: 330_000
+            )
+        )
+        XCTAssertNil(
+            FluidAudioProvider.incrementalPreviewDeltaRange(
+                enabled: true,
+                hasSession: true,
+                acceptedSampleCount: 240_000,
+                totalSampleCount: 250_000
+            )
+        )
     }
 
     @MainActor
@@ -652,7 +719,333 @@ final class HotkeyShortcutTests: XCTestCase {
         )
 
         XCTAssertTrue(builtInDevice.isBuiltIn)
+        XCTAssertTrue(builtInDevice.isUnavailableWhenClamshellClosed)
         XCTAssertFalse(builtInDevice.isBluetooth)
+
+        let analogHeadset = Self.device(
+            uid: "analog-headset",
+            name: "External Microphone",
+            transportType: kAudioDeviceTransportTypeBuiltIn,
+            inputDataSourceID: AudioDevice.Device.externalMicrophoneDataSourceID
+        )
+        XCTAssertTrue(analogHeadset.isBuiltIn)
+        XCTAssertFalse(analogHeadset.isUnavailableWhenClamshellClosed)
+    }
+
+    func testBluetoothStartupAdmitsSameInputRetriesWithinFiveSecondWindow() {
+        var stabilization = AudioCaptureIdlePolicy.BluetoothInputStabilization()
+
+        XCTAssertTrue(stabilization.shouldRetry(
+            inputUID: "airpods",
+            isBluetoothInput: true,
+            now: 10
+        ))
+        XCTAssertTrue(stabilization.shouldRetry(
+            inputUID: "airpods",
+            isBluetoothInput: false,
+            now: 14.999
+        ))
+        XCTAssertFalse(stabilization.shouldRetry(
+            inputUID: "airpods",
+            isBluetoothInput: false,
+            now: 15
+        ))
+    }
+
+    func testCaptureAttemptRetainsBluetoothIdentityWhenForcedDeviceDisappears() {
+        let airPods = Self.device(
+            uid: "airpods",
+            name: "AirPods Microphone",
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+        let selectedIdentity = AudioCaptureIdlePolicy.CaptureAttemptIdentity.resolve(
+            selectedInput: airPods,
+            forcingInputUID: nil,
+            previous: nil
+        )
+        let retryIdentity = AudioCaptureIdlePolicy.CaptureAttemptIdentity.resolve(
+            selectedInput: nil,
+            forcingInputUID: "airpods",
+            previous: selectedIdentity
+        )
+
+        XCTAssertEqual(retryIdentity, selectedIdentity)
+        XCTAssertTrue(retryIdentity?.isBluetooth == true)
+    }
+
+    func testCaptureAttemptDoesNotTransferBluetoothIdentityToDifferentDevice() {
+        let previous = AudioCaptureIdlePolicy.CaptureAttemptIdentity(
+            uid: "airpods",
+            name: "AirPods Microphone",
+            isBluetooth: true,
+            isInternalMicrophone: false
+        )
+
+        let replacement = AudioCaptureIdlePolicy.CaptureAttemptIdentity.resolve(
+            selectedInput: nil,
+            forcingInputUID: "usb-mic",
+            previous: previous
+        )
+
+        XCTAssertEqual(replacement?.uid, "usb-mic")
+        XCTAssertFalse(replacement?.isBluetooth == true)
+    }
+
+    func testCaptureAttemptSeedsPreferredBluetoothIdentityBeforeInputAppears() {
+        let airPodsOutputProfile = AudioDevice.Device(
+            id: 42,
+            uid: "airpods",
+            name: "AirPods",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+
+        let candidate = AudioCaptureIdlePolicy.bluetoothInputAwaitingAvailability(
+            priorityInputUIDs: ["airpods", "built-in"],
+            preferredInputUID: "airpods",
+            resolvedInputUID: "built-in",
+            allDevices: [airPodsOutputProfile],
+            excluding: []
+        )
+
+        XCTAssertEqual(candidate?.uid, "airpods")
+        XCTAssertTrue(candidate?.isBluetooth == true)
+    }
+
+    func testCaptureAttemptDoesNotWaitForLowerPriorityBluetoothInput() {
+        let builtIn = Self.device(
+            uid: "built-in",
+            name: "MacBook Pro Microphone",
+            transportType: kAudioDeviceTransportTypeBuiltIn
+        )
+        let airPodsOutputProfile = AudioDevice.Device(
+            id: 42,
+            uid: "airpods",
+            name: "AirPods",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+
+        let candidate = AudioCaptureIdlePolicy.bluetoothInputAwaitingAvailability(
+            priorityInputUIDs: ["built-in", "airpods"],
+            preferredInputUID: "built-in",
+            resolvedInputUID: "built-in",
+            allDevices: [builtIn, airPodsOutputProfile],
+            excluding: []
+        )
+
+        XCTAssertNil(candidate)
+    }
+
+    func testCaptureAttemptSkipsDisconnectedPriorityBeforeSettlingBluetoothInput() {
+        let airPodsOutputProfile = AudioDevice.Device(
+            id: 42,
+            uid: "airpods",
+            name: "AirPods",
+            hasInput: false,
+            hasOutput: true,
+            transportType: kAudioDeviceTransportTypeBluetooth
+        )
+
+        let candidate = AudioCaptureIdlePolicy.bluetoothInputAwaitingAvailability(
+            priorityInputUIDs: ["disconnected-usb", "airpods", "built-in"],
+            preferredInputUID: "disconnected-usb",
+            resolvedInputUID: "built-in",
+            allDevices: [airPodsOutputProfile],
+            excluding: []
+        )
+
+        XCTAssertEqual(candidate?.uid, "airpods")
+    }
+
+    func testBluetoothStartupPolicyDoesNotAffectOtherInputsOrActiveRecovery() {
+        var stabilization = AudioCaptureIdlePolicy.BluetoothInputStabilization()
+
+        XCTAssertFalse(stabilization.shouldRetry(
+            inputUID: "usb",
+            isBluetoothInput: false,
+            now: 10
+        ))
+        XCTAssertTrue(AudioCaptureIdlePolicy.shouldDeferRouteRecoveryToBluetoothStart(
+            directCaptureEnabled: true,
+            isStarting: true,
+            isRunning: false,
+            attemptedInputIsBluetooth: true
+        ))
+        XCTAssertFalse(AudioCaptureIdlePolicy.shouldDeferRouteRecoveryToBluetoothStart(
+            directCaptureEnabled: true,
+            isStarting: true,
+            isRunning: true,
+            attemptedInputIsBluetooth: true
+        ))
+        XCTAssertFalse(AudioCaptureIdlePolicy.shouldDeferRouteRecoveryToBluetoothStart(
+            directCaptureEnabled: true,
+            isStarting: true,
+            isRunning: false,
+            attemptedInputIsBluetooth: false
+        ))
+
+        XCTAssertEqual(
+            AudioCaptureIdlePolicy.bluetoothStartupRouteChangeDisposition(
+                invalidatesCurrentStart: true,
+                requiresIdlePrewarm: true,
+                reconcilesInputSelection: false
+            ),
+            .retryCurrentStart
+        )
+        XCTAssertEqual(
+            AudioCaptureIdlePolicy.bluetoothStartupRouteChangeDisposition(
+                invalidatesCurrentStart: false,
+                requiresIdlePrewarm: true,
+                reconcilesInputSelection: true
+            ),
+            .preserveDeferredWork
+        )
+        XCTAssertEqual(
+            AudioCaptureIdlePolicy.bluetoothStartupRouteChangeDisposition(
+                invalidatesCurrentStart: false,
+                requiresIdlePrewarm: false,
+                reconcilesInputSelection: false
+            ),
+            .ignore
+        )
+    }
+
+    func testBluetoothStartupPreservesOnlyExplicitReconciliationWork() {
+        var deferredRecovery = AudioCaptureIdlePolicy.DeferredBluetoothRouteRecovery()
+
+        deferredRecovery.preserve(
+            reason: "ordinary route churn",
+            requiresIdlePrewarm: false,
+            reconcilesInputSelection: false
+        )
+        XCTAssertNil(deferredRecovery.take())
+
+        deferredRecovery.preserve(
+            reason: "settings backup restored",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: false
+        )
+        deferredRecovery.preserve(
+            reason: "input topology changed",
+            requiresIdlePrewarm: false,
+            reconcilesInputSelection: true
+        )
+        let request = deferredRecovery.take()
+        XCTAssertEqual(request?.reason, "settings backup restored")
+        XCTAssertEqual(request?.requiresIdlePrewarm, true)
+        XCTAssertEqual(request?.reconcilesInputSelection, true)
+        XCTAssertNil(deferredRecovery.take())
+    }
+
+    func testDeferredBluetoothReconciliationLeavesMatchingActiveInputUntouched() {
+        XCTAssertFalse(AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: true,
+            confirmedInputUID: "airpods",
+            activeDeviceID: 42,
+            resolvedInputUID: "airpods",
+            resolvedDeviceID: 42,
+            hasPreparedCapture: true,
+            requiresIdlePrewarm: true
+        ))
+    }
+
+    func testDeferredBluetoothReconciliationRecoversChangedSelectionOrIdentity() {
+        XCTAssertTrue(AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: true,
+            confirmedInputUID: "airpods",
+            activeDeviceID: 42,
+            resolvedInputUID: "usb",
+            resolvedDeviceID: 88,
+            hasPreparedCapture: true,
+            requiresIdlePrewarm: true
+        ))
+        XCTAssertTrue(AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: true,
+            confirmedInputUID: "airpods",
+            activeDeviceID: 42,
+            resolvedInputUID: "airpods",
+            resolvedDeviceID: 43,
+            hasPreparedCapture: true,
+            requiresIdlePrewarm: true
+        ))
+    }
+
+    func testDeferredBluetoothReconciliationPreservesIdlePrewarmIntent() {
+        XCTAssertFalse(AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: false,
+            confirmedInputUID: nil,
+            activeDeviceID: 42,
+            resolvedInputUID: "airpods",
+            resolvedDeviceID: 42,
+            hasPreparedCapture: true,
+            requiresIdlePrewarm: true
+        ))
+        XCTAssertTrue(AudioCaptureIdlePolicy.shouldRecoverAfterDeferredBluetoothReconciliation(
+            isRunning: false,
+            confirmedInputUID: nil,
+            activeDeviceID: nil,
+            resolvedInputUID: "airpods",
+            resolvedDeviceID: 42,
+            hasPreparedCapture: false,
+            requiresIdlePrewarm: true
+        ))
+    }
+
+    func testSilentPCMWatchdogRecoversInternalDirectCaptureOnceAfterRealSignal() {
+        var watchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+
+        XCTAssertFalse(watchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: true, rms: 0, peak: 0
+        ))
+        XCTAssertFalse(watchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: true, rms: 0.02, peak: 0.08
+        ))
+        for _ in 0..<(AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog.requiredSilentWindows - 1) {
+            XCTAssertFalse(watchdog.shouldRecover(
+                isInternalMicrophone: true, isDirectCapture: true, rms: 0, peak: 0
+            ))
+        }
+        XCTAssertTrue(watchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: true, rms: 0, peak: 0
+        ))
+        XCTAssertFalse(watchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: true, rms: 0, peak: 0
+        ))
+    }
+
+    func testSilentPCMWatchdogIgnoresExternalAndLowAmbientInputs() {
+        var externalWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+        XCTAssertFalse(externalWatchdog.shouldRecover(
+            isInternalMicrophone: false, isDirectCapture: true, rms: 0.02, peak: 0.08
+        ))
+        for _ in 0...AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog.requiredSilentWindows {
+            XCTAssertFalse(externalWatchdog.shouldRecover(
+                isInternalMicrophone: false, isDirectCapture: true, rms: 0, peak: 0
+            ))
+        }
+
+        var legacyCaptureWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+        XCTAssertFalse(legacyCaptureWatchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: false, rms: 0.02, peak: 0.08
+        ))
+        for _ in 0...AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog.requiredSilentWindows {
+            XCTAssertFalse(legacyCaptureWatchdog.shouldRecover(
+                isInternalMicrophone: true, isDirectCapture: false, rms: 0, peak: 0
+            ))
+        }
+
+        var ambientWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
+        XCTAssertFalse(ambientWatchdog.shouldRecover(
+            isInternalMicrophone: true, isDirectCapture: true, rms: 0.02, peak: 0.08
+        ))
+        for _ in 0...AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog.requiredSilentWindows {
+            XCTAssertFalse(ambientWatchdog.shouldRecover(
+                isInternalMicrophone: true, isDirectCapture: true, rms: 0.0001, peak: 0.001
+            ))
+        }
     }
 
     @MainActor

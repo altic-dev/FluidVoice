@@ -4,6 +4,75 @@ import Carbon.HIToolbox
 import Foundation
 
 final class TypingService {
+    nonisolated static let synthesizedEventUserData: Int64 = 0x46565353
+
+    struct CapturedFocusTarget {
+        let pid: pid_t
+        let window: AXUIElement?
+        let element: AXUIElement
+
+        var isSecureTextField: Bool {
+            let subrole = TypingService.stringAXAttribute(
+                from: self.element,
+                attribute: kAXSubroleAttribute as CFString
+            ) ?? ""
+            return subrole == (kAXSecureTextFieldSubrole as String)
+                || subrole.localizedCaseInsensitiveContains("secure")
+        }
+    }
+
+    enum DeliveryOutcome: Equatable {
+        case rejected
+        case insertionFailed
+        case inserted
+        case actionSuppressed
+        case actionDispatched
+        case insertedActionSuppressed
+        case insertedAndActionDispatched
+
+        var didInsert: Bool {
+            switch self {
+            case .inserted, .insertedActionSuppressed, .insertedAndActionDispatched:
+                return true
+            case .rejected, .insertionFailed, .actionSuppressed, .actionDispatched:
+                return false
+            }
+        }
+
+        var didDispatchAction: Bool {
+            self == .actionDispatched || self == .insertedAndActionDispatched
+        }
+    }
+
+    nonisolated static func canDispatchPostInsertionAction(
+        preferredTargetPID: pid_t?,
+        requiredTargetPID: pid_t?,
+        isSecureTextField: Bool,
+        modifiersReleased: Bool,
+        exactFocusIsActive: Bool
+    ) -> Bool {
+        guard let preferredTargetPID, preferredTargetPID > 0,
+              requiredTargetPID == preferredTargetPID
+        else {
+            return false
+        }
+        return !isSecureTextField && modifiersReleased && exactFocusIsActive
+    }
+
+    nonisolated static func canInsertBeforePostInsertionAction(
+        preferredTargetPID: pid_t?,
+        requiredTargetPID: pid_t?,
+        isSecureTextField: Bool,
+        exactFocusIsActive: Bool
+    ) -> Bool {
+        guard let preferredTargetPID, preferredTargetPID > 0,
+              requiredTargetPID == preferredTargetPID
+        else {
+            return false
+        }
+        return !isSecureTextField && exactFocusIsActive
+    }
+
     // Logging toggle (off by default). Enable by setting env FLUID_TYPING_LOGS=1
     // or UserDefaults bool for key "enableTypingLogs".
     private static var isLoggingEnabled: Bool {
@@ -131,7 +200,7 @@ final class TypingService {
 
     /// Best-effort: returns the PID owning the currently focused accessibility element.
     /// This is more reliable than NSWorkspace.frontmostApplication for floating overlays/launchers.
-    static func captureSystemFocusedPID() -> pid_t? {
+    static func captureSystemFocusTarget() -> CapturedFocusTarget? {
         // Accessibility is required to query system-focused AX element.
         guard AXIsProcessTrusted() else {
             self.storeFocusSnapshot(nil)
@@ -167,7 +236,57 @@ final class TypingService {
             ?? Self.copyAXElementAttribute(from: appElement, attribute: kAXMainWindowAttribute as CFString)
         Self.storeFocusSnapshot(FocusSnapshot(pid: pid, window: window, element: element))
         Self.logFocusState("[TypingService] Captured focus snapshot")
-        return pid
+        return CapturedFocusTarget(pid: pid, window: window, element: element)
+    }
+
+    static func captureSystemFocusedPID() -> pid_t? {
+        self.captureSystemFocusTarget()?.pid
+    }
+
+    static func isExactFocusTargetActive(_ target: CapturedFocusTarget) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var focusedElementRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementRef
+        )
+        guard result == .success, let focusedElementRef,
+              CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID()
+        else {
+            return false
+        }
+
+        let currentElement = unsafeBitCast(focusedElementRef, to: AXUIElement.self)
+        return CFEqual(currentElement, target.element)
+    }
+
+    @discardableResult
+    static func restoreFocusTarget(_ target: CapturedFocusTarget) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let appElement = AXUIElementCreateApplication(target.pid)
+
+        if let window = target.window {
+            _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            _ = AXUIElementSetAttributeValue(appElement, kAXMainWindowAttribute as CFString, window)
+            _ = AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window)
+            usleep(40_000)
+        }
+
+        for _ in 0..<3 {
+            let result = AXUIElementSetAttributeValue(
+                target.element,
+                kAXFocusedAttribute as CFString,
+                kCFBooleanTrue
+            )
+            if result == .success, self.isExactFocusTargetActive(target) {
+                return true
+            }
+            usleep(50_000)
+        }
+        return self.isExactFocusTargetActive(target)
     }
 
     /// Best-effort: returns the text immediately before the caret in the currently focused
@@ -301,7 +420,10 @@ final class TypingService {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?,
-        tracksDictionaryCorrections: Bool = false
+        tracksDictionaryCorrections: Bool = false,
+        postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        requiredFocusTarget: CapturedFocusTarget? = nil,
+        completion: ((DeliveryOutcome) -> Void)? = nil
     ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let text = plan.plainText
@@ -319,9 +441,10 @@ final class TypingService {
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
         self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
 
-        guard text.isEmpty == false else {
+        guard text.isEmpty == false || postInsertionKey != nil else {
             self.bench("request_return reason=empty_text")
             self.log("[TypingService] ERROR: Empty text provided, aborting")
+            completion?(.rejected)
             return
         }
 
@@ -329,6 +452,7 @@ final class TypingService {
         guard !self.isCurrentlyTyping else {
             self.bench("request_return reason=already_typing")
             self.log("[TypingService] WARNING: Skipping text injection - already in progress")
+            completion?(.rejected)
             return
         }
 
@@ -337,6 +461,7 @@ final class TypingService {
             self.bench("request_return reason=accessibility_not_trusted")
             self.log("[TypingService] ERROR: Accessibility permissions required for text injection")
             self.log("[TypingService] Current accessibility status: \(AXIsProcessTrusted())")
+            completion?(.rejected)
             return
         }
 
@@ -344,6 +469,7 @@ final class TypingService {
         self.isCurrentlyTyping = true
 
         DispatchQueue.global(qos: .userInitiated).async {
+            var outcome: DeliveryOutcome = .insertionFailed
             let workerStartedAt = ProcessInfo.processInfo.systemUptime
             self.bench("worker_start queueDelayMs=\(Self.elapsedMs(from: requestedAt, to: workerStartedAt))")
 
@@ -354,6 +480,7 @@ final class TypingService {
                     "complete totalMs=\(Self.elapsedMs(from: requestedAt, to: completedAt)) textReadyToCompleteMs=\(textReadyAt.map { String(Self.elapsedMs(from: $0, to: completedAt)) } ?? "nil")"
                 )
                 self.log("[TypingService] Typing operation completed, isCurrentlyTyping set to false")
+                completion?(outcome)
             }
 
             self.log("[TypingService] Starting async text insertion process")
@@ -361,21 +488,76 @@ final class TypingService {
                 usleep(useconds_t(settleDelayMs * 1000))
             }
             self.bench("settle_delay_done delayMs=\(settleDelayMs) elapsedMs=\(Self.elapsedMs(since: requestedAt))")
-            self.log("[TypingService] Delay completed, calling insertTextInstantly")
-            let insertStartedAt = ProcessInfo.processInfo.systemUptime
-            self.bench("insert_call")
-            self.insertTextInstantly(text, preferredTargetPID: preferredTargetPID)
-            self.bench(
-                "insert_return elapsedMs=\(Self.elapsedMs(since: insertStartedAt)) totalMs=\(Self.elapsedMs(since: requestedAt))"
-            )
-            if tracksDictionaryCorrections {
-                Task { @MainActor in
-                    AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
-                        text,
-                        targetPID: preferredTargetPID
-                    )
+            let hasTextToInsert = !text.isEmpty
+            if postInsertionKey != nil {
+                guard let preferredTargetPID, let requiredFocusTarget else {
+                    outcome = .actionSuppressed
+                    return
+                }
+                // A held dictation modifier must suppress only the key action,
+                // not the dictated text. The longer check below waits for
+                // modifiers after insertion before deciding whether to send.
+                guard Self.canInsertBeforePostInsertionAction(
+                    preferredTargetPID: preferredTargetPID,
+                    requiredTargetPID: requiredFocusTarget.pid,
+                    isSecureTextField: requiredFocusTarget.isSecureTextField,
+                    exactFocusIsActive: Self.isExactFocusTargetActive(requiredFocusTarget)
+                ) else {
+                    outcome = .actionSuppressed
+                    return
                 }
             }
+
+            if hasTextToInsert {
+                self.log("[TypingService] Delay completed, calling insertTextInstantly")
+                let insertStartedAt = ProcessInfo.processInfo.systemUptime
+                self.bench("insert_call")
+                let inserted = self.insertTextInstantly(text, preferredTargetPID: preferredTargetPID)
+                self.bench(
+                    "insert_return elapsedMs=\(Self.elapsedMs(since: insertStartedAt)) totalMs=\(Self.elapsedMs(since: requestedAt))"
+                )
+                guard inserted else {
+                    outcome = .insertionFailed
+                    return
+                }
+
+                outcome = .inserted
+                if tracksDictionaryCorrections, postInsertionKey == nil {
+                    Task { @MainActor in
+                        AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
+                            text,
+                            targetPID: preferredTargetPID
+                        )
+                    }
+                }
+            }
+
+            guard let postInsertionKey else { return }
+            guard let preferredTargetPID, let requiredFocusTarget else {
+                outcome = hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed
+                return
+            }
+            let modifiersReleased = self.waitForPhysicalModifiersToRelease(timeout: 2)
+            let exactFocusIsActive = Self.isExactFocusTargetActive(requiredFocusTarget)
+            guard Self.canDispatchPostInsertionAction(
+                preferredTargetPID: preferredTargetPID,
+                requiredTargetPID: requiredFocusTarget.pid,
+                isSecureTextField: requiredFocusTarget.isSecureTextField,
+                modifiersReleased: modifiersReleased,
+                exactFocusIsActive: exactFocusIsActive
+            ) else {
+                outcome = hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed
+                return
+            }
+
+            usleep(50_000)
+            guard Self.isExactFocusTargetActive(requiredFocusTarget),
+                  self.postReturnKey(postInsertionKey, targetPID: preferredTargetPID)
+            else {
+                outcome = hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed
+                return
+            }
+            outcome = hasTextToInsert ? .insertedAndActionDispatched : .actionDispatched
         }
     }
 
@@ -393,7 +575,7 @@ final class TypingService {
 
     // MARK: - Internal insertion pipeline
 
-    private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
+    private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) -> Bool {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
@@ -403,7 +585,7 @@ final class TypingService {
             self.log("[TypingService] Ghostty target detected in standard mode (PID \(ghosttyTargetPID)); forcing Reliable Paste path")
             if self.tryReliablePasteInsertion(text, preferredTargetPID: ghosttyTargetPID) {
                 self.log("[TypingService] SUCCESS: Ghostty Reliable Paste path completed")
-                return
+                return true
             }
             self.log("[TypingService] Ghostty Reliable Paste path fell through to direct-typing fallbacks")
         }
@@ -412,14 +594,14 @@ final class TypingService {
             self.log("[TypingService] Reliable Paste mode enabled")
             if self.tryReliablePasteInsertion(text, preferredTargetPID: preferredTargetPID) {
                 self.log("[TypingService] SUCCESS: Reliable Paste mode completed")
-                return
+                return true
             }
             self.log("[TypingService] Reliable Paste mode fell through to direct-typing fallbacks")
         } else if let preferredTargetPID, preferredTargetPID > 0 {
             self.log("[TypingService] Experimental Direct Typing mode: trying preferred PID unicode insertion first")
             if self.insertTextBulkInstant(text, targetPID: preferredTargetPID) {
                 self.log("[TypingService] SUCCESS: Preferred PID CGEvent insertion completed")
-                return
+                return true
             }
             self.log("[TypingService] Preferred PID CGEvent insertion failed, continuing fallback pipeline")
         }
@@ -453,7 +635,7 @@ final class TypingService {
             self.log("[TypingService] Trying CGEvent insertion targeting focused PID \(focusedPID)")
             if self.insertTextBulkInstant(text, targetPID: focusedPID) {
                 self.log("[TypingService] SUCCESS: CGEvent focused-PID insertion completed")
-                return
+                return true
             }
         }
 
@@ -461,7 +643,7 @@ final class TypingService {
         self.log("[TypingService] Trying Accessibility focused-element insertion")
         if self.insertTextViaAccessibility(text) {
             self.log("[TypingService] SUCCESS: Accessibility insertion completed")
-            return
+            return true
         }
 
         // HID Fallback if PID targeting failed
@@ -469,7 +651,7 @@ final class TypingService {
             self.log("[TypingService] No focused PID available, trying HID CGEvent insertion")
             if self.insertTextBulkHIDInstant(text) {
                 self.log("[TypingService] SUCCESS: CGEvent HID insertion completed")
-                return
+                return true
             }
         }
 
@@ -477,7 +659,7 @@ final class TypingService {
         self.log("[TypingService] CGEvent failed, trying clipboard fallback")
         if self.insertTextViaClipboard(text) {
             self.log("[TypingService] SUCCESS: Clipboard insertion completed")
-            return
+            return true
         }
 
         // Last resort: Character-by-character
@@ -490,6 +672,37 @@ final class TypingService {
             usleep(1000)
         }
         self.log("[TypingService] Character-by-character typing completed")
+        return true
+    }
+
+    private func waitForPhysicalModifiersToRelease(timeout: TimeInterval) -> Bool {
+        let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        while ProcessInfo.processInfo.systemUptime - startedAt < timeout {
+            if CGEventSource.flagsState(.combinedSessionState).isDisjoint(with: relevant) {
+                return true
+            }
+            usleep(15_000)
+        }
+        return false
+    }
+
+    private func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) -> Bool {
+        let returnKeyCode = CGKeyCode(kVK_Return)
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false)
+        else {
+            return false
+        }
+
+        keyDown.flags = key.eventFlags
+        keyUp.flags = key.eventFlags
+        keyDown.setIntegerValueField(.eventSourceUserData, value: Self.synthesizedEventUserData)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: Self.synthesizedEventUserData)
+        keyDown.postToPid(targetPID)
+        usleep(10_000)
+        keyUp.postToPid(targetPID)
+        return true
     }
 
     private func tryReliablePasteInsertion(_ text: String, preferredTargetPID: pid_t?) -> Bool {

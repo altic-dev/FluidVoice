@@ -16,18 +16,40 @@ enum PrivateAIProviderPromptFormat {
     }
 
     static func verifiedModelID(settings: SettingsStore = .shared) -> String? {
-        guard PrivateFeatures.privateAIProvider else { return nil }
         let key = self.providerKey(for: PrivateAIProviderFeature.shared.providerID)
         let configuredModelID = PrivateAIIntegrationService.configuredModelID
         let modelID = PrivateAIModelRegistry.canonicalModelID(for: settings.selectedModelByProvider[key] ?? configuredModelID) ?? configuredModelID
+        return self.verifiedModelID(for: modelID, settings: settings)
+    }
+
+    static func verifiedModelID(for selectedModelID: String, settings: SettingsStore = .shared) -> String? {
+        guard PrivateFeatures.privateAIProvider else { return nil }
+        let key = self.providerKey(for: PrivateAIProviderFeature.shared.providerID)
+        let modelID = PrivateAIModelRegistry.canonicalModelID(for: selectedModelID) ?? selectedModelID
+        let expectedFingerprint = PrivateAIProviderFeature.verificationFingerprint(for: modelID)
         guard let model = PrivateAIModelRegistry.model(id: modelID),
               PrivateAIIntegrationService.isModelInstalled(model),
-              settings.verifiedProviderFingerprints[key] == PrivateAIProviderFeature.verificationFingerprint(for: modelID)
+              self.hasStoredVerification(
+                  for: modelID,
+                  providerKey: key,
+                  expectedFingerprint: expectedFingerprint,
+                  settings: settings
+              )
         else {
             return nil
         }
 
         return modelID
+    }
+
+    static func hasStoredVerification(
+        for modelID: String,
+        providerKey: String,
+        expectedFingerprint: String,
+        settings: SettingsStore = .shared
+    ) -> Bool {
+        settings.verifiedPrivateAIModelFingerprints[modelID] == expectedFingerprint ||
+            settings.verifiedProviderFingerprints[providerKey] == expectedFingerprint
     }
 
     private static func isSoleStoredVerifiedProvider(settings: SettingsStore) -> Bool {

@@ -51,7 +51,6 @@ extension AIEnhancementSettingsView {
             ThemedCard(style: .prominent, hoverEffect: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     self.aiSetupHeader
-                    self.aiConfigurationSectionPicker
 
                     Group {
                         switch self.selectedConfigurationSection {
@@ -70,7 +69,9 @@ extension AIEnhancementSettingsView {
     }
 
     private var aiSetupHeader: some View {
-        HStack(spacing: 12) {
+        let isProviders = self.selectedConfigurationSection == .providers
+
+        return HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(self.theme.palette.contentBackground.opacity(0.82))
@@ -87,81 +88,26 @@ extension AIEnhancementSettingsView {
                             .stroke(self.theme.palette.accent.opacity(0.35), lineWidth: 1)
                     )
 
-                Image(systemName: "brain")
+                Image(systemName: isProviders ? "cpu" : "wand.and.stars")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(self.theme.palette.accent)
             }
             .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("AI Enhancement")
+                Text(isProviders ? "AI Providers" : "Cleanup Styles")
                     .font(.title3)
                     .fontWeight(.semibold)
                     .foregroundStyle(self.theme.palette.primaryText)
-                Text("Set up providers and prompt behavior separately.")
+                Text(isProviders
+                    ? "Configure local models and API providers."
+                    : "Choose how FluidVoice cleans up your dictation.")
                     .font(.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             Spacer()
         }
-    }
-
-    private var aiConfigurationSectionPicker: some View {
-        HStack(spacing: 3) {
-            ForEach(AIEnhancementConfigurationSection.allCases) { section in
-                self.aiConfigurationSectionButton(section)
-            }
-        }
-        .padding(4)
-        .background(
-            Capsule(style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.78))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.24), lineWidth: 1)
-                )
-        )
-        .frame(maxWidth: .infinity, alignment: .center)
-        .accessibilityElement(children: .contain)
-    }
-
-    private func aiConfigurationSectionButton(_ section: AIEnhancementConfigurationSection) -> some View {
-        let isSelected = self.selectedConfigurationSection == section
-        let isHovering = self.hoveredConfigurationSection == section
-        let tone = self.theme.palette.accent
-        let shape = Capsule(style: .continuous)
-
-        return Button {
-            self.selectedConfigurationSection = section
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: section.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(section.title)
-                    .font(.system(size: 13, weight: .semibold))
-            }
-            .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
-            .frame(width: 176, height: 36)
-            .contentShape(shape)
-            .background(
-                shape
-                    .fill(isSelected ? tone.opacity(0.13) : (isHovering ? self.theme.palette.cardBackground.opacity(0.66) : .clear))
-                    .overlay(
-                        shape
-                            .stroke(isSelected ? tone.opacity(0.46) : (isHovering ? self.theme.palette.cardBorder.opacity(0.36) : .clear), lineWidth: 1)
-                    )
-                    .shadow(color: isSelected ? tone.opacity(0.18) : .clear, radius: 8, x: 0, y: 2)
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(section.title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { hovering in
-            self.hoveredConfigurationSection = hovering ? section : nil
-        }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isSelected)
     }
 
     private var providerConfigurationContent: some View {
@@ -1019,39 +965,21 @@ extension AIEnhancementSettingsView {
                 guard self.privateAISelectedModelID == model.id else { return }
                 if verified {
                     self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
-                    if PrivateAIMLXUpgradeCoordinator.isUpgradePending() {
-                        PrivateAIMLXUpgradeCoordinator.completeUpgrade()
-                        await PrivateAIIntegrationService.shared.removeInactiveInstalledModels(keeping: model)
-                    }
                 } else {
                     let message = self.viewModel.connectionErrorMessage.isEmpty
                         ? "Model downloaded, but verification failed."
                         : self.viewModel.connectionErrorMessage
-                    self.restoreLlamaAfterFailedMLXUpgrade(message: message, modelID: model.id)
+                    self.privateAILoadState = .failed(modelID: model.id, message: message)
                 }
             } catch {
                 guard self.privateAISelectedModelID == model.id else { return }
-                self.restoreLlamaAfterFailedMLXUpgrade(
-                    message: Self.errorMessage(for: error),
-                    modelID: model.id
+                self.privateAILoadState = .failed(
+                    modelID: model.id,
+                    message: Self.errorMessage(for: error)
                 )
             }
             self.viewModel.refreshProviderItems()
         }
-    }
-
-    private func restoreLlamaAfterFailedMLXUpgrade(message: String, modelID: String) {
-        guard PrivateAIMLXUpgradeCoordinator.isUpgradePending() else {
-            self.privateAILoadState = .failed(modelID: modelID, message: message)
-            return
-        }
-
-        PrivateAIMLXUpgradeCoordinator.restorePreviousLlama()
-        self.viewModel.onAppear()
-        self.privateAILoadState = .failed(
-            modelID: modelID,
-            message: "MLX upgrade failed. Your previous llama.cpp model is still active. \(message)"
-        )
     }
 
     private func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel) {
@@ -1078,9 +1006,7 @@ extension AIEnhancementSettingsView {
     }
 
     private func isPrivateAIModelVerified(_ model: PrivateAIRegisteredModel) -> Bool {
-        guard PrivateAIIntegrationService.isModelInstalled(model) else { return false }
-        let key = self.viewModel.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        return self.viewModel.settings.verifiedProviderFingerprints[key] == PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+        PrivateAIProviderPromptFormat.verifiedModelID(for: model.id, settings: self.viewModel.settings) != nil
     }
 
     private func privateAIModelStatus(
@@ -1618,7 +1544,6 @@ extension AIEnhancementSettingsView {
         let isFluidDownloading = self.privateAILoadState.isDownloading(fluidModel.id)
         let fluidDownloadProgress = self.privateAILoadState.downloadProgress(for: fluidModel.id)
         let isFluidLoading = self.privateAILoadState.isLoading(fluidModel.id)
-        let isFluidLoaded = self.privateAILoadState.isLoaded(fluidModel.id)
         let hasFluidLoadFailure = self.privateAILoadState.failureMessage(for: fluidModel.id) != nil
         let isFluidVerified = self.isPrivateAIModelVerified(fluidModel)
         let isFluidTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID
@@ -1643,20 +1568,12 @@ extension AIEnhancementSettingsView {
                     Text(item.name)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.fluidGreen)
-
-                    if isSelected {
-                        Text("Active")
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
-                            .foregroundStyle(Color.fluidGreen)
-                    }
                 }
 
                 Spacer()
@@ -1740,7 +1657,7 @@ extension AIEnhancementSettingsView {
                 .fixedSize(horizontal: true, vertical: false)
             }
 
-            if isPrivateAIProvider, isFluidDownloading || isFluidLoading || isFluidLoaded || hasFluidLoadFailure || isFluidVerified || !isFluidInstalled {
+            if isPrivateAIProvider, isFluidDownloading || isFluidLoading || hasFluidLoadFailure || !isFluidInstalled {
                 self.privateAIModelStatusRow(
                     status: fluidStatus,
                     progress: fluidDownloadProgress,
@@ -1971,7 +1888,7 @@ extension AIEnhancementSettingsView {
                 Image(systemName: "text.bubble.fill")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(self.theme.palette.accent)
-                Text("Advanced Prompts")
+                Text("Styles")
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)

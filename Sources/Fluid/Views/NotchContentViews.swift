@@ -10,6 +10,85 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+enum SpokenSendIndicatorState: Equatable {
+    case hidden
+    case detected
+    case countingDown
+    case sending
+    case sent
+    case failed
+
+    var isVisible: Bool {
+        self != .hidden
+    }
+}
+
+struct SpokenSendIndicatorView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var progress: CGFloat = 0
+
+    let state: SpokenSendIndicatorState
+    let color: Color
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            switch self.state {
+            case .hidden:
+                EmptyView()
+            case .detected:
+                self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Send detected")
+            case .countingDown:
+                ZStack {
+                    Circle()
+                        .stroke(self.color.opacity(0.22), lineWidth: self.lineWidth)
+
+                    Circle()
+                        .trim(from: 0, to: self.progress)
+                        .stroke(
+                            self.color,
+                            style: StrokeStyle(lineWidth: self.lineWidth, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+
+                    self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Waiting to send")
+                }
+                .onAppear {
+                    guard !self.reduceMotion else {
+                        self.progress = 1
+                        return
+                    }
+                    withAnimation(.linear(duration: SpokenSendParser.immediateStopSettleDuration)) {
+                        self.progress = 1
+                    }
+                }
+            case .sending:
+                ZStack {
+                    Circle()
+                        .stroke(self.color, lineWidth: self.lineWidth)
+                    self.symbol("paperplane.fill", color: self.color, accessibilityLabel: "Sending")
+                }
+            case .sent:
+                self.symbol("checkmark.circle.fill", color: self.color, accessibilityLabel: "Sent")
+            case .failed:
+                self.symbol("exclamationmark.circle.fill", color: .orange, accessibilityLabel: "Send skipped")
+            }
+        }
+        .frame(width: self.size, height: self.size)
+    }
+
+    private var lineWidth: CGFloat {
+        max(1, self.size * 0.085)
+    }
+
+    private func symbol(_ name: String, color: Color, accessibilityLabel: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: max(6, self.size * 0.46), weight: .semibold))
+            .foregroundStyle(color)
+            .accessibilityLabel(accessibilityLabel)
+    }
+}
+
 // MARK: - Observable state for notch content (Singleton)
 
 @MainActor
@@ -25,6 +104,8 @@ class NotchContentState: ObservableObject {
     @Published var isAIProcessingFailureVisible: Bool = false
     @Published private(set) var aiProcessingFailureMessage: String = "AI Enhancement failed"
     @Published private(set) var canRetryAIProcessingFailure: Bool = true
+    @Published private(set) var spokenSendIndicatorState: SpokenSendIndicatorState = .hidden
+    @Published private(set) var spokenSendCountdownID: UInt64 = 0
     @Published var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
     @Published var promptModeOverrideProfileName: String? = nil // Name shown in overlay when prompt mode hotkey is active
     @Published var promptModeOverrideProfileID: String? = nil // ID of the active override profile (for checkmark in menu)
@@ -109,6 +190,18 @@ class NotchContentState: ObservableObject {
 
     func clearAIProcessingFailure() {
         self.isAIProcessingFailureVisible = false
+    }
+
+    func setSpokenSendIndicatorState(_ state: SpokenSendIndicatorState) {
+        guard self.spokenSendIndicatorState != state else { return }
+        self.spokenSendIndicatorState = state
+    }
+
+    @discardableResult
+    func beginSpokenSendCountdown() -> UInt64 {
+        self.spokenSendCountdownID &+= 1
+        self.spokenSendIndicatorState = .countingDown
+        return self.spokenSendCountdownID
     }
 
     /// Update transcription and recompute cached lines
@@ -416,6 +509,12 @@ struct NotchExpandedView: View {
 
     private var modeColor: Color {
         self.contentState.mode.notchColor
+    }
+
+    private var showsSpokenSendIndicator: Bool {
+        self.contentState.mode == .dictation &&
+            self.settings.spokenSendEnabled &&
+            self.contentState.spokenSendIndicatorState.isVisible
     }
 
     private var presentationPolicy: NotchOverlayManager.NotchPresentationPolicy {
@@ -904,9 +1003,20 @@ struct NotchExpandedView: View {
                 .frame(width: 48, height: 18)
 
                 self.promptSelectorControl
+
+                if self.showsSpokenSendIndicator {
+                    SpokenSendIndicatorView(
+                        state: self.contentState.spokenSendIndicatorState,
+                        color: self.modeColor,
+                        size: 14
+                    )
+                    .id(self.contentState.spokenSendCountdownID)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .offset(x: 4, y: 0)
+            .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
 
             self.promptHoverMenuRow
 
@@ -1160,13 +1270,34 @@ struct NotchCompactLeadingView: View {
 struct NotchCompactTrailingView: View {
     let audioPublisher: AnyPublisher<CGFloat, Never>
     @ObservedObject private var contentState = NotchContentState.shared
+    @ObservedObject private var settings = SettingsStore.shared
+
+    private var showsSpokenSendIndicator: Bool {
+        self.contentState.mode == .dictation &&
+            self.settings.spokenSendEnabled &&
+            self.contentState.spokenSendIndicatorState.isVisible
+    }
 
     var body: some View {
-        CompactNotchWaveformView(
-            audioPublisher: self.audioPublisher,
-            color: self.contentState.mode.notchColor
-        )
+        HStack(spacing: self.showsSpokenSendIndicator ? 4 : 0) {
+            CompactNotchWaveformView(
+                audioPublisher: self.audioPublisher,
+                color: self.contentState.mode.notchColor,
+                barCount: self.showsSpokenSendIndicator ? 4 : 8
+            )
+            .frame(width: self.showsSpokenSendIndicator ? 16 : 34, height: 16)
+
+            if self.showsSpokenSendIndicator {
+                SpokenSendIndicatorView(
+                    state: self.contentState.spokenSendIndicatorState,
+                    color: self.contentState.mode.notchColor,
+                    size: 13
+                )
+                .id(self.contentState.spokenSendCountdownID)
+            }
+        }
         .frame(width: 34, height: 16)
+        .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
     }
 }
 
@@ -1721,14 +1852,19 @@ struct ExpandedModeWaveformView: View {
 }
 
 struct CompactNotchWaveformView: View {
+    private static let storedBarCount = 8
+
     let audioPublisher: AnyPublisher<CGFloat, Never>
     let color: Color
+    var barCount: Int = 8
 
     @StateObject private var data: AudioVisualizationData
     @ObservedObject private var contentState = NotchContentState.shared
-    @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 8)
+    @State private var barHeights: [CGFloat] = Array(
+        repeating: 3,
+        count: CompactNotchWaveformView.storedBarCount
+    )
 
-    private let barCount = 8
     private let barWidth: CGFloat = 2.5
     private let barSpacing: CGFloat = 2
     private let minHeight: CGFloat = 3
@@ -1736,9 +1872,10 @@ struct CompactNotchWaveformView: View {
     private let noiseThreshold: CGFloat = 0.05
     private let processingFlatHeight: CGFloat = 3
 
-    init(audioPublisher: AnyPublisher<CGFloat, Never>, color: Color) {
+    init(audioPublisher: AnyPublisher<CGFloat, Never>, color: Color, barCount: Int = 8) {
         self.audioPublisher = audioPublisher
         self.color = color
+        self.barCount = min(max(barCount, 1), Self.storedBarCount)
         _data = StateObject(wrappedValue: AudioVisualizationData(audioLevelPublisher: audioPublisher))
     }
 
@@ -1820,7 +1957,7 @@ struct CompactNotchWaveformView: View {
 
     private func resetBarsToBaseline(animated: Bool) {
         let apply = {
-            self.barHeights = Array(repeating: self.minHeight, count: self.barCount)
+            self.barHeights = Array(repeating: self.minHeight, count: Self.storedBarCount)
         }
 
         if animated {

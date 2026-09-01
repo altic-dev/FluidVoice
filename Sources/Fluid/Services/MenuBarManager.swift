@@ -6,7 +6,7 @@ import SwiftUI
 enum MenuBarNavigationDestination: String {
     case customDictionary
     case microphoneSettings
-    case preferences
+    case settings
 }
 
 @MainActor
@@ -119,6 +119,18 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newText in
                 guard self != nil else { return }
+                if asrService.isRunning,
+                   NotchContentState.shared.mode == .dictation,
+                   SettingsStore.shared.spokenSendEnabled,
+                   !SettingsStore.shared.spokenSendImmediatelyEnabled
+                {
+                    let detected = SpokenSendParser.parse(
+                        newText,
+                        phrase: SettingsStore.shared.spokenSendPhrase,
+                        enabled: true
+                    ).shouldSend
+                    NotchContentState.shared.setSpokenSendIndicatorState(detected ? .detected : .hidden)
+                }
                 if NotchOverlayManager.shared.shouldShowOrTrackLivePreviewText {
                     NotchOverlayManager.shared.updateTranscriptionText(newText)
                 }
@@ -899,7 +911,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     @objc private func openPreferences() {
-        self.openNavigationDestination(.preferences)
+        self.openNavigationDestination(.settings)
     }
 
     @objc private func openCustomDictionary() {

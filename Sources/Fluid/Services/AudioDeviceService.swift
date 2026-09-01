@@ -14,7 +14,7 @@ import IOKit.pwr_mgt
 // MARK: - Audio Device Manager
 
 nonisolated enum AudioDevice {
-    struct Device: Identifiable, Hashable {
+    struct Device: Identifiable, Hashable, Sendable {
         static let externalMicrophoneDataSourceID: UInt32 = 0x656d6963 // 'emic'
 
         let id: AudioObjectID
@@ -213,8 +213,14 @@ nonisolated enum AudioDevice {
     }
 
     static func getDefaultInputDevice() -> Device? {
-        guard let devId: AudioObjectID = getDefaultDeviceId(selector: kAudioHardwarePropertyDefaultInputDevice) else { return nil }
-        return self.listAllDevices().first { $0.id == devId }
+        self.getDefaultInputDevice(from: self.listAllDevices())
+    }
+
+    static func getDefaultInputDevice(from devices: [Device]) -> Device? {
+        guard let deviceID: AudioObjectID = getDefaultDeviceId(
+            selector: kAudioHardwarePropertyDefaultInputDevice
+        ) else { return nil }
+        return devices.first { $0.id == deviceID }
     }
 
     static func getDefaultOutputDevice() -> Device? {

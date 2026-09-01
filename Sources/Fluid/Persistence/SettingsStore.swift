@@ -14,6 +14,7 @@ final class SettingsStore: ObservableObject {
     static let microphonePriorityMigrationVersion = 4
 
     static let shared = SettingsStore()
+    private static let automaticWhisperLanguageCode = "auto"
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
@@ -23,6 +24,8 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationSystemOverheadTokens = 1280
     static let privateAIDictationMinimumOutputTokens = 256
     static let privateAIDictationRoundTripTokenCost = 2.75
+    private static let privateAIDenseSegmentByteThreshold = 12
+    private static let privateAIDenseBytesPerToken = 2
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
@@ -59,18 +62,48 @@ final class SettingsStore: ObservableObject {
         return max(100, Int((inputTokens * 0.75 / 50).rounded(.up)) * 50)
     }
 
-    static func privateAIMaxOutputTokens(forInputText inputText: String, contextTokenLimit: Int) -> Int {
-        let wordCount = inputText.split { $0.isWhitespace || $0.isNewline }.count
-        let estimatedInputTokens = max(1, Int((Double(wordCount) / 0.75).rounded(.up)))
+    struct PrivateAIDictationTokenBudget: Equatable {
+        let maxOutputTokens: Int
+        let hasSufficientHeadroom: Bool
+    }
+
+    static func privateAIDictationTokenBudget(forInputText inputText: String, contextTokenLimit: Int) -> PrivateAIDictationTokenBudget {
+        let estimatedInputTokens = self.estimatedPrivateAIInputTokens(for: inputText)
         let requestedOutputTokens = max(
             Self.privateAIDictationMinimumOutputTokens,
             Int((Double(estimatedInputTokens) * 1.15).rounded(.up)) + 64
         )
-        let availableOutputTokens = max(
-            Self.privateAIDictationMinimumOutputTokens,
-            Self.clampPrivateAIContextTokenLimit(contextTokenLimit) - Self.privateAIDictationSystemOverheadTokens - estimatedInputTokens
+        let availableOutputTokens = Self.clampPrivateAIContextTokenLimit(contextTokenLimit)
+            - Self.privateAIDictationSystemOverheadTokens
+            - estimatedInputTokens
+        return PrivateAIDictationTokenBudget(
+            maxOutputTokens: min(requestedOutputTokens, max(Self.privateAIDictationMinimumOutputTokens, availableOutputTokens)),
+            hasSufficientHeadroom: availableOutputTokens >= requestedOutputTokens
         )
-        return min(requestedOutputTokens, availableOutputTokens)
+    }
+
+    private static func estimatedPrivateAIInputTokens(for inputText: String) -> Int {
+        let segments = inputText.split { $0.isWhitespace || $0.isNewline }
+        let wordBasedEstimate = Int((Double(segments.count) / 0.75).rounded(.up))
+        // Keep the existing prose estimate, but charge long unbroken input by UTF-8 size so
+        // URLs, identifiers, and languages without whitespace cannot look like a single token.
+        let denseSegmentEstimate = segments.reduce(into: 0) { estimate, segment in
+            let byteCount = segment.utf8.count
+            if byteCount > Self.privateAIDenseSegmentByteThreshold {
+                estimate += (byteCount + Self.privateAIDenseBytesPerToken - 1)
+                    / Self.privateAIDenseBytesPerToken
+            } else {
+                estimate += 1
+            }
+        }
+        return max(1, max(wordBasedEstimate, denseSegmentEstimate))
+    }
+
+    static func privateAIMaxOutputTokens(forInputText inputText: String, contextTokenLimit: Int) -> Int {
+        self.privateAIDictationTokenBudget(
+            forInputText: inputText,
+            contextTokenLimit: contextTokenLimit
+        ).maxOutputTokens
     }
 
     enum PrivateAIBackendPreference: String, Codable, CaseIterable, Identifiable {
@@ -1300,6 +1333,15 @@ final class SettingsStore: ObservableObject {
         return Self.combineBasePrompt(for: normalizedMode, with: trimmedBody)
     }
 
+    /// System prompt for a dictation-shortcut prompt override, honoring
+    /// "Send Custom Prompt Only" the same way the effective-prompt paths do.
+    func shortcutOverrideSystemPrompt(for profile: DictationPromptProfile, mode: PromptMode = .dictate) -> String {
+        self.systemPrompt(
+            forCustomProfileBody: Self.stripBasePrompt(for: mode, from: profile.prompt),
+            mode: mode
+        )
+    }
+
     // MARK: - Model Reasoning Configuration
 
     /// Configuration for model-specific reasoning/thinking parameters
@@ -1401,9 +1443,9 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Anonymous analytics toggle (default: ON). Uses default-true semantics so existing installs
-    /// upgrading to a version that includes analytics do not silently default to OFF.
-    var shareAnonymousAnalytics: Bool {
+    /// Detailed anonymous analytics toggle (default: ON). The daily activity signal is always enabled.
+    /// Uses default-true semantics so existing installs upgrading to analytics do not default to OFF.
+    var shareDetailedAnalytics: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.shareAnonymousAnalytics)
             if value == nil { return true }
@@ -1783,6 +1825,16 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.enableStreamingPreview)
+        }
+    }
+
+    /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
+    /// Experimental and enabled by default; users can fall back to full-buffer finalization.
+    var experimentalParakeetUnifiedFinalEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
         }
     }
 
@@ -3058,6 +3110,28 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Stored verification fingerprints per private model ID. Provider-level fingerprints remain
+    /// for backward compatibility, while this map allows Dictation and Edit Mode to use different
+    /// installed models without invalidating each other.
+    var verifiedPrivateAIModelFingerprints: [String: String] {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.verifiedPrivateAIModelFingerprints),
+                  let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+            else {
+                return [:]
+            }
+            return decoded
+        }
+        set {
+            objectWillChange.send()
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                self.defaults.set(encoded, forKey: Keys.verifiedPrivateAIModelFingerprints)
+            } else {
+                self.defaults.removeObject(forKey: Keys.verifiedPrivateAIModelFingerprints)
+            }
+        }
+    }
+
     // MARK: - Stats Settings
 
     /// User's typing speed in words per minute (for time saved calculation)
@@ -3170,6 +3244,7 @@ final class SettingsStore: ObservableObject {
             privateAIBackendPreference: self.privateAIBackendPreference,
             privateAIContextTokenLimit: self.privateAIContextTokenLimit,
             selectedSpeechModel: self.selectedSpeechModel,
+            selectedWhisperLanguageCode: Self.whisperLanguageBackupValue(for: self.selectedWhisperLanguageCode),
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
@@ -3203,14 +3278,19 @@ final class SettingsStore: ObservableObject {
             autoUpdateCheckEnabled: self.autoUpdateCheckEnabled,
             betaReleasesEnabled: self.betaReleasesEnabled,
             enableDebugLogs: self.enableDebugLogs,
-            shareAnonymousAnalytics: self.shareAnonymousAnalytics,
+            shareAnonymousAnalytics: self.shareDetailedAnalytics,
             pressAndHoldMode: self.pressAndHoldMode,
             hotkeyMode: self.hotkeyMode,
             enableStreamingPreview: self.enableStreamingPreview,
+            experimentalParakeetUnifiedFinalEnabled: self.experimentalParakeetUnifiedFinalEnabled,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
+            spokenSendEnabled: self.spokenSendEnabled,
+            spokenSendImmediatelyEnabled: self.spokenSendImmediatelyEnabled,
+            spokenSendPhrase: self.spokenSendPhrase,
+            spokenSendKey: self.spokenSendKey,
             preferredInputDeviceUID: self.preferredInputDeviceUID,
             microphonePriority: self.microphonePriority,
             suppressedMicrophoneUIDs: self.suppressedMicrophoneUIDs.sorted(),
@@ -3287,6 +3367,9 @@ final class SettingsStore: ObservableObject {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
         self.selectedSpeechModel = payload.selectedSpeechModel
+        if let selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode {
+            self.selectedWhisperLanguageCode = Self.whisperLanguageCode(fromBackupValue: selectedWhisperLanguageCode)
+        }
         self.selectedCohereLanguage = payload.selectedCohereLanguage
         if let selectedNemotronLanguage = payload.selectedNemotronLanguage {
             self.selectedNemotronLanguage = selectedNemotronLanguage
@@ -3327,15 +3410,30 @@ final class SettingsStore: ObservableObject {
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
         self.betaReleasesEnabled = payload.betaReleasesEnabled
         self.enableDebugLogs = payload.enableDebugLogs
-        self.shareAnonymousAnalytics = payload.shareAnonymousAnalytics
+        self.shareDetailedAnalytics = payload.shareAnonymousAnalytics
         self.hotkeyMode = payload.hotkeyMode ?? (payload.pressAndHoldMode ? .hold : .toggle)
         self.enableStreamingPreview = payload.enableStreamingPreview
+        if let experimentalParakeetUnifiedFinalEnabled = payload.experimentalParakeetUnifiedFinalEnabled {
+            self.experimentalParakeetUnifiedFinalEnabled = experimentalParakeetUnifiedFinalEnabled
+        }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
         }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
         self.textInsertionMode = payload.textInsertionMode
+        if let spokenSendEnabled = payload.spokenSendEnabled {
+            self.spokenSendEnabled = spokenSendEnabled
+        }
+        if let spokenSendImmediatelyEnabled = payload.spokenSendImmediatelyEnabled {
+            self.spokenSendImmediatelyEnabled = spokenSendImmediatelyEnabled
+        }
+        if let spokenSendPhrase = payload.spokenSendPhrase {
+            self.spokenSendPhrase = spokenSendPhrase
+        }
+        if let spokenSendKey = payload.spokenSendKey {
+            self.spokenSendKey = spokenSendKey
+        }
         self.preferredInputDeviceUID = payload.preferredInputDeviceUID
         self.suppressedMicrophoneUIDs = Set(payload.suppressedMicrophoneUIDs ?? [])
         if let microphonePriority = payload.microphonePriority {
@@ -3828,17 +3926,16 @@ final class SettingsStore: ObservableObject {
 
     private func syncLinkedProviderSelections(to providerID: String) {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
-        let model = self.modelSelection(for: linkedProviderID)
 
         if self.rewriteModeLinkedToGlobal {
-            self.rewriteModeSelectedProviderID = linkedProviderID
-            self.rewriteModeSelectedModel = model
+            self.rewriteModeSelectedProviderID = trimmed
+            self.rewriteModeSelectedModel = self.modelSelection(for: trimmed)
         }
 
         if self.commandModeLinkedToGlobal {
+            let linkedProviderID = self.isPrivateAIProviderID(trimmed) ? "" : trimmed
             self.commandModeSelectedProviderID = linkedProviderID
-            self.commandModeSelectedModel = model
+            self.commandModeSelectedModel = self.modelSelection(for: linkedProviderID)
         }
     }
 
@@ -5235,6 +5332,7 @@ private extension SettingsStore {
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
         static let verifiedProviderFingerprints = "VerifiedProviderFingerprints"
+        static let verifiedPrivateAIModelFingerprints = "VerifiedPrivateAIModelFingerprints"
         static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
         static let privateAIInterestCaptured = "PrivateAIProviderInterestCaptured"
         static let hotkeyShortcutKey = "HotkeyShortcutKey"
@@ -5259,10 +5357,15 @@ private extension SettingsStore {
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
         static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
+        static let spokenSendEnabled = "SpokenSendEnabled"
+        static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
+        static let spokenSendPhrase = "SpokenSendPhrase"
+        static let spokenSendKey = "SpokenSendKey"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
         static let betaReleasesEnabled = "BetaReleasesEnabled"
         static let lastUpdateCheckDate = "LastUpdateCheckDate"
@@ -5348,6 +5451,7 @@ private extension SettingsStore {
 
         /// Unified Speech Model (replaces above two)
         static let selectedSpeechModel = "SelectedSpeechModel"
+        static let selectedWhisperLanguageCode = "SelectedWhisperLanguageCode"
         static let selectedCohereLanguage = "SelectedCohereLanguage"
         static let selectedNemotronLanguage = "SelectedNemotronLanguage"
         static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
@@ -5392,6 +5496,77 @@ private extension SettingsStore {
 }
 
 extension SettingsStore {
+    enum SpokenSendKey: String, CaseIterable, Identifiable, Codable {
+        case enter
+        case shiftEnter
+        case commandEnter
+
+        var id: String {
+            self.rawValue
+        }
+
+        var displayName: String {
+            switch self {
+            case .enter:
+                return "Enter"
+            case .shiftEnter:
+                return "Shift + Enter"
+            case .commandEnter:
+                return "Command + Enter"
+            }
+        }
+
+        var eventFlags: CGEventFlags {
+            switch self {
+            case .enter:
+                return []
+            case .shiftEnter:
+                return .maskShift
+            case .commandEnter:
+                return .maskCommand
+            }
+        }
+    }
+
+    var spokenSendEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.spokenSendEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendEnabled)
+        }
+    }
+
+    var spokenSendImmediatelyEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.spokenSendImmediatelyEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendImmediatelyEnabled)
+        }
+    }
+
+    var spokenSendPhrase: String {
+        get { self.defaults.string(forKey: Keys.spokenSendPhrase) ?? "send it" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.spokenSendPhrase)
+        }
+    }
+
+    var spokenSendKey: SpokenSendKey {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.spokenSendKey),
+                  let key = SpokenSendKey(rawValue: raw)
+            else {
+                return .enter
+            }
+            return key
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.spokenSendKey)
+        }
+    }
+
     enum TextInsertionMode: String, CaseIterable, Identifiable, Codable {
         case standard
         case reliablePaste
@@ -5604,6 +5779,31 @@ extension SettingsStore {
             let model = newValue == .nemotronStreaming320 ? SpeechModel.nemotronStreaming : newValue
             self.defaults.set(model.rawValue, forKey: Keys.selectedSpeechModel)
         }
+    }
+
+    /// The language Whisper should transcribe, or `nil` to detect it from each recording.
+    /// Existing installs keep automatic detection until the user selects a language.
+    var selectedWhisperLanguageCode: String? {
+        get {
+            Self.whisperLanguageCode(fromStoredValue: self.defaults.string(forKey: Keys.selectedWhisperLanguageCode))
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue ?? Self.automaticWhisperLanguageCode, forKey: Keys.selectedWhisperLanguageCode)
+        }
+    }
+
+    static func whisperLanguageCode(fromStoredValue value: String?) -> String? {
+        guard let value, value != self.automaticWhisperLanguageCode else { return nil }
+        return VoiceEngineLanguageCatalog.whisperLanguage(forCode: value) == nil ? nil : value
+    }
+
+    static func whisperLanguageBackupValue(for languageCode: String?) -> String {
+        languageCode ?? self.automaticWhisperLanguageCode
+    }
+
+    static func whisperLanguageCode(fromBackupValue value: String) -> String? {
+        value == self.automaticWhisperLanguageCode ? nil : value
     }
 
     var selectedCohereLanguage: CohereLanguage {

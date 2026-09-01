@@ -71,9 +71,9 @@ extension SettingsStore {
 
         guard self.isCommandModeProviderVerified(providerID) else {
             if self.commandModeLinkedToGlobal {
-                return "Command Mode needs a verified chat provider. Verify the synced AI Enhancement provider, or turn Sync off and choose one for Command Mode."
+                return "Command Mode needs a verified chat provider. Verify the synced provider in AI Providers, or turn Sync off and choose one for Command Mode."
             }
-            return "Command Mode needs a verified chat provider. Verify this provider in AI Enhancement before using Command Mode."
+            return "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
         }
 
         return nil

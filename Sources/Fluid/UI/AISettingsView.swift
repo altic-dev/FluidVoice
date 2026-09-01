@@ -104,6 +104,7 @@ struct AISettingsView: View {
 
     @StateObject private var voiceViewModel: VoiceEngineSettingsViewModel
     @StateObject private var enhancementViewModel: AIEnhancementSettingsViewModel
+    @State private var selectedEnhancementSection: AIEnhancementConfigurationSection = .providers
 
     init(appServices: AppServices, menuBarManager: MenuBarManager, theme: AppTheme) {
         self.appServices = appServices
@@ -133,6 +134,7 @@ struct AISettingsView: View {
                     settings: self.enhancementViewModel.settings,
                     promptTest: self.enhancementViewModel.promptTest,
                     theme: self.theme,
+                    selectedConfigurationSection: self.$selectedEnhancementSection,
                     activeShortcutRecordingTarget: .constant(nil),
                     shortcutRecordingMessage: .constant(nil)
                 )

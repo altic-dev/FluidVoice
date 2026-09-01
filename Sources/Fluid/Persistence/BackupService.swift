@@ -17,6 +17,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let privateAIBackendPreference: SettingsStore.PrivateAIBackendPreference?
     let privateAIContextTokenLimit: Int?
     let selectedSpeechModel: SettingsStore.SpeechModel
+    let selectedWhisperLanguageCode: String?
     let selectedCohereLanguage: SettingsStore.CohereLanguage
     let selectedNemotronLanguage: SettingsStore.NemotronLanguage?
     let selectedAppleSpeechLocaleIdentifier: String?
@@ -57,11 +58,17 @@ struct SettingsBackupPayload: Codable, Equatable {
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
     let enableStreamingPreview: Bool
+    // Optional so backups created before incremental Parakeet finalization still decode.
+    let experimentalParakeetUnifiedFinalEnabled: Bool?
     // Optional so backups created before the silence filter still decode.
     let skipSilentRecordingsEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
+    let spokenSendEnabled: Bool?
+    let spokenSendImmediatelyEnabled: Bool?
+    let spokenSendPhrase: String?
+    let spokenSendKey: SettingsStore.SpokenSendKey?
     let preferredInputDeviceUID: String?
     // Optional so backups created before microphone priority ordering still decode.
     // swiftlint:disable:next discouraged_optional_collection

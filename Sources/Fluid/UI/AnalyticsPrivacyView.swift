@@ -10,7 +10,7 @@ struct AnalyticsPrivacyView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Anonymous Analytics")
                         .font(.system(size: 18, weight: .semibold))
-                    Text("What FluidVoice collects when analytics is enabled")
+                    Text("Daily activity and optional detailed analytics")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -29,9 +29,11 @@ struct AnalyticsPrivacyView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    self.sectionTitle("We collect")
-                    self.bullet("A random installation ID, app version, and the operating-system label macOS.")
-                    self.bullet("One daily active-use signal after you interact with the app.")
+                    self.sectionTitle("Always collected")
+                    self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
+                    self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
+
+                    self.sectionTitle("When detailed analytics is enabled")
                     self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
                     self.bullet("Onboarding steps viewed and completed, including skips.")
                     self.bullet("Transcription and AI provider/model identifiers, counted as daily totals.")
@@ -42,14 +44,15 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("Selected text, rewrite prompts, or AI responses.")
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
-                    self.bullet("Hardware identifiers, CPU/chip details, performance timings, or individual transcription events.")
+                    self.bullet("Hardware serial numbers or other unique device identifiers, performance timings, or individual transcription events.")
 
                     self.sectionTitle("How it’s used")
-                    self.bullet("To understand feature adoption, onboarding completion, model usage, active installations, and retention without requiring accounts.")
+                    self.bullet("Daily activity measures active installations and retention without requiring accounts.")
+                    self.bullet("Optional detailed analytics helps us understand feature adoption, onboarding completion, and model usage.")
 
                     self.sectionTitle("Control")
-                    self.bullet("You can disable analytics anytime in Settings → Share Anonymous Analytics.")
-                    self.bullet("Disabling analytics securely removes all queued and aggregated analytics stored on this Mac.")
+                    self.bullet("You can disable detailed analytics anytime in Settings → Share Detailed Anonymous Analytics.")
+                    self.bullet("Disabling detailed analytics securely removes its queued and aggregated data from this Mac. The daily activity signal remains enabled.")
                 }
                 .padding(.vertical, 6)
             }

@@ -158,6 +158,32 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
     }
 
+    func testCustomPromptOnly_shortcutProfileOverrideOmitsBasePrompt() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+
+            let profile = SettingsStore.DictationPromptProfile(
+                name: "Cleaner",
+                prompt: "Normalize the transcript. Output only the cleaned text.",
+                mode: .dictate
+            )
+            settings.dictationPromptProfiles = [profile]
+            settings.sendCustomPromptOnly = true
+
+            XCTAssertEqual(
+                settings.shortcutOverrideSystemPrompt(for: profile),
+                profile.prompt
+            )
+
+            settings.sendCustomPromptOnly = false
+            XCTAssertEqual(
+                settings.shortcutOverrideSystemPrompt(for: profile),
+                SettingsStore.combineBasePrompt(for: .dictate, with: profile.prompt)
+            )
+        }
+    }
+
     private static let basePromptMarker = "You are a voice-to-text dictation cleaner"
 
     private func resetPromptSettings(_ settings: SettingsStore) {

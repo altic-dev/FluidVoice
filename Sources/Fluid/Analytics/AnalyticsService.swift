@@ -4,13 +4,13 @@ import Foundation
 final class AnalyticsService {
     static let shared = AnalyticsService()
 
-    private let consentGate: AnalyticsConsentGate
+    private let detailedConsentGate: DetailedAnalyticsConsentGate
     private let core: AnalyticsCore
 
     private init() {
-        let consentGate = AnalyticsConsentGate()
-        self.consentGate = consentGate
-        self.core = AnalyticsCore(consentGate: consentGate)
+        let detailedConsentGate = DetailedAnalyticsConsentGate()
+        self.detailedConsentGate = detailedConsentGate
+        self.core = AnalyticsCore(detailedConsentGate: detailedConsentGate)
     }
 
     func bootstrap() {
@@ -19,11 +19,14 @@ final class AnalyticsService {
         }
     }
 
-    func setEnabled(_ enabled: Bool) {
-        let consentGeneration = self.consentGate.advance()
-        let context = Self.context(enabled: enabled, consentGeneration: consentGeneration)
+    func setDetailedAnalyticsEnabled(_ enabled: Bool) {
+        let consentGeneration = self.detailedConsentGate.advance()
+        let context = Self.context(
+            detailedAnalyticsEnabled: enabled,
+            detailedConsentGeneration: consentGeneration
+        )
         Task.detached(priority: .background) { [core] in
-            await core.setEnabled(context: context)
+            await core.setDetailedAnalyticsEnabled(context: context)
         }
     }
 
@@ -89,6 +92,53 @@ final class AnalyticsService {
         }
     }
 
+    func recordOnboardingTryoutAttemptStarted(startMethod: AnalyticsOnboardingTryoutStartMethod) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.recordOnboardingTryoutAttemptStarted(
+                startMethod: startMethod,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func recordOnboardingTryoutAttemptResult(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage? = nil
+    ) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.recordOnboardingTryoutAttemptResult(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func finishOnboardingTryout(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage? = nil
+    ) {
+        let origin = SettingsStore.shared.analyticsOnboardingOrigin
+        self.submit { core, context in
+            await core.finishOnboardingTryout(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                context: context
+            )
+        }
+    }
+
+    func skipOnboardingTryout(origin: AnalyticsOnboardingOrigin) {
+        self.submit { core, context in
+            await core.skipOnboardingTryout(origin: origin, context: context)
+        }
+    }
+
     func recordModelDownloadStarted(
         id: UUID,
         descriptor: AnalyticsModelDescriptor,
@@ -127,19 +177,22 @@ final class AnalyticsService {
         _ operation: @escaping @Sendable (AnalyticsCore, AnalyticsContext) async -> Void
     ) {
         let context = Self.context(
-            enabled: SettingsStore.shared.shareAnonymousAnalytics,
-            consentGeneration: self.consentGate.currentGeneration
+            detailedAnalyticsEnabled: SettingsStore.shared.shareDetailedAnalytics,
+            detailedConsentGeneration: self.detailedConsentGate.currentGeneration
         )
         Task.detached(priority: .background) { [core] in
             await operation(core, context)
         }
     }
 
-    private static func context(enabled: Bool, consentGeneration: UInt64) -> AnalyticsContext {
+    private static func context(
+        detailedAnalyticsEnabled: Bool,
+        detailedConsentGeneration: UInt64
+    ) -> AnalyticsContext {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         return AnalyticsContext(
-            enabled: enabled,
-            consentGeneration: consentGeneration,
+            detailedAnalyticsEnabled: detailedAnalyticsEnabled,
+            detailedConsentGeneration: detailedConsentGeneration,
             config: AnalyticsConfig.fromBundle(),
             distinctID: AnalyticsIdentityStore.shared.anonymousInstallID,
             appVersion: version
@@ -148,14 +201,14 @@ final class AnalyticsService {
 }
 
 private struct AnalyticsContext {
-    let enabled: Bool
-    let consentGeneration: UInt64
+    let detailedAnalyticsEnabled: Bool
+    let detailedConsentGeneration: UInt64
     let config: AnalyticsConfig
     let distinctID: String
     let appVersion: String
 }
 
-final nonisolated class AnalyticsConsentGate: @unchecked Sendable {
+final nonisolated class DetailedAnalyticsConsentGate: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 0
 
@@ -177,7 +230,7 @@ final nonisolated class AnalyticsConsentGate: @unchecked Sendable {
 
 private actor AnalyticsCore {
     private var context: AnalyticsContext?
-    private let consentGate: AnalyticsConsentGate
+    private let detailedConsentGate: DetailedAnalyticsConsentGate
     private var database: AnalyticsDatabase?
     private var flushTask: Task<Void, Never>?
     private var activeUploadTask: Task<Int, Error>?
@@ -185,21 +238,22 @@ private actor AnalyticsCore {
 
     private let batchSize = 50
 
-    init(consentGate: AnalyticsConsentGate) {
-        self.consentGate = consentGate
+    init(detailedConsentGate: DetailedAnalyticsConsentGate) {
+        self.detailedConsentGate = detailedConsentGate
     }
 
     func bootstrap(context: AnalyticsContext) async {
         guard self.apply(context) else { return }
-        guard context.enabled else {
-            try? self.purgeStoredAnalyticsIfPresent(context: context)
-            return
-        }
-        guard context.config.isConfigured else { return }
         do {
+            if !context.detailedAnalyticsEnabled {
+                try self.purgeStoredDetailedAnalyticsIfPresent(context: context)
+            }
+            guard context.config.isConfigured else { return }
             let database = try self.database(for: context)
-            try database.finalizeDays(before: Date())
-            try database.recoverInterruptedModelDownloads(at: Date())
+            if context.detailedAnalyticsEnabled {
+                try database.finalizeDays(before: Date())
+                try database.recoverInterruptedModelDownloads(at: Date())
+            }
             self.startFlushLoopIfNeeded()
             await self.flushIfNeeded()
         } catch {
@@ -207,19 +261,15 @@ private actor AnalyticsCore {
         }
     }
 
-    func setEnabled(context: AnalyticsContext) async {
+    func setDetailedAnalyticsEnabled(context: AnalyticsContext) async {
         guard self.apply(context) else { return }
-        if !context.enabled {
-            self.activeUploadTask?.cancel()
-            self.stopFlushLoop()
-            try? self.purgeStoredAnalyticsIfPresent(context: context)
-            return
-        }
+        self.activeUploadTask?.cancel()
+        self.stopFlushLoop()
         await self.bootstrap(context: context)
     }
 
     func recordActivity(_ kind: AnalyticsActivityKind, context: AnalyticsContext) async {
-        await self.write(context: context) { database, date in
+        await self.writeActivity(context: context) { database, date in
             try database.recordActivity(kind, at: date)
         }
     }
@@ -230,7 +280,7 @@ private actor AnalyticsCore {
         aiModel: AnalyticsModelDescriptor?,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context, fallbackActivity: .coreAction) { database, date in
             try database.recordUsage(
                 mode: mode,
                 transcriptionModel: transcriptionModel,
@@ -246,13 +296,13 @@ private actor AnalyticsCore {
         descriptor: AnalyticsModelDescriptor,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context, fallbackActivity: .coreAction) { database, date in
             try database.recordModelUsage(role: role, mode: mode, descriptor: descriptor, at: date)
         }
     }
 
     func recordOnboardingStarted(origin: AnalyticsOnboardingOrigin, context: AnalyticsContext) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context, fallbackActivity: .app) { database, date in
             try database.recordOnboardingStarted(origin: origin, at: date)
         }
     }
@@ -262,7 +312,7 @@ private actor AnalyticsCore {
         origin: AnalyticsOnboardingOrigin,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context) { database, date in
             try database.recordOnboardingStepViewed(step, origin: origin, at: date)
         }
     }
@@ -274,7 +324,7 @@ private actor AnalyticsCore {
         completesFlow: Bool,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context) { database, date in
             try database.recordOnboardingStepCompleted(
                 step,
                 outcome: outcome,
@@ -285,13 +335,65 @@ private actor AnalyticsCore {
         }
     }
 
+    func recordOnboardingTryoutAttemptStarted(
+        startMethod: AnalyticsOnboardingTryoutStartMethod,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.recordOnboardingTryoutAttemptStarted(
+                startMethod: startMethod,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func recordOnboardingTryoutAttemptResult(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage?,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.recordOnboardingTryoutAttemptResult(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func finishOnboardingTryout(
+        outcome: AnalyticsOnboardingTryoutOutcome,
+        failureStage: AnalyticsOnboardingTryoutFailureStage?,
+        origin: AnalyticsOnboardingOrigin,
+        context: AnalyticsContext
+    ) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.finishOnboardingTryout(
+                outcome: outcome,
+                failureStage: failureStage,
+                origin: origin,
+                at: date
+            )
+        }
+    }
+
+    func skipOnboardingTryout(origin: AnalyticsOnboardingOrigin, context: AnalyticsContext) async {
+        await self.writeDetailed(context: context) { database, date in
+            try database.skipOnboardingTryout(origin: origin, at: date)
+        }
+    }
+
     func recordModelDownloadStarted(
         id: String,
         descriptor: AnalyticsModelDescriptor,
         source: AnalyticsModelDownloadSource,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context, fallbackActivity: .coreAction) { database, date in
             try database.recordModelDownloadStarted(id: id, descriptor: descriptor, source: source, at: date)
         }
     }
@@ -304,7 +406,7 @@ private actor AnalyticsCore {
         duration: TimeInterval?,
         context: AnalyticsContext
     ) async {
-        await self.write(context: context) { database, date in
+        await self.writeDetailed(context: context) { database, date in
             try database.recordModelDownloadFinished(
                 id: id,
                 descriptor: descriptor,
@@ -316,12 +418,11 @@ private actor AnalyticsCore {
         }
     }
 
-    private func write(
+    private func writeActivity(
         context: AnalyticsContext,
         operation: (AnalyticsDatabase, Date) throws -> Void
     ) async {
-        guard self.apply(context) else { return }
-        guard context.enabled, context.config.isConfigured else { return }
+        guard context.config.isConfigured else { return }
         do {
             let database = try self.database(for: context)
             try operation(database, Date())
@@ -331,8 +432,30 @@ private actor AnalyticsCore {
         }
     }
 
+    private func writeDetailed(
+        context: AnalyticsContext,
+        fallbackActivity: AnalyticsActivityKind? = nil,
+        operation: (AnalyticsDatabase, Date) throws -> Void
+    ) async {
+        let mayRecordDetails = self.apply(context) && context.detailedAnalyticsEnabled
+        guard context.config.isConfigured else { return }
+        guard mayRecordDetails || fallbackActivity != nil else { return }
+        do {
+            let database = try self.database(for: context)
+            let date = Date()
+            if mayRecordDetails {
+                try operation(database, date)
+            } else if let fallbackActivity {
+                try database.recordActivity(fallbackActivity, at: date)
+            }
+            self.startFlushLoopIfNeeded()
+        } catch {
+            return
+        }
+    }
+
     private func apply(_ context: AnalyticsContext) -> Bool {
-        guard self.consentGate.accepts(context.consentGeneration) else { return false }
+        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return false }
         self.context = context
         return true
     }
@@ -363,9 +486,9 @@ private actor AnalyticsCore {
             .appendingPathComponent("analytics-v2.sqlite3")
     }
 
-    private func purgeStoredAnalyticsIfPresent(context: AnalyticsContext) throws {
+    private func purgeStoredDetailedAnalyticsIfPresent(context: AnalyticsContext) throws {
         if let database {
-            try database.purgeAll()
+            try database.purgeDetailedAnalytics()
             return
         }
         let url = try self.databaseURL()
@@ -375,14 +498,13 @@ private actor AnalyticsCore {
             distinctID: context.distinctID,
             appVersion: context.appVersion
         )
-        try existingDatabase.purgeAll()
+        try existingDatabase.purgeDetailedAnalytics()
     }
 
     private func startFlushLoopIfNeeded() {
         guard self.flushTask == nil,
               let context,
-              self.consentGate.accepts(context.consentGeneration),
-              context.enabled,
+              self.detailedConsentGate.accepts(context.detailedConsentGeneration),
               context.config.isConfigured
         else { return }
         self.flushTask = Task { [weak self] in
@@ -402,8 +524,7 @@ private actor AnalyticsCore {
     private func flushIfNeeded() async {
         guard !self.isFlushing,
               let context,
-              self.consentGate.accepts(context.consentGeneration),
-              context.enabled,
+              self.detailedConsentGate.accepts(context.detailedConsentGeneration),
               context.config.isConfigured,
               let database
         else { return }
@@ -416,17 +537,19 @@ private actor AnalyticsCore {
 
         let items: [AnalyticsOutboxItem]
         do {
-            try database.finalizeDays(before: Date())
+            if context.detailedAnalyticsEnabled {
+                try database.finalizeDays(before: Date())
+            }
             items = try database.readyOutbox(limit: self.batchSize, at: Date())
         } catch {
             return
         }
         guard !items.isEmpty else { return }
-        guard self.consentGate.accepts(context.consentGeneration) else { return }
+        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
 
         let ids = items.map(\.id)
         let uploadTask = Task {
-            guard self.consentGate.accepts(context.consentGeneration) else {
+            guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else {
                 throw CancellationError()
             }
             return try await self.send(items: items, config: context.config)
@@ -437,11 +560,11 @@ private actor AnalyticsCore {
         do {
             status = try await uploadTask.value
         } catch {
-            guard self.consentGate.accepts(context.consentGeneration) else { return }
+            guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
             try? database.retry(ids: ids, at: Date())
             return
         }
-        guard self.consentGate.accepts(context.consentGeneration) else { return }
+        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
 
         switch status {
         case 200..<300:

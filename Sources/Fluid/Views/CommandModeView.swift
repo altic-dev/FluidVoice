@@ -1,21 +1,42 @@
 import SwiftUI
 
+enum CommandModeRecordingOwnershipPolicy {
+    static func ownsRecording(after outcome: AudioCaptureStartOutcome, isRunning: Bool) -> Bool {
+        outcome == .started && isRunning
+    }
+
+    static func shouldStopOnDeactivate(ownsRecording: Bool, isRunning: Bool) -> Bool {
+        ownsRecording && isRunning
+    }
+
+    static func shouldStopAfterStart(ownsRecording: Bool, isPresentationActive: Bool) -> Bool {
+        ownsRecording && !isPresentationActive
+    }
+}
+
 struct CommandModeView: View {
     @ObservedObject var service: CommandModeService
+    let isActive: Bool
     @EnvironmentObject var appServices: AppServices
-    private var asr: ASRService { self.appServices.asr }
+    private var asr: ASRService {
+        self.appServices.asr
+    }
+
     @ObservedObject var settings = SettingsStore.shared
     @EnvironmentObject var menuBarManager: MenuBarManager
     var onClose: (() -> Void)?
     @State private var inputText: String = ""
 
-    // Local state for available models (derived from shared AI Settings pool)
+    /// Local state for available models (derived from shared AI Settings pool)
     @State private var availableModels: [String] = []
 
     // UI State
     @State private var showingClearConfirmation = false
     @State private var showHowTo = false
     @State private var isHoveringHowTo = false
+    @State private var ownsASRRecording = false
+    @State private var isASRStartPending = false
+    @State private var isPresentationActive = false
 
     @Environment(\.theme) private var theme
 
@@ -44,16 +65,22 @@ struct CommandModeView: View {
         }
         .onAppear {
             self.updateAvailableModels()
-            // Disable notch output when using in-app UI (conversation is shared but notch shouldn't show)
-            self.service.enableNotchOutput = false
+            self.updatePresentationActivity(self.isActive)
         }
         .onDisappear {
-            // Re-enable notch output when leaving in-app UI
-            self.service.enableNotchOutput = true
+            self.updatePresentationActivity(false)
+        }
+        .onChange(of: self.isActive) { _, isActive in
+            self.updatePresentationActivity(isActive)
         }
         .onChange(of: self.asr.finalText) { _, newText in
             if !newText.isEmpty {
                 self.inputText = newText
+            }
+        }
+        .onChange(of: self.asr.isRunning) { _, isRunning in
+            if !isRunning {
+                self.ownsASRRecording = false
             }
         }
         .onChange(of: self.settings.commandModeSelectedProviderID) { _, _ in
@@ -462,7 +489,7 @@ struct CommandModeView: View {
 
                     Spacer(minLength: 8)
 
-                    Button("AI Settings") {
+                    Button("AI Providers") {
                         AppNavigationRouter.shared.request(.aiEnhancements)
                     }
                     .font(.caption)
@@ -488,7 +515,7 @@ struct CommandModeView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: true, vertical: false)
-                        .help("Use the same provider and model selected in AI Enhancement.")
+                        .help("Use the same provider and model selected in AI Providers.")
 
                     SearchableProviderPicker(
                         builtInProviders: self.verifiedBuiltInProvidersList,
@@ -577,8 +604,25 @@ struct CommandModeView: View {
             self.settings.commandModeReadinessIssue == nil
     }
 
+    private func updatePresentationActivity(_ isActive: Bool) {
+        self.isPresentationActive = isActive
+        self.service.enableNotchOutput = !isActive
+
+        guard !isActive,
+              CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(
+                  ownsRecording: self.ownsASRRecording,
+                  isRunning: self.asr.isRunning
+              )
+        else { return }
+
+        self.ownsASRRecording = false
+        Task { await self.asr.stopWithoutTranscription() }
+    }
+
     private func toggleRecording() {
         if self.asr.isRunning {
+            guard self.ownsASRRecording else { return }
+            self.ownsASRRecording = false
             Task {
                 let command = await self.asr.stop().trimmingCharacters(in: .whitespacesAndNewlines)
                 _ = self.asr.consumeLastCompletedAudioSnapshot()
@@ -593,7 +637,22 @@ struct CommandModeView: View {
                 }
             }
         } else {
-            Task { await self.asr.start() }
+            guard !self.isASRStartPending else { return }
+            self.isASRStartPending = true
+            Task { @MainActor in
+                let outcome = await self.asr.start()
+                self.isASRStartPending = false
+                self.ownsASRRecording = CommandModeRecordingOwnershipPolicy.ownsRecording(
+                    after: outcome,
+                    isRunning: self.asr.isRunning
+                )
+                if CommandModeRecordingOwnershipPolicy.shouldStopAfterStart(
+                    ownsRecording: self.ownsASRRecording,
+                    isPresentationActive: self.isPresentationActive
+                ) {
+                    self.updatePresentationActivity(false)
+                }
+            }
         }
     }
 
@@ -872,12 +931,11 @@ struct MessageBubble: View {
 
     private func markdownAttributedString(from text: String) -> AttributedString {
         do {
-            let attributed = try AttributedString(
+            return try AttributedString(
                 markdown: text,
                 options: AttributedString
                     .MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
             )
-            return attributed
         } catch {
             return AttributedString(text)
         }

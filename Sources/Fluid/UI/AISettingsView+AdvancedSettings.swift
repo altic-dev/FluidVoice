@@ -1177,35 +1177,12 @@ extension AIEnhancementSettingsView {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(self.theme.palette.secondaryText)
 
-            if self.isEditModeLinkedToPrivateAI {
-                Toggle("Sync", isOn: self.editModeLinkedToGlobalBinding)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .onChange(of: self.settings.rewriteModeLinkedToGlobal) { _, linked in
-                        if linked {
-                            self.syncEditModeToGlobalSelection()
-                        } else {
-                            self.normalizeEditModeProviderSelection()
-                        }
-                    }
-
-                HStack(spacing: 8) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text("\(PrivateAIProviderFeature.displayName) for Edit Mode is coming soon")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            } else if verified.isEmpty {
+            if verified.isEmpty {
                 HStack(spacing: 8) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                    Text("No verified chat provider")
+                    Text("No verified AI provider")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1458,7 +1435,6 @@ extension AIEnhancementSettingsView {
 
     private var editModeVerifiedProviders: [AIEnhancementSettingsViewModel.ProviderItemData] {
         self.viewModel.cachedVerifiedProviderItems
-            .filter { !self.isPrivateAIProviderID($0.id) }
             .sorted { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
@@ -1474,15 +1450,9 @@ extension AIEnhancementSettingsView {
 
     private var activeEditModeProviderID: String {
         if self.settings.rewriteModeLinkedToGlobal {
-            let global = self.viewModel.selectedProviderID
-            return self.isPrivateAIProviderID(global) ? "" : global
+            return self.viewModel.selectedProviderID
         }
         return self.editModeSelectedProviderID
-    }
-
-    private var isEditModeLinkedToPrivateAI: Bool {
-        self.settings.rewriteModeLinkedToGlobal &&
-            self.isPrivateAIProviderID(self.viewModel.selectedProviderID)
     }
 
     private var editModeLinkedToGlobalBinding: Binding<Bool> {
@@ -1543,9 +1513,7 @@ extension AIEnhancementSettingsView {
 
     private func syncEditModeToGlobalSelection() {
         let global = self.viewModel.selectedProviderID
-        guard !global.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !self.isPrivateAIProviderID(global)
-        else {
+        guard !global.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             self.settings.rewriteModeSelectedProviderID = ""
             self.settings.rewriteModeSelectedModel = nil
             return
@@ -1566,11 +1534,6 @@ extension AIEnhancementSettingsView {
             self.settings.rewriteModeLinkedToGlobal = true
             self.syncEditModeToGlobalSelection()
         }
-    }
-
-    private func isPrivateAIProviderID(_ providerID: String) -> Bool {
-        PrivateFeatures.privateAIProvider &&
-            providerID.trimmingCharacters(in: .whitespacesAndNewlines) == PrivateAIProviderFeature.shared.providerID
     }
 
     private func canFetchModels(for providerID: String) -> Bool {
