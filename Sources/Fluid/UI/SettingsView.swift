@@ -374,16 +374,6 @@ struct SettingsView: View {
                                     }
                                     .frame(width: 150)
                                 }
-
-                                self.settingsToggleRow(
-                                    title: "Independent Volume",
-                                    description: "Sound volume stays constant regardless of system volume. Mute is still respected.",
-                                    footnote: "Temporarily changes system volume during playback, which may briefly affect other audio.",
-                                    isOn: Binding(
-                                        get: { SettingsStore.shared.transcriptionSoundIndependentVolume },
-                                        set: { SettingsStore.shared.transcriptionSoundIndependentVolume = $0 }
-                                    )
-                                )
                             }
 
                             Divider().opacity(0.2)

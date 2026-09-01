@@ -2374,17 +2374,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var transcriptionSoundIndependentVolume: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.transcriptionSoundIndependentVolume)
-            return value as? Bool ?? false
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.transcriptionSoundIndependentVolume)
-        }
-    }
-
     var transcriptionStartSound: TranscriptionStartSound {
         get {
             self.migrateTranscriptionStartSoundIfNeeded()
@@ -3274,7 +3263,6 @@ final class SettingsStore: ObservableObject {
             accentColorOption: self.accentColorOption,
             transcriptionStartSound: self.transcriptionStartSound,
             transcriptionSoundVolume: self.transcriptionSoundVolume,
-            transcriptionSoundIndependentVolume: self.transcriptionSoundIndependentVolume,
             autoUpdateCheckEnabled: self.autoUpdateCheckEnabled,
             betaReleasesEnabled: self.betaReleasesEnabled,
             enableDebugLogs: self.enableDebugLogs,
@@ -3406,7 +3394,6 @@ final class SettingsStore: ObservableObject {
         self.accentColorOption = payload.accentColorOption
         self.transcriptionStartSound = payload.transcriptionStartSound
         self.transcriptionSoundVolume = payload.transcriptionSoundVolume
-        self.transcriptionSoundIndependentVolume = payload.transcriptionSoundIndependentVolume
         self.autoUpdateCheckEnabled = payload.autoUpdateCheckEnabled
         self.betaReleasesEnabled = payload.betaReleasesEnabled
         self.enableDebugLogs = payload.enableDebugLogs
@@ -5353,7 +5340,6 @@ private extension SettingsStore {
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"
         static let transcriptionStartSound = "TranscriptionStartSound"
         static let transcriptionSoundVolume = "TranscriptionSoundVolume"
-        static let transcriptionSoundIndependentVolume = "TranscriptionSoundIndependentVolume"
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
