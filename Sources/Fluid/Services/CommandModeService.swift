@@ -437,7 +437,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Check if we need confirmation for destructive commands
-                if SettingsStore.shared.commandModeConfirmBeforeExecute, self.isDestructiveCommand(tc.command) {
+                if SettingsStore.shared.commandModeConfirmBeforeExecute, Self.isDestructiveCommand(tc.command) {
                     self.pendingCommand = PendingCommand(
                         id: tc.id,
                         command: tc.command,
@@ -559,47 +559,148 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func isDestructiveCommand(_ command: String) -> Bool {
-        let cmd = command.lowercased()
-
-        // Commands that start with these are destructive
-        let destructivePrefixes = [
-            "rm ", "rm\t", "rmdir ", "rm -", // delete
-            "mv ", "mv\t", // move/rename
-            "sudo ", // elevated privileges
-            "kill ", "pkill ", "killall ", // terminate processes
-            "chmod ", "chown ", "chgrp ", // change permissions/ownership
-            "dd ", // disk operations
-            "mkfs", "format", // filesystem formatting
-            "> ", // overwrite file
-            "truncate ", // truncate file
-            "shred ", // secure delete
-        ]
-
-        // Check if command starts with any destructive prefix
-        if destructivePrefixes.contains(where: { cmd.hasPrefix($0) }) {
-            return true
+    /// Splits a command into the simple commands a shell would run, on unquoted
+    /// `&&`, `||`, `;`, `&`, `|`, and newline, so every command in a chain gets
+    /// checked, not just the first one before a separator.
+    /// Splits on unquoted `;`, `&&`, `||`, `|`, newline. Quotes are tracked so a
+    /// separator inside a quoted argument doesn't split, and a backslash-escaped
+    /// quote doesn't close early, real shells honor `\"` inside a double-quoted
+    /// string as a literal character, not the end of the string.
+    private nonisolated static func splitIntoSimpleCommands(_ command: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaped = false
+        for c in command {
+            if escaped {
+                current.append(c)
+                escaped = false
+                continue
+            }
+            if c == "\\", quote != "'" {
+                current.append(c)
+                escaped = true
+                continue
+            }
+            if let q = quote {
+                current.append(c)
+                if c == q { quote = nil }
+                continue
+            }
+            if c == "\"" || c == "'" {
+                quote = c
+                current.append(c)
+            } else if ";&|\n".contains(c) {
+                parts.append(current)
+                current = ""
+            } else {
+                current.append(c)
+            }
         }
+        parts.append(current)
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
 
-        // Check for destructive patterns anywhere in piped commands
-        let destructivePatterns = [
-            "| rm ", "| sudo ", "| dd ",
-            "; rm ", "; sudo ",
-            "&& rm ", "&& sudo ",
-            "xargs rm", "xargs -I",
-        ]
+    /// Characters that mean this simple command isn't plain text: a redirect, a
+    /// subshell, or command substitution. Any of these riding along with an
+    /// otherwise safe command means it isn't actually safe, `echo $(rm -rf x)`
+    /// is not safe just because `echo` is. Filenames with these characters will
+    /// also require confirmation; that's an acceptable cost of not being a full
+    /// shell parser.
+    private static let unsafeCharacters = CharacterSet(charactersIn: "$`(){}<>")
 
-        if destructivePatterns.contains(where: { cmd.contains($0) }) {
-            return true
+    /// `$` and backtick stay live for substitution inside double quotes; a real
+    /// shell still evaluates `"$(rm -rf x)"`. Everything else in
+    /// `unsafeCharacters` (redirects, braces, parens on their own) is inert
+    /// inside double quotes, same as any other literal character.
+    private static let unsafeInsideDoubleQuotes = CharacterSet(charactersIn: "$`")
+
+    /// True if an unsafe character appears where it's actually live: unquoted,
+    /// or (for `$`/backtick specifically) inside double quotes. Single quotes
+    /// suppress everything, and an escaped character is a literal, not a
+    /// redirect or substitution, `echo '>'` and `echo \>` pass an ordinary
+    /// argument.
+    private nonisolated static func hasUnquotedUnsafeCharacter(_ simpleCommand: String) -> Bool {
+        var quote: Character?
+        var escaped = false
+        for c in simpleCommand {
+            if escaped {
+                escaped = false
+                continue
+            }
+            if c == "\\", quote != "'" {
+                escaped = true
+                continue
+            }
+            if let q = quote {
+                if c == q {
+                    quote = nil
+                } else if q == "\"", c.unicodeScalars.contains(where: unsafeInsideDoubleQuotes.contains) {
+                    return true
+                }
+                continue
+            }
+            if c == "\"" || c == "'" {
+                quote = c
+            } else if c.unicodeScalars.contains(where: unsafeCharacters.contains) {
+                return true
+            }
         }
-
-        // rm with flags like -rf, -r, -f anywhere
-        if cmd.contains("rm -") {
-            return true
-        }
-
         return false
     }
+
+    /// The leading word of a simple command, with a leading env assignment
+    /// dropped (`LC_ALL=C ls` runs `ls`) and surrounding quotes stripped if the
+    /// whole word is one quoted span.
+    private nonisolated static func leadingCommand(_ simpleCommand: String) -> String? {
+        var words = simpleCommand.split(separator: " ").map(String.init)
+        while let first = words.first, isEnvironmentAssignmentWord(first) {
+            words.removeFirst()
+        }
+        guard var word = words.first else { return nil }
+        if word.count >= 2, let q = word.first, (q == "\"" || q == "'"), word.last == q {
+            word.removeFirst()
+            word.removeLast()
+        }
+        return word
+    }
+
+    /// `NAME=value` in leading position scopes an env var to the command that
+    /// follows; `LC_ALL=C rm -rf victim` runs `rm`, not `lc_all=c`.
+    private nonisolated static func isEnvironmentAssignmentWord(_ word: String) -> Bool {
+        guard let equalsIndex = word.firstIndex(of: "=") else { return false }
+        let name = word[word.startIndex..<equalsIndex]
+        guard let first = name.first, first.isLetter || first == "_" else { return false }
+        return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
+    /// Commands that never take a destructive action regardless of arguments or
+    /// flags. Short and conservative on purpose: anything not recognized asks
+    /// for confirmation, rather than trying to enumerate every way a command
+    /// could be dangerous. Add a command only after auditing every invocation.
+    private static let knownSafeCommands: Set<String> = [
+        "ls", "cat", "echo", "pwd", "whoami", "date", "hostname", "uname",
+        "head", "tail", "wc", "file", "stat", "which", "type", "printenv",
+    ]
+
+    /// A path-qualified command is only trusted if it also lives in one of
+    /// these directories. A bare name resolving to `ls` is the real system
+    /// `ls`; a path like `./ls` or `/tmp/cat` could be an arbitrary planted
+    /// script that merely shares the name.
+    private static let trustedDirectories: Set<String> = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
+
+    nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
+        splitIntoSimpleCommands(command.lowercased()).contains { !isSafeSimpleCommand($0) }
+    }
+
+    private nonisolated static func isSafeSimpleCommand(_ simpleCommand: String) -> Bool {
+        guard !hasUnquotedUnsafeCharacter(simpleCommand) else { return false }
+        guard let name = leadingCommand(simpleCommand) else { return true }
+        guard knownSafeCommands.contains((name as NSString).lastPathComponent) else { return false }
+        guard name.contains("/") else { return true }
+        return trustedDirectories.contains((name as NSString).deletingLastPathComponent)
+    }
+
 
     private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
         self.currentStep = .executing(command)
