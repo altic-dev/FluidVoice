@@ -2,15 +2,70 @@
 import Foundation
 import XCTest
 
-/// Covers three confirm-gate bypass classes in `CommandModeService.isDestructiveCommand`:
-/// the primary command invoked via an absolute path, `find -delete`/`-exec rm`, and
-/// `diskutil`'s destructive subcommands. None of the three require anything adversarial-
-/// looking from the model -- an absolute path, `find`, and `diskutil` are all ordinary,
-/// unremarkable tool choices.
+/// Covers `CommandModeService.isDestructiveCommand`'s allowlist model: a command
+/// requires confirmation unless every simple command in it resolves, after
+/// dropping a leading env assignment, to a name on a short known-safe list, with
+/// no redirect riding along. Anything not recognized asks for confirmation by
+/// default, rather than trying to enumerate every way a command could be
+/// dangerous.
 final class CommandModeDestructiveCommandGapTests: XCTestCase {
-    // MARK: - Regression: existing bare-command detection still works
+    // MARK: - Known-safe commands pass through
 
-    func testBareDestructiveCommandsAreStillCaught() {
+    func testKnownSafeCommandsAreNotFlagged() {
+        let cases = [
+            "ls -la",
+            "cat README.md",
+            "echo hello world",
+            "pwd",
+            "whoami",
+            "date",
+            "hostname",
+            "uname -a",
+            "head -n 5 file.txt",
+            "tail -f log.txt",
+            "wc -l file.txt",
+            "file image.png",
+            "stat file.txt",
+            "which python3",
+            "printenv PATH",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation"
+            )
+        }
+    }
+
+    // MARK: - Everything not on the safe list requires confirmation, even when benign
+
+    /// This is the actual tradeoff of the allowlist model, stated as a test rather
+    /// than left implicit: ordinary, harmless commands not on the short safe list
+    /// now require confirmation too, since the model is "prove it's safe" rather
+    /// than "prove it's dangerous."
+    func testCommandsNotOnTheSafeListRequireConfirmation() {
+        let cases = [
+            "cd /tmp",
+            "git status",
+            "find . -name '*.txt'",
+            "curl -s https://example.com",
+            "python3 script.py",
+            "diskutil list",
+            "npm install",
+            "mkdir newfolder",
+            "touch file.txt",
+        ]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation, it isn't on the known-safe list"
+            )
+        }
+    }
+
+    // MARK: - Genuinely destructive commands still require confirmation
+
+    func testDestructiveCommandsAreCaught() {
         let cases = [
             "rm -rf ~/Documents",
             "sudo reboot",
@@ -18,61 +73,8 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
             "chmod 000 /etc/hosts",
             "killall Finder",
             "rmdir ~/Documents",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 1: absolute-path invocation
-
-    func testAbsolutePathInvocationIsCaught() {
-        let cases = [
-            "/usr/bin/sudo reboot",
-            "/bin/mv secret.txt /tmp/",
-            "/bin/chmod 000 /etc/hosts",
-            "/usr/bin/killall Finder",
-            "/bin/rmdir ~/Documents",
-            "/bin/rm somefile.txt", // rm with no dash flag -- the "rm -" fallback doesn't apply here
-            "/bin/rm -rf ~/Documents", // still caught (now redundantly, by both the old fallback and the new check)
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation despite the absolute path"
-            )
-        }
-    }
-
-    // MARK: - Fix 2: find -delete / find -exec rm
-
-    func testFindDeleteAndExecRmAreCaught() {
-        let cases = [
-            "find ~/Documents -delete",
-            "find ~/Documents -type f -delete",
-            "find / -name '*.important' -exec rm {} \\;",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 3: diskutil destructive subcommands
-
-    func testDiskutilDestructiveSubcommandsAreCaught() {
-        let cases = [
+            "dd if=/dev/zero of=/dev/disk0",
             "diskutil eraseDisk JHFS+ Untitled disk0",
-            "diskutil secureErase 0 /dev/disk0",
-            "diskutil eraseVolume APFS Wiped /Volumes/Backup",
-            "diskutil reformat /dev/disk2s1",
-            "diskutil partitionDisk disk0 1 JHFS+ Untitled 100%",
-            "diskutil zeroDisk /dev/disk0",
         ]
         for command in cases {
             XCTAssertTrue(
@@ -82,308 +84,125 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
-    // MARK: - Fix 4: quoted absolute-path invocation
+    // MARK: - Path-qualified, quoted, and escaped forms still resolve correctly
 
-    func testQuotedAbsolutePathInvocationIsCaught() {
-        let cases = [
+    func testAbsoluteAndQuotedPathsStillResolveToTheBareCommand() {
+        let safeCases = [
+            "/bin/ls -la",
+            "\"/bin/cat\" README.md",
+        ]
+        for command in safeCases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation, it resolves to a safe basename"
+            )
+        }
+
+        let unsafeCases = [
+            "/bin/rm -rf ~/Documents",
             "\"/bin/rm\" -rf ~/Documents",
-            "'/bin/rm' -rf ~/Documents",
-            "\"/usr/bin/sudo\" reboot",
+            "/tmp/tools\\ dir/rm file",
         ]
-        for command in cases {
+        for command in unsafeCases {
             XCTAssertTrue(
                 CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation despite the quoted absolute path"
+                "expected \"\(command)\" to require confirmation, it resolves to rm"
             )
         }
     }
 
-    // MARK: - Fix 5: diskutil subcommand matching doesn't false-positive on arguments
+    // MARK: - Accepted tradeoff: no escape-aware tokenizing, so an escaped
+    // whitespace character in the leading command's own path isn't specially
+    // handled. It fails toward confirmation, not toward silently allowing
+    // something, and it's a genuinely rare shape for a leading command to take.
 
-    func testDiskutilArgumentContainingSubcommandNameIsNotFlagged() {
-        let cases = [
-            "diskutil info /Volumes/EraseDisk",
-            "diskutil list /Volumes/ReformatBackup",
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation -- the destructive-looking "
-                    + "text is in an argument, not the diskutil subcommand"
-            )
-        }
-    }
-
-    // MARK: - Fix 6: diskutil's `quiet` modifier doesn't hide the destructive verb
-
-    func testDiskutilQuietModifierStillCatchesDestructiveVerb() {
-        let cases = [
-            "diskutil quiet eraseDisk JHFS+ Untitled disk0",
-            "diskutil quiet secureErase 0 /dev/disk0",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation -- `quiet` precedes the verb, "
-                    + "it isn't the verb"
-            )
-        }
-    }
-
-    func testDiskutilQuietModifierAloneIsNotFlagged() {
-        XCTAssertFalse(
-            CommandModeService.isDestructiveCommand("diskutil quiet list"),
-            "expected a read-only verb after `quiet` NOT to require confirmation"
-        )
-    }
-
-    // MARK: - Fix 7: format/mkfs.* basenames
-
-    func testFormatAndMkfsVariantBasenamesAreCaught() {
-        let cases = [
-            "/usr/local/bin/format /dev/disk2",
-            "/sbin/mkfs.ext4 /dev/sdb1",
-            "mkfs.vfat /dev/disk3",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 8: quoted path with an internal space
-
-    func testQuotedPathWithInternalSpaceIsCaught() {
+    func testEscapedWhitespaceInLeadingCommandPathAsksForConfirmation() {
         XCTAssertTrue(
-            CommandModeService.isDestructiveCommand("\"/tmp/tools dir/rm\" file"),
-            "expected the quoted path to resolve to rm despite the internal space"
+            CommandModeService.isDestructiveCommand("/tmp/tools\\ dir/ls"),
+            "expected an escaped-space path to require confirmation rather than resolve to a safe basename"
         )
     }
 
-    // MARK: - Fix 9: destructive command after a compound-command separator
+    // MARK: - A leading env assignment doesn't change the verdict
 
-    func testDestructiveCommandAfterSeparatorIsCaught() {
-        let cases = [
-            "cd /tmp && /bin/rm victim",
-            "echo done; rm -rf ~/Documents",
-            "true || sudo reboot",
-            "find . -name '*.log' | xargs rm",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation for the command after the separator"
-            )
-        }
-    }
-
-    func testBenignCommandsChainedWithSeparatorsAreNotFlagged() {
-        let cases = [
-            "cd /tmp && ls -la",
-            "git status; git log",
-            "find . -name '*.log' | xargs cat",
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 10: redirect anywhere in the command, not just as a leading prefix
-
-    func testRedirectAnywhereInCommandIsCaught() {
-        XCTAssertTrue(
-            CommandModeService.isDestructiveCommand("echo malicious > /etc/hosts"),
-            "expected a mid-command redirect to require confirmation"
-        )
-    }
-
-    // MARK: - Fix 11: path-qualified xargs target
-
-    func testPathQualifiedXargsTargetIsCaught() {
-        XCTAssertTrue(
-            CommandModeService.isDestructiveCommand("find . -print0 | xargs -0 /bin/rm"),
-            "expected the path-qualified xargs target to resolve to rm"
-        )
-    }
-
-    // MARK: - Fix 12: bare redirect as the entire simple command
-
-    func testBareRedirectAsEntireCommandIsCaught() {
-        let cases = [
-            "> important.txt",
-            ">> important.txt",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 13: leading environment assignment before a destructive command
-
-    func testLeadingEnvironmentAssignmentIsCaught() {
-        let cases = [
-            "LC_ALL=C rm -rf victim",
-            "A=1 B=2 sudo reboot",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to require confirmation despite the leading assignment"
-            )
-        }
-    }
-
-    func testLeadingEnvironmentAssignmentAloneIsNotFlagged() {
+    func testLeadingEnvironmentAssignmentIsSkippedBeforeChecking() {
         XCTAssertFalse(
             CommandModeService.isDestructiveCommand("LC_ALL=C ls -la"),
-            "expected a benign command after an assignment NOT to require confirmation"
+            "expected an env-prefixed safe command NOT to require confirmation"
+        )
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("LC_ALL=C rm -rf victim"),
+            "expected an env-prefixed destructive command to still require confirmation"
         )
     }
 
-    // MARK: - Fix 14: backslash-escaped whitespace in an executable path
+    // MARK: - A redirect makes an otherwise-safe command unsafe
 
-    func testEscapedWhitespaceInPathIsCaught() {
+    func testRedirectOnAnOtherwiseSafeCommandIsCaught() {
         let cases = [
-            "/tmp/tools\\ dir/rm -rf victim",
-            "/tmp/tools\\ dir/sudo reboot",
+            "echo malicious > /etc/hosts",
+            "cat file.txt > /etc/hosts",
+            "> important.txt",
+            "2>/dev/null ls",
         ]
         for command in cases {
             XCTAssertTrue(
                 CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to resolve past the escaped space to the real basename"
+                "expected \"\(command)\" to require confirmation because of the redirect"
             )
         }
     }
 
-    // MARK: - Fix 15: program passed as an argument to a runner resolves by basename
+    // MARK: - Every simple command in a chain is checked, not just the first
 
-    func testPathQualifiedProgramInRunnersIsCaught() {
-        let cases = [
-            "find . -exec /bin/rm -rf {} \\;",
-            "find . -execdir /bin/rm {} \\;",
-            "env /bin/rm -rf victim",
-            "nohup /bin/rm -rf victim",
-            "time /bin/rm victim",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" to resolve the argument program to its basename"
-            )
-        }
+    func testEverySimpleCommandInAChainIsChecked() {
+        let allSafe = "ls -la; cat README.md && echo done"
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand(allSafe),
+            "expected a chain of only safe commands NOT to require confirmation"
+        )
+
+        let oneUnsafe = "ls -la && rm -rf victim"
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand(oneUnsafe),
+            "expected a chain with one destructive command to require confirmation"
+        )
+
+        let oneUnrecognized = "ls -la && git status"
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand(oneUnrecognized),
+            "expected a chain with one unrecognized command to require confirmation"
+        )
     }
 
-    func testBenignProgramsInRunnersAreNotFlagged() {
-        let cases = [
-            "env /bin/ls -la",
-            "nohup /usr/bin/python3 script.py",
-            "time git status",
-            "find . -type f -exec /bin/cat {} \\;",
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation"
-            )
-        }
-    }
+    // MARK: - The bypass constructs raised across the original review are all closed,
+    // for the same reason: none of these leading commands are on the safe list.
 
-    // MARK: - Fix 16: shell -c payload is parsed, not treated as an opaque argument
-
-    func testShellWrapperPayloadIsParsed() {
+    func testPreviouslyReportedBypassConstructsAllRequireConfirmation() {
         let cases = [
+            "\"/bin/rm\" -rf ~/Documents",
+            "diskutil quiet eraseDisk JHFS+ Untitled disk0",
+            "/usr/local/bin/format /dev/disk2",
+            "/sbin/mkfs.ext4 /dev/disk2",
+            "cd /tmp && /bin/rm victim",
+            "xargs -I{} /bin/rm {}",
+            "find . -exec /bin/rm {} \\;",
             "sh -c 'rm -rf victim'",
-            "bash -c \"rm -rf victim\"",
-            "zsh -c 'cd /tmp && /bin/rm victim'",
-            "sh -c 'sh -c \"rm -rf victim\"'",
-        ]
-        for command in cases {
-            XCTAssertTrue(
-                CommandModeService.isDestructiveCommand(command),
-                "expected the shell payload in \"\(command)\" to be parsed for destructive commands"
-            )
-        }
-    }
-
-    func testBenignShellWrapperPayloadIsNotFlagged() {
-        let cases = [
-            "sh -c 'ls -la'",
-            "bash -c \"git status\"",
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation"
-            )
-        }
-    }
-
-    // MARK: - Fix 17: a shell in argument position is a nested invocation, not a leaf
-
-    func testNestedShellPayloadInArgumentPositionIsCaught() {
-        let cases = [
-            "xargs sh -c 'rm -rf victim'",
-            "find . -exec sh -c 'rm -rf victim' \\;",
-            "find . -execdir bash -c 'rm -rf victim' \\;",
             "env sh -c 'rm -rf victim'",
-            "nohup zsh -c 'rm -rf victim'",
-            "timeout 5 sh -c 'rm -rf victim'",
-            "xargs -I{} /bin/sh -c 'rm -rf {}'",
-            "cd /tmp && xargs sh -c 'rm -rf victim'",
+            "eval 'rm -rf victim'",
+            "env diskutil eraseDisk JHFS+ Untitled disk0",
+            "nohup find . -delete",
+            "(rm -rf victim)",
+            "if true; then rm -rf victim; fi",
+            "echo $(rm -rf victim)",
         ]
         for command in cases {
             XCTAssertTrue(
                 CommandModeService.isDestructiveCommand(command),
-                "expected the nested shell payload in \"\(command)\" to be parsed"
+                "expected \"\(command)\" to require confirmation"
             )
         }
     }
 
-    func testNestedBenignShellPayloadInArgumentPositionIsNotFlagged() {
-        let cases = [
-            "xargs sh -c 'ls -la'",
-            "find . -exec sh -c 'cat {}' \\;",
-            "env bash -c 'git status'",
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation"
-            )
-        }
-    }
 
-    // MARK: - No new false positives on benign commands
-
-    func testBenignCommandsAreNotFlagged() {
-        let cases = [
-            "ls -la",
-            "git status",
-            "git commit -m \"fix bug\"",
-            "find . -name '*.txt'", // find WITHOUT -delete or -exec rm
-            "find . -type f -name '*.log' -exec cat {} \\;", // -exec, but not rm
-            "diskutil list", // read-only
-            "diskutil info disk0", // read-only
-            "diskutil activity", // read-only
-            "echo hello world",
-            "cat README.md",
-            "curl -s https://example.com",
-            "python3 script.py",
-            "/usr/bin/python3 --version", // absolute path but not a destructive command name
-        ]
-        for command in cases {
-            XCTAssertFalse(
-                CommandModeService.isDestructiveCommand(command),
-                "expected \"\(command)\" NOT to require confirmation"
-            )
-        }
-    }
 }

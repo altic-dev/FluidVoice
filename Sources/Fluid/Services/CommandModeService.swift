@@ -559,138 +559,63 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private static let destructiveCommandNames: Set<String> = [
-        "rm", "rmdir", "mv", "sudo", "kill", "pkill", "killall",
-        "chmod", "chown", "chgrp", "dd", "shred", "truncate", "format",
-    ]
-
-    private static let destructiveDiskutilSubcommands: Set<String> = [
-        "erasedisk", "erasevolume", "secureerase",
-        "reformat", "partitiondisk", "zerodisk", "unmountdisk",
-    ]
-
-    /// Splits a full command into the individual commands a shell would run, on unquoted
-    /// `&&`, `||`, `;`, `&`, `|`, and newline. Every prior version of this classifier only
-    /// ever looked at the leading token of the whole string, so anything after a separator
-    /// -- `cd /tmp && rm -rf victim` -- was invisible to it. This makes every command in a
-    /// chain go through the same check, at whatever position it's in.
-    ///
-    /// Doesn't handle backslash-escaped separators (`\;`) -- an escaped operator inside a
-    /// `find -exec ... \;` gets split as if it were real, but the -exec/rm detection below
-    /// checks word membership on the resulting pieces rather than the exact tail, so it
-    /// still matches correctly. A real escape-aware parser would be needed to do better,
-    /// and nothing here depends on it.
+    /// Splits a command into the simple commands a shell would run, on unquoted
+    /// `&&`, `||`, `;`, `&`, `|`, and newline, so every command in a chain gets
+    /// checked, not just the first one before a separator.
+    /// Splits on unquoted `;`, `&&`, `||`, `|`, newline. Quotes are tracked so a
+    /// separator inside a quoted argument doesn't split; escaped separators are
+    /// not handled, an over-split just means one more piece to check, which can
+    /// only ask for confirmation more often, never less.
     private nonisolated static func splitIntoSimpleCommands(_ command: String) -> [String] {
-        var commands: [String] = []
+        var parts: [String] = []
         var current = ""
         var quote: Character?
-        let chars = Array(command)
-        var i = 0
-        while i < chars.count {
-            let c = chars[i]
-            // A backslash escapes the next character (outside single quotes), so an
-            // escaped separator like `find ... -exec rm {} \;` doesn't split here.
-            // Both characters are kept verbatim -- tokenizeWords consumes the escape.
-            if c == "\\", quote != "'", i + 1 < chars.count {
-                current.append(c)
-                current.append(chars[i + 1])
-                i += 2
-                continue
-            }
+        for c in command {
             if let q = quote {
                 current.append(c)
                 if c == q { quote = nil }
-                i += 1
                 continue
             }
             if c == "\"" || c == "'" {
                 quote = c
                 current.append(c)
-                i += 1
-                continue
-            }
-            if c == "&" || c == "|" {
-                if i + 1 < chars.count, chars[i + 1] == c {
-                    i += 1  // swallow the doubled form (&&, ||) as one separator
-                }
-                commands.append(current)
+            } else if ";&|\n".contains(c) {
+                parts.append(current)
                 current = ""
-                i += 1
-                continue
-            }
-            if c == ";" || c == "\n" {
-                commands.append(current)
-                current = ""
-                i += 1
-                continue
-            }
-            current.append(c)
-            i += 1
-        }
-        commands.append(current)
-        return commands
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// Tokenizes one simple command into words, tracking quote state so a quoted span
-    /// (single or double) stays one word even when it contains whitespace -- the gap that
-    /// let `"/tmp/tools dir/rm" file` resolve to `tools` instead of `rm`. Quote characters
-    /// themselves are dropped from the output, the same way a shell would consume them,
-    /// and a backslash escapes the next character (outside single quotes, where a shell
-    /// treats it literally) so `/tmp/tools\ dir/rm` stays one word too.
-    private nonisolated static func tokenizeWords(_ simpleCommand: String) -> [String] {
-        var words: [String] = []
-        var current = ""
-        var quote: Character?
-        var inWord = false
-        var escaped = false
-        for c in simpleCommand {
-            if escaped {
+            } else {
                 current.append(c)
-                inWord = true
-                escaped = false
-                continue
             }
-            if c == "\\", quote != "'" {
-                escaped = true
-                inWord = true
-                continue
-            }
-            if let q = quote {
-                if c == q {
-                    quote = nil
-                } else {
-                    current.append(c)
-                }
-                inWord = true
-                continue
-            }
-            if c == "\"" || c == "'" {
-                quote = c
-                inWord = true
-                continue
-            }
-            if c == " " || c == "\t" {
-                if inWord {
-                    words.append(current)
-                    current = ""
-                    inWord = false
-                }
-                continue
-            }
-            current.append(c)
-            inWord = true
         }
-        if inWord {
-            words.append(current)
-        }
-        return words
+        parts.append(current)
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// `NAME=value` in leading position is a real shell feature -- it scopes an
-    /// environment variable to the command that follows, not a command itself.
-    /// `LC_ALL=C rm -rf victim` runs `rm`, not `lc_all=c`.
+    /// Characters that mean this simple command isn't plain text: a redirect, a
+    /// subshell, or command substitution. Any of these riding along with an
+    /// otherwise safe command means it isn't actually safe, `echo $(rm -rf x)`
+    /// is not safe just because `echo` is. Filenames with these characters will
+    /// also require confirmation; that's an acceptable cost of not being a full
+    /// shell parser.
+    private static let unsafeCharacters = CharacterSet(charactersIn: "$`(){}<>")
+
+    /// The leading word of a simple command, with a leading env assignment
+    /// dropped (`LC_ALL=C ls` runs `ls`) and surrounding quotes stripped if the
+    /// whole word is one quoted span.
+    private nonisolated static func leadingCommand(_ simpleCommand: String) -> String? {
+        var words = simpleCommand.split(separator: " ").map(String.init)
+        while let first = words.first, isEnvironmentAssignmentWord(first) {
+            words.removeFirst()
+        }
+        guard var word = words.first else { return nil }
+        if word.count >= 2, let q = word.first, (q == "\"" || q == "'"), word.last == q {
+            word.removeFirst()
+            word.removeLast()
+        }
+        return word
+    }
+
+    /// `NAME=value` in leading position scopes an env var to the command that
+    /// follows; `LC_ALL=C rm -rf victim` runs `rm`, not `lc_all=c`.
     private nonisolated static func isEnvironmentAssignmentWord(_ word: String) -> Bool {
         guard let equalsIndex = word.firstIndex(of: "=") else { return false }
         let name = word[word.startIndex..<equalsIndex]
@@ -698,130 +623,25 @@ final class CommandModeService: ObservableObject {
         return name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
-    /// Utilities that take another program as an argument and run it. The destructive
-    /// program is never this simple command's own leading word, so each argument has to
-    /// be considered a candidate command in its own right.
-    private static let commandRunnerNames: Set<String> = [
-        "xargs", "env", "nohup", "command", "exec", "time", "nice",
-        "setsid", "stdbuf", "timeout", "watch", "sudo",
+    /// Commands that never take a destructive action regardless of arguments or
+    /// flags. Short and conservative on purpose: anything not recognized asks
+    /// for confirmation, rather than trying to enumerate every way a command
+    /// could be dangerous. Add a command only after auditing every invocation.
+    private static let knownSafeCommands: Set<String> = [
+        "ls", "cat", "echo", "pwd", "whoami", "date", "hostname", "uname",
+        "head", "tail", "wc", "file", "stat", "which", "type", "printenv",
     ]
-
-    /// Shells whose `-c` payload is itself a shell command, so it can be parsed with the
-    /// same machinery rather than treated as an opaque string. Distinct from a general
-    /// interpreter (`python3 -c`), whose payload is a different language entirely and is
-    /// out of reach of this classifier.
-    private static let shellInterpreterNames: Set<String> = [
-        "sh", "bash", "zsh", "dash", "ksh",
-    ]
-
-    /// True if a program reference anywhere in `words` is destructive.
-    ///
-    /// Used for every position where a program can appear as an argument rather than as
-    /// argv[0]. Two things have to hold there, and they are the same two that hold for a
-    /// leading command: a reference resolves by basename (so `/bin/rm` is `rm`), and a
-    /// shell is not a leaf -- everything after it is a nested invocation that gets the
-    /// same classification, so `xargs sh -c 'rm -rf x'` is caught like `sh -c 'rm -rf x'`.
-    private nonisolated static func containsDestructiveProgram(
-        _ words: ArraySlice<String>,
-        depth: Int
-    ) -> Bool {
-        var index = words.startIndex
-        while index < words.endIndex {
-            let name = (words[index] as NSString).lastPathComponent
-            if destructiveCommandNames.contains(name) || name.hasPrefix("mkfs") {
-                return true
-            }
-            if shellInterpreterNames.contains(name), depth < maxShellRecursionDepth {
-                if isDestructiveSimpleCommand(Array(words[index...]), depth: depth) {
-                    return true
-                }
-            }
-            index = words.index(after: index)
-        }
-        return false
-    }
-
-    /// Classifies one already-split simple command. `words` is already lowercase and
-    /// tokenized, so this only ever deals with correctly-resolved argv, not raw text.
-    /// `depth` bounds recursion into nested shell payloads.
-    private nonisolated static func isDestructiveSimpleCommand(
-        _ words: [String],
-        depth: Int
-    ) -> Bool {
-        guard !words.isEmpty else { return false }
-
-        // A bare truncating/creating redirect, `> file` or `>> file`, anywhere in the
-        // command's own words, including as the very first one (`> file` alone is a
-        // complete, valid, destructive command).
-        if words.contains(where: { $0 == ">" || $0 == ">>" }) {
-            return true
-        }
-
-        let remaining = words.drop(while: isEnvironmentAssignmentWord)
-        guard let rawCommand = remaining.first else { return false }
-
-        // Absolute and relative paths resolve to the same bare name a shell would use
-        // (`/bin/rm`, `/usr/bin/rm`, and bare `rm` are all just `rm`), so this alone
-        // covers what used to need a separate prefix-list plus a path-resolution pass.
-        let commandName = (rawCommand as NSString).lastPathComponent
-
-        if destructiveCommandNames.contains(commandName) || commandName.hasPrefix("mkfs") {
-            return true
-        }
-
-        // `find -delete` / `find ... -exec rm ...` deletes without ever matching a
-        // bare command name, since `find` itself isn't destructive. The -exec target
-        // can be path-qualified like any other program reference.
-        if commandName == "find" {
-            if remaining.contains("-delete") { return true }
-            if remaining.contains("-exec") || remaining.contains("-execdir") {
-                if containsDestructiveProgram(remaining.dropFirst(), depth: depth) { return true }
-            }
-        }
-
-        // diskutil's erase/reformat/partition subcommands are as destructive as
-        // `dd`/`mkfs`/`format` but are a different binary and weren't covered by any
-        // check above. Scoped to the destructive subcommands specifically so read-only
-        // uses (`diskutil list`, `diskutil info`) aren't flagged. `quiet` is a real
-        // diskutil modifier that can precede the verb (`diskutil quiet eraseDisk ...`),
-        // so it's skipped rather than read as the verb itself.
-        if commandName == "diskutil" {
-            let subcommand = remaining.dropFirst().drop(while: { $0 == "quiet" }).first ?? ""
-            if destructiveDiskutilSubcommands.contains(subcommand) {
-                return true
-            }
-        }
-
-        // `xargs rm`, `env rm`, `nohup rm`, `sudo rm` -- the program that actually runs
-        // is an argument here, not argv[0].
-        if commandRunnerNames.contains(commandName) {
-            if containsDestructiveProgram(remaining.dropFirst(), depth: depth) { return true }
-        }
-
-        // `sh -c 'rm -rf victim'` -- the payload is a shell command, so run it back
-        // through the same parse instead of treating it as an opaque argument.
-        if shellInterpreterNames.contains(commandName), depth < maxShellRecursionDepth {
-            for argument in remaining.dropFirst() where !argument.hasPrefix("-") {
-                if isDestructiveCommand(argument, depth: depth + 1) { return true }
-            }
-        }
-
-        return false
-    }
-
-    /// Bounds `sh -c '...'` nesting so a pathological payload can't recurse without end.
-    private static let maxShellRecursionDepth = 4
-
-    private nonisolated static func isDestructiveCommand(_ command: String, depth: Int) -> Bool {
-        let simpleCommands = splitIntoSimpleCommands(command.lowercased())
-        return simpleCommands.contains {
-            isDestructiveSimpleCommand(tokenizeWords($0), depth: depth)
-        }
-    }
 
     nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
-        isDestructiveCommand(command, depth: 0)
+        splitIntoSimpleCommands(command.lowercased()).contains { !isSafeSimpleCommand($0) }
     }
+
+    private nonisolated static func isSafeSimpleCommand(_ simpleCommand: String) -> Bool {
+        guard simpleCommand.rangeOfCharacter(from: unsafeCharacters) == nil else { return false }
+        guard let name = leadingCommand(simpleCommand) else { return true }
+        return knownSafeCommands.contains((name as NSString).lastPathComponent)
+    }
+
 
     private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
         self.currentStep = .executing(command)
