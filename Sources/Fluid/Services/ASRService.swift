@@ -4941,6 +4941,7 @@ final class ASRService: ObservableObject {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
+        forceReliablePaste: Bool = false,
         tracksDictionaryCorrections: Bool = false
     ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -4955,6 +4956,7 @@ final class ASRService: ObservableObject {
             plan,
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
+            forceReliablePaste: forceReliablePaste,
             tracksDictionaryCorrections: tracksDictionaryCorrections
         )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
@@ -4972,6 +4974,7 @@ final class ASRService: ObservableObject {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
+        forceReliablePaste: Bool = false,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil
@@ -4989,6 +4992,7 @@ final class ASRService: ObservableObject {
                 plan,
                 preferredTargetPID: preferredTargetPID,
                 textReadyAt: textReadyAt,
+                forceReliablePaste: forceReliablePaste,
                 tracksDictionaryCorrections: tracksDictionaryCorrections,
                 postInsertionKey: postInsertionKey,
                 requiredFocusTarget: requiredFocusTarget

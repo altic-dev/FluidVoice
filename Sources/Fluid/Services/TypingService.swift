@@ -73,6 +73,55 @@ final class TypingService {
         return !isSecureTextField && exactFocusIsActive
     }
 
+    nonisolated static func requiresReliablePaste(
+        appName: String?,
+        bundleIdentifier: String?,
+        windowTitle: String?,
+        focusedRole: String?,
+        focusedTitle: String?,
+        focusedDescription: String?
+    ) -> Bool {
+        let appIdentity = "\(appName ?? "") \(bundleIdentifier ?? "")".lowercased()
+        let title = (windowTitle ?? "").lowercased()
+        let isBrowser = [
+            "safari", "chrome", "chromium", "arc", "edge", "firefox", "brave", "opera", "atlas",
+        ].contains { appIdentity.contains($0) }
+
+        guard isBrowser else { return false }
+        if title.contains("google docs") || title.contains("docs.google.com") {
+            return true
+        }
+
+        let isDocsCanvas = focusedRole == (kAXTextAreaRole as String)
+            && [focusedTitle, focusedDescription]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .contains("document content")
+        return isDocsCanvas
+    }
+
+    static func requiresReliablePaste(
+        for target: CapturedFocusTarget?,
+        appName: String?,
+        bundleIdentifier: String?,
+        windowTitle: String?
+    ) -> Bool {
+        let element = target?.element
+        return self.requiresReliablePaste(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            windowTitle: windowTitle,
+            focusedRole: element.flatMap {
+                self.stringAXAttribute(from: $0, attribute: kAXRoleAttribute as CFString)
+            },
+            focusedTitle: element.flatMap {
+                self.stringAXAttribute(from: $0, attribute: kAXTitleAttribute as CFString)
+            },
+            focusedDescription: element.flatMap {
+                self.stringAXAttribute(from: $0, attribute: kAXDescriptionAttribute as CFString)
+            }
+        )
+    }
+
     // Logging toggle (off by default). Enable by setting env FLUID_TYPING_LOGS=1
     // or UserDefaults bool for key "enableTypingLogs".
     private static var isLoggingEnabled: Bool {
@@ -424,16 +473,17 @@ final class TypingService {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?,
+        forceReliablePaste: Bool = false,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: CapturedFocusTarget? = nil,
         completion: ((DeliveryOutcome) -> Void)? = nil
     ) {
-        self.typeOutputPlanInstantly(
+        self.performOutputPlanInstantly(
             plan,
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
-            forceReliablePaste: false,
+            forceReliablePaste: forceReliablePaste,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             postInsertionKey: postInsertionKey,
             requiredFocusTarget: requiredFocusTarget,
@@ -445,7 +495,7 @@ final class TypingService {
     /// This is useful for web editors that report success for key-event insertion but
     /// only reliably replace rich editor selections through paste.
     func typeTextReliably(_ text: String, preferredTargetPID: pid_t?, textReadyAt: TimeInterval? = nil) {
-        self.typeOutputPlanInstantly(
+        self.performOutputPlanInstantly(
             .plain(text),
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
@@ -457,7 +507,7 @@ final class TypingService {
         )
     }
 
-    private func typeOutputPlanInstantly(
+    private func performOutputPlanInstantly(
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?,
@@ -629,6 +679,24 @@ final class TypingService {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
+        let isGoogleDocsTarget = self.focusedTargetRequiresReliablePaste(
+            preferredTargetPID: preferredTargetPID
+        )
+
+        if isGoogleDocsTarget {
+            self.bench("route compatibility=reliable_paste target=google_docs")
+            self.log("[TypingService] Google Docs canvas detected; forcing Reliable Paste path")
+            if self.tryReliablePasteInsertion(
+                text,
+                preferredTargetPID: preferredTargetPID,
+                restoreDelayMicros: 750_000
+            ) {
+                self.log("[TypingService] SUCCESS: Google Docs Reliable Paste path completed")
+                return true
+            }
+            self.log("[TypingService] Google Docs Reliable Paste path fell through to direct-typing fallbacks")
+        }
+
         if !forceReliablePaste,
            self.textInsertionMode == .standard,
            let ghosttyTargetPID = self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID)
@@ -726,6 +794,40 @@ final class TypingService {
         return true
     }
 
+    private func focusedTargetRequiresReliablePaste(preferredTargetPID: pid_t?) -> Bool {
+        let focusInfo = self.getSystemFocusedElementAndPID()
+        let targetPID = preferredTargetPID.flatMap { $0 > 0 ? $0 : nil } ?? focusInfo?.pid
+        guard let targetPID,
+              let app = NSRunningApplication(processIdentifier: targetPID)
+        else {
+            return false
+        }
+
+        let focusedElement = focusInfo?.pid == targetPID ? focusInfo?.element : nil
+        return Self.requiresReliablePaste(
+            appName: app.localizedName,
+            bundleIdentifier: app.bundleIdentifier,
+            windowTitle: Self.windowTitle(for: targetPID),
+            focusedRole: focusedElement.flatMap {
+                Self.stringAXAttribute(from: $0, attribute: kAXRoleAttribute as CFString)
+            },
+            focusedTitle: focusedElement.flatMap {
+                Self.stringAXAttribute(from: $0, attribute: kAXTitleAttribute as CFString)
+            },
+            focusedDescription: focusedElement.flatMap {
+                Self.stringAXAttribute(from: $0, attribute: kAXDescriptionAttribute as CFString)
+            }
+        )
+    }
+
+    private static func windowTitle(for pid: pid_t) -> String? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        return windows.first { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid }?[kCGWindowName as String] as? String
+    }
+
     private func waitForPhysicalModifiersToRelease(timeout: TimeInterval) -> Bool {
         let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -756,10 +858,18 @@ final class TypingService {
         return true
     }
 
-    private func tryReliablePasteInsertion(_ text: String, preferredTargetPID: pid_t?) -> Bool {
+    private func tryReliablePasteInsertion(
+        _ text: String,
+        preferredTargetPID: pid_t?,
+        restoreDelayMicros: useconds_t = 5_000_000
+    ) -> Bool {
         if let preferredTargetPID, preferredTargetPID > 0 {
             self.log("[TypingService] Trying clipboard-to-PID insertion first")
-            if self.insertTextViaClipboardToPid(text, targetPID: preferredTargetPID) {
+            if self.insertTextViaClipboardToPid(
+                text,
+                targetPID: preferredTargetPID,
+                restoreDelayMicros: restoreDelayMicros
+            ) {
                 self.log("[TypingService] Reliable Paste dispatched via clipboard-to-PID")
                 return true
             }
@@ -959,7 +1069,12 @@ final class TypingService {
 
     /// Clipboard-paste insertion targeted at a specific PID.
     /// Uses postToPid for Cmd+V while preserving the full previous pasteboard payload.
-    private func insertTextViaClipboardToPid(_ text: String, targetPID: pid_t, activateTargetFirst: Bool = true) -> Bool {
+    private func insertTextViaClipboardToPid(
+        _ text: String,
+        targetPID: pid_t,
+        activateTargetFirst: Bool = true,
+        restoreDelayMicros: useconds_t = 5_000_000
+    ) -> Bool {
         self.log("[TypingService] Starting clipboard-to-PID insertion to PID \(targetPID)")
 
         guard targetPID > 0 else {
@@ -972,7 +1087,7 @@ final class TypingService {
             usleep(80_000)
         }
 
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: restoreDelayMicros) {
             let vKey = Self.pasteVirtualKeyCode
             guard let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: true),
                   let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: vKey, keyDown: false)

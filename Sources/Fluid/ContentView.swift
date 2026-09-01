@@ -1926,13 +1926,15 @@ struct ContentView: View {
     private func deliverSpokenSend(
         _ outputPlan: DictationLiteralOutputPlan,
         targetPID: pid_t?,
-        textReadyAt: TimeInterval
+        textReadyAt: TimeInterval,
+        forceReliablePaste: Bool
     ) async -> TypingService.DeliveryOutcome {
         let sendsExistingDraft = outputPlan.plainText.isEmpty
         let outcome = await self.asr.typeOutputPlanToActiveFieldAndWait(
             outputPlan,
             preferredTargetPID: targetPID,
             textReadyAt: textReadyAt,
+            forceReliablePaste: forceReliablePaste,
             postInsertionKey: self.settings.spokenSendKey,
             requiredFocusTarget: self.recordingFocusTarget
         )
@@ -2698,6 +2700,16 @@ struct ContentView: View {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let frontmostName = frontmostApp?.localizedName ?? "Unknown"
         let isFluidFrontmost = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
+        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost
+        let typingTarget = shouldTypeExternally
+            ? self.resolveTypingTargetPID()
+            : (pid: nil, shouldRestoreOriginalFocus: false)
+        let requiresCompatibilityPaste = shouldTypeExternally && TypingService.requiresReliablePaste(
+            for: self.recordingFocusTarget,
+            appName: appInfo.name,
+            bundleIdentifier: appInfo.bundleId,
+            windowTitle: appInfo.windowTitle
+        )
 
         // Save to transcription history (transcription mode only, if enabled)
         if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory {
@@ -2726,14 +2738,19 @@ struct ContentView: View {
         let shouldCopyToClipboard = shouldPersistOutputs &&
             !sendsExistingDraft &&
             SettingsStore.shared.copyTranscriptionToClipboard &&
-            !isFluidFrontmost
+            !isFluidFrontmost &&
+            !requiresCompatibilityPaste
 
         if shouldCopyToClipboard {
             ClipboardService.copyToClipboard(finalText)
+        } else if requiresCompatibilityPaste {
+            DebugLogger.shared.debug(
+                "Google Docs compatibility paste will preserve the existing clipboard",
+                source: "ContentView"
+            )
         }
 
         var didTypeExternally = false
-        let shouldTypeExternally = shouldPersistOutputs && !isFluidFrontmost
 
         DebugLogger.shared.debug(
             "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), willTypeExternally: \(shouldTypeExternally)",
@@ -2741,7 +2758,6 @@ struct ContentView: View {
         )
 
         if shouldTypeExternally {
-            let typingTarget = self.resolveTypingTargetPID()
             let spokenSendRequested = spokenSendParse.shouldSend
             let targetMatchesRecordingFocus = typingTarget.pid != nil
                 && typingTarget.pid == self.recordingFocusTarget?.pid
@@ -2766,7 +2782,8 @@ struct ContentView: View {
                 let deliveryOutcome = await self.deliverSpokenSend(
                     finalOutputPlan,
                     targetPID: typingTarget.pid,
-                    textReadyAt: finalTextReadyAt
+                    textReadyAt: finalTextReadyAt,
+                    forceReliablePaste: requiresCompatibilityPaste
                 )
                 didTypeExternally = deliveryOutcome.didInsert
             } else {
@@ -2774,6 +2791,7 @@ struct ContentView: View {
                     finalOutputPlan,
                     preferredTargetPID: typingTarget.pid,
                     textReadyAt: finalTextReadyAt,
+                    forceReliablePaste: requiresCompatibilityPaste,
                     tracksDictionaryCorrections: true
                 )
                 didTypeExternally = true

@@ -6,6 +6,50 @@ import XCTest
 // managers exclude it from history. It is restored immediately and is not user-copied content.
 final class TypingServiceTransientPasteboardTests: XCTestCase {
 
+    func testGoogleDocsCanvasRequiresReliablePaste() {
+        XCTAssertTrue(TypingService.requiresReliablePaste(
+            appName: "Safari",
+            bundleIdentifier: "com.apple.Safari",
+            windowTitle: nil,
+            focusedRole: "AXTextArea",
+            focusedTitle: "Document content",
+            focusedDescription: "Document content"
+        ))
+    }
+
+    func testGoogleDocsWindowTitleRequiresReliablePaste() {
+        XCTAssertTrue(TypingService.requiresReliablePaste(
+            appName: "Google Chrome",
+            bundleIdentifier: "com.google.Chrome",
+            windowTitle: "Essay - Google Docs",
+            focusedRole: "AXGroup",
+            focusedTitle: nil,
+            focusedDescription: nil
+        ))
+    }
+
+    func testNormalBrowserTextAreaKeepsStandardInsertion() {
+        XCTAssertFalse(TypingService.requiresReliablePaste(
+            appName: "Safari",
+            bundleIdentifier: "com.apple.Safari",
+            windowTitle: "ChatGPT",
+            focusedRole: "AXTextArea",
+            focusedTitle: "Message",
+            focusedDescription: "Message composer"
+        ))
+    }
+
+    func testNativeDocumentContentFieldKeepsStandardInsertion() {
+        XCTAssertFalse(TypingService.requiresReliablePaste(
+            appName: "Pages",
+            bundleIdentifier: "com.apple.iWork.Pages",
+            windowTitle: "Document",
+            focusedRole: "AXTextArea",
+            focusedTitle: "Document content",
+            focusedDescription: "Document content"
+        ))
+    }
+
     func testTransientPasteboardItem_carriesText() {
         let item = TypingService.makeTransientPasteboardItem("hello world")
         XCTAssertEqual(
