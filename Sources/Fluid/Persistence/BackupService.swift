@@ -50,7 +50,6 @@ struct SettingsBackupPayload: Codable, Equatable {
     let accentColorOption: SettingsStore.AccentColorOption
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float
-    let transcriptionSoundIndependentVolume: Bool
     let autoUpdateCheckEnabled: Bool
     let betaReleasesEnabled: Bool
     let enableDebugLogs: Bool
