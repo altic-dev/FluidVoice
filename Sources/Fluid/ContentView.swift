@@ -2248,7 +2248,7 @@ struct ContentView: View {
         let isLocal = self.isLocalEndpoint(derivedBaseURL)
         let apiKey = route.apiKey
 
-        if !isLocal {
+        if !isLocal, !OfficialProviderAuth.isOfficialProvider(currentSelectedProviderID) {
             guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
                 throw AIProcessingError.missingAPIKey(provider: derivedCurrentProvider)
             }
@@ -2326,6 +2326,7 @@ struct ContentView: View {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: currentSelectedProviderID,
             messages: messages,
             model: derivedSelectedModel,
             baseURL: derivedBaseURL,
@@ -2353,6 +2354,7 @@ struct ContentView: View {
                     source: "ContentView"
                 )
                 let fallbackConfig = LLMClient.Config(
+                    providerID: currentSelectedProviderID,
                     messages: messages,
                     model: derivedSelectedModel,
                     baseURL: derivedBaseURL,

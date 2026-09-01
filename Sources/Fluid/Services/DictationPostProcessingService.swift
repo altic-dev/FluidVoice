@@ -210,7 +210,10 @@ final class DictationPostProcessingService {
         }
 
         let isLocal = ModelRepository.shared.isLocalEndpoint(resolved.baseURL)
-        if !isLocal, resolved.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !isLocal,
+           !OfficialProviderAuth.isOfficialProvider(resolved.providerID),
+           resolved.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
             throw AIProcessingError.missingAPIKey(provider: resolved.providerKey)
         }
 
@@ -228,6 +231,7 @@ final class DictationPostProcessingService {
         messages.append(["role": "user", "content": userMessageContent])
 
         var config = LLMClient.Config(
+            providerID: resolved.providerID,
             messages: messages,
             model: resolved.model,
             baseURL: resolved.baseURL,

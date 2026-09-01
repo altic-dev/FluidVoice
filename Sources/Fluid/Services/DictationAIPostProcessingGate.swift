@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Shared gating logic for whether dictation AI post-processing is usable/configured.
@@ -58,9 +57,12 @@ enum DictationAIPostProcessingGate {
 
         let baseURL = route.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let apiKey = route.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard self.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
+        guard self.isLocalEndpoint(baseURL) ||
+            OfficialProviderAuth.isOfficialProvider(providerID) ||
+            !apiKey.isEmpty
+        else { return false }
 
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == storedFingerprint
+        return self.providerFingerprint(providerID: providerID, baseURL: baseURL, apiKey: apiKey) == storedFingerprint
     }
 
     static func baseURL(for providerID: String, settings: SettingsStore) -> String {
@@ -83,14 +85,16 @@ enum DictationAIPostProcessingGate {
         return "custom:\(trimmed)"
     }
 
-    static func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBase.isEmpty else { return nil }
-
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    static func providerFingerprint(
+        providerID: String = "",
+        baseURL: String,
+        apiKey: String
+    ) -> String? {
+        OfficialProviderAuth.configurationFingerprint(
+            providerID: providerID,
+            baseURL: baseURL,
+            apiKey: apiKey
+        )
     }
 
     private static func isPrivateProviderConfigured(settings: SettingsStore) -> Bool {

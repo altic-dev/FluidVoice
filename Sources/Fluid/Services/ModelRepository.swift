@@ -17,7 +17,12 @@ final class ModelRepository {
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
-            "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
+            "openai", OfficialProviderAuth.codexProviderID,
+            "anthropic", OfficialProviderAuth.claudeProviderID,
+            "xai", GrokSubscriptionAuth.providerID,
+            "groq", "cerebras",
+            "google", OfficialProviderAuth.geminiProviderID,
+            "openrouter", "ollama", "lmstudio",
         ]
         if PrivateFeatures.privateAIProvider {
             providers.insert(PrivateAIProviderFeature.shared.providerID, at: 0)
@@ -33,6 +38,16 @@ final class ModelRepository {
         }
 
         switch providerID {
+        case OfficialProviderAuth.codexProviderID:
+            // GPT-5.5 remains the broadly available ChatGPT/Codex default;
+            // the 5.6 tiers can vary by subscription.
+            return ["gpt-5.5", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.4"]
+        case OfficialProviderAuth.claudeProviderID:
+            return ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"]
+        case OfficialProviderAuth.geminiProviderID:
+            return ["gemini-2.5-pro", "gemini-2.5-flash"]
+        case GrokSubscriptionAuth.providerID:
+            return ["grok-4.5"]
         case "openai":
             return ["gpt-4.1"]
         case "anthropic":
@@ -59,6 +74,14 @@ final class ModelRepository {
     /// Returns the default base URL for a given provider ID.
     func defaultBaseURL(for providerID: String) -> String {
         switch providerID {
+        case OfficialProviderAuth.codexProviderID:
+            return "https://chatgpt.com/backend-api/codex"
+        case OfficialProviderAuth.claudeProviderID:
+            return "https://api.anthropic.com/v1"
+        case OfficialProviderAuth.geminiProviderID:
+            return "https://cloudcode-pa.googleapis.com/v1internal"
+        case GrokSubscriptionAuth.providerID:
+            return GrokSubscriptionAuth.proxyBaseURL
         case "openai":
             return "https://api.openai.com/v1"
         case "anthropic":
@@ -89,6 +112,10 @@ final class ModelRepository {
         }
 
         switch providerID {
+        case OfficialProviderAuth.codexProviderID: return "ChatGPT (Codex Login)"
+        case OfficialProviderAuth.claudeProviderID: return "Claude Subscription"
+        case OfficialProviderAuth.geminiProviderID: return "Gemini Subscription"
+        case GrokSubscriptionAuth.providerID: return "Grok Subscription"
         case "openai": return "OpenAI"
         case "anthropic": return "Anthropic"
         case "xai": return "xAI"
@@ -111,6 +138,9 @@ final class ModelRepository {
     /// Returns nil for providers that don't have a relevant URL.
     func providerWebsiteURL(for providerID: String) -> (url: String, label: String)? {
         switch providerID {
+        case let id where OfficialProviderAuth.isOfficialProvider(id):
+            guard let info = OfficialProviderAuth.info(for: id) else { return nil }
+            return (info.setupURL, info.setupLabel)
         case "openai":
             return ("https://platform.openai.com/api-keys", "Get API Key")
         case "anthropic":
@@ -153,11 +183,15 @@ final class ModelRepository {
     func builtInProvidersList() -> [(id: String, name: String)] {
         var list: [(id: String, name: String)] = [
             ("openai", "OpenAI"),
+            (OfficialProviderAuth.codexProviderID, "ChatGPT (Codex Login)"),
             ("anthropic", "Anthropic"),
+            (OfficialProviderAuth.claudeProviderID, "Claude Subscription"),
             ("xai", "xAI"),
+            (GrokSubscriptionAuth.providerID, "Grok Subscription"),
             ("groq", "Groq"),
             ("cerebras", "Cerebras"),
             ("google", "Google"),
+            (OfficialProviderAuth.geminiProviderID, "Gemini Subscription"),
             ("openrouter", "OpenRouter"),
             ("ollama", "Ollama"),
             ("lmstudio", "LM Studio"),
@@ -225,6 +259,14 @@ final class ModelRepository {
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
+        }
+
+        // First-party subscription clients do not expose one common public model-list
+        // contract. Resolve the official session so setup errors are actionable, then
+        // return the documented models curated for that client integration.
+        if OfficialProviderAuth.isOfficialProvider(providerID) {
+            _ = try await OfficialProviderAuth.resolve(providerID: providerID)
+            return self.defaultModels(for: providerID)
         }
 
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")

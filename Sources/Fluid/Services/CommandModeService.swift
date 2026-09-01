@@ -16,7 +16,7 @@ final class CommandModeService: ObservableObject {
     private var currentTurnCount = 0
     private let maxTurns = 20
 
-    // Flag to enable notch output display
+    /// Flag to enable notch output display
     var enableNotchOutput: Bool = true
 
     // Streaming UI update throttling - adaptive rate based on content length
@@ -67,6 +67,8 @@ final class CommandModeService: ObservableObject {
         let content: String
         let thinking: String? // Display-only: AI reasoning tokens (NOT sent to API)
         let toolCall: ToolCall?
+        let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
+        let responsesContinuationScope: String?
         let stepType: StepType
         let timestamp: Date
 
@@ -91,13 +93,38 @@ final class CommandModeService: ObservableObject {
             let command: String
             let workingDirectory: String?
             let purpose: String? // Why this command is being run
+            let thoughtSignature: String?
+
+            init(
+                id: String,
+                command: String,
+                workingDirectory: String?,
+                purpose: String?,
+                thoughtSignature: String? = nil
+            ) {
+                self.id = id
+                self.command = command
+                self.workingDirectory = workingDirectory
+                self.purpose = purpose
+                self.thoughtSignature = thoughtSignature
+            }
         }
 
-        init(role: Role, content: String, thinking: String? = nil, toolCall: ToolCall? = nil, stepType: StepType = .normal) {
+        init(
+            role: Role,
+            content: String,
+            thinking: String? = nil,
+            toolCall: ToolCall? = nil,
+            responsesContinuationItems: [LLMClient.ResponsesContinuationItem] = [],
+            responsesContinuationScope: String? = nil,
+            stepType: StepType = .normal
+        ) {
             self.role = role
             self.content = content
             self.thinking = thinking
             self.toolCall = toolCall
+            self.responsesContinuationItems = responsesContinuationItems
+            self.responsesContinuationScope = responsesContinuationScope
             self.stepType = stepType
             self.timestamp = Date()
         }
@@ -228,7 +255,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                thoughtSignature: tc.thoughtSignature
             )
         }
 
@@ -237,6 +265,8 @@ final class CommandModeService: ObservableObject {
             role: role,
             content: msg.content,
             toolCall: toolCall,
+            responsesContinuationItems: msg.responsesContinuationItems,
+            responsesContinuationScope: msg.responsesContinuationScope,
             stepType: stepType,
             timestamp: msg.timestamp
         )
@@ -267,7 +297,8 @@ final class CommandModeService: ObservableObject {
                 id: tc.id,
                 command: tc.command,
                 workingDirectory: tc.workingDirectory,
-                purpose: tc.purpose
+                purpose: tc.purpose,
+                thoughtSignature: tc.thoughtSignature
             )
         }
 
@@ -275,6 +306,8 @@ final class CommandModeService: ObservableObject {
             role: role,
             content: chatMsg.content,
             toolCall: toolCall,
+            responsesContinuationItems: chatMsg.responsesContinuationItems,
+            responsesContinuationScope: chatMsg.responsesContinuationScope,
             stepType: stepType
         )
     }
@@ -296,7 +329,9 @@ final class CommandModeService: ObservableObject {
             }
 
             // Skip tool outputs in notch (they're verbose)
-            if msg.role == .tool { continue }
+            if msg.role == .tool {
+                continue
+            }
 
             NotchContentState.shared.addCommandMessage(role: role, content: msg.content)
         }
@@ -425,8 +460,11 @@ final class CommandModeService: ObservableObject {
                         command: tc.command,
                         workingDirectory: tc
                             .workingDirectory,
-                        purpose: tc.purpose
+                        purpose: tc.purpose,
+                        thoughtSignature: tc.thoughtSignature
                     ),
+                    responsesContinuationItems: response.responsesContinuationItems,
+                    responsesContinuationScope: response.responsesContinuationScope,
                     stepType: stepType
                 ))
 
@@ -672,13 +710,32 @@ final class CommandModeService: ObservableObject {
         let content: String
         let thinking: String? // Display-only, NOT sent back to API
         let toolCall: ToolCallData?
+        let responsesContinuationItems: [LLMClient.ResponsesContinuationItem]
+        let responsesContinuationScope: String?
 
         struct ToolCallData {
             let id: String
             let command: String
             let workingDirectory: String?
             let purpose: String?
+            let thoughtSignature: String?
         }
+    }
+
+    static func terminalToolArguments(
+        command: String,
+        workingDirectory: String?,
+        purpose: String?
+    ) throws -> String {
+        var arguments: [String: Any] = ["command": command]
+        if let workingDirectory {
+            arguments["workingDirectory"] = workingDirectory
+        }
+        if let purpose {
+            arguments["purpose"] = purpose
+        }
+        let data = try JSONSerialization.data(withJSONObject: arguments)
+        return String(data: data, encoding: .utf8) ?? "{}"
     }
 
     private func callLLM() async throws -> LLMResponse {
@@ -798,27 +855,41 @@ final class CommandModeService: ObservableObject {
                     lastToolCallId = tc.id
                     let argsJSON: String
                     do {
-                        let data = try JSONSerialization.data(withJSONObject: [
-                            "command": tc.command,
-                            "workingDirectory": tc.workingDirectory ?? "",
-                        ])
-                        argsJSON = String(data: data, encoding: .utf8) ?? "{}"
+                        argsJSON = try Self.terminalToolArguments(
+                            command: tc.command,
+                            workingDirectory: tc.workingDirectory,
+                            purpose: tc.purpose
+                        )
                     } catch {
                         DebugLogger.shared.error("Failed to encode tool call args: \(error)", source: "CommandModeService")
                         argsJSON = "{}"
                     }
-                    messages.append([
+                    var toolCallMessage: [String: Any] = [
+                        "id": tc.id,
+                        "type": "function",
+                        "function": [
+                            "name": "execute_terminal_command",
+                            "arguments": argsJSON,
+                        ],
+                    ]
+                    if let thoughtSignature = tc.thoughtSignature {
+                        toolCallMessage["thought_signature"] = thoughtSignature
+                    }
+                    var assistantMessage: [String: Any] = [
                         "role": "assistant",
                         "content": msg.content,
-                        "tool_calls": [[
-                            "id": tc.id,
-                            "type": "function",
-                            "function": [
-                                "name": "execute_terminal_command",
-                                "arguments": argsJSON,
-                            ],
-                        ]],
-                    ])
+                        "tool_calls": [toolCallMessage],
+                    ]
+                    if let continuationScope = msg.responsesContinuationScope {
+                        assistantMessage["tool_continuation_scope"] = continuationScope
+                    }
+                    if !msg.responsesContinuationItems.isEmpty,
+                       let continuationScope = msg.responsesContinuationScope
+                    {
+                        assistantMessage["responses_continuation_items"] = msg.responsesContinuationItems.map(\.inputItem)
+                        assistantMessage["responses_continuation_scope"] = continuationScope
+                    }
+                    messages.append(assistantMessage)
                 } else {
                     messages.append(["role": "assistant", "content": msg.content])
                 }
@@ -860,6 +931,7 @@ final class CommandModeService: ObservableObject {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: providerID,
             messages: messages,
             model: model,
             baseURL: baseURL,
@@ -964,8 +1036,11 @@ final class CommandModeService: ObservableObject {
                     id: tc.id,
                     command: command,
                     workingDirectory: workDir,
-                    purpose: purpose
-                )
+                    purpose: purpose,
+                    thoughtSignature: tc.thoughtSignature
+                ),
+                responsesContinuationItems: response.responsesContinuationItems,
+                responsesContinuationScope: response.responsesContinuationScope
             )
         }
 
@@ -981,7 +1056,9 @@ final class CommandModeService: ObservableObject {
         return LLMResponse(
             content: response.content,
             thinking: finalThinking, // Display-only
-            toolCall: nil
+            toolCall: nil,
+            responsesContinuationItems: response.responsesContinuationItems,
+            responsesContinuationScope: response.responsesContinuationScope
         )
     }
 }
