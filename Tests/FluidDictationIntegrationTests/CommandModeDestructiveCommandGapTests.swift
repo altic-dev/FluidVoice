@@ -153,6 +153,22 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
+    // MARK: - A quoted or escaped unsafe character is an argument, not a redirect
+
+    func testQuotedOrEscapedUnsafeCharacterIsNotFlagged() {
+        let cases = [
+            "echo '>'",
+            "echo \\>",
+            "echo \"(hello)\"",
+        ]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation, the character is quoted or escaped"
+            )
+        }
+    }
+
     // MARK: - Every simple command in a chain is checked, not just the first
 
     func testEverySimpleCommandInAChainIsChecked() {

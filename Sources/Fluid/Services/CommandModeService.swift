@@ -598,6 +598,29 @@ final class CommandModeService: ObservableObject {
     /// shell parser.
     private static let unsafeCharacters = CharacterSet(charactersIn: "$`(){}<>")
 
+    /// True if an unsafe character appears outside quotes and isn't escaped.
+    /// `echo '>'` and `echo \>` pass an ordinary argument, not a redirect, and
+    /// shouldn't require confirmation just because the character is scary
+    /// elsewhere.
+    private nonisolated static func hasUnquotedUnsafeCharacter(_ simpleCommand: String) -> Bool {
+        var quote: Character?
+        var escaped = false
+        for c in simpleCommand {
+            if escaped {
+                escaped = false
+            } else if c == "\\", quote != "'" {
+                escaped = true
+            } else if let q = quote {
+                if c == q { quote = nil }
+            } else if c == "\"" || c == "'" {
+                quote = c
+            } else if c.unicodeScalars.contains(where: unsafeCharacters.contains) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// The leading word of a simple command, with a leading env assignment
     /// dropped (`LC_ALL=C ls` runs `ls`) and surrounding quotes stripped if the
     /// whole word is one quoted span.
@@ -637,7 +660,7 @@ final class CommandModeService: ObservableObject {
     }
 
     private nonisolated static func isSafeSimpleCommand(_ simpleCommand: String) -> Bool {
-        guard simpleCommand.rangeOfCharacter(from: unsafeCharacters) == nil else { return false }
+        guard !hasUnquotedUnsafeCharacter(simpleCommand) else { return false }
         guard let name = leadingCommand(simpleCommand) else { return true }
         return knownSafeCommands.contains((name as NSString).lastPathComponent)
     }
