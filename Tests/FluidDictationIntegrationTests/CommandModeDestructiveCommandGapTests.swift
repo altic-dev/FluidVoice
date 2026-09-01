@@ -169,6 +169,67 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
         }
     }
 
+    // MARK: - A backslash-escaped quote doesn't hide a real separator
+
+    func testEscapedQuoteDoesNotHideSeparator() {
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("echo \"foo\\\"bar\" && rm -rf victim"),
+            "expected the destructive command after && to require confirmation, the escaped quote shouldn't close the string early"
+        )
+    }
+
+    func testEscapedQuoteInsideAnOtherwiseSafeCommandIsNotFlagged() {
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand("echo \"foo\\\"bar\""),
+            "expected a genuinely safe command with an escaped quote NOT to require confirmation"
+        )
+    }
+
+    // MARK: - Command substitution inside double quotes is still substitution
+
+    func testCommandSubstitutionInsideDoubleQuotesIsCaught() {
+        XCTAssertTrue(
+            CommandModeService.isDestructiveCommand("echo \"$(rm -rf victim)\""),
+            "expected a double-quoted command substitution to require confirmation, a real shell still evaluates it"
+        )
+    }
+
+    func testSingleQuotedSubstitutionSyntaxIsNotFlagged() {
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand("echo '$(rm -rf victim)'"),
+            "expected single-quoted text NOT to require confirmation, single quotes suppress all substitution"
+        )
+    }
+
+    func testParenthesesInsideDoubleQuotesAreStillInert() {
+        XCTAssertFalse(
+            CommandModeService.isDestructiveCommand("echo \"(hello)\""),
+            "expected literal parentheses inside double quotes NOT to require confirmation, they aren't substitution on their own"
+        )
+    }
+
+    // MARK: - A path-qualified safe command is only trusted from a real system directory
+
+    func testPathQualifiedSafeCommandOutsideATrustedDirectoryIsFlagged() {
+        let cases = ["./ls", "/tmp/cat -la", "ls_backup/ls"]
+        for command in cases {
+            XCTAssertTrue(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" to require confirmation, it isn't in a trusted system directory"
+            )
+        }
+    }
+
+    func testPathQualifiedSafeCommandInATrustedDirectoryIsNotFlagged() {
+        let cases = ["/bin/ls -la", "/usr/bin/cat README.md"]
+        for command in cases {
+            XCTAssertFalse(
+                CommandModeService.isDestructiveCommand(command),
+                "expected \"\(command)\" NOT to require confirmation, it's a real system path"
+            )
+        }
+    }
+
     // MARK: - Every simple command in a chain is checked, not just the first
 
     func testEverySimpleCommandInAChainIsChecked() {
@@ -219,6 +280,7 @@ final class CommandModeDestructiveCommandGapTests: XCTestCase {
             )
         }
     }
+
 
 
 }

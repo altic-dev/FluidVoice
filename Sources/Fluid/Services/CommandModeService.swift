@@ -563,14 +563,25 @@ final class CommandModeService: ObservableObject {
     /// `&&`, `||`, `;`, `&`, `|`, and newline, so every command in a chain gets
     /// checked, not just the first one before a separator.
     /// Splits on unquoted `;`, `&&`, `||`, `|`, newline. Quotes are tracked so a
-    /// separator inside a quoted argument doesn't split; escaped separators are
-    /// not handled, an over-split just means one more piece to check, which can
-    /// only ask for confirmation more often, never less.
+    /// separator inside a quoted argument doesn't split, and a backslash-escaped
+    /// quote doesn't close early, real shells honor `\"` inside a double-quoted
+    /// string as a literal character, not the end of the string.
     private nonisolated static func splitIntoSimpleCommands(_ command: String) -> [String] {
         var parts: [String] = []
         var current = ""
         var quote: Character?
+        var escaped = false
         for c in command {
+            if escaped {
+                current.append(c)
+                escaped = false
+                continue
+            }
+            if c == "\\", quote != "'" {
+                current.append(c)
+                escaped = true
+                continue
+            }
             if let q = quote {
                 current.append(c)
                 if c == q { quote = nil }
@@ -598,21 +609,38 @@ final class CommandModeService: ObservableObject {
     /// shell parser.
     private static let unsafeCharacters = CharacterSet(charactersIn: "$`(){}<>")
 
-    /// True if an unsafe character appears outside quotes and isn't escaped.
-    /// `echo '>'` and `echo \>` pass an ordinary argument, not a redirect, and
-    /// shouldn't require confirmation just because the character is scary
-    /// elsewhere.
+    /// `$` and backtick stay live for substitution inside double quotes; a real
+    /// shell still evaluates `"$(rm -rf x)"`. Everything else in
+    /// `unsafeCharacters` (redirects, braces, parens on their own) is inert
+    /// inside double quotes, same as any other literal character.
+    private static let unsafeInsideDoubleQuotes = CharacterSet(charactersIn: "$`")
+
+    /// True if an unsafe character appears where it's actually live: unquoted,
+    /// or (for `$`/backtick specifically) inside double quotes. Single quotes
+    /// suppress everything, and an escaped character is a literal, not a
+    /// redirect or substitution, `echo '>'` and `echo \>` pass an ordinary
+    /// argument.
     private nonisolated static func hasUnquotedUnsafeCharacter(_ simpleCommand: String) -> Bool {
         var quote: Character?
         var escaped = false
         for c in simpleCommand {
             if escaped {
                 escaped = false
-            } else if c == "\\", quote != "'" {
+                continue
+            }
+            if c == "\\", quote != "'" {
                 escaped = true
-            } else if let q = quote {
-                if c == q { quote = nil }
-            } else if c == "\"" || c == "'" {
+                continue
+            }
+            if let q = quote {
+                if c == q {
+                    quote = nil
+                } else if q == "\"", c.unicodeScalars.contains(where: unsafeInsideDoubleQuotes.contains) {
+                    return true
+                }
+                continue
+            }
+            if c == "\"" || c == "'" {
                 quote = c
             } else if c.unicodeScalars.contains(where: unsafeCharacters.contains) {
                 return true
@@ -655,6 +683,12 @@ final class CommandModeService: ObservableObject {
         "head", "tail", "wc", "file", "stat", "which", "type", "printenv",
     ]
 
+    /// A path-qualified command is only trusted if it also lives in one of
+    /// these directories. A bare name resolving to `ls` is the real system
+    /// `ls`; a path like `./ls` or `/tmp/cat` could be an arbitrary planted
+    /// script that merely shares the name.
+    private static let trustedDirectories: Set<String> = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
+
     nonisolated static func isDestructiveCommand(_ command: String) -> Bool {
         splitIntoSimpleCommands(command.lowercased()).contains { !isSafeSimpleCommand($0) }
     }
@@ -662,7 +696,9 @@ final class CommandModeService: ObservableObject {
     private nonisolated static func isSafeSimpleCommand(_ simpleCommand: String) -> Bool {
         guard !hasUnquotedUnsafeCharacter(simpleCommand) else { return false }
         guard let name = leadingCommand(simpleCommand) else { return true }
-        return knownSafeCommands.contains((name as NSString).lastPathComponent)
+        guard knownSafeCommands.contains((name as NSString).lastPathComponent) else { return false }
+        guard name.contains("/") else { return true }
+        return trustedDirectories.contains((name as NSString).deletingLastPathComponent)
     }
 
 
