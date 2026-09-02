@@ -56,6 +56,22 @@ final class ModelRepository {
         }
     }
 
+    /// Returns models eligible for one app mode. Remote providers keep their
+    /// normal model list; Fluid Intelligence supplies task-scoped local models.
+    func defaultModels(for providerID: String, task: PrivateAIModelTask) -> [String] {
+        if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
+            return PrivateAIProviderFeature.shared.modelIDs(for: task)
+        }
+        return self.defaultModels(for: providerID)
+    }
+
+    static func eligibleModel(preferred: String?, from models: [String]) -> String? {
+        if let preferred, models.contains(preferred) {
+            return preferred
+        }
+        return models.first
+    }
+
     /// Returns the default base URL for a given provider ID.
     func defaultBaseURL(for providerID: String) -> String {
         switch providerID {

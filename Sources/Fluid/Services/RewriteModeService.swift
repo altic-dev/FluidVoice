@@ -236,6 +236,7 @@ final class RewriteModeService: ObservableObject {
         }
 
         let model: String = {
+            let taskModels = ModelRepository.shared.defaultModels(for: providerID, task: .edit)
             if settings.rewriteModeLinkedToGlobal {
                 let key: String
                 if ModelRepository.shared.isBuiltIn(providerID) {
@@ -245,13 +246,14 @@ final class RewriteModeService: ObservableObject {
                 } else {
                     key = "custom:\(providerID)"
                 }
-                return settings.selectedModelByProvider[key]
-                    ?? settings.selectedModel
-                    ?? ModelRepository.shared.defaultModels(for: providerID).first
+                let selected = settings.selectedModelByProvider[key] ?? settings.selectedModel
+                return ModelRepository.eligibleModel(preferred: selected, from: taskModels)
                     ?? ""
             }
-            return settings.rewriteModeSelectedModel
-                ?? ModelRepository.shared.defaultModels(for: providerID).first
+            return ModelRepository.eligibleModel(
+                preferred: settings.rewriteModeSelectedModel,
+                from: taskModels
+            )
                 ?? ""
         }()
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

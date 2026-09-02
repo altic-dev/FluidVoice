@@ -1189,7 +1189,7 @@ extension AIEnhancementSettingsView {
                 }
             } else {
                 let providerID = self.activeEditModeProviderID
-                let models = self.viewModel.models(for: providerID)
+                let models = self.editModeModels(for: providerID)
                 Group {
                     Toggle("Sync", isOn: self.editModeLinkedToGlobalBinding)
                         .toggleStyle(.checkbox)
@@ -1225,7 +1225,10 @@ extension AIEnhancementSettingsView {
                     SearchableModelPicker(
                         models: models,
                         selectedModel: self.editModeModelBinding(for: providerID),
-                        onRefresh: { await self.viewModel.fetchModels(for: providerID) },
+                        onRefresh: {
+                            guard !self.isPrivateAIProviderID(providerID) else { return }
+                            await self.viewModel.fetchModels(for: providerID)
+                        },
                         isRefreshing: self.viewModel.refreshingProviderID == providerID,
                         refreshEnabled: !self.settings.rewriteModeLinkedToGlobal && self.canFetchModels(for: providerID),
                         selectionEnabled: !self.settings.rewriteModeLinkedToGlobal && !models.isEmpty,
@@ -1468,7 +1471,7 @@ extension AIEnhancementSettingsView {
             set: { newProviderID in
                 guard !self.settings.rewriteModeLinkedToGlobal else { return }
                 self.settings.rewriteModeSelectedProviderID = newProviderID
-                let models = self.viewModel.models(for: newProviderID)
+                let models = self.editModeModels(for: newProviderID)
                 let current = self.settings.rewriteModeSelectedModel ?? ""
                 if !models.contains(current) {
                     self.settings.rewriteModeSelectedModel = models.first
@@ -1480,14 +1483,17 @@ extension AIEnhancementSettingsView {
     private func editModeModelBinding(for providerID: String) -> Binding<String> {
         Binding(
             get: {
+                let models = self.editModeModels(for: providerID)
                 if self.settings.rewriteModeLinkedToGlobal {
                     let key = self.viewModel.providerKey(for: providerID)
-                    return self.settings.selectedModelByProvider[key]
+                    let preferred = self.settings.selectedModelByProvider[key]
                         ?? self.settings.selectedModel
-                        ?? self.viewModel.models(for: providerID).first
-                        ?? ""
+                    return ModelRepository.eligibleModel(preferred: preferred, from: models) ?? ""
                 }
-                return self.settings.rewriteModeSelectedModel ?? self.viewModel.models(for: providerID).first ?? ""
+                return ModelRepository.eligibleModel(
+                    preferred: self.settings.rewriteModeSelectedModel,
+                    from: models
+                ) ?? ""
             },
             set: { newModel in
                 guard !self.settings.rewriteModeLinkedToGlobal else { return }
@@ -1504,7 +1510,7 @@ extension AIEnhancementSettingsView {
         }
 
         let providerID = self.settings.rewriteModeSelectedProviderID
-        let models = self.viewModel.models(for: providerID)
+        let models = self.editModeModels(for: providerID)
         let currentModel = self.settings.rewriteModeSelectedModel ?? ""
         if !models.contains(currentModel) {
             self.settings.rewriteModeSelectedModel = models.first
@@ -1521,11 +1527,29 @@ extension AIEnhancementSettingsView {
 
         self.settings.rewriteModeSelectedProviderID = global
 
+        if self.isPrivateAIProviderID(global) {
+            self.settings.rewriteModeSelectedModel = self.editModeModels(for: global).first
+            return
+        }
+
         let key = self.viewModel.providerKey(for: global)
         let model = self.settings.selectedModelByProvider[key]
             ?? self.settings.selectedModel
             ?? self.viewModel.models(for: global).first
         self.settings.rewriteModeSelectedModel = model
+    }
+
+    private func editModeModels(for providerID: String) -> [String] {
+        if self.isPrivateAIProviderID(providerID) {
+            return ModelRepository.shared.defaultModels(for: providerID, task: .edit)
+        }
+        return self.viewModel.models(for: providerID)
+    }
+
+    private func isPrivateAIProviderID(_ providerID: String) -> Bool {
+        PrivateFeatures.privateAIProvider &&
+            providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            == PrivateAIProviderFeature.shared.providerID
     }
 
     private func ensureDefaultEditModeSyncState() {

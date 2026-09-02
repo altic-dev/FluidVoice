@@ -83,6 +83,7 @@ struct AIEnhancementSettingsView: View {
     @State var providerSearchText: String = ""
     @State var privateAISelectedModelID: String = PrivateAIIntegrationService.configuredModelID
     @State var privateAILoadState: PrivateAIModelLoadState = .idle
+    @State var privateAIModelUpdateStatusByID: [String: PrivateAIModelUpdateStatus] = [:]
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
     @State var hoveredPromptModeKey: String? = nil
@@ -100,6 +101,7 @@ struct AIEnhancementSettingsView: View {
                 self.viewModel.onAppear()
                 self.privateAISelectedModelID = PrivateAIIntegrationService.configuredModelID
                 self.refreshPrivateAILoadState()
+                self.refreshPrivateAIModelUpdateStatus(self.selectedPrivateAIModel)
             }
             .onChange(of: self.viewModel.connectionStatus) { oldValue, newValue in
                 if oldValue == .success && newValue != .success {

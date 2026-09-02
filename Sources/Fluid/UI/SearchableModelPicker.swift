@@ -16,6 +16,7 @@ struct SearchableModelPicker: View {
     var isRefreshing: Bool = false
     var refreshEnabled: Bool = true
     var selectionEnabled: Bool = true
+    let displayName: (String) -> String
     let controlWidth: CGFloat
     let controlHeight: CGFloat?
 
@@ -26,6 +27,7 @@ struct SearchableModelPicker: View {
         isRefreshing: Bool = false,
         refreshEnabled: Bool = true,
         selectionEnabled: Bool = true,
+        displayName: @escaping (String) -> String = { $0 },
         controlWidth: CGFloat = 180,
         controlHeight: CGFloat? = nil
     ) {
@@ -35,6 +37,7 @@ struct SearchableModelPicker: View {
         self.isRefreshing = isRefreshing
         self.refreshEnabled = refreshEnabled
         self.selectionEnabled = selectionEnabled
+        self.displayName = displayName
         self.controlWidth = controlWidth
         self.controlHeight = controlHeight
     }
@@ -57,7 +60,10 @@ struct SearchableModelPicker: View {
         if self.searchText.isEmpty {
             return self.models
         }
-        return self.models.filter { $0.localizedCaseInsensitiveContains(self.searchText) }
+        return self.models.filter {
+            $0.localizedCaseInsensitiveContains(self.searchText) ||
+                self.displayName($0).localizedCaseInsensitiveContains(self.searchText)
+        }
     }
 
     var body: some View {
@@ -65,7 +71,7 @@ struct SearchableModelPicker: View {
             // Model button that opens popover
             Button(action: { self.isShowingPopover.toggle() }) {
                 HStack(spacing: 6) {
-                    Text(self.selectedModel.isEmpty ? "Select Model" : self.selectedModel)
+                    Text(self.selectedModel.isEmpty ? "Select Model" : self.displayName(self.selectedModel))
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -128,7 +134,7 @@ struct SearchableModelPicker: View {
                                                 self.isShowingPopover = false
                                             }) {
                                                 HStack {
-                                                    Text(model)
+                                                    Text(self.displayName(model))
                                                         .lineLimit(1)
                                                     Spacer()
                                                     if model == self.selectedModel {

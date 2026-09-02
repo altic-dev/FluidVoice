@@ -594,6 +594,7 @@ extension AIEnhancementSettingsView {
         let isVerified = self.isPrivateAIModelVerified(model)
         let isTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID
         let isBusy = isDownloading || isLoading || isTesting
+        let hasUpdate = isInstalled && self.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable
         let canVerify = isInstalled && (!isVerified || hasLoadFailure) && !self.privateAISelectedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -607,6 +608,7 @@ extension AIEnhancementSettingsView {
                     models: PrivateAIModelRegistry.modelIDs(),
                     selectedModel: self.privateAIModelBinding,
                     selectionEnabled: !isBusy,
+                    displayName: self.privateAIModelDisplayName,
                     controlWidth: 180,
                     controlHeight: AISettingsLayout.providerRowControlHeight
                 )
@@ -678,6 +680,24 @@ extension AIEnhancementSettingsView {
                     }
                     .foregroundStyle(.secondary)
                 }
+            } else if hasUpdate {
+                Button(action: { self.updatePrivateAIModel(model) }) {
+                    HStack(spacing: 6) {
+                        if isDownloading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .fixedSize()
+                        }
+                        Text(
+                            isDownloading
+                                ? Self.downloadButtonText(progress: downloadProgress)
+                                : "Update & Verify"
+                        )
+                        .font(.system(size: 11, weight: .semibold))
+                    }
+                }
+                .fluidButton(.accent, size: .small)
+                .disabled(isBusy)
             } else if canVerify {
                 Button(action: { self.verifyPrivateAIConnection(model) }) {
                     HStack(spacing: 6) {
@@ -927,7 +947,16 @@ extension AIEnhancementSettingsView {
         }
 
         self.refreshPrivateAILoadState()
+        self.refreshPrivateAIModelUpdateStatus(self.selectedPrivateAIModel)
         self.viewModel.refreshProviderItems()
+    }
+
+    func refreshPrivateAIModelUpdateStatus(_ model: PrivateAIRegisteredModel) {
+        Task { @MainActor in
+            let status = await PrivateAIIntegrationService.modelUpdateStatus(model)
+            guard self.privateAISelectedModelID == model.id else { return }
+            self.privateAIModelUpdateStatusByID[model.id] = status
+        }
     }
 
     private func downloadPrivateAIModel(_ model: PrivateAIRegisteredModel) {
@@ -982,6 +1011,75 @@ extension AIEnhancementSettingsView {
         }
     }
 
+    private func updatePrivateAIModel(_ model: PrivateAIRegisteredModel) {
+        guard self.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable,
+              !self.privateAILoadState.isDownloading(model.id)
+        else { return }
+
+        self.privateAILoadState = .downloading(
+            modelID: model.id,
+            progress: PrivateAIModelDownloadProgress(initialExpectedBytes: model.artifact.byteCount)
+        )
+        Task { @MainActor in
+            var updateToken: PrivateAIModelUpdateToken?
+            do {
+                updateToken = try await PrivateAIIntegrationService.updateModel(model) { progress in
+                    await MainActor.run {
+                        guard self.privateAISelectedModelID == model.id else { return }
+                        self.privateAILoadState = .downloading(
+                            modelID: model.id,
+                            progress: progress.withFallbackExpectedBytes(model.artifact.byteCount)
+                        )
+                    }
+                }
+                guard self.privateAISelectedModelID == model.id else {
+                    if let updateToken {
+                        await PrivateAIIntegrationService.rollbackModelUpdate(updateToken)
+                    }
+                    return
+                }
+
+                self.privateAILoadState = .loading(modelID: model.id)
+                let start = ContinuousClock.now
+                let verified = await self.viewModel.verifyPrivateAIProvider(model: model)
+                let latencyMilliseconds = Self.elapsedMilliseconds(since: start)
+                guard self.privateAISelectedModelID == model.id else {
+                    if let updateToken {
+                        await PrivateAIIntegrationService.rollbackModelUpdate(updateToken)
+                    }
+                    return
+                }
+
+                if verified, let updateToken {
+                    await PrivateAIIntegrationService.commitModelUpdate(updateToken)
+                    self.privateAILoadState = .loaded(
+                        modelID: model.id,
+                        latencyMilliseconds: latencyMilliseconds
+                    )
+                } else {
+                    if let updateToken {
+                        await PrivateAIIntegrationService.rollbackModelUpdate(updateToken)
+                    }
+                    let detail = self.viewModel.connectionErrorMessage.isEmpty
+                        ? "The new model failed verification. The previous model is still active."
+                        : "The new model failed verification. The previous model is still active. \(self.viewModel.connectionErrorMessage)"
+                    self.privateAILoadState = .failed(modelID: model.id, message: detail)
+                }
+            } catch {
+                if let updateToken {
+                    await PrivateAIIntegrationService.rollbackModelUpdate(updateToken)
+                }
+                guard self.privateAISelectedModelID == model.id else { return }
+                self.privateAILoadState = .failed(
+                    modelID: model.id,
+                    message: "Update failed. The previous model is still active. \(Self.errorMessage(for: error))"
+                )
+            }
+            self.refreshPrivateAIModelUpdateStatus(model)
+            self.viewModel.refreshProviderItems()
+        }
+    }
+
     private func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel) {
         self.privateAILoadState = .loading(modelID: model.id)
         Task { @MainActor in
@@ -1001,8 +1099,12 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var selectedPrivateAIModel: PrivateAIRegisteredModel {
+    var selectedPrivateAIModel: PrivateAIRegisteredModel {
         PrivateAIModelRegistry.model(id: self.privateAISelectedModelID) ?? PrivateAIModelRegistry.defaultModel
+    }
+
+    private func privateAIModelDisplayName(_ modelID: String) -> String {
+        PrivateAIModelRegistry.model(id: modelID)?.displayName ?? modelID
     }
 
     private func isPrivateAIModelVerified(_ model: PrivateAIRegisteredModel) -> Bool {
@@ -1210,6 +1312,7 @@ extension AIEnhancementSettingsView {
             self.viewModel.selectedModel = model.id
         }
         self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
+        self.refreshPrivateAIModelUpdateStatus(model)
         self.viewModel.refreshProviderItems()
         if PrivateAIIntegrationService.isModelInstalled(model) {
             self.loadPrivateAIModel(model)
@@ -1585,6 +1688,7 @@ extension AIEnhancementSettingsView {
                             models: PrivateAIModelRegistry.modelIDs(),
                             selectedModel: self.privateAIModelBinding,
                             selectionEnabled: !isFluidBusy,
+                            displayName: self.privateAIModelDisplayName,
                             controlWidth: 180,
                             controlHeight: AISettingsLayout.providerRowControlHeight
                         )
@@ -1945,6 +2049,7 @@ extension AIEnhancementSettingsView {
                         models: PrivateAIModelRegistry.modelIDs(),
                         selectedModel: self.privateAIModelBinding,
                         selectionEnabled: !isBusy,
+                        displayName: self.privateAIModelDisplayName,
                         controlWidth: 260,
                         controlHeight: AISettingsLayout.providerRowControlHeight
                     )

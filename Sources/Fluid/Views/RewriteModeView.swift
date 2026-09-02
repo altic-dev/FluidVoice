@@ -290,7 +290,10 @@ struct RewriteModeView: View {
         if let stored = storedList {
             self.availableModels = stored
         } else {
-            self.availableModels = ModelRepository.shared.defaultModels(for: currentProviderID)
+            self.availableModels = ModelRepository.shared.defaultModels(
+                for: currentProviderID,
+                task: .edit
+            )
         }
 
         // If current model not in list, select first available
