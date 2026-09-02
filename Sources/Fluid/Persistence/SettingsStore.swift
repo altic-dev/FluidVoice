@@ -1956,10 +1956,7 @@ final class SettingsStore: ObservableObject {
     func reconcileMicrophonePriority(with devices: [AudioDevice.Device]) {
         var entries = self.microphonePriority
         let preferredUID = self.preferredInputDeviceUID
-        let connectedUIDs = Set(devices.map(\.uid))
-        var suppressedUIDs = self.suppressedMicrophoneUIDs
-        suppressedUIDs.formIntersection(connectedUIDs)
-        self.suppressedMicrophoneUIDs = suppressedUIDs
+        let suppressedUIDs = self.suppressedMicrophoneUIDs
 
         if entries.isEmpty,
            let preferredUID,

@@ -1790,7 +1790,7 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
-    func testRemovedConnectedMicrophoneReturnsAtSecondAfterReconnect() throws {
+    func testRemovedConnectedMicrophoneStaysRemovedAfterReconnect() throws {
         try self.withRestoredDefaults(keys: [
             self.preferredInputDeviceUIDKey,
             self.microphonePriorityKey,
@@ -1813,8 +1813,11 @@ final class HotkeyShortcutTests: XCTestCase {
             XCTAssertEqual(SettingsStore.shared.microphonePriority.map(\.uid), [usb.uid])
 
             SettingsStore.shared.reconcileMicrophonePriority(with: [usb])
+            XCTAssertTrue(SettingsStore.shared.suppressedMicrophoneUIDs.contains(builtIn.uid))
+
             SettingsStore.shared.reconcileMicrophonePriority(with: [builtIn, usb])
-            XCTAssertEqual(SettingsStore.shared.microphonePriority.map(\.uid), [usb.uid, builtIn.uid])
+            XCTAssertEqual(SettingsStore.shared.microphonePriority.map(\.uid), [usb.uid])
+            XCTAssertEqual(coordinator.inputDeviceForCapture(), usb)
         }
     }
 
