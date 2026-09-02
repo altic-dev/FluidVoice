@@ -118,7 +118,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return true
         }
 
-        // Ensure dock-icon reopen always foregrounds FluidVoice.
+        // LaunchServices can restore the bundle's regular activation policy when
+        // reopening a running app, so reapply the user's Dock preference first.
+        self.applyDockVisibilityPolicy()
         sender.activate(ignoringOtherApps: true)
 
         return !self.bringMainWindowToFrontIfPresent()

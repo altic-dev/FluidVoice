@@ -19,6 +19,34 @@ final class HotkeyShortcutTests: XCTestCase {
     private let experimentalDirectAudioCaptureEnabledKey = "ExperimentalDirectAudioCaptureEnabled"
     private let incrementalParakeetEnabledKey = "ExperimentalParakeetUnifiedFinalEnabled"
 
+    func testHotkeyEventMaskExcludesMouseEventsWithoutMouseShortcuts() {
+        let mask = GlobalHotkeyManager.eventMask(mouseButtons: [])
+
+        XCTAssertNotEqual(mask & (CGEventMask(1) << CGEventType.keyDown.rawValue), 0)
+        XCTAssertNotEqual(mask & (CGEventMask(1) << CGEventType.flagsChanged.rawValue), 0)
+        XCTAssertEqual(mask & (CGEventMask(1) << CGEventType.leftMouseDown.rawValue), 0)
+        XCTAssertEqual(mask & (CGEventMask(1) << CGEventType.rightMouseDown.rawValue), 0)
+        XCTAssertEqual(mask & (CGEventMask(1) << CGEventType.otherMouseDown.rawValue), 0)
+    }
+
+    func testHotkeyEventMaskIncludesOnlyConfiguredMouseButtonFamilies() {
+        let leftMask = GlobalHotkeyManager.eventMask(mouseButtons: [0])
+        XCTAssertNotEqual(leftMask & (CGEventMask(1) << CGEventType.leftMouseDown.rawValue), 0)
+        XCTAssertEqual(leftMask & (CGEventMask(1) << CGEventType.rightMouseDown.rawValue), 0)
+        XCTAssertEqual(leftMask & (CGEventMask(1) << CGEventType.otherMouseDown.rawValue), 0)
+
+        let auxiliaryMask = GlobalHotkeyManager.eventMask(mouseButtons: [3])
+        XCTAssertEqual(auxiliaryMask & (CGEventMask(1) << CGEventType.leftMouseDown.rawValue), 0)
+        XCTAssertEqual(auxiliaryMask & (CGEventMask(1) << CGEventType.rightMouseDown.rawValue), 0)
+        XCTAssertNotEqual(auxiliaryMask & (CGEventMask(1) << CGEventType.otherMouseDown.rawValue), 0)
+    }
+
+    func testHotkeySessionLockDetection() {
+        XCTAssertTrue(GlobalHotkeyManager.sessionIsLocked(sessionInfo: ["CGSSessionScreenIsLocked": true]))
+        XCTAssertFalse(GlobalHotkeyManager.sessionIsLocked(sessionInfo: ["CGSSessionScreenIsLocked": false]))
+        XCTAssertFalse(GlobalHotkeyManager.sessionIsLocked(sessionInfo: [:]))
+    }
+
     @MainActor
     func testBottomOverlayRapidStopStartStopDoesNotDropFinalHide() async {
         let audioPublisher = Just(CGFloat.zero).eraseToAnyPublisher()

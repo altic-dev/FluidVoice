@@ -231,6 +231,7 @@ final class GlobalHotkeyManager: NSObject {
     private nonisolated(unsafe) var state = HotkeyState()
     private nonisolated(unsafe) var eventTap: CFMachPort?
     private nonisolated(unsafe) var runLoopSource: CFRunLoopSource?
+    private nonisolated(unsafe) var monitoredMouseButtons: Set<Int> = []
     private let asrService: ASRService
     private var primaryShortcuts: [HotkeyShortcut]
     private var promptModeShortcut: HotkeyShortcut
@@ -510,11 +511,17 @@ final class GlobalHotkeyManager: NSObject {
     private func initializeWithDelay() {
         DebugLogger.shared.debug("Starting delayed initialization...", source: "GlobalHotkeyManager")
 
-        self.initializationTask = Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
+        self.initializationTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
 
             await MainActor.run {
-                self.setupGlobalHotkeyWithRetry()
+                self?.setupGlobalHotkeyWithRetry()
             }
         }
     }
@@ -529,7 +536,27 @@ final class GlobalHotkeyManager: NSObject {
 
     func updatePrimaryShortcuts(_ newShortcuts: [HotkeyShortcut]) {
         self.primaryShortcuts = newShortcuts
+        self.refreshMouseShortcutMonitoringIfNeeded()
         DebugLogger.shared.info("Updated transcription hotkeys", source: "GlobalHotkeyManager")
+    }
+
+    func refreshMouseShortcutMonitoringIfNeeded() {
+        guard self.isInitialized else { return }
+
+        let mouseButtons = self.configuredMouseButtons()
+        guard mouseButtons != self.monitoredMouseButtons else { return }
+
+        DebugLogger.shared.info(
+            "Mouse shortcut configuration changed; rebuilding event tap",
+            source: "GlobalHotkeyManager"
+        )
+        if !self.setupGlobalHotkey() {
+            self.isInitialized = false
+            DebugLogger.shared.error(
+                "Failed to rebuild event tap after mouse shortcut change",
+                source: "GlobalHotkeyManager"
+            )
+        }
     }
 
     func updateCommandModeShortcut(_ newShortcut: HotkeyShortcut?) {
@@ -636,15 +663,8 @@ final class GlobalHotkeyManager: NSObject {
             return false
         }
 
-        let eventMask = (1 << CGEventType.keyDown.rawValue)
-            | (1 << CGEventType.keyUp.rawValue)
-            | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
-            | (1 << CGEventType.leftMouseUp.rawValue)
-            | (1 << CGEventType.rightMouseDown.rawValue)
-            | (1 << CGEventType.rightMouseUp.rawValue)
-            | (1 << CGEventType.otherMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseUp.rawValue)
+        let mouseButtons = self.configuredMouseButtons()
+        let eventMask = Self.eventMask(mouseButtons: mouseButtons)
 
         self.eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -680,21 +700,76 @@ final class GlobalHotkeyManager: NSObject {
             return false
         }
 
-        DebugLogger.shared.info("Event tap successfully created and enabled", source: "GlobalHotkeyManager")
+        self.monitoredMouseButtons = mouseButtons
+        let mouseButtonSummary = mouseButtons.isEmpty
+            ? "none"
+            : mouseButtons.sorted().map(String.init).joined(separator: ",")
+        DebugLogger.shared.info(
+            "Event tap successfully created and enabled [mouseButtons=\(mouseButtonSummary)]",
+            source: "GlobalHotkeyManager"
+        )
         return true
+    }
+
+    nonisolated static func eventMask(mouseButtons: Set<Int>) -> CGEventMask {
+        var mask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
+            | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+            | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+
+        if mouseButtons.contains(0) {
+            mask |= (CGEventMask(1) << CGEventType.leftMouseDown.rawValue)
+                | (CGEventMask(1) << CGEventType.leftMouseUp.rawValue)
+        }
+        if mouseButtons.contains(1) {
+            mask |= (CGEventMask(1) << CGEventType.rightMouseDown.rawValue)
+                | (CGEventMask(1) << CGEventType.rightMouseUp.rawValue)
+        }
+        if mouseButtons.contains(where: { $0 >= 2 }) {
+            mask |= (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
+                | (CGEventMask(1) << CGEventType.otherMouseUp.rawValue)
+        }
+
+        return mask
+    }
+
+    nonisolated static func sessionIsLocked(sessionInfo: [String: Any]) -> Bool {
+        sessionInfo["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    private nonisolated static func currentSessionIsLocked() -> Bool {
+        self.sessionIsLocked(sessionInfo: CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:])
+    }
+
+    private func configuredMouseButtons() -> Set<Int> {
+        var buttons = Set(self.primaryShortcuts.compactMap { shortcut in
+            shortcut.isMouseShortcut ? shortcut.mouseButton : nil
+        })
+
+        if SettingsStore.shared.pasteLastTranscriptionShortcutEnabled,
+           let shortcut = SettingsStore.shared.pasteLastTranscriptionHotkeyShortcut,
+           shortcut.isMouseShortcut,
+           let mouseButton = shortcut.mouseButton
+        {
+            buttons.insert(mouseButton)
+        }
+
+        return buttons
     }
 
     private nonisolated func cleanupEventTap() {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
 
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopSourceInvalidate(source)
         }
 
         self.eventTap = nil
         self.runLoopSource = nil
+        self.monitoredMouseButtons = []
         self.clearPrimaryShortcutPressState()
     }
 
@@ -1195,6 +1270,8 @@ final class GlobalHotkeyManager: NSObject {
         if !self.isEventTapEnabled() {
             DebugLogger.shared.warning("Event tap re-enable failed — recreating tap", source: "GlobalHotkeyManager")
             self.setupGlobalHotkeyWithRetry()
+        } else {
+            DebugLogger.shared.info("Event tap re-enabled immediately", source: "GlobalHotkeyManager")
         }
 
         return Unmanaged.passUnretained(event)
@@ -1725,12 +1802,20 @@ final class GlobalHotkeyManager: NSObject {
         case .ignore:
             return false
         case .start:
+            DebugLogger.shared.debug(
+                "Modifier shortcut matched | phase=start | target=\(self.label(for: behavior.holdModeType)) | keyCode=\(keyCode) | flags=\(modifiers.rawValue) | shortcut=\(behavior.shortcut.displayString)",
+                source: "GlobalHotkeyManager"
+            )
             self.modifierOnlyKeyDown = true
             self.modifierPressStartTime = Date()
 
             self.scheduleModifierOnlyStart(for: behavior)
             return true
         case let .finish(wasCleanPress):
+            DebugLogger.shared.debug(
+                "Modifier shortcut matched | phase=finish | target=\(self.label(for: behavior.holdModeType)) | keyCode=\(keyCode) | flags=\(modifiers.rawValue) | clean=\(wasCleanPress)",
+                source: "GlobalHotkeyManager"
+            )
             self.modifierOnlyKeyDown = false
             self.modifierPressStartTime = nil
 
@@ -1897,6 +1982,10 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func canTriggerRecordingAction(_ label: String) -> Bool {
+        guard !Self.currentSessionIsLocked() else {
+            DebugLogger.shared.info("Ignoring \(label) - screen is locked", source: "GlobalHotkeyManager")
+            return false
+        }
         guard !self.isProcessingStop else {
             DebugLogger.shared.debug("Ignoring \(label) - stop already processing", source: "GlobalHotkeyManager")
             return false
