@@ -1139,7 +1139,17 @@ struct ContentView: View {
                 shortcuts.append(shortcut)
             }
         }
-        self.primaryDictationShortcuts = shortcuts
+
+        // Persist and push the normalized list to the running event tap right here, mirroring the
+        // other shortcut types in applyRecordedShortcut(_:to:). GlobalHotkeyManager matches primary
+        // dictation against its cached `primaryShortcuts` array, so the previous shortcut keeps
+        // firing until this update runs. Doing it directly (instead of relying solely on the
+        // .onChange(of:) side effect, which is driven from the NSEvent capture callback) makes the
+        // replacement take effect without an app restart. (#470)
+        SettingsStore.shared.primaryDictationShortcuts = shortcuts
+        let storedShortcuts = SettingsStore.shared.primaryDictationShortcuts
+        self.primaryDictationShortcuts = storedShortcuts
+        self.hotkeyManager?.updatePrimaryShortcuts(storedShortcuts)
     }
 
     private func setShortcutTargetEnabled(_ enabled: Bool, for target: ShortcutRecordingTarget) {
