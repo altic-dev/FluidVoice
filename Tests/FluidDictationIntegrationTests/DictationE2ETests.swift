@@ -2235,6 +2235,59 @@ final class DictationE2ETests: XCTestCase {
     }
 }
 
+// Speech-model management regression coverage. Kept in an extension so it does not add to
+// the main `DictationE2ETests` class body, which is at the `type_body_length` limit.
+extension DictationE2ETests {
+    func testDeleteNonActiveSpeechModel_doesNotBounceSelectionThroughDeletedModel() async throws {
+        // Regression: deleting a non-active speech model used to temporarily persist the
+        // deleted model as `selectedSpeechModel`, then restore the real selection through an
+        // un-awaited `defer { Task { ... } }`. If the process exited during that window (app
+        // quit, crash, or update relaunch) the user was left with a model they never chose.
+        // Use a built-in no-cache model here so the hosted test can catch the selection bounce
+        // without deleting a real downloaded speech model from the developer's machine.
+        let defaults = UserDefaults.standard
+        let key = "SelectedSpeechModel"
+        let snapshot = defaults.object(forKey: key)
+        defer {
+            if let snapshot {
+                defaults.set(snapshot, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let settings = SettingsStore.shared
+        let activeModel: SettingsStore.SpeechModel = .whisperTiny
+        let modelToDelete: SettingsStore.SpeechModel = .appleSpeech
+        XCTAssertNotEqual(activeModel, modelToDelete)
+
+        settings.selectedSpeechModel = activeModel
+        XCTAssertEqual(settings.selectedSpeechModel, activeModel)
+
+        // Record every value the persisted selection takes during the delete so a transient
+        // write of the deleted model is caught directly, not masked by the async restore.
+        let recorder = PersistedSpeechModelRecorder(defaults: defaults, key: key)
+        defer { recorder.stop() }
+
+        let viewModel = VoiceEngineSettingsViewModel(settings: settings, appServices: AppServices.shared)
+        XCTAssertFalse(viewModel.areSpeechModelActionsBlocked)
+        await viewModel.deleteSpeechModel(modelToDelete)
+
+        XCTAssertEqual(
+            settings.selectedSpeechModel,
+            activeModel,
+            "Deleting a non-active model must leave the user's selection unchanged."
+        )
+        XCTAssertFalse(
+            recorder.recordedRawValues.contains(modelToDelete.rawValue),
+            """
+            Deleting a non-active model must never persist it as the selection, even transiently. \
+            Recorded writes: \(recorder.recordedRawValues)
+            """
+        )
+    }
+}
+
 extension DictationE2ETests {
     func testSpokenFormattingActionsUseSharedPrefix() {
         self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
@@ -2466,3 +2519,40 @@ final class SimpleUpdaterTests: XCTestCase {
         XCTAssertTrue(gate.begin())
     }
 }
+
+// Classic key-path KVO is required here: an arbitrary UserDefaults key has no Swift `KeyPath`
+// for the block-based API, and the change dictionary is delivered synchronously with the exact
+// new value, which a coalescing `UserDefaults.didChangeNotification` cannot guarantee.
+// swiftlint:disable block_based_kvo discouraged_optional_collection
+
+/// Records every value written to a UserDefaults key via KVO, so a transient write that is
+/// later reverted can still be observed. Used to catch the non-active speech-model delete race,
+/// where the deleted model was momentarily persisted as the selection before being restored.
+private final class PersistedSpeechModelRecorder: NSObject {
+    private let defaults: UserDefaults
+    private let key: String
+    private(set) var recordedRawValues: [String] = []
+
+    init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+        super.init()
+        defaults.addObserver(self, forKeyPath: key, options: [.new], context: nil)
+    }
+
+    func stop() {
+        self.defaults.removeObserver(self, forKeyPath: self.key)
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        guard keyPath == self.key, let rawValue = change?[.newKey] as? String else { return }
+        self.recordedRawValues.append(rawValue)
+    }
+}
+
+// swiftlint:enable block_based_kvo discouraged_optional_collection

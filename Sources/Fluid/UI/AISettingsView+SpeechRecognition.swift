@@ -462,7 +462,9 @@ extension VoiceEngineSettingsView {
                     if !model.usesAppleLogo {
                         if isSelected {
                             Button {
-                                self.viewModel.deleteSpeechModel(model)
+                                Task {
+                                    await self.viewModel.deleteSpeechModel(model)
+                                }
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 15))
