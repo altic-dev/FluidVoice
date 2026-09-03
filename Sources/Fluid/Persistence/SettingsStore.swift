@@ -1489,7 +1489,6 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.enableDebugLogs)
-            DebugLogger.shared.refreshLoggingEnabled()
         }
     }
 
@@ -1497,7 +1496,6 @@ final class SettingsStore: ObservableObject {
         if self.defaults.object(forKey: Keys.enableDebugLogs) == nil {
             self.defaults.set(true, forKey: Keys.enableDebugLogs)
         }
-        DebugLogger.shared.refreshLoggingEnabled()
     }
 
     var selectedModel: String? {

@@ -1107,10 +1107,6 @@ struct SettingsView: View {
                 // Notification Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Notifications", systemImage: "bell.fill")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-
                         VStack(alignment: .leading, spacing: 12) {
                             self.optionToggleRow(
                                 title: "AI Enhancement Failures",
@@ -1253,10 +1249,6 @@ struct SettingsView: View {
                 // Overlay Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Overlay", systemImage: "rectangle.on.rectangle")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -1527,12 +1519,6 @@ struct SettingsView: View {
 
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 8) {
-                            Label("Experimental", systemImage: "flask.fill")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                        }
-
                         self.settingsToggleRow(
                             title: "Faster Long Dictation",
                             description: "For long recordings, reuse completed live windows and process only the remaining tail when you stop.",
