@@ -199,6 +199,7 @@ final class ASRService: ObservableObject {
     private var isMicrophonePreviewRequested = false
     private(set) var lastDictionaryTrainingResult: ASRTranscriptionResult?
     private(set) var lastStopOutcome: ASRStopOutcome = .empty
+    private var lastFinalTranscriptionDurationMs: Int?
     private(set) var dictionaryTrainingAudioGeneration = 0
 
     @Published private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
@@ -1143,6 +1144,12 @@ final class ASRService: ObservableObject {
         let snapshot = self.lastCompletedAudioSnapshot
         self.lastCompletedAudioSnapshot = nil
         return snapshot
+    }
+
+    func consumeLastFinalTranscriptionDurationMs() -> Int? {
+        let duration = self.lastFinalTranscriptionDurationMs
+        self.lastFinalTranscriptionDurationMs = nil
+        return duration
     }
 
     func dictionaryTrainingAudioChunk(at offset: Int, count: Int) -> [Float] {
@@ -2327,6 +2334,7 @@ final class ASRService: ObservableObject {
     ) async -> String {
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
         self.lastStopOutcome = .empty
+        self.lastFinalTranscriptionDurationMs = nil
         if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
             self.lastDictionaryTrainingResult = nil
         }
@@ -2535,6 +2543,9 @@ final class ASRService: ObservableObject {
                 finalSource = "full"
             }
             let finalElapsedMs = self.elapsedMilliseconds(since: finalStartedAt)
+            if !useDictionaryTrainingPath {
+                self.lastFinalTranscriptionDurationMs = finalElapsedMs
+            }
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
             let finalRTF = finalAudioSeconds > 0 ? (Double(finalElapsedMs) / 1000.0) / finalAudioSeconds : 0
             DebugLogger.shared.debug("stop(): final transcription finished source=\(finalSource)", source: "ASRService")

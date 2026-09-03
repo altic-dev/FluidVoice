@@ -98,6 +98,53 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertNil(entry.clipboardText)
     }
 
+    func testTranscriptionHistoryEntryRoundTripPreservesProcessingTimes() throws {
+        let entry = TranscriptionHistoryEntry(
+            rawText: "raw",
+            processedText: "clean",
+            appName: "Notes",
+            windowTitle: "Draft",
+            wasAIProcessed: true,
+            transcriptionDurationMilliseconds: 272,
+            aiProcessingDurationMilliseconds: 181,
+            aiTokensPerSecond: 987.7
+        )
+
+        let decoded = try JSONDecoder().decode(
+            TranscriptionHistoryEntry.self,
+            from: JSONEncoder().encode(entry)
+        )
+
+        XCTAssertEqual(decoded.transcriptionDurationMilliseconds, 272)
+        XCTAssertEqual(decoded.aiProcessingDurationMilliseconds, 181)
+        XCTAssertEqual(decoded.aiTokensPerSecond, 987.7)
+    }
+
+    func testOlderTranscriptionHistoryEntryWithoutProcessingTimesStillDecodes() throws {
+        struct LegacyEntry: Encodable {
+            let id = UUID()
+            let timestamp = Date(timeIntervalSince1970: 1000)
+            let rawText = "raw"
+            let processedText = "clean"
+            let appName = "Notes"
+            let windowTitle = "Draft"
+            let characterCount = 5
+            let wasAIProcessed = true
+            let processingModel: String? = "fluid-1"
+            let aiProcessingError: String? = nil
+            let audio: DictationAudioMetadata? = nil
+        }
+
+        let decoded = try JSONDecoder().decode(
+            TranscriptionHistoryEntry.self,
+            from: JSONEncoder().encode(LegacyEntry())
+        )
+
+        XCTAssertNil(decoded.transcriptionDurationMilliseconds)
+        XCTAssertNil(decoded.aiProcessingDurationMilliseconds)
+        XCTAssertNil(decoded.aiTokensPerSecond)
+    }
+
     func testTranscriptionStartSound_noneOptionHasNoFile() {
         XCTAssertEqual(SettingsStore.TranscriptionStartSound.none.displayName, "None")
         XCTAssertNil(SettingsStore.TranscriptionStartSound.none.startSoundFileName)

@@ -17,6 +17,9 @@ struct HistoryAPIController: LocalAPIRouteHandler {
         let windowTitle: String
         let characterCount: Int
         let wasAIProcessed: Bool
+        let transcriptionDurationMilliseconds: Int?
+        let aiProcessingDurationMilliseconds: Int?
+        let aiTokensPerSecond: Double?
         let aiProcessingError: String?
     }
 
@@ -40,6 +43,9 @@ struct HistoryAPIController: LocalAPIRouteHandler {
                     windowTitle: entry.windowTitle,
                     characterCount: entry.characterCount,
                     wasAIProcessed: entry.wasAIProcessed,
+                    transcriptionDurationMilliseconds: entry.transcriptionDurationMilliseconds,
+                    aiProcessingDurationMilliseconds: entry.aiProcessingDurationMilliseconds,
+                    aiTokensPerSecond: entry.aiTokensPerSecond,
                     aiProcessingError: entry.aiProcessingError
                 )
             }

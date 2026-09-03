@@ -34,6 +34,19 @@ actor PrivateAIIntegrationService {
         let outputText: String
         let backendKind: String?
         let latencyMilliseconds: Int?
+        let tokensPerSecond: Double?
+
+        init(
+            outputText: String,
+            backendKind: String?,
+            latencyMilliseconds: Int?,
+            tokensPerSecond: Double? = nil
+        ) {
+            self.outputText = outputText
+            self.backendKind = backendKind
+            self.latencyMilliseconds = latencyMilliseconds
+            self.tokensPerSecond = tokensPerSecond
+        }
     }
 
     struct LoadedModelState: Sendable, Equatable {

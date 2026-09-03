@@ -147,16 +147,30 @@ struct TranscriptionHistoryView: View {
                         .foregroundStyle(isSelected ? .white : .secondary)
                         .lineLimit(1)
 
-                    if entry.wasAIProcessed {
-                        Text("AI")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(isSelected ? .white.opacity(0.8) : self.theme.palette.accent)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(isSelected ? .white.opacity(0.2) : self.theme.palette.accent.opacity(0.15))
-                            )
+                    if let duration = entry.transcriptionDurationMilliseconds {
+                        self.processingBadge(
+                            text: "ASR \(TranscriptionHistoryEntry.formattedDuration(milliseconds: duration))",
+                            isSelected: isSelected,
+                            isAccent: false
+                        )
+                    }
+
+                    if entry.wasAIProcessed || entry.aiProcessingError != nil {
+                        self.processingBadge(
+                            text: entry.aiProcessingDurationMilliseconds.map {
+                                "AI \(TranscriptionHistoryEntry.formattedDuration(milliseconds: $0))"
+                            } ?? "AI",
+                            isSelected: isSelected,
+                            isAccent: true
+                        )
+                    }
+
+                    if let tokensPerSecond = entry.aiTokensPerSecond {
+                        self.processingBadge(
+                            text: TranscriptionHistoryEntry.formattedTokensPerSecond(tokensPerSecond, compact: true),
+                            isSelected: isSelected,
+                            isAccent: true
+                        )
                     }
 
                     if self.hasAudio(entry) {
@@ -529,6 +543,27 @@ struct TranscriptionHistoryView: View {
                 self.metadataItem(icon: "macwindow", label: "Window", value: entry.windowTitle.isEmpty ? "Unknown" : entry.windowTitle)
                 self.metadataItem(icon: "character.cursor.ibeam", label: "Characters", value: "\(entry.characterCount)")
                 self.metadataItem(icon: "sparkles", label: "AI Processed", value: entry.wasAIProcessed ? "Yes" : "No")
+                if let duration = entry.transcriptionDurationMilliseconds {
+                    self.metadataItem(
+                        icon: "waveform",
+                        label: "Transcription Time",
+                        value: TranscriptionHistoryEntry.formattedDuration(milliseconds: duration)
+                    )
+                }
+                if let duration = entry.aiProcessingDurationMilliseconds {
+                    self.metadataItem(
+                        icon: "sparkles",
+                        label: "Cleanup Time",
+                        value: TranscriptionHistoryEntry.formattedDuration(milliseconds: duration)
+                    )
+                }
+                if let tokensPerSecond = entry.aiTokensPerSecond {
+                    self.metadataItem(
+                        icon: "speedometer",
+                        label: "AI Speed",
+                        value: TranscriptionHistoryEntry.formattedTokensPerSecond(tokensPerSecond)
+                    )
+                }
                 self.metadataItem(icon: "waveform", label: "Audio", value: self.audioMetadataText(for: entry))
             }
         }
@@ -557,6 +592,28 @@ struct TranscriptionHistoryView: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8)
             .fill(self.theme.palette.cardBackground.opacity(0.9)))
+    }
+
+    private func processingBadge(
+        text: String,
+        isSelected: Bool,
+        isAccent: Bool
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(
+                isSelected ? .white.opacity(0.8) : (isAccent ? self.theme.palette.accent : Color.secondary)
+            )
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(
+                        isSelected
+                            ? .white.opacity(0.2)
+                            : (isAccent ? self.theme.palette.accent.opacity(0.15) : Color.secondary.opacity(0.12))
+                    )
+            )
     }
 
     private func copyToClipboard(_ text: String) {

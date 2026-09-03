@@ -2152,12 +2152,31 @@ struct ContentView: View {
 
     // MARK: - Modular AI Processing
 
+    private struct AITextProcessingResult {
+        let text: String
+        let tokensPerSecond: Double?
+    }
+
     private func processTextWithAI(
         _ inputText: String,
         overrideSystemPrompt: String? = nil,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         streamHandler: PrivateAIStreamHandler? = nil
     ) async throws -> String {
+        try await self.processTextWithAIMetrics(
+            inputText,
+            overrideSystemPrompt: overrideSystemPrompt,
+            dictationSlot: dictationSlot,
+            streamHandler: streamHandler
+        ).text
+    }
+
+    private func processTextWithAIMetrics(
+        _ inputText: String,
+        overrideSystemPrompt: String? = nil,
+        dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
+        streamHandler: PrivateAIStreamHandler? = nil
+    ) async throws -> AITextProcessingResult {
         let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
         let route = DictationProviderRoute.resolve(
             settings: SettingsStore.shared,
@@ -2216,7 +2235,13 @@ struct ContentView: View {
             if self.shouldTracePromptProcessing {
                 self.logDictationPromptTrace("Model answer (A)", value: response.outputText)
             }
-            return response.outputText
+            let tokensPerSecond = response.tokensPerSecond.flatMap { value in
+                value.isFinite && value > 0 ? value : nil
+            }
+            return AITextProcessingResult(
+                text: response.outputText,
+                tokensPerSecond: tokensPerSecond
+            )
         }
 
         // Resolve the effective prompt once so every provider path honors
@@ -2384,7 +2409,7 @@ struct ContentView: View {
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }
-        return response.content
+        return AITextProcessingResult(text: response.content, tokensPerSecond: nil)
     }
 
     // MARK: - Streaming Response Handler (DEPRECATED - Now handled by LLMClient)
@@ -2452,6 +2477,7 @@ struct ContentView: View {
         })
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
+        let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
         DebugLogger.shared.info(
             "Stop transcription result | chars=\(transcribedText.count) | empty=\(transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)",
             source: "ContentView"
@@ -2547,6 +2573,8 @@ struct ContentView: View {
         var finalText: String
         var aiFallbackReason: String?
         var postProcessingModel: String?
+        var aiProcessingDurationMilliseconds: Int?
+        var aiTokensPerSecond: Double?
         let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
         let punctuationFormattedText = ASRService.applySpokenPunctuationFormatting(
             transcribedText,
@@ -2585,7 +2613,7 @@ struct ContentView: View {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
             postProcessingModel = postProcessingModelInfo.model
             let postProcessingInputChars = normalizedTranscribedText.count
-            let postProcessingStart = Date()
+            let postProcessingStart = ProcessInfo.processInfo.systemUptime
 
             // Update overlay text to show we're now refining (processing already true)
             self.appBench("processing_ui_request status=Refining")
@@ -2603,12 +2631,14 @@ struct ContentView: View {
             }
 
             do {
-                finalText = try await self.processTextWithAI(
+                let result = try await self.processTextWithAIMetrics(
                     normalizedTranscribedText,
                     overrideSystemPrompt: promptOverride,
                     dictationSlot: activeDictationSlot,
                     streamHandler: streamHandler
                 )
+                finalText = result.text
+                aiTokensPerSecond = result.tokensPerSecond
                 await streamPreview.flush()
             } catch {
                 // Fall back to the raw transcription so the user still gets
@@ -2631,7 +2661,10 @@ struct ContentView: View {
                 }
                 finalText = normalizedTranscribedText
             }
-            let postProcessingLatencyMs = Int((Date().timeIntervalSince(postProcessingStart) * 1000).rounded())
+            let postProcessingLatencyMs = Int(
+                ((ProcessInfo.processInfo.systemUptime - postProcessingStart) * 1000).rounded()
+            )
+            aiProcessingDurationMilliseconds = postProcessingLatencyMs
             let postProcessingProviderName = postProcessingModelInfo.provider ?? "unknown"
             let postProcessingModelName = postProcessingModelInfo.model ?? "unknown"
             DebugLogger.shared.info(
@@ -2727,6 +2760,9 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle,
                 wasAIProcessed: postProcessingModel != nil && aiFallbackReason == nil,
                 processingModel: postProcessingModel,
+                transcriptionDurationMilliseconds: transcriptionDurationMilliseconds,
+                aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
+                aiTokensPerSecond: aiTokensPerSecond,
                 aiProcessingError: aiFallbackReason
             )
             self.persistDictationAudioIfNeeded(
@@ -3270,6 +3306,8 @@ struct ContentView: View {
 
         var aiFallbackReason: String?
         var postProcessingModel: String?
+        var aiProcessingDurationMilliseconds: Int?
+        var aiTokensPerSecond: Double?
         let appInfo = self.getCurrentAppInfo()
         let normalizedTranscribedText = ASRService.applySpokenPunctuationFormatting(
             transcribedText,
@@ -3284,11 +3322,14 @@ struct ContentView: View {
                 dictationSlot: .primary,
                 appBundleID: appInfo.bundleId
             ).model
+            let postProcessingStart = ProcessInfo.processInfo.systemUptime
             do {
-                finalText = try await self.processTextWithAI(
+                let result = try await self.processTextWithAIMetrics(
                     normalizedTranscribedText,
                     dictationSlot: .primary
                 )
+                finalText = result.text
+                aiTokensPerSecond = result.tokensPerSecond
             } catch {
                 DebugLogger.shared.error(
                     "AI reprocess failed, falling back to raw transcription: \(error.localizedDescription)",
@@ -3298,6 +3339,9 @@ struct ContentView: View {
                 NotificationService.showAIProcessingFallback(error: error.localizedDescription)
                 finalText = normalizedTranscribedText
             }
+            aiProcessingDurationMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - postProcessingStart) * 1000).rounded()
+            )
         }
 
         NotchOverlayManager.shared.updateTranscriptionText("")
@@ -3335,6 +3379,8 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle,
                 wasAIProcessed: postProcessingModel != nil && aiFallbackReason == nil,
                 processingModel: postProcessingModel,
+                aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
+                aiTokensPerSecond: aiTokensPerSecond,
                 aiProcessingError: aiFallbackReason
             )
         }

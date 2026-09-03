@@ -20,6 +20,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
     let characterCount: Int
     let wasAIProcessed: Bool
     let processingModel: String?
+    let transcriptionDurationMilliseconds: Int?
+    let aiProcessingDurationMilliseconds: Int?
+    let aiTokensPerSecond: Double?
     /// Non-nil when AI post-processing was configured but failed and we fell
     /// back to typing the raw transcription. The string carries the error
     /// message for display / debugging.
@@ -35,6 +38,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         windowTitle: String,
         wasAIProcessed: Bool,
         processingModel: String? = nil,
+        transcriptionDurationMilliseconds: Int? = nil,
+        aiProcessingDurationMilliseconds: Int? = nil,
+        aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil
     ) {
@@ -47,6 +53,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         self.characterCount = processedText.count
         self.wasAIProcessed = wasAIProcessed
         self.processingModel = processingModel
+        self.transcriptionDurationMilliseconds = transcriptionDurationMilliseconds
+        self.aiProcessingDurationMilliseconds = aiProcessingDurationMilliseconds
+        self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
     }
@@ -61,6 +70,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         characterCount: Int,
         wasAIProcessed: Bool,
         processingModel: String?,
+        transcriptionDurationMilliseconds: Int?,
+        aiProcessingDurationMilliseconds: Int?,
+        aiTokensPerSecond: Double?,
         aiProcessingError: String?,
         audio: DictationAudioMetadata?
     ) {
@@ -73,6 +85,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         self.characterCount = characterCount
         self.wasAIProcessed = wasAIProcessed
         self.processingModel = processingModel
+        self.transcriptionDurationMilliseconds = transcriptionDurationMilliseconds
+        self.aiProcessingDurationMilliseconds = aiProcessingDurationMilliseconds
+        self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
     }
@@ -88,13 +103,25 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         self.characterCount = try container.decode(Int.self, forKey: .characterCount)
         self.wasAIProcessed = try container.decode(Bool.self, forKey: .wasAIProcessed)
         self.processingModel = try container.decodeIfPresent(String.self, forKey: .processingModel)
+        self.transcriptionDurationMilliseconds = try container.decodeIfPresent(
+            Int.self,
+            forKey: .transcriptionDurationMilliseconds
+        )
+        self.aiProcessingDurationMilliseconds = try container.decodeIfPresent(
+            Int.self,
+            forKey: .aiProcessingDurationMilliseconds
+        )
+        self.aiTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .aiTokensPerSecond)
         self.aiProcessingError = try container.decodeIfPresent(String.self, forKey: .aiProcessingError)
         self.audio = try container.decodeIfPresent(DictationAudioMetadata.self, forKey: .audio)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, rawText, processedText, appName, windowTitle
-        case characterCount, wasAIProcessed, processingModel, aiProcessingError, audio
+        case characterCount, wasAIProcessed, processingModel
+        case transcriptionDurationMilliseconds, aiProcessingDurationMilliseconds
+        case aiTokensPerSecond
+        case aiProcessingError, audio
     }
 
     /// Preview text for list display (first 80 chars)
@@ -132,6 +159,20 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
         self.audio != nil
     }
 
+    static func formattedDuration(milliseconds: Int) -> String {
+        if milliseconds < 1000 {
+            return "\(milliseconds) ms"
+        }
+        return String(format: "%.1f s", Double(milliseconds) / 1000)
+    }
+
+    static func formattedTokensPerSecond(_ tokensPerSecond: Double, compact: Bool = false) -> String {
+        let rounded = tokensPerSecond >= 100
+            ? String(Int(tokensPerSecond.rounded()))
+            : String(format: "%.1f", tokensPerSecond)
+        return compact ? "\(rounded) tok/s" : "\(rounded) tokens/sec"
+    }
+
     func replacingAudio(_ audio: DictationAudioMetadata?) -> TranscriptionHistoryEntry {
         TranscriptionHistoryEntry(
             id: self.id,
@@ -143,6 +184,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
             characterCount: self.characterCount,
             wasAIProcessed: self.wasAIProcessed,
             processingModel: self.processingModel,
+            transcriptionDurationMilliseconds: self.transcriptionDurationMilliseconds,
+            aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: self.aiTokensPerSecond,
             aiProcessingError: self.aiProcessingError,
             audio: audio
         )
@@ -190,6 +234,9 @@ final class TranscriptionHistoryStore: ObservableObject {
         windowTitle: String,
         wasAIProcessed: Bool? = nil,
         processingModel: String? = nil,
+        transcriptionDurationMilliseconds: Int? = nil,
+        aiProcessingDurationMilliseconds: Int? = nil,
+        aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil
     ) {
@@ -205,6 +252,9 @@ final class TranscriptionHistoryStore: ObservableObject {
             windowTitle: windowTitle,
             wasAIProcessed: wasAIProcessed ?? (processingModel != nil && aiProcessingError == nil),
             processingModel: processingModel,
+            transcriptionDurationMilliseconds: transcriptionDurationMilliseconds,
+            aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
+            aiTokensPerSecond: aiTokensPerSecond,
             aiProcessingError: aiProcessingError,
             audio: audio
         )
