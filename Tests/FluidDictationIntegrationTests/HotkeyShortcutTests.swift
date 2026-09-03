@@ -272,6 +272,36 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testHistoryPerformanceDefaultsOffAndRoundTripsWithoutBreakingLegacyBackups() async throws {
+        let defaults = UserDefaults.standard
+        let key = "ShowHistoryPerformanceMetrics"
+        let originalValue = defaults.object(forKey: key)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        defaults.removeObject(forKey: key)
+        XCTAssertFalse(SettingsStore.shared.showHistoryPerformanceMetrics)
+
+        SettingsStore.shared.showHistoryPerformanceMetrics = true
+        let document = await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.showHistoryPerformanceMetrics, true)
+
+        let encoded = try BackupService.shared.encode(document)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var settings = try XCTUnwrap(root["settings"] as? [String: Any])
+        settings.removeValue(forKey: "showHistoryPerformanceMetrics")
+        root["settings"] = settings
+
+        let legacyBackup = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacyBackup.settings.showHistoryPerformanceMetrics)
+    }
+
+    @MainActor
     func testIncrementalParakeetCopiesOnlyTheUnacceptedTailAfterSessionStarts() {
         XCTAssertEqual(
             FluidAudioProvider.incrementalPreviewDeltaRange(

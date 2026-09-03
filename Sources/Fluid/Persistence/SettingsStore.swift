@@ -1837,6 +1837,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Shows optional ASR and AI performance details in transcription history.
+    var showHistoryPerformanceMetrics: Bool {
+        get { self.defaults.object(forKey: Keys.showHistoryPerformanceMetrics) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.showHistoryPerformanceMetrics)
+        }
+    }
+
     /// Skips clearly silent recordings up to four seconds before invoking ASR.
     /// Opt-in so quiet speech keeps the existing transcription behavior by default.
     var skipSilentRecordingsEnabled: Bool {
@@ -3279,6 +3288,7 @@ final class SettingsStore: ObservableObject {
             hotkeyMode: self.hotkeyMode,
             enableStreamingPreview: self.enableStreamingPreview,
             experimentalParakeetUnifiedFinalEnabled: self.experimentalParakeetUnifiedFinalEnabled,
+            showHistoryPerformanceMetrics: self.showHistoryPerformanceMetrics,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
@@ -3411,6 +3421,9 @@ final class SettingsStore: ObservableObject {
         self.enableStreamingPreview = payload.enableStreamingPreview
         if let experimentalParakeetUnifiedFinalEnabled = payload.experimentalParakeetUnifiedFinalEnabled {
             self.experimentalParakeetUnifiedFinalEnabled = experimentalParakeetUnifiedFinalEnabled
+        }
+        if let showHistoryPerformanceMetrics = payload.showHistoryPerformanceMetrics {
+            self.showHistoryPerformanceMetrics = showHistoryPerformanceMetrics
         }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
@@ -5354,6 +5367,7 @@ private extension SettingsStore {
         static let hotkeyMode = "HotkeyMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
+        static let showHistoryPerformanceMetrics = "ShowHistoryPerformanceMetrics"
         static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"

@@ -29,6 +29,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case audio
     case overlay
     case dataAndDiagnostics
+    case experimental
 
     var id: Self {
         self
@@ -42,6 +43,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .audio: return "Audio"
         case .overlay: return "Overlay"
         case .dataAndDiagnostics: return "Data & Diagnostics"
+        case .experimental: return "Experimental"
         }
     }
 
@@ -53,6 +55,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .audio: return "speaker.wave.2"
         case .overlay: return "rectangle.on.rectangle"
         case .dataAndDiagnostics: return "wrench.and.screwdriver"
+        case .experimental: return "flask"
         }
     }
 }

@@ -1542,11 +1542,23 @@ struct SettingsView: View {
                                 set: { SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled = $0 }
                             )
                         )
+
+                        Divider().padding(.vertical, 4)
+
+                        self.settingsToggleRow(
+                            title: "Show Performance in History",
+                            description: "Display transcription time, cleanup time, and Fluid Intelligence speed.",
+                            isOn: Binding(
+                                get: { SettingsStore.shared.showHistoryPerformanceMetrics },
+                                set: { SettingsStore.shared.showHistoryPerformanceMetrics = $0 }
+                            )
+                        )
+                        .settingsSearchTarget(.historyPerformance)
                     }
                     .padding(16)
                 }
                 .settingsSearchTarget(.fasterLongDictation)
-                .shownInSettingsSection(.dataAndDiagnostics, selectedSection: self.selectedSection)
+                .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
             }
             .padding(16)
             .environment(\.settingsSearchPresentation, self.settingsSearchPresentation)
@@ -2590,7 +2602,7 @@ private extension SettingsView {
             await self.prepareAudioSettings()
         case .dictation:
             await self.refreshAudioHistoryUsageInBackground()
-        case .notifications, .overlay, .dataAndDiagnostics:
+        case .notifications, .overlay, .dataAndDiagnostics, .experimental:
             break
         }
     }

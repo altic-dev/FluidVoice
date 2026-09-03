@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct TranscriptionHistoryView: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
 
     @State private var searchQuery: String = ""
@@ -147,7 +148,9 @@ struct TranscriptionHistoryView: View {
                         .foregroundStyle(isSelected ? .white : .secondary)
                         .lineLimit(1)
 
-                    if let duration = entry.transcriptionDurationMilliseconds {
+                    if self.settings.showHistoryPerformanceMetrics,
+                       let duration = entry.transcriptionDurationMilliseconds
+                    {
                         self.processingBadge(
                             text: "ASR \(TranscriptionHistoryEntry.formattedDuration(milliseconds: duration))",
                             isSelected: isSelected,
@@ -155,7 +158,9 @@ struct TranscriptionHistoryView: View {
                         )
                     }
 
-                    if entry.wasAIProcessed || entry.aiProcessingError != nil {
+                    if self.settings.showHistoryPerformanceMetrics,
+                       entry.wasAIProcessed || entry.aiProcessingError != nil
+                    {
                         self.processingBadge(
                             text: entry.aiProcessingDurationMilliseconds.map {
                                 "AI \(TranscriptionHistoryEntry.formattedDuration(milliseconds: $0))"
@@ -163,9 +168,13 @@ struct TranscriptionHistoryView: View {
                             isSelected: isSelected,
                             isAccent: true
                         )
+                    } else if entry.wasAIProcessed {
+                        self.processingBadge(text: "AI", isSelected: isSelected, isAccent: true)
                     }
 
-                    if let tokensPerSecond = entry.aiTokensPerSecond {
+                    if self.settings.showHistoryPerformanceMetrics,
+                       let tokensPerSecond = entry.aiTokensPerSecond
+                    {
                         self.processingBadge(
                             text: TranscriptionHistoryEntry.formattedTokensPerSecond(tokensPerSecond, compact: true),
                             isSelected: isSelected,
@@ -543,21 +552,27 @@ struct TranscriptionHistoryView: View {
                 self.metadataItem(icon: "macwindow", label: "Window", value: entry.windowTitle.isEmpty ? "Unknown" : entry.windowTitle)
                 self.metadataItem(icon: "character.cursor.ibeam", label: "Characters", value: "\(entry.characterCount)")
                 self.metadataItem(icon: "sparkles", label: "AI Processed", value: entry.wasAIProcessed ? "Yes" : "No")
-                if let duration = entry.transcriptionDurationMilliseconds {
+                if self.settings.showHistoryPerformanceMetrics,
+                   let duration = entry.transcriptionDurationMilliseconds
+                {
                     self.metadataItem(
                         icon: "waveform",
                         label: "Transcription Time",
                         value: TranscriptionHistoryEntry.formattedDuration(milliseconds: duration)
                     )
                 }
-                if let duration = entry.aiProcessingDurationMilliseconds {
+                if self.settings.showHistoryPerformanceMetrics,
+                   let duration = entry.aiProcessingDurationMilliseconds
+                {
                     self.metadataItem(
                         icon: "sparkles",
                         label: "Cleanup Time",
                         value: TranscriptionHistoryEntry.formattedDuration(milliseconds: duration)
                     )
                 }
-                if let tokensPerSecond = entry.aiTokensPerSecond {
+                if self.settings.showHistoryPerformanceMetrics,
+                   let tokensPerSecond = entry.aiTokensPerSecond
+                {
                     self.metadataItem(
                         icon: "speedometer",
                         label: "AI Speed",
