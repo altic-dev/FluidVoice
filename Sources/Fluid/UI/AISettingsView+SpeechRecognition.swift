@@ -153,6 +153,10 @@ extension VoiceEngineSettingsView {
 
                         // Filler Words Section
                         self.fillerWordsSection
+
+                        Divider().padding(.vertical, 4)
+
+                        self.modelIdleUnloadSection
                     }
                 }
             }
@@ -853,6 +857,35 @@ extension VoiceEngineSettingsView {
             if self.viewModel.removeFillerWordsEnabled {
                 FillerWordsEditor()
             }
+        }
+    }
+
+    var modelIdleUnloadSection: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unload Models When Idle")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.voiceEngineTitleText)
+                Text("Frees memory after a break. No need to wait on your next dictation: just start talking and the models reload while you speak.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.voiceEngineSecondaryText)
+            }
+            Spacer()
+            Picker("", selection: self.$settings.modelIdleUnloadMinutes) {
+                ForEach(SettingsStore.modelIdleUnloadMinuteOptions, id: \.self) { minutes in
+                    Text(minutes == 0 ? "Never" : "\(minutes) min").tag(minutes)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 96)
+            .onChange(of: self.settings.modelIdleUnloadMinutes) { _, _ in
+                IdleModelUnloader.shared.recordActivity()
+            }
+            Button("Unload Now") {
+                Task { await IdleModelUnloader.shared.unloadNow() }
+            }
+            .help("Release the models right away. The next dictation reloads them while you speak.")
         }
     }
 

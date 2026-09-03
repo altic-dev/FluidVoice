@@ -188,6 +188,8 @@ final class ASRService: ObservableObject {
     @Published private(set) var isCancellingModelPreparation: Bool = false
     @Published var modelsExistOnDisk: Bool = false
     @Published var downloadProgress: Double? = nil
+    /// Seconds the last cached-model load took. The notch loading bar paces itself on this.
+    static let lastModelLoadSecondsKey = "LastSpeechModelLoadSeconds"
     @Published var modelPreparationPhase: ModelPreparationPhase? = nil
     @Published var downloadingModelId: String? = nil // Tracks which model is currently being downloaded
     @Published private(set) var isCancellingModelDownload: Bool = false
@@ -601,6 +603,14 @@ final class ASRService: ObservableObject {
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .failed)
             throw error
         }
+    }
+
+    /// Release the loaded speech model to reclaim memory while idle. The next
+    /// `ensureAsrReady` reloads it; recording itself never waits on the model.
+    func unloadForIdle() {
+        guard self.isAsrReady, !self.isRunningOrStarting else { return }
+        DebugLogger.shared.info("ASRService: unloading speech model after idle", source: "ASRService")
+        self.resetTranscriptionProvider()
     }
 
     /// Call this when the transcription provider setting changes to reset state
@@ -1727,6 +1737,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("⚠️ START() blocked - already running (started: \(self.isRunning), starting: \(self.isStarting))", source: "ASRService")
             return .alreadyActive
         }
+        IdleModelUnloader.shared.cancel()
         guard self.isTerminating == false else {
             DebugLogger.shared.warning("START() blocked - app is terminating", source: "ASRService")
             return .failed
@@ -2017,6 +2028,20 @@ final class ASRService: ObservableObject {
                 self.startMonitoringDevice(currentDevice.id)
             } else if self.activeAudioCaptureBackend == .audioEngine {
                 DebugLogger.shared.debug("ℹ️ No device to monitor", source: "ASRService")
+            }
+
+            // Load the model in the background while audio buffers. Without this the
+            // hotkey path only loads at stop(), so the user waits after releasing.
+            // ensureAsrReady() de-duplicates against any load already in flight.
+            if !self.isAsrReady, !forDictionaryTraining {
+                DebugLogger.shared.info("Model not ready at start; loading in background while recording", source: "ASRService")
+                Task { [weak self] in
+                    do {
+                        try await self?.ensureAsrReady()
+                    } catch {
+                        DebugLogger.shared.error("Background model load failed: \(error)", source: "ASRService")
+                    }
+                }
             }
 
             // Only start streaming for models that support it (large Whisper models are too slow)
@@ -2346,6 +2371,7 @@ final class ASRService: ObservableObject {
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
+            IdleModelUnloader.shared.recordActivity()
         }
 
         await self.cancelAudioRouteRecoveryAndWait()
@@ -2773,6 +2799,7 @@ final class ASRService: ObservableObject {
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
+            IdleModelUnloader.shared.recordActivity()
         }
 
         await self.cancelAudioRouteRecoveryAndWait()
@@ -4339,6 +4366,9 @@ final class ASRService: ObservableObject {
             guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
             let downloadDuration = Date().timeIntervalSince(downloadStartTime)
             DebugLogger.shared.info("✓ Provider preparation completed in \(String(format: "%.1f", downloadDuration)) seconds", source: "ASRService")
+            if modelsAlreadyCached {
+                UserDefaults.standard.set(downloadDuration, forKey: Self.lastModelLoadSecondsKey)
+            }
 
             self.isDownloadingModel = false
             // Keep isLoadingModel true until first transcription completes (for large models that need warm-up)
@@ -4360,6 +4390,16 @@ final class ASRService: ObservableObject {
             self.isAsrReady = true
             self.isCancellingModelPreparation = false
             self.refreshWordBoostStatus()
+            // start() skips the preview loop when the model isn't ready yet. If the
+            // load finished while audio was buffering, start it now; the first chunk
+            // transcribes the whole buffered prefix, then continues incrementally.
+            if self.isRunning,
+               !self.isDictionaryTrainingCaptureActive,
+               SettingsStore.shared.selectedSpeechModel.supportsStreaming
+            {
+                DebugLogger.shared.info("Model became ready mid-recording; starting streaming preview", source: "ASRService")
+                self.startStreamingTranscription()
+            }
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .succeeded)
         } catch is CancellationError {
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)

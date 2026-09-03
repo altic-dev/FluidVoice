@@ -20,6 +20,9 @@ final class SettingsStore: ObservableObject {
     static let defaultTranscriptionPreviewCharLimit = 150
     static let privateAIContextTokenLimitRange: ClosedRange<Int> = 2048...8192
     static let privateAIContextTokenLimitStep = 512
+    /// Minutes of inactivity before on-device models are released. 0 = never.
+    static let modelIdleUnloadMinuteOptions = [0, 2, 5, 10, 30]
+    static let defaultModelIdleUnloadMinutes = 10
     static let defaultPrivateAIContextTokenLimit = 4096
     static let privateAIDictationSystemOverheadTokens = 1280
     static let privateAIDictationMinimumOutputTokens = 256
@@ -1660,6 +1663,19 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(Self.clampPrivateAIContextTokenLimit(newValue), forKey: Keys.privateAIContextTokenLimit)
+        }
+    }
+
+    var modelIdleUnloadMinutes: Int {
+        get {
+            guard self.defaults.object(forKey: Keys.modelIdleUnloadMinutes) != nil else {
+                return Self.defaultModelIdleUnloadMinutes
+            }
+            return max(0, self.defaults.integer(forKey: Keys.modelIdleUnloadMinutes))
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(max(0, newValue), forKey: Keys.modelIdleUnloadMinutes)
         }
     }
 
@@ -5324,6 +5340,7 @@ private extension SettingsStore {
         static let privateAIBoostEnabled = "PrivateAIProviderBoostEnabled"
         static let privateAIBackendPreference = SettingsStore.privateAIBackendPreferenceDefaultsKey
         static let privateAIContextTokenLimit = "PrivateAIProviderContextTokenLimit"
+        static let modelIdleUnloadMinutes = "ModelIdleUnloadMinutes"
         static let privateAIContextDefaultMigratedTo4K = "PrivateAIProviderContextDefaultMigratedTo4K"
         static let providerAPIKeys = "ProviderAPIKeys"
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"

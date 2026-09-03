@@ -492,6 +492,114 @@ final class CompositorShimmerSweepView: NSView {
     }
 }
 
+// MARK: - Model Loading Indicator
+
+/// Shown under the waveform while the speech model loads or downloads mid-recording.
+/// Audio keeps buffering underneath; this only explains why the preview is late.
+/// The sweep runs on the compositor (same as ShimmerText), so it costs no timers.
+struct NotchModelLoadingView: View {
+    private enum Phase: Equatable {
+        case downloading(Double?)
+        case loading
+        case warmingUp
+    }
+
+    private let phase: Phase
+    let color: Color
+    /// Tighter metrics for the one-line strip under the standard notch.
+    let compact: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var fill: CGFloat = 0
+
+    init(asr: ASRService, color: Color, compact: Bool = false) {
+        if asr.isDownloadingModel {
+            self.phase = .downloading(asr.downloadProgress)
+        } else if asr.isAsrReady {
+            self.phase = .warmingUp
+        } else {
+            self.phase = .loading
+        }
+        self.color = color
+        self.compact = compact
+    }
+
+    private var label: String {
+        switch self.phase {
+        case let .downloading(progress?):
+            return "Downloading model · \(Int((progress * 100).rounded()))%"
+        case .downloading(nil):
+            return "Downloading model…"
+        case .loading:
+            return "Keep talking · loading model"
+        case .warmingUp:
+            return "Keep talking · transcribing"
+        }
+    }
+
+    private var trackHeight: CGFloat { self.compact ? 2 : 3 }
+    private var font: Font { .system(size: self.compact ? 9 : 10, weight: .medium) }
+
+    /// Loads report no progress, so the bar eases toward 85% over the last measured
+    /// load time and completes when the model reports ready. Same trick as Safari's
+    /// page-load bar: it feels determinate without pretending to know the future.
+    private var expectedLoadSeconds: Double {
+        let stored = UserDefaults.standard.double(forKey: ASRService.lastModelLoadSecondsKey)
+        return min(max(stored == 0 ? 1.5 : stored, 0.6), 15)
+    }
+
+    private func motion(_ base: Animation) -> Animation? {
+        self.reduceMotion ? nil : base
+    }
+
+    private func advance(to phase: Phase) {
+        switch phase {
+        case let .downloading(progress):
+            withAnimation(self.motion(.spring(response: 0.4, dampingFraction: 0.85))) {
+                self.fill = CGFloat(min(max(progress ?? 0, 0), 1))
+            }
+        case .loading:
+            withAnimation(self.motion(.easeOut(duration: self.expectedLoadSeconds))) {
+                self.fill = 0.85
+            }
+        case .warmingUp:
+            withAnimation(self.motion(.easeOut(duration: 0.35))) {
+                self.fill = 1
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.compact ? 3 : 5) {
+            Group {
+                if self.reduceMotion {
+                    Text(self.label)
+                        .font(self.font)
+                        .foregroundStyle(.white.opacity(0.75))
+                } else {
+                    ShimmerText(text: self.label, color: .white, font: self.font)
+                }
+            }
+            .lineLimit(1)
+            .id(self.label)
+            .transition(.opacity)
+            .animation(self.motion(.easeInOut(duration: 0.2)), value: self.label)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                    Capsule()
+                        .fill(self.color)
+                        .frame(width: max(self.trackHeight, geometry.size.width * self.fill))
+                }
+            }
+            .frame(height: self.trackHeight)
+        }
+        .onAppear { self.advance(to: self.phase) }
+        .onChange(of: self.phase) { _, newPhase in self.advance(to: newPhase) }
+    }
+}
+
 // MARK: - Expanded View (Main Content) - Minimal Design
 
 struct NotchExpandedView: View {
@@ -499,6 +607,7 @@ struct NotchExpandedView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
+    @ObservedObject private var asr = AppServices.shared.asr
     @Environment(\.theme) private var theme
     @State private var isHoveringPromptChip = false
     @State private var isHoveringPromptMenu = false
@@ -550,6 +659,16 @@ struct NotchExpandedView: View {
 
     private var hasTranscription: Bool {
         !self.visiblePreviewText.isEmpty
+    }
+
+    /// Speech model is loading or downloading while audio is already buffering.
+    /// `isLoadingModel` stays true until the first chunk lands, so this hands off
+    /// straight to the preview text.
+    private var isModelLoading: Bool {
+        self.contentState.mode == .dictation &&
+            !self.contentState.isProcessing &&
+            !self.hasTranscription &&
+            (self.asr.isLoadingModel || self.asr.isDownloadingModel)
     }
 
     private var visiblePreviewText: String {
@@ -987,6 +1106,7 @@ struct NotchExpandedView: View {
             }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.hasTranscription)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.isModelLoading)
         .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
         .animation(.easeInOut(duration: 0.25), value: self.contentState.isProcessing)
     }
@@ -1060,6 +1180,11 @@ struct NotchExpandedView: View {
                 }
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: self.previewMaxWidth, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            } else if self.isModelLoading {
+                NotchModelLoadingView(asr: self.asr, color: self.modeColor)
+                .frame(width: self.previewMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             } else if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
                 let previewText = self.visiblePreviewText
@@ -1303,6 +1428,7 @@ struct NotchCompactTrailingView: View {
 
 struct NotchCompactBottomView: View {
     @ObservedObject private var contentState = NotchContentState.shared
+    @ObservedObject private var asr = AppServices.shared.asr
 
     private let previewWidth: CGFloat = 250
     private let previewHeight: CGFloat = 20
@@ -1326,8 +1452,16 @@ struct NotchCompactBottomView: View {
         return trimmed
     }
 
+    private var isModelLoading: Bool {
+        SettingsStore.shared.enableStreamingPreview &&
+            self.contentState.mode == .dictation &&
+            !self.contentState.isProcessing &&
+            self.compactPreviewText.isEmpty &&
+            (self.asr.isLoadingModel || self.asr.isDownloadingModel)
+    }
+
     private var shouldShowPreview: Bool {
-        SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty
+        SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty && !self.isModelLoading
     }
 
     var body: some View {
@@ -1339,12 +1473,19 @@ struct NotchCompactBottomView: View {
                 .truncationMode(.head)
                 .offset(y: self.shouldShowPreview ? 0 : -4)
                 .opacity(self.shouldShowPreview ? 1 : 0)
+
+            if self.isModelLoading {
+                NotchModelLoadingView(asr: self.asr, color: self.contentState.mode.notchColor, compact: true)
+                    .frame(width: self.previewWidth, alignment: .leading)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
+            }
         }
         .frame(width: self.previewWidth, height: SettingsStore.shared.enableStreamingPreview ? self.previewHeight : 0, alignment: .leading)
         .padding(.horizontal, SettingsStore.shared.enableStreamingPreview ? 10 : 0)
         .padding(.bottom, SettingsStore.shared.enableStreamingPreview ? 8 : 0)
         .clipped()
         .animation(.easeOut(duration: 0.2), value: self.shouldShowPreview)
+        .animation(.easeOut(duration: 0.2), value: self.isModelLoading)
     }
 }
 

@@ -208,6 +208,7 @@ actor PrivateAIIntegrationService {
         context: AppContext
     ) async throws -> EnhancementResult {
         try Self.validateDictationHeadroom(inputText, contextTokenLimit: runtime.contextTokenLimit)
+        defer { Task { @MainActor in IdleModelUnloader.shared.recordActivity() } }
         return try await Self.provider.enhanceDictation(inputText, runtime: runtime, context: context)
     }
 
@@ -218,6 +219,7 @@ actor PrivateAIIntegrationService {
         streamHandler: PrivateAIStreamHandler?
     ) async throws -> EnhancementResult {
         try Self.validateDictationHeadroom(inputText, contextTokenLimit: runtime.contextTokenLimit)
+        defer { Task { @MainActor in IdleModelUnloader.shared.recordActivity() } }
         return try await Self.provider.enhanceDictation(
             inputText,
             runtime: runtime,
@@ -242,7 +244,8 @@ actor PrivateAIIntegrationService {
         runtime: RuntimeConfiguration,
         context: AppContext
     ) async throws -> EnhancementResult {
-        try await Self.provider.rewrite(
+        defer { Task { @MainActor in IdleModelUnloader.shared.recordActivity() } }
+        return try await Self.provider.rewrite(
             inputText,
             systemPrompt: systemPrompt,
             runtime: runtime,
