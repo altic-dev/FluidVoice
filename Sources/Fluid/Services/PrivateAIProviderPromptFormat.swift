@@ -6,13 +6,7 @@ enum PrivateAIProviderPromptFormat {
     }
 
     static func isAvailable(settings: SettingsStore = .shared) -> Bool {
-        guard self.verifiedModelID(settings: settings) != nil else { return false }
-
-        if settings.selectedProviderID == PrivateAIProviderFeature.shared.providerID {
-            return true
-        }
-
-        return self.isSoleStoredVerifiedProvider(settings: settings)
+        self.verifiedModelID(settings: settings) != nil
     }
 
     static func verifiedModelID(settings: SettingsStore = .shared) -> String? {
@@ -50,13 +44,6 @@ enum PrivateAIProviderPromptFormat {
     ) -> Bool {
         settings.verifiedPrivateAIModelFingerprints[modelID] == expectedFingerprint ||
             settings.verifiedProviderFingerprints[providerKey] == expectedFingerprint
-    }
-
-    private static func isSoleStoredVerifiedProvider(settings: SettingsStore) -> Bool {
-        let key = self.providerKey(for: PrivateAIProviderFeature.shared.providerID)
-        let fingerprints = settings.verifiedProviderFingerprints
-        guard fingerprints[key] != nil else { return false }
-        return fingerprints.keys.allSatisfy { $0 == key }
     }
 
     private static func providerKey(for providerID: String) -> String {

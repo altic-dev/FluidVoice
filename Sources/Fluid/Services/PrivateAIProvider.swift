@@ -193,6 +193,7 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
     var boostDefaultsKey: String { get }
     var modelDirectoryName: String { get }
 
+    func selectedModelDefaultsKey(for task: PrivateAIModelTask) -> String
     func modelIDs() -> [String]
     func modelIDs(for task: PrivateAIModelTask) -> [String]
     func model(id: String) -> PrivateAIRegisteredModel?
@@ -203,6 +204,10 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
 }
 
 extension PrivateAIProviderFeatureProviding {
+    func selectedModelDefaultsKey(for _: PrivateAIModelTask) -> String {
+        self.selectedModelDefaultsKey
+    }
+
     func modelIDs(for task: PrivateAIModelTask) -> [String] {
         task == .dictation ? self.modelIDs() : []
     }
@@ -251,6 +256,7 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func status(for runtime: PrivateAIIntegrationService.RuntimeConfiguration) async -> PrivateAIStatus
     func loadedModelState() async -> PrivateAIIntegrationService.LoadedModelState?
     func loadModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
+    func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
     func prewarmDictation() async
     func unloadCachedRuntime(reason: String) async
     func shutdownForTermination() async
@@ -274,6 +280,10 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
+        try await self.loadModel(model)
+    }
+
     func installedModelURLs(for model: PrivateAIRegisteredModel) -> [URL] {
         guard let path = self.localModelPath(for: model) else { return [] }
         return [URL(fileURLWithPath: path)]

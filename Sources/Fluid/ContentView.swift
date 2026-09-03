@@ -3584,7 +3584,13 @@ struct ContentView: View {
 
     private func prewarmPrivateAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
         let appBundleID = self.recordingAppInfo?.bundleId
-        guard PrivateAIProviderPromptFormat.isAvailable(settings: SettingsStore.shared),
+        let settings = SettingsStore.shared
+        let route = DictationProviderRoute.resolve(
+            settings: settings,
+            dictationSlot: slot,
+            appBundleID: appBundleID
+        )
+        guard route.usesPrivateAI,
               DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID)
         else { return }
 
@@ -3751,15 +3757,7 @@ struct ContentView: View {
             _ = self.handleCancelShortcut()
         }
         NotchContentState.shared.onDictationPromptSelectionRequested = { selection in
-            let privateAIAvailable = PrivateAIProviderPromptFormat.isAvailable()
-            switch selection {
-            case .off:
-                break
-            case .privateAI:
-                guard privateAIAvailable else { return }
-            case .default, .profile:
-                guard !privateAIAvailable else { return }
-            }
+            guard selection != .privateAI || PrivateAIProviderPromptFormat.isAvailable() else { return }
             let slot = self.activeDictationShortcutSlot ?? .primary
             SettingsStore.shared.setDictationPromptSelection(selection, for: slot)
             self.applyDictationShortcutSelectionContext(for: slot)

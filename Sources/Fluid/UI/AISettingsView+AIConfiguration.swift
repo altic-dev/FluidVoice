@@ -161,13 +161,13 @@ extension AIEnhancementSettingsView {
                 self.aiSetupSummaryDivider
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
                 self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
             }
 
             VStack(alignment: .leading, spacing: 7) {
                 self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
             }
         }
         .padding(.horizontal, 2)
@@ -1639,8 +1639,11 @@ extension AIEnhancementSettingsView {
     private func verifiedProviderRow(_ item: ProviderItem) -> some View {
         let providerKey = self.viewModel.providerKey(for: item.id)
         let models = self.viewModel.availableModelsByProvider[providerKey] ?? []
-        let isSelected = item.id == self.viewModel.selectedProviderID
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
+        let primaryPromptSelection = self.viewModel.dictationPromptSelection(for: .primary)
+        let isDefaultProvider = isPrivateAIProvider
+            ? primaryPromptSelection == .privateAI
+            : primaryPromptSelection == .default && item.id == self.viewModel.selectedProviderID
         let fluidModel = self.selectedPrivateAIModel
         let fluidStatus = self.privateAIModelStatus(for: fluidModel)
         let isFluidInstalled = PrivateAIIntegrationService.isModelInstalled(fluidModel)
@@ -1683,6 +1686,29 @@ extension AIEnhancementSettingsView {
 
                 // Fixed action grid: companion icon, optional reasoning, primary action.
                 HStack(spacing: 8) {
+                    Button {
+                        guard !isDefaultProvider else { return }
+                        self.makePrimaryDefaultProvider(item.id, isPrivateAI: isPrivateAIProvider)
+                    } label: {
+                        Label(
+                            isDefaultProvider ? "Default" : "Use as default",
+                            systemImage: isDefaultProvider ? "checkmark.circle.fill" : "circle"
+                        )
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
+                    }
+                    .fluidCompactButton(
+                        isReady: isDefaultProvider,
+                        foreground: isDefaultProvider ? self.theme.palette.accent : nil,
+                        borderColor: isDefaultProvider ? self.theme.palette.accent.opacity(0.5) : nil
+                    )
+                    .help(
+                        isDefaultProvider
+                            ? "Used by the main dictation shortcut"
+                            : "Use this provider for the main dictation shortcut"
+                    )
+
                     if isPrivateAIProvider {
                         SearchableModelPicker(
                             models: PrivateAIModelRegistry.modelIDs(),
@@ -1811,16 +1837,8 @@ extension AIEnhancementSettingsView {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 0.8)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? Color.fluidGreen.opacity(0.9) : .clear, lineWidth: 2)
-        )
         // Verified rows always have interactive elements, don't use drawingGroup
         .contentShape(Rectangle())
-        .onTapGesture {
-            self.activateProvider(item.id)
-            self.expandedProviderID = nil
-        }
     }
 
     private func providerBaseURL(for item: ProviderItem) -> String {
@@ -1953,6 +1971,21 @@ extension AIEnhancementSettingsView {
         self.viewModel.selectedProviderID = providerID
         self.viewModel.handleProviderChange(providerID)
         self.viewModel.connectionStatus = self.viewModel.connectionStatus(for: providerID)
+    }
+
+    private func makePrimaryDefaultProvider(_ providerID: String, isPrivateAI: Bool) {
+        if isPrivateAI {
+            self.viewModel.setDictationPromptSelection(.privateAI, for: .primary)
+            return
+        }
+
+        self.activateProvider(providerID)
+
+        var defaultConfiguration = self.settings.dictationPromptConfiguration(for: .default)
+        defaultConfiguration.providerID = ""
+        defaultConfiguration.modelName = ""
+        self.settings.setDictationPromptConfiguration(defaultConfiguration, for: .default)
+        self.viewModel.setDictationPromptSelection(.default, for: .primary)
     }
 
     private func modelBinding(for providerID: String) -> Binding<String> {

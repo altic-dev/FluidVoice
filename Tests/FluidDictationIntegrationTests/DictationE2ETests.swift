@@ -1601,6 +1601,92 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testLMStudioCleanupRouteIsIndependentOfFluidIntelligenceProviderState() {
+        self.withRestoredDefaults(
+            keys: [
+                self.selectedProviderIDKey,
+                self.selectedModelByProviderKey,
+                self.verifiedProviderFingerprintsKey,
+                self.dictationPromptConfigurationsKey,
+                self.dictationPromptOffKey,
+                self.selectedDictationPromptIDKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            let lmStudioModel = "local-cleanup-model"
+            let globalProviderID = PrivateFeatures.privateAIProvider
+                ? PrivateAIProviderFeature.shared.providerID
+                : "openai"
+            settings.selectedProviderID = globalProviderID
+            settings.selectedModelByProvider = [
+                globalProviderID: PrivateFeatures.privateAIProvider
+                    ? PrivateAIIntegrationService.configuredModelID
+                    : "gpt-4.1",
+                "lmstudio": lmStudioModel,
+            ]
+            settings.setDictationPromptSelection(.default, for: .primary)
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(
+                    providerID: "lmstudio",
+                    modelName: lmStudioModel
+                ),
+                for: .default
+            )
+            settings.verifiedProviderFingerprints = [:]
+
+            let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary)
+
+            XCTAssertEqual(route.providerID, "lmstudio")
+            XCTAssertEqual(route.model, lmStudioModel)
+            XCTAssertFalse(route.usesPrivateAI)
+            XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary))
+
+            settings.verifiedProviderFingerprints = [
+                "lmstudio": DictationAIPostProcessingGate.providerFingerprint(
+                    baseURL: route.baseURL,
+                    apiKey: route.apiKey
+                ) ?? "",
+            ]
+
+            XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
+            XCTAssertEqual(settings.selectedProviderID, globalProviderID)
+        }
+    }
+
+    func testExternalCleanupDoesNotInheritFluidIntelligenceProvider() {
+        XCTAssertEqual(
+            DictationProviderRoute.externalFallbackProviderID(
+                from: PrivateAIProviderFeature.shared.providerID
+            ),
+            ""
+        )
+        XCTAssertEqual(
+            DictationProviderRoute.externalFallbackProviderID(from: "lmstudio"),
+            "lmstudio"
+        )
+    }
+
+    func testResettingDefaultCleanupConfigurationRemovesStaleProviderAndModel() {
+        self.withRestoredDefaults(keys: [self.dictationPromptConfigurationsKey]) {
+            let settings = SettingsStore.shared
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(
+                    shortcut: HotkeyShortcut(keyCode: 3, modifierFlags: [.option]),
+                    providerID: "lmstudio",
+                    modelName: "removed-model"
+                ),
+                for: .default
+            )
+
+            settings.removeDictationPromptConfiguration(for: .default)
+
+            XCTAssertEqual(
+                settings.dictationPromptConfiguration(for: .default),
+                SettingsStore.DictationPromptConfiguration()
+            )
+        }
+    }
+
     func testDictationProviderRouteReturnsEmptyRouteForUnverifiedPrivateAI() {
         self.withPromptAndProviderSettingsRestored {
             let settings = SettingsStore.shared
@@ -1729,11 +1815,7 @@ final class DictationE2ETests: XCTestCase {
             XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
 
             settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
-            if PrivateFeatures.privateAIProvider {
-                XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .privateAI)
-            } else {
-                XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
-            }
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
 
             settings.setDictationPromptSelection(.off)
             XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
@@ -1746,7 +1828,7 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
-    func testPrivateAIProviderDictationPromptSelection_usesOnlyFluidPromptOrOffWhileSelected() {
+    func testPrivateAIProviderSelectionDoesNotOverrideCleanupStyle() {
         self.withPromptAndProviderSettingsRestored {
             let settings = SettingsStore.shared
             let custom = SettingsStore.DictationPromptProfile(
@@ -1762,16 +1844,10 @@ final class DictationE2ETests: XCTestCase {
 
             settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
             settings.setDictationPromptSelection(.default)
-            XCTAssertEqual(
-                settings.dictationPromptSelection(for: .primary),
-                PrivateFeatures.privateAIProvider ? .privateAI : .default
-            )
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .default)
 
             settings.setDictationPromptSelection(.profile(custom.id))
-            XCTAssertEqual(
-                settings.dictationPromptSelection(for: .primary),
-                PrivateFeatures.privateAIProvider ? .privateAI : .profile(custom.id)
-            )
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
 
             settings.setDictationPromptSelection(.off)
             XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)

@@ -189,6 +189,10 @@ actor PrivateAIIntegrationService {
         return status
     }
 
+    func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
+        try await Self.provider.verifyModel(model)
+    }
+
     func removeInactiveInstalledModels(keeping model: PrivateAIRegisteredModel) async {
         do {
             try Self.removeInactiveInstalledModels(keeping: model)

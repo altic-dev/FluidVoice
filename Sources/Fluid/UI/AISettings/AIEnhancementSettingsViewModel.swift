@@ -381,7 +381,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         do {
-            let status = try await PrivateAIIntegrationService.shared.loadModel(currentModel)
+            let status = try await PrivateAIIntegrationService.shared.verifyModel(currentModel)
             switch status.state {
             case .ready:
                 let fingerprint = self.privateAIFingerprint(for: currentModel.id)
@@ -1884,10 +1884,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
     }
 
-    func isPrivateAIModelSelected() -> Bool {
-        PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
-    }
-
     func isPrivateAIPromptSelected() -> Bool {
         self.settings.dictationPromptSelection == .privateAI
     }
@@ -2066,11 +2062,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func setSelectedPromptID(_ id: String?, for mode: SettingsStore.PromptMode) {
         if mode.normalized == .dictate {
-            if self.isPrivateAIModelSelected() {
-                if id == nil {
-                    self.settings.setDictationPromptSelection(.privateAI)
-                }
-            } else if let id {
+            if let id {
                 self.settings.setDictationPromptSelection(.profile(id))
             } else {
                 self.settings.setDictationPromptSelection(.default)

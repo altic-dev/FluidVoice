@@ -41,7 +41,7 @@ struct DictationProviderRoute: Equatable {
                 selectedProviderID = providerID
                 configuredModel = model
             } else {
-                selectedProviderID = settings.selectedProviderID
+                selectedProviderID = self.externalFallbackProviderID(from: settings.selectedProviderID)
                 configuredModel = nil
             }
         } else {
@@ -93,6 +93,11 @@ struct DictationProviderRoute: Equatable {
             model: modelID,
             apiKey: ""
         )
+    }
+
+    static func externalFallbackProviderID(from providerID: String) -> String {
+        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == PrivateAIProviderFeature.shared.providerID ? "" : trimmed
     }
 
     static func resolveForPostProcessing(

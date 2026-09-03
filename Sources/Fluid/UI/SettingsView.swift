@@ -159,13 +159,11 @@ struct SettingsView: View {
                 case "__OFF__":
                     self.settings.setDictationPromptSelection(.off, for: slot)
                 case "__DEFAULT__":
-                    guard !PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) else { return }
                     self.settings.setDictationPromptSelection(.default, for: slot)
                 case PrivateAIProviderPromptFormat.promptSelectionID:
                     guard PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) else { return }
                     self.settings.setDictationPromptSelection(.privateAI, for: slot)
                 default:
-                    guard !PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) else { return }
                     self.settings.setDictationPromptSelection(.profile(newValue), for: slot)
                 }
             }
@@ -175,7 +173,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func dictationPromptPicker(for slot: SettingsStore.DictationShortcutSlot) -> some View {
         let profiles = self.settings.promptProfiles(for: .dictate)
-        let privateAILocked = PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
+        let privateAIAvailable = PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
         HStack {
             Text("AI Prompt")
                 .font(self.theme.typography.bodySmall)
@@ -188,15 +186,14 @@ struct SettingsView: View {
                     if PrivateFeatures.privateAIProvider {
                         Text("Cleanup — Fluid-1")
                             .tag(PrivateAIProviderPromptFormat.promptSelectionID)
-                            .disabled(!privateAILocked)
+                            .disabled(!privateAIAvailable)
                     }
                 }
                 Section("EXTERNAL") {
-                    Text("Cleanup").tag("__DEFAULT__").disabled(privateAILocked)
+                    Text("Cleanup").tag("__DEFAULT__")
                     ForEach(profiles) { profile in
                         Text(profile.name.isEmpty ? "Untitled" : profile.name)
                             .tag(profile.id)
-                            .disabled(privateAILocked)
                     }
                 }
             }

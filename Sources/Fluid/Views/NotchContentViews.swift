@@ -789,7 +789,6 @@ struct NotchExpandedView: View {
     private func promptMenuContent() -> some View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
-        let privateAILocked = promptMode.normalized == .dictate && PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
         return VStack(alignment: .leading, spacing: 2) {
             Text("AI Prompt")
                 .font(.system(size: 8, weight: .semibold))
@@ -817,16 +816,14 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    if !privateAILocked {
-                        self.promptMenuRow("Default", rowID: "default", isSelected: defaultSelected) {
-                            if promptMode.normalized == .dictate {
-                                self.contentState.onDictationPromptSelectionRequested?(.default)
-                            } else {
-                                self.settings.setSelectedPromptID(nil, for: promptMode)
-                            }
-                            self.restoreRecordingTargetFocus()
-                            self.dismissPromptHoverMenu()
+                    self.promptMenuRow("Default", rowID: "default", isSelected: defaultSelected) {
+                        if promptMode.normalized == .dictate {
+                            self.contentState.onDictationPromptSelectionRequested?(.default)
+                        } else {
+                            self.settings.setSelectedPromptID(nil, for: promptMode)
                         }
+                        self.restoreRecordingTargetFocus()
+                        self.dismissPromptHoverMenu()
                     }
 
                     if promptMode.normalized == .dictate && PrivateFeatures.privateAIProvider {
@@ -843,7 +840,7 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    let profiles = privateAILocked ? [] : self.settings.promptProfiles(for: promptMode)
+                    let profiles = self.settings.promptProfiles(for: promptMode)
                     if !profiles.isEmpty {
                         ForEach(profiles) { profile in
                             let isSelected = promptMode.normalized == .dictate

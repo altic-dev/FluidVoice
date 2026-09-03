@@ -1445,10 +1445,6 @@ private struct BottomOverlayPromptMenuView: View {
     let onDismissRequested: () -> Void
     @State private var hoveredRowID: String?
 
-    private var privateAILocked: Bool {
-        self.promptMode.normalized == .dictate && PrivateAIProviderPromptFormat.isAvailable(settings: self.settings)
-    }
-
     private func rowBackground(isSelected: Bool, rowID: String) -> some View {
         let isHovered = self.hoveredRowID == rowID
         let fillColor: Color
@@ -1562,13 +1558,12 @@ private struct BottomOverlayPromptMenuView: View {
     @ViewBuilder
     private func defaultRow(selectedID: String?) -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = !self.privateAILocked && (
+        let isSelected = (
             self.promptMode.normalized == .dictate
                 ? (self.settings.dictationPromptSelection(for: activeSlot) == .default)
                 : (selectedID == nil)
         )
         Button(action: {
-            guard !self.privateAILocked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.default)
             } else {
@@ -1591,10 +1586,8 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: "default"))
         }
         .buttonStyle(.plain)
-        .disabled(self.privateAILocked)
-        .opacity(self.privateAILocked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering && !self.privateAILocked ? "default" : nil
+            self.hoveredRowID = hovering ? "default" : nil
         }
     }
 
@@ -1637,13 +1630,12 @@ private struct BottomOverlayPromptMenuView: View {
     @ViewBuilder
     private func profileRow(_ profile: SettingsStore.DictationPromptProfile, selectedID: String?) -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = !self.privateAILocked && (
+        let isSelected = (
             self.promptMode.normalized == .dictate
                 ? (self.settings.dictationPromptSelection(for: activeSlot) == .profile(profile.id))
                 : (selectedID == profile.id)
         )
         Button(action: {
-            guard !self.privateAILocked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))
             } else {
@@ -1666,10 +1658,8 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: profile.id))
         }
         .buttonStyle(.plain)
-        .disabled(self.privateAILocked)
-        .opacity(self.privateAILocked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering && !self.privateAILocked ? profile.id : nil
+            self.hoveredRowID = hovering ? profile.id : nil
         }
     }
 
@@ -1693,23 +1683,21 @@ private struct BottomOverlayPromptMenuView: View {
                 }
             }
 
-            if !self.privateAILocked {
-                if self.promptMode.normalized == .dictate {
-                    Divider()
-                        .padding(.vertical, 4)
-                }
-
-                Text("EXTERNAL")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .padding(.horizontal, 8)
-                    .padding(.top, self.promptMode.normalized == .dictate ? 0 : 4)
-                    .padding(.bottom, 3)
-
-                self.defaultRow(selectedID: selectedID)
+            if self.promptMode.normalized == .dictate {
+                Divider()
+                    .padding(.vertical, 4)
             }
 
-            if !self.privateAILocked && !profiles.isEmpty {
+            Text("EXTERNAL")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+                .padding(.horizontal, 8)
+                .padding(.top, self.promptMode.normalized == .dictate ? 0 : 4)
+                .padding(.bottom, 3)
+
+            self.defaultRow(selectedID: selectedID)
+
+            if !profiles.isEmpty {
                 ForEach(profiles) { profile in
                     self.profileRow(profile, selectedID: selectedID)
                 }
