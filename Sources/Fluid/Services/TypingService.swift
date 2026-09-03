@@ -93,14 +93,6 @@ final class TypingService {
         let element: AXUIElement?
     }
 
-    private struct PasteboardItemSnapshot {
-        let dataByType: [NSPasteboard.PasteboardType: Data]
-    }
-
-    private struct PasteboardSnapshot {
-        let items: [PasteboardItemSnapshot]
-    }
-
     private struct FocusedTextSnapshot {
         let pid: pid_t
         let bundleIdentifier: String?
@@ -120,8 +112,6 @@ final class TypingService {
     }
 
     private static let focusSnapshotQueue = DispatchQueue(label: "TypingService.FocusSnapshot")
-    private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
-    private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
     private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
 
@@ -131,69 +121,15 @@ final class TypingService {
 
     // MARK: - Layout-aware key code lookup
 
-    /// Returns the virtual key code that produces `character` under the current keyboard layout.
-    /// Uses the TIS (Text Input Services) API which must run on the main thread, so the lookup
-    /// is dispatched there when called from a background thread. Falls back to `qwertyFallback`
-    /// if the layout data is unavailable.
-    private static func virtualKeyCode(for character: Character, qwertyFallback: CGKeyCode) -> CGKeyCode {
-        if Thread.isMainThread {
-            return self.tisLookup(for: character, qwertyFallback: qwertyFallback)
-        }
-        var result = qwertyFallback
-        DispatchQueue.main.sync {
-            result = self.tisLookup(for: character, qwertyFallback: qwertyFallback)
-        }
-        return result
-    }
-
-    /// Performs the actual TIS + UCKeyTranslate scan. Must be called on the main thread.
-    private static func tisLookup(for character: Character, qwertyFallback: CGKeyCode) -> CGKeyCode {
-        guard let targetScalar = character.unicodeScalars.first else { return qwertyFallback }
-
-        guard let sourceRef = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
-              let rawPtr = TISGetInputSourceProperty(sourceRef, kTISPropertyUnicodeKeyLayoutData)
-        else {
-            return qwertyFallback
-        }
-        let layoutData = Unmanaged<CFData>.fromOpaque(rawPtr).takeUnretainedValue() as Data
-
-        return layoutData.withUnsafeBytes { buffer -> CGKeyCode in
-            guard let layoutPtr = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else {
-                return qwertyFallback
-            }
-            var deadKeyState: UInt32 = 0
-            var chars = [UniChar](repeating: 0, count: 4)
-            var length = 0
-            let kbType = UInt32(LMGetKbdType())
-
-            for keyCode: UInt16 in 0..<128 {
-                deadKeyState = 0
-                length = 0
-                let status = UCKeyTranslate(
-                    layoutPtr,
-                    keyCode,
-                    UInt16(kUCKeyActionDisplay),
-                    0,
-                    kbType,
-                    UInt32(kUCKeyTranslateNoDeadKeysMask),
-                    &deadKeyState,
-                    chars.count,
-                    &length,
-                    &chars
-                )
-                guard status == noErr, length > 0 else { continue }
-                if Unicode.Scalar(chars[0]) == targetScalar {
-                    return CGKeyCode(keyCode)
-                }
-            }
-            return qwertyFallback
-        }
-    }
-
     /// The virtual key code for "v" in the current keyboard layout (used for Cmd+V paste).
     /// Re-evaluated on every call so runtime keyboard layout switches are picked up immediately.
+    /// Falls back to the ANSI "v" key code when the layout data is unavailable.
     private static var pasteVirtualKeyCode: CGKeyCode {
-        virtualKeyCode(for: "v", qwertyFallback: 9)
+        LayoutAwareKeyCode.virtualKeyCode(
+            for: "v",
+            qwertyFallback: CGKeyCode(kVK_ANSI_V),
+            carbonModifierState: LayoutAwareKeyCode.commandModifierState
+        )
     }
 
     // MARK: - Focus helpers (shared)
@@ -814,33 +750,6 @@ final class TypingService {
         return ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXWebArea", "AXGroup"].contains(currentRole)
     }
 
-    private func capturePasteboardSnapshot(_ pasteboard: NSPasteboard) -> PasteboardSnapshot {
-        let items: [PasteboardItemSnapshot] = pasteboard.pasteboardItems?.map { item in
-            var dataByType: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    dataByType[type] = data
-                }
-            }
-            return PasteboardItemSnapshot(dataByType: dataByType)
-        } ?? []
-        return PasteboardSnapshot(items: items)
-    }
-
-    private func restorePasteboardSnapshot(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        guard !snapshot.items.isEmpty else { return }
-
-        let restoredItems = snapshot.items.map { snap -> NSPasteboardItem in
-            let item = NSPasteboardItem()
-            for (type, data) in snap.dataByType {
-                item.setData(data, forType: type)
-            }
-            return item
-        }
-        _ = pasteboard.writeObjects(restoredItems)
-    }
-
     /// Builds the pasteboard item for a temporary paste write, tagged with the nspasteboard.org
     /// Transient and AutoGenerated marker types so clipboard managers exclude it from history.
     /// `ConcealedType` is deliberately not used: it signals sensitive/password content, which
@@ -858,35 +767,35 @@ final class TypingService {
         restoreDelayMicros: useconds_t,
         action: () -> Bool
     ) -> Bool {
-        Self.pasteboardSessionSemaphore.wait()
+        PasteboardSession.beginExclusive()
         var releasesPasteboardSessionOnReturn = true
         defer {
             if releasesPasteboardSessionOnReturn {
-                Self.pasteboardSessionSemaphore.signal()
+                PasteboardSession.endExclusive()
             }
         }
 
         let pasteboard = NSPasteboard.general
-        let snapshot = self.capturePasteboardSnapshot(pasteboard)
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
 
         pasteboard.clearContents()
         guard pasteboard.writeObjects([Self.makeTransientPasteboardItem(text)]) else {
             self.log("[TypingService] ERROR: Failed to set temporary clipboard string")
-            self.restorePasteboardSnapshot(snapshot, to: pasteboard)
+            snapshot.restore(to: pasteboard)
             return false
         }
         let temporaryChangeCount = pasteboard.changeCount
         let focusedTextSnapshot = self.captureFocusedTextSnapshot()
         let actionResult = action()
         guard actionResult else {
-            self.restorePasteboardSnapshot(snapshot, to: pasteboard)
+            snapshot.restore(to: pasteboard)
             self.log("[TypingService] Restored previous clipboard snapshot after paste dispatch failure")
             return false
         }
 
         releasesPasteboardSessionOnReturn = false
-        Self.pasteboardRestoreQueue.async {
-            defer { Self.pasteboardSessionSemaphore.signal() }
+        PasteboardSession.restoreQueue.async {
+            defer { PasteboardSession.endExclusive() }
             _ = self.waitForFocusedTextVerification(
                 from: focusedTextSnapshot,
                 expectedText: text,
@@ -896,7 +805,7 @@ final class TypingService {
 
             // Avoid clobbering user clipboard changes that happened after our insertion.
             if pasteboard.changeCount == temporaryChangeCount || pasteboard.string(forType: .string) == text {
-                self.restorePasteboardSnapshot(snapshot, to: pasteboard)
+                snapshot.restore(to: pasteboard)
                 self.log("[TypingService] Restored previous clipboard snapshot")
             } else {
                 self.log("[TypingService] Skipped clipboard restore because clipboard changed externally")
