@@ -42,6 +42,7 @@ struct SettingsView: View {
     @Binding var primaryDictationShortcuts: [HotkeyShortcut]
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
+    @Binding var promptModeShortcut: HotkeyShortcut
     @Binding var commandModeShortcut: HotkeyShortcut?
     @Binding var rewriteShortcut: HotkeyShortcut
     @Binding var cancelRecordingShortcut: HotkeyShortcut
@@ -49,6 +50,7 @@ struct SettingsView: View {
     @Binding var commandModeShortcutEnabled: Bool
     @Binding var rewriteShortcutEnabled: Bool
     @Binding var pasteLastTranscriptionShortcutEnabled: Bool
+    @Binding var promptModeShortcutEnabled: Bool
     @Binding var hotkeyManagerInitialized: Bool
     @Binding var hotkeyMode: HotkeyActivationMode
     @Binding var enableStreamingPreview: Bool
@@ -707,6 +709,28 @@ struct SettingsView: View {
                                     self.primaryDictationShortcutsList()
                                         .settingsSearchTarget(.primaryDictationShortcuts)
                                     self.dictationPromptPicker(for: .primary)
+                                    Divider().opacity(0.2).padding(.vertical, 4)
+
+                                    self.shortcutRow(
+                                        content: .init(
+                                            icon: "sparkles",
+                                            iconColor: .secondary,
+                                            title: "AI Prompt Dictation",
+                                            description: "Transcribe and improve speech with a selected AI prompt"
+                                        ),
+                                        shortcut: self.promptModeShortcut,
+                                        isRecording: self.isRecording(.secondaryDictation),
+                                        isAnyRecordingActive: self.isRecordingAnyShortcut,
+                                        recordingMessage: self.isRecording(.secondaryDictation) ? self.shortcutRecordingMessage : nil,
+                                        isEnabled: self.$promptModeShortcutEnabled,
+                                        requiresShortcutToEnable: true,
+                                        onChangePressed: {
+                                            DebugLogger.shared.debug("Starting to record new AI prompt shortcut", source: "SettingsView")
+                                            self.shortcutRecordingMessage = nil
+                                            self.activeShortcutRecordingTarget = .secondaryDictation
+                                        }
+                                    )
+                                    self.dictationPromptPicker(for: .secondary)
                                     Divider().opacity(0.2).padding(.vertical, 4)
 
                                     self.shortcutRow(

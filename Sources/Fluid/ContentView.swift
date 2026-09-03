@@ -99,7 +99,7 @@ enum ShortcutRecordingTarget: Hashable {
         case .primaryDictation:
             return "Primary Dictation Shortcut"
         case .secondaryDictation:
-            return "Secondary Dictation Shortcut"
+            return "AI Prompt Dictation Shortcut"
         case .command:
             return "Command Mode"
         case .edit:
@@ -491,6 +491,9 @@ struct ContentView: View {
     }
 
     private func handlePromptShortcutEnabledChange(_ isEnabled: Bool) {
+        if isEnabled, SettingsStore.shared.dictationPromptSelection(for: .secondary) == .off {
+            SettingsStore.shared.setDictationPromptSelection(.default, for: .secondary)
+        }
         SettingsStore.shared.promptModeShortcutEnabled = isEnabled
         self.hotkeyManager?.updatePromptModeShortcutEnabled(isEnabled)
 
@@ -1147,8 +1150,7 @@ struct ContentView: View {
         switch target {
         case .secondaryDictation:
             self.isPromptModeShortcutEnabled = enabled
-            SettingsStore.shared.promptModeShortcutEnabled = enabled
-            self.hotkeyManager?.updatePromptModeShortcutEnabled(enabled)
+            self.handlePromptShortcutEnabledChange(enabled)
         case .command:
             self.isCommandModeShortcutEnabled = enabled
             SettingsStore.shared.commandModeShortcutEnabled = enabled
@@ -1773,6 +1775,7 @@ struct ContentView: View {
                 primaryDictationShortcuts: self.$primaryDictationShortcuts,
                 activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
                 shortcutRecordingMessage: self.$shortcutRecordingMessage,
+                promptModeShortcut: self.$promptModeHotkeyShortcut,
                 commandModeShortcut: self.$commandModeHotkeyShortcut,
                 rewriteShortcut: self.$rewriteModeHotkeyShortcut,
                 cancelRecordingShortcut: self.$cancelRecordingHotkeyShortcut,
@@ -1780,6 +1783,7 @@ struct ContentView: View {
                 commandModeShortcutEnabled: self.$isCommandModeShortcutEnabled,
                 rewriteShortcutEnabled: self.$isRewriteModeShortcutEnabled,
                 pasteLastTranscriptionShortcutEnabled: self.$isPasteLastTranscriptionShortcutEnabled,
+                promptModeShortcutEnabled: self.$isPromptModeShortcutEnabled,
                 hotkeyManagerInitialized: self.$hotkeyManagerInitialized,
                 hotkeyMode: self.$hotkeyMode,
                 enableStreamingPreview: self.$enableStreamingPreview,
