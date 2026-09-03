@@ -52,7 +52,7 @@ final class MeetingTimelineDriftProbeTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        let microphone = try MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: "BuiltInMicrophoneDevice")
+        let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: "BuiltInMicrophoneDevice")
         var writerDiscontinuities = 0
         let track = MeetingAudioTrack(
             id: UUID(), kind: .microphone,

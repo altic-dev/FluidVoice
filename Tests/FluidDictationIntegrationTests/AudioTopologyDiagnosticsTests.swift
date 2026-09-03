@@ -3,6 +3,12 @@ import CoreAudio
 import XCTest
 
 final class AudioTopologyDiagnosticsTests: XCTestCase {
+    func testInputAvailabilityRequiresAtLeastOneLiveEnumeratedDevice() {
+        XCTAssertFalse(AudioInputAvailabilityPolicy.hasAvailableInput(liveness: []))
+        XCTAssertFalse(AudioInputAvailabilityPolicy.hasAvailableInput(liveness: [false, false]))
+        XCTAssertTrue(AudioInputAvailabilityPolicy.hasAvailableInput(liveness: [false, true]))
+    }
+
     override func setUp() {
         super.setUp()
         fv_audio_topology_trace_reset()
@@ -81,6 +87,8 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
             (.recoveryBegin, .recoveryEnd),
             (.phaseBegin, .phaseEnd),
             (.probeCycleBegin, .probeCycleEnd),
+            (.callbackBegin, .callbackEnd),
+            (.mainHopBegin, .mainHopEnd),
         ]
 
         for (begin, end) in pairs {
@@ -97,6 +105,38 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
         _ = Self.record(.phaseBegin, objectID: 17)
         _ = Self.record(.recoveryCancel, objectID: 17)
         XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+    }
+
+    func testDifferentPropertyAddressCannotCloseOpenBoundary() {
+        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 100)
+        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 200)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+
+        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 100)
+        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+    }
+
+    func testInterleavedListenerBoundariesRemainOpenUntilBothEnd() {
+        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 100)
+        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 200)
+        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 100)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+
+        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 200)
+        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+    }
+
+    func testMainThreadFlagIsCapturedPerEvent() async throws {
+        await MainActor.run {
+            _ = Self.record(.callbackBegin, objectID: 101)
+        }
+        await Task.detached {
+            _ = Self.record(.callbackBegin, objectID: 202)
+        }.value
+
+        let events = Self.snapshot().events
+        XCTAssertEqual(events.first(where: { $0.objectID == 101 })?.isMainThread, 1)
+        XCTAssertEqual(events.first(where: { $0.objectID == 202 })?.isMainThread, 0)
     }
 
     func testClockAnchorContainsBothTimeDomains() throws {
@@ -258,17 +298,283 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
         }
     }
 
+    func testRetainedAvailabilityRegistrationSurvivesUnchangedTopologyRefresh() {
+        let registration = AudioInputAvailabilityListenerIdentity(
+            deviceID: 41,
+            uid: "input-a",
+            epoch: 1,
+            lifecycleGeneration: 7
+        )
+
+        // Reconciliation generations are deliberately absent from callback validity. An
+        // unchanged registration remains current after any number of topology snapshots.
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.callbackIsCurrent(
+                captured: registration,
+                registered: registration,
+                installed: true
+            )
+        )
+    }
+
+    func testFailedOvertakenAvailabilityAddRequestsFreshReconciliation() {
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.shouldRetryStaleCompletion(
+                ownsPendingMarker: true,
+                installed: true,
+                capturedLifecycleGeneration: 3,
+                currentLifecycleGeneration: 3,
+                capturedUID: "input-a",
+                desiredUID: "input-a",
+                hasRegistration: false,
+                reconciliationIsStale: true
+            )
+        )
+    }
+
+    func testSuccessfulOvertakenAddAfterSameUIDReconnectIsRetriedNotAccepted() {
+        // R1 starts an add for N/A. R2 observes absence. R3 observes the same N/A again.
+        // The R1 completion is stale even though AudioObjectID and UID match, so production
+        // routes it through cleanup and uses this policy to request a new reconciliation.
+        XCTAssertFalse(
+            AudioInputAvailabilityListenerPolicy.completionCanInstall(
+                statusSucceeded: true,
+                ownsPendingMarker: true,
+                installed: true,
+                capturedLifecycleGeneration: 4,
+                currentLifecycleGeneration: 4,
+                capturedUID: "input-a",
+                desiredUID: "input-a",
+                reconciliationIsCurrent: false
+            )
+        )
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.shouldRetryStaleCompletion(
+                ownsPendingMarker: true,
+                installed: true,
+                capturedLifecycleGeneration: 4,
+                currentLifecycleGeneration: 4,
+                capturedUID: "input-a",
+                desiredUID: "input-a",
+                hasRegistration: false,
+                reconciliationIsStale: true
+            )
+        )
+    }
+
+    func testServiceRestartRejectsOldAvailabilityWorkAndAcceptsNewLifecycle() {
+        let old = AudioInputAvailabilityListenerIdentity(
+            deviceID: 41,
+            uid: "input-a",
+            epoch: 4,
+            lifecycleGeneration: 8
+        )
+        let replacement = AudioInputAvailabilityListenerIdentity(
+            deviceID: 41,
+            uid: "input-a",
+            epoch: 5,
+            lifecycleGeneration: 9
+        )
+
+        XCTAssertFalse(
+            AudioInputAvailabilityListenerPolicy.callbackIsCurrent(
+                captured: old,
+                registered: replacement,
+                installed: true
+            )
+        )
+        XCTAssertFalse(
+            AudioInputAvailabilityListenerPolicy.shouldRetryStaleCompletion(
+                ownsPendingMarker: true,
+                installed: true,
+                capturedLifecycleGeneration: 8,
+                currentLifecycleGeneration: 9,
+                capturedUID: "input-a",
+                desiredUID: "input-a",
+                hasRegistration: false,
+                reconciliationIsStale: true
+            )
+        )
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.callbackIsCurrent(
+                captured: replacement,
+                registered: replacement,
+                installed: true
+            )
+        )
+    }
+
+    func testReusedAudioObjectIDReplacesUIDAndRejectsOldCallback() {
+        let old = AudioInputAvailabilityListenerIdentity(
+            deviceID: 77,
+            uid: "old-uid",
+            epoch: 10,
+            lifecycleGeneration: 2
+        )
+        let replacement = AudioInputAvailabilityListenerIdentity(
+            deviceID: 77,
+            uid: "new-uid",
+            epoch: 11,
+            lifecycleGeneration: 2
+        )
+
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.registrationNeedsReplacement(
+                registeredUID: old.uid,
+                desiredUID: replacement.uid
+            )
+        )
+        XCTAssertFalse(
+            AudioInputAvailabilityListenerPolicy.callbackIsCurrent(
+                captured: old,
+                registered: replacement,
+                installed: true
+            )
+        )
+        XCTAssertTrue(
+            AudioInputAvailabilityListenerPolicy.callbackIsCurrent(
+                captured: replacement,
+                registered: replacement,
+                installed: true
+            )
+        )
+    }
+
+    func testASRHardwareCallbackDuringRegistrationIsLatchedThenHandled() {
+        XCTAssertEqual(
+            ASRHardwareListenerPolicy.disposition(
+                isTerminating: false,
+                lifecycleMatches: true,
+                isInstalled: false,
+                pendingIdentityMatches: true
+            ),
+            .latchUntilInstalled
+        )
+        XCTAssertEqual(
+            ASRHardwareListenerPolicy.disposition(
+                isTerminating: false,
+                lifecycleMatches: true,
+                isInstalled: true,
+                pendingIdentityMatches: false
+            ),
+            .handle
+        )
+    }
+
+    func testASRStaleOrFailedRegistrationCallbackIsIgnored() {
+        XCTAssertEqual(
+            ASRHardwareListenerPolicy.disposition(
+                isTerminating: false,
+                lifecycleMatches: false,
+                isInstalled: false,
+                pendingIdentityMatches: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            ASRHardwareListenerPolicy.disposition(
+                isTerminating: false,
+                lifecycleMatches: true,
+                isInstalled: false,
+                pendingIdentityMatches: false
+            ),
+            .ignore
+        )
+    }
+
+    func testASRLivenessResultCannotAffectReplacementDeviceOrLifecycle() {
+        XCTAssertFalse(
+            ASRHardwareListenerPolicy.selectedDeviceQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 3,
+                currentLifecycle: 3,
+                capturedEpoch: 8,
+                currentEpoch: 10,
+                capturedDeviceID: 41,
+                currentDeviceID: 52,
+                listenerIsInstalled: true
+            )
+        )
+        XCTAssertFalse(
+            ASRHardwareListenerPolicy.selectedDeviceQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 3,
+                currentLifecycle: 4,
+                capturedEpoch: 8,
+                currentEpoch: 8,
+                capturedDeviceID: 41,
+                currentDeviceID: 41,
+                listenerIsInstalled: true
+            )
+        )
+        XCTAssertTrue(
+            ASRHardwareListenerPolicy.selectedDeviceQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 4,
+                currentLifecycle: 4,
+                capturedEpoch: 10,
+                currentEpoch: 10,
+                capturedDeviceID: 52,
+                currentDeviceID: 52,
+                listenerIsInstalled: true
+            )
+        )
+    }
+
+    func testASRDeviceListQueryUsesLastRequestWins() {
+        XCTAssertFalse(
+            ASRHardwareListenerPolicy.deviceListQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 4,
+                currentLifecycle: 4,
+                capturedQueryGeneration: 10,
+                currentQueryGeneration: 11
+            )
+        )
+        XCTAssertTrue(
+            ASRHardwareListenerPolicy.deviceListQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 4,
+                currentLifecycle: 4,
+                capturedQueryGeneration: 11,
+                currentQueryGeneration: 11
+            )
+        )
+    }
+
+    func testASRDeviceListQueryCannotApplyAfterResetOrTermination() {
+        XCTAssertFalse(
+            ASRHardwareListenerPolicy.deviceListQueryCanApply(
+                isTerminating: false,
+                capturedLifecycle: 4,
+                currentLifecycle: 5,
+                capturedQueryGeneration: 11,
+                currentQueryGeneration: 11
+            )
+        )
+        XCTAssertFalse(
+            ASRHardwareListenerPolicy.deviceListQueryCanApply(
+                isTerminating: true,
+                capturedLifecycle: 5,
+                currentLifecycle: 5,
+                capturedQueryGeneration: 12,
+                currentQueryGeneration: 12
+            )
+        )
+    }
+
     @discardableResult
     private static func record(
         _ event: AudioTopologyTraceEvent,
         objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector = kAudioDevicePropertyDeviceIsAlive,
         status: OSStatus = AudioTopologyDiagnostics.noStatus
     ) -> UInt64 {
         fv_audio_topology_trace_record(
             event.rawValue,
             AudioTopologyTraceOwner.audioHardwareObserver.rawValue,
             objectID,
-            kAudioDevicePropertyDeviceIsAlive,
+            selector,
             kAudioObjectPropertyScopeGlobal,
             kAudioObjectPropertyElementMain,
             AudioTopologyTraceQueueRole.mainControl.rawValue,

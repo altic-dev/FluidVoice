@@ -902,26 +902,24 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
     }
 
-    // MARK: - Upgrade ring-discard boundary
+    // MARK: - HAL callback isolation
 
-    func testRingDiscardDropsSamplesAtOrBehindBoundaryAndKeepsSamplesAfterIt() throws {
-        let buffer = self.makeMonoBuffer(frameCount: 480) { _ in 0.1 }
-        let before = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
-            from: buffer, presentationTime: CMTime(value: 0, timescale: 48_000)
-        ))
-        let atBoundary = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
-            from: buffer, presentationTime: CMTime(value: 48_000, timescale: 48_000)
-        ))
-        let after = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(
-            from: buffer, presentationTime: CMTime(value: 48_001, timescale: 48_000)
-        ))
-        let boundary = CMTime(value: 48_000, timescale: 48_000)
+    func testMeetingEventWorkStartsOnlyAfterHALDeliveryCallbackReturns() {
+        let callbackReturned = expectation(description: "HAL callback returned")
+        let eventHandled = expectation(description: "meeting event handled")
+        let state = MeetingMicrophoneCallbackOrderingState()
 
-        let kept = MeetingUpgradeRingDiscard.discardingSamples(atOrBehind: boundary, from: [before, atBoundary, after])
-        XCTAssertEqual(kept.count, 1, "only the strictly-after sample survives")
+        // Model the body of a property-listener callback on the exact serial queue passed to HAL.
+        AudioTopologyListenerExecution.deliveryQueue.async {
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                XCTAssertTrue(state.callbackHasReturned)
+                eventHandled.fulfill()
+            }
+            state.markCallbackReturned()
+            callbackReturned.fulfill()
+        }
 
-        let unfiltered = MeetingUpgradeRingDiscard.discardingSamples(atOrBehind: nil, from: [before, atBoundary, after])
-        XCTAssertEqual(unfiltered.count, 3, "nil boundary means the writer produced no splice — keep everything")
+        wait(for: [callbackReturned, eventHandled], timeout: 1, enforceOrder: true)
     }
 
     // MARK: - Not covered here: phase-machine transitions (file-private, hardware-driven —
@@ -943,4 +941,21 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(elected.role, .personal)
     }
 
+}
+
+private final class MeetingMicrophoneCallbackOrderingState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var returned = false
+
+    var callbackHasReturned: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.returned
+    }
+
+    func markCallbackReturned() {
+        self.lock.lock()
+        self.returned = true
+        self.lock.unlock()
+    }
 }

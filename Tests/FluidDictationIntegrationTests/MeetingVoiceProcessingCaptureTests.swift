@@ -13,7 +13,13 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
     // MARK: - Decision table (incl. role)
 
     private func mic(uid: String? = "mic-uid", role: MeetingMicrophoneRole = .personal) -> MeetingMicrophoneIdentity {
-        MeetingMicrophoneIdentity(captureDeviceID: "dev-1", coreAudioUID: uid, displayName: "Mic", role: role)
+        MeetingMicrophoneIdentity(
+            captureDeviceID: uid ?? "selection-1",
+            coreAudioUID: uid,
+            avCaptureDeviceID: "dev-1",
+            displayName: "Mic",
+            role: role
+        )
     }
 
     private func viableRoute() -> MeetingOutputRouteSnapshot {
@@ -176,6 +182,220 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertTrue(MeetingVoiceProcessingWatchdog.isStalled(secondsSinceLastEmittedBuffer: 30))
     }
 
+    func testRouteDrivenFallbackRecoversOnlyOnViableBuiltInRoute() {
+        XCTAssertTrue(MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+            routeDrivenFallback: true,
+            attempts: 0,
+            microphone: self.mic(),
+            outputRoute: self.viableRoute()
+        ))
+        XCTAssertFalse(MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+            routeDrivenFallback: true,
+            attempts: 0,
+            microphone: self.mic(),
+            outputRoute: MeetingOutputRouteSnapshot(
+                deviceExists: true,
+                isBluetooth: true,
+                isBuiltIn: false,
+                isHeadphonesDataSource: false
+            )
+        ))
+    }
+
+    func testWatchdogOrEngineFailureFallbackStaysSticky() {
+        XCTAssertFalse(MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+            routeDrivenFallback: false,
+            attempts: 0,
+            microphone: self.mic(),
+            outputRoute: self.viableRoute()
+        ))
+    }
+
+    func testVoiceProcessingRecoveryAttemptsAreBounded() {
+        XCTAssertFalse(MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+            routeDrivenFallback: true,
+            attempts: MeetingCaptureTransitionPolicy.maximumRouteRecoveryAttempts,
+            microphone: self.mic(),
+            outputRoute: self.viableRoute()
+        ))
+    }
+
+    func testRecoveryDwellCannotArmDuringTransitionStopOrQuarantine() {
+        for blocked in [
+            (false, false, false, false),
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, false, false, true),
+        ] {
+            XCTAssertFalse(MeetingVoiceProcessingUpgradeDwell.shouldArm(
+                phaseIsAVCapture: blocked.0,
+                dwellAlreadyArmed: blocked.1,
+                quarantined: blocked.2,
+                stopRequested: blocked.3,
+                routeDrivenFallback: true,
+                attempts: 0,
+                microphone: self.mic(),
+                outputRoute: self.viableRoute()
+            ))
+        }
+    }
+
+    func testStopOldFirstOwnershipSequenceReleasesAVCaptureBeforeVPIOConstruction() throws {
+        let steps = MeetingVoiceProcessingUpgradeOwnership.stopOldFirstSequence
+        let clearRuntime = try XCTUnwrap(steps.firstIndex(of: .clearRuntimeRef))
+        let clearLocal = try XCTUnwrap(steps.firstIndex(of: .clearLocalRef))
+        let constructVPIO = try XCTUnwrap(steps.firstIndex(of: .constructVoiceProcessing))
+        XCTAssertLessThan(clearRuntime, constructVPIO)
+        XCTAssertLessThan(clearLocal, constructVPIO)
+        XCTAssertFalse(MeetingVoiceProcessingUpgradeOwnership.mayConstructVoiceProcessing(
+            avCaptureRuntimeRef: false,
+            avCaptureLocalRef: true,
+            avCaptureRunning: false,
+            teardownProven: true
+        ))
+        XCTAssertTrue(MeetingVoiceProcessingUpgradeOwnership.mayConstructVoiceProcessing(
+            avCaptureRuntimeRef: false,
+            avCaptureLocalRef: false,
+            avCaptureRunning: false,
+            teardownProven: true
+        ))
+        XCTAssertFalse(MeetingVoiceProcessingUpgradeOwnership.watchdogRunsDuringIntentionalGap)
+    }
+
+    func testRollbackMayPublishAVCaptureOnlyWithALiveComponent() {
+        XCTAssertFalse(MeetingVoiceProcessingUpgradeOwnership.mayPhaseAVCapture(
+            hasComponent: false,
+            componentStopped: false
+        ))
+        XCTAssertFalse(MeetingVoiceProcessingUpgradeOwnership.mayPhaseAVCapture(
+            hasComponent: true,
+            componentStopped: true
+        ))
+        XCTAssertTrue(MeetingVoiceProcessingUpgradeOwnership.mayPhaseAVCapture(
+            hasComponent: true,
+            componentStopped: false
+        ))
+    }
+
+    func testStickyFallbackRebindsWhenPhysicalInputChanges() {
+        XCTAssertTrue(MeetingAVCaptureRebindDecision.shouldRebind(
+            activeCoreAudioUID: "airpods",
+            electedCoreAudioUID: "built-in",
+            forced: false
+        ))
+    }
+
+    func testOutputOnlyRouteChangeDoesNotRebindTheSamePhysicalInput() {
+        XCTAssertFalse(MeetingAVCaptureRebindDecision.shouldRebind(
+            activeCoreAudioUID: "built-in",
+            electedCoreAudioUID: "built-in",
+            forced: false
+        ))
+    }
+
+    func testMissingSettledDefaultDoesNotAbandonTheActiveInput() {
+        XCTAssertFalse(MeetingAVCaptureRebindDecision.shouldRebind(
+            activeCoreAudioUID: "airpods",
+            electedCoreAudioUID: nil,
+            forced: false
+        ))
+    }
+
+    func testNoBufferWatchdogCanRebuildTheSamePhysicalInput() {
+        XCTAssertTrue(MeetingAVCaptureRebindDecision.shouldRebind(
+            activeCoreAudioUID: "built-in",
+            electedCoreAudioUID: "built-in",
+            forced: true
+        ))
+    }
+
+    func testRetiredCandidateTerminalCallbackCannotFailItsSuccessor() {
+        let retired = MeetingAVCaptureAttemptToken()
+        let active = MeetingAVCaptureAttemptToken()
+        XCTAssertFalse(MeetingAVCaptureFailureAdmission.accepts(
+            currentGeneration: 7,
+            eventGeneration: 7,
+            activeToken: active,
+            eventToken: retired,
+            stopRequested: false
+        ))
+        XCTAssertTrue(MeetingAVCaptureFailureAdmission.accepts(
+            currentGeneration: 7,
+            eventGeneration: 7,
+            activeToken: active,
+            eventToken: active,
+            stopRequested: false
+        ))
+    }
+
+    func testStopRejectsEvenTheCurrentCandidateTerminalCallback() {
+        let active = MeetingAVCaptureAttemptToken()
+        XCTAssertFalse(MeetingAVCaptureFailureAdmission.accepts(
+            currentGeneration: 7,
+            eventGeneration: 7,
+            activeToken: active,
+            eventToken: active,
+            stopRequested: true
+        ))
+    }
+
+    func testCaptureRetirementWaitsBehindAnInFlightFrameworkStart() async {
+        let startEntered = DispatchSemaphore(value: 0)
+        let allowStartToReturn = DispatchSemaphore(value: 0)
+        let stopRan = DispatchSemaphore(value: 0)
+        let lifecycle = MeetingSerializedCaptureLifecycle(
+            label: "com.fluidvoice.tests.avcapture-lifecycle",
+            start: {
+                startEntered.signal()
+                allowStartToReturn.wait()
+                return false
+            },
+            stop: { stopRan.signal() }
+        )
+
+        let startTask = Task { await lifecycle.start() }
+        XCTAssertEqual(startEntered.wait(timeout: .now() + 1), .success)
+        let stopTask = Task { await lifecycle.stop() }
+        XCTAssertEqual(
+            stopRan.wait(timeout: .now() + 0.1), .timedOut,
+            "retirement must not bypass an uninterruptible startRunning call"
+        )
+
+        allowStartToReturn.signal()
+        _ = await startTask.value
+        await stopTask.value
+        XCTAssertEqual(stopRan.wait(timeout: .now() + 1), .success)
+    }
+
+    func testCaptureRetirementRejectsAStartSubmittedAfterStopAdmission() async {
+        let startRan = DispatchSemaphore(value: 0)
+        let stopEntered = DispatchSemaphore(value: 0)
+        let allowStopToReturn = DispatchSemaphore(value: 0)
+        let lifecycle = MeetingSerializedCaptureLifecycle(
+            label: "com.fluidvoice.tests.avcapture-retirement-seal",
+            start: {
+                startRan.signal()
+                return true
+            },
+            stop: {
+                stopEntered.signal()
+                allowStopToReturn.wait()
+            }
+        )
+
+        let stopTask = Task { await lifecycle.stop() }
+        XCTAssertEqual(stopEntered.wait(timeout: .now() + 1), .success)
+        let lateStartSucceeded = await lifecycle.start()
+        XCTAssertFalse(lateStartSucceeded)
+        XCTAssertEqual(
+            startRan.wait(timeout: .now() + 0.1), .timedOut,
+            "retirement must permanently seal the lifecycle against late restarts"
+        )
+
+        allowStopToReturn.signal()
+        await stopTask.value
+    }
+
     // MARK: - ScreenCaptureKit audio-settings plumbing (rebuild regression)
 
     func testIncludeMicrophoneFalseAttachesNoMicrophoneDevice() {
@@ -190,6 +410,123 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         MeetingScreenCaptureAudioSettings.apply(to: configuration, microphone: self.mic(), includeMicrophone: true)
         XCTAssertTrue(configuration.captureMicrophone)
         XCTAssertEqual(configuration.microphoneCaptureDeviceID, "dev-1")
+    }
+
+    func testAVCaptureSelectionPrefersExplicitResolvedID() {
+        let candidates = [
+            MeetingAVCaptureDeviceDescriptor(uniqueID: "explicit", displayName: "Mic"),
+            MeetingAVCaptureDeviceDescriptor(uniqueID: "mic-uid", displayName: "Mic"),
+        ]
+        var microphone = self.mic()
+        microphone.avCaptureDeviceID = "explicit"
+        XCTAssertEqual(
+            MeetingAVCaptureDeviceSelection.select(microphone: microphone, candidates: candidates),
+            "explicit"
+        )
+    }
+
+    func testAVCaptureSelectionAcceptsLegacyCaptureIDOnlyForLegacyManifest() {
+        let candidates = [MeetingAVCaptureDeviceDescriptor(uniqueID: "legacy-av", displayName: "Different")]
+        let legacy = MeetingMicrophoneIdentity(
+            captureDeviceID: "legacy-av",
+            coreAudioUID: "core-id",
+            identitySchemaVersion: nil,
+            displayName: "Saved mic"
+        )
+        XCTAssertEqual(
+            MeetingAVCaptureDeviceSelection.select(microphone: legacy, candidates: candidates),
+            "legacy-av"
+        )
+
+        var current = legacy
+        current.identitySchemaVersion = 2
+        XCTAssertNil(MeetingAVCaptureDeviceSelection.select(microphone: current, candidates: candidates))
+    }
+
+    func testAVCaptureSelectionUsesCoreAudioUIDWhenFrameworkIDsMatch() {
+        let microphone = MeetingMicrophoneIdentity(
+            captureDeviceID: "core-id", coreAudioUID: "core-id", displayName: "Mic"
+        )
+        let candidates = [MeetingAVCaptureDeviceDescriptor(uniqueID: "core-id", displayName: "Other")]
+        XCTAssertEqual(
+            MeetingAVCaptureDeviceSelection.select(microphone: microphone, candidates: candidates),
+            "core-id"
+        )
+    }
+
+    func testAVCaptureSelectionUsesOnlyUniqueNormalizedNameFallback() {
+        let microphone = MeetingMicrophoneIdentity(
+            captureDeviceID: "core-id", coreAudioUID: "core-id", displayName: "  Studio MÍC  "
+        )
+        let unique = [MeetingAVCaptureDeviceDescriptor(uniqueID: "av-id", displayName: "studio mic")]
+        XCTAssertEqual(
+            MeetingAVCaptureDeviceSelection.select(microphone: microphone, candidates: unique),
+            "av-id"
+        )
+
+        let ambiguous = unique + [MeetingAVCaptureDeviceDescriptor(uniqueID: "av-id-2", displayName: "Studio Mic")]
+        XCTAssertNil(MeetingAVCaptureDeviceSelection.select(microphone: microphone, candidates: ambiguous))
+    }
+
+    func testMicrophoneIdentityDecodesLegacyManifestAndRoundTripsCurrentIdentity() throws {
+        let legacyJSON = Data(#"{"captureDeviceID":"legacy-av","coreAudioUID":"core-id","displayName":"Mic","role":"personal"}"#.utf8)
+        let legacy = try JSONDecoder().decode(MeetingMicrophoneIdentity.self, from: legacyJSON)
+        XCTAssertNil(legacy.identitySchemaVersion)
+        XCTAssertNil(legacy.avCaptureDeviceID)
+        XCTAssertEqual(legacy.captureDeviceID, "legacy-av")
+
+        let current = self.mic()
+        let roundTrip = try JSONDecoder().decode(
+            MeetingMicrophoneIdentity.self,
+            from: JSONEncoder().encode(current)
+        )
+        XCTAssertEqual(roundTrip, current)
+        XCTAssertEqual(roundTrip.identitySchemaVersion, 2)
+    }
+
+    func testSameDeviceElectionPreservesLegacyAVMappingAcrossCoreAudioRefresh() {
+        let original = MeetingMicrophoneIdentity(
+            captureDeviceID: "legacy-av",
+            coreAudioUID: "core-id",
+            identitySchemaVersion: nil,
+            displayName: "Shared Name",
+            role: .personal
+        )
+        let refreshed = MeetingMicrophoneIdentity(
+            captureDeviceID: "core-id", coreAudioUID: "core-id", displayName: "Shared Name"
+        )
+        let elected = MeetingCaptureDeviceElection.decide(
+            original: original, catalog: [refreshed], defaultInputUID: "core-id"
+        )
+        XCTAssertEqual(elected.identity.captureDeviceID, "core-id")
+        XCTAssertEqual(elected.identity.avCaptureDeviceID, "legacy-av")
+        XCTAssertEqual(elected.role, .personal)
+
+        let ambiguous = [
+            MeetingAVCaptureDeviceDescriptor(uniqueID: "legacy-av", displayName: "Shared Name"),
+            MeetingAVCaptureDeviceDescriptor(uniqueID: "other-av", displayName: "Shared Name"),
+        ]
+        XCTAssertEqual(
+            MeetingAVCaptureDeviceSelection.select(microphone: elected.identity, candidates: ambiguous),
+            "legacy-av"
+        )
+    }
+
+    func testSameDeviceElectionPreservesCurrentExplicitAVMapping() {
+        let original = MeetingMicrophoneIdentity(
+            captureDeviceID: "core-id",
+            coreAudioUID: "core-id",
+            avCaptureDeviceID: "explicit-av",
+            displayName: "Shared Name",
+            role: .personal
+        )
+        let refreshed = MeetingMicrophoneIdentity(
+            captureDeviceID: "core-id", coreAudioUID: "core-id", displayName: "Shared Name"
+        )
+        let elected = MeetingCaptureDeviceElection.decide(
+            original: original, catalog: [refreshed], defaultInputUID: "core-id"
+        )
+        XCTAssertEqual(elected.identity.avCaptureDeviceID, "explicit-av")
     }
 
     // MARK: - Eligibility

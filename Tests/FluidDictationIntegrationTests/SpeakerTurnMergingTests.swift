@@ -961,6 +961,179 @@ final class MeetingSpeakerEmbeddingIndexTests: XCTestCase {
     }
 }
 
+final class MeetingGlobalSpeakerStitcherTests: XCTestCase {
+    private func observation(
+        _ key: String,
+        chunk: String,
+        track: MeetingAudioTrackKind = .applicationAudio,
+        label: String,
+        embedding: [Float],
+        quality: Float = 0.9,
+        duration: TimeInterval = 3
+    ) -> MeetingGlobalSpeakerStitcher.Observation {
+        MeetingGlobalSpeakerStitcher.Observation(
+            key: key,
+            chunkKey: chunk,
+            trackKind: track,
+            localLabel: label,
+            embedding: embedding,
+            quality: quality,
+            effectiveSpeechDuration: duration
+        )
+    }
+
+    func testInputOrderDoesNotChangeAssignmentsOrPrototypes() {
+        let observations = [
+            self.observation("c", chunk: "chunk-c", label: "Speaker 1", embedding: [0.99, 0.1]),
+            self.observation("a", chunk: "chunk-a", label: "Speaker 0", embedding: [1, 0]),
+            self.observation("b", chunk: "chunk-b", label: "Speaker 4", embedding: [0, 1]),
+        ]
+        let stitcher = MeetingGlobalSpeakerStitcher()
+        let forward = stitcher.stitch(observations)
+        let reverse = stitcher.stitch(Array(observations.reversed()))
+
+        XCTAssertEqual(forward, reverse)
+        XCTAssertEqual(forward.speakerIDByObservationKey["a"], forward.speakerIDByObservationKey["c"])
+        XCTAssertNotEqual(forward.speakerIDByObservationKey["a"], forward.speakerIDByObservationKey["b"])
+    }
+
+    func testSameVoiceAcrossNonadjacentChunksStitches() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("first", chunk: "chunk-1", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("other", chunk: "chunk-2", label: "Speaker 1", embedding: [0, 1]),
+            self.observation("later", chunk: "chunk-3", label: "Speaker 7", embedding: [0.99, 0.12]),
+        ])
+
+        XCTAssertEqual(result.speakerIDByObservationKey["first"], result.speakerIDByObservationKey["later"])
+        XCTAssertNotEqual(result.speakerIDByObservationKey["first"], result.speakerIDByObservationKey["other"])
+    }
+
+    func testNoisyBoundaryObservationAttachesAfterReliableCores() {
+        let boundary = self.observation(
+            "boundary", chunk: "chunk-boundary", label: "Speaker 9", embedding: [0.98, 0.2], quality: 0.2, duration: 0.3
+        )
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core-a", chunk: "chunk-a", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("core-b", chunk: "chunk-b", label: "Speaker 2", embedding: [0, 1]),
+            boundary,
+        ])
+
+        XCTAssertEqual(result.speakerIDByObservationKey["boundary"], result.speakerIDByObservationKey["core-a"])
+    }
+
+    func testAmbiguousDeferredObservationDoesNotMergeCores() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core-a", chunk: "chunk-a", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("core-b", chunk: "chunk-b", label: "Speaker 2", embedding: [0.5, 0.866]),
+            self.observation("ambiguous", chunk: "chunk-c", label: "Speaker 8", embedding: [0.866, 0.5], quality: 0.2, duration: 0.2),
+        ])
+
+        XCTAssertNotEqual(result.speakerIDByObservationKey["core-a"], result.speakerIDByObservationKey["core-b"])
+        XCTAssertNotEqual(result.speakerIDByObservationKey["ambiguous"], result.speakerIDByObservationKey["core-a"])
+        XCTAssertNotEqual(result.speakerIDByObservationKey["ambiguous"], result.speakerIDByObservationKey["core-b"])
+    }
+
+    func testSameChunkCannotLinkKeepsDistinctLocalLabelsApart() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("same-a", chunk: "same", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("same-b", chunk: "same", label: "Speaker 2", embedding: [0.99, 0.1]),
+        ])
+
+        XCTAssertNotEqual(result.speakerIDByObservationKey["same-a"], result.speakerIDByObservationKey["same-b"])
+    }
+
+    func testDeferredSameChunkLabelsCannotAttachToTheSameCore() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core", chunk: "core-chunk", label: "Speaker 0", embedding: [1, 0]),
+            self.observation("weak-a", chunk: "boundary", label: "Speaker 1", embedding: [0.99, 0.1], quality: 0.2, duration: 0.2),
+            self.observation("weak-b", chunk: "boundary", label: "Speaker 2", embedding: [0.98, 0.2], quality: 0.2, duration: 0.2),
+        ])
+
+        let coreID = result.speakerIDByObservationKey["core"]
+        let attachedCount = ["weak-a", "weak-b"].filter {
+            result.speakerIDByObservationKey[$0] == coreID
+        }.count
+        XCTAssertEqual(attachedCount, 1)
+        XCTAssertNotEqual(result.speakerIDByObservationKey["weak-a"], result.speakerIDByObservationKey["weak-b"])
+    }
+
+    func testEligibleDeferredObservationUpdatesPrototypeOnlyThroughTightDistanceGate() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core", chunk: "chunk-core", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("short", chunk: "chunk-short", label: "Speaker 4", embedding: [0.995, 0.1], quality: 0.8, duration: 0.75),
+        ])
+        let speakerID = result.speakerIDByObservationKey["core"]
+        let prototype = speakerID.flatMap { result.prototypes[$0] }
+
+        XCTAssertEqual(speakerID, result.speakerIDByObservationKey["short"])
+        XCTAssertEqual(prototype?.observationCount, 2)
+        XCTAssertNotEqual(prototype?.embedding, [1, 0])
+    }
+
+    func testCoreMergeRejectsCentroidChainBeyondPairwiseDiameter() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("a", chunk: "chunk-a", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("b", chunk: "chunk-b", label: "Speaker 1", embedding: [0.866, 0.5]),
+            self.observation("c", chunk: "chunk-c", label: "Speaker 1", embedding: [0.5, 0.866]),
+        ])
+
+        let identities = Set(["a", "b", "c"].compactMap { result.speakerIDByObservationKey[$0] })
+        XCTAssertEqual(identities.count, 2)
+    }
+
+    func testInvalidEmbeddingRemainsUntrustedSingleton() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core", chunk: "chunk-core", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("invalid", chunk: "chunk-invalid", label: "Speaker 2", embedding: []),
+        ])
+        let invalidID = result.speakerIDByObservationKey["invalid"]
+
+        XCTAssertNotEqual(result.speakerIDByObservationKey["core"], invalidID)
+        XCTAssertEqual(invalidID.flatMap { result.prototypes[$0]?.containsReliableCore }, false)
+        XCTAssertEqual(invalidID.flatMap { result.prototypes[$0]?.embedding }, [])
+    }
+
+    func testLongModerateQualityObservationBootstrapsWhenNoStrictCoreExists() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("quiet", chunk: "chunk-quiet", track: .microphone, label: "Speaker 1", embedding: [1, 0], quality: 0.5, duration: 4),
+        ])
+        let speakerID = result.speakerIDByObservationKey["quiet"]
+
+        XCTAssertEqual(speakerID.flatMap { result.prototypes[$0]?.containsReliableCore }, true)
+    }
+
+    func testShortLowQualityObservationDoesNotBootstrap() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("noise", chunk: "chunk-noise", track: .microphone, label: "Speaker 1", embedding: [1, 0], quality: 0.3, duration: 0.5),
+        ])
+        let speakerID = result.speakerIDByObservationKey["noise"]
+
+        XCTAssertEqual(speakerID.flatMap { result.prototypes[$0]?.containsReliableCore }, false)
+    }
+
+    func testWeakObservationDoesNotDistortReliablePrototype() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("core", chunk: "chunk-core", label: "Speaker 1", embedding: [1, 0]),
+            self.observation("weak", chunk: "chunk-weak", label: "Speaker 4", embedding: [0.99, 0.1], quality: 0.2, duration: 0.2),
+        ])
+        let speakerID = result.speakerIDByObservationKey["core"]
+        let prototype = speakerID.flatMap { result.prototypes[$0] }
+
+        XCTAssertEqual(speakerID, result.speakerIDByObservationKey["weak"])
+        XCTAssertEqual(prototype?.observationCount, 1)
+        XCTAssertEqual(prototype?.embedding, [1, 0])
+    }
+
+    func testApplicationAndMicrophoneTracksNeverCrossMatch() {
+        let result = MeetingGlobalSpeakerStitcher().stitch([
+            self.observation("application", chunk: "chunk-a", track: .applicationAudio, label: "Speaker 1", embedding: [1, 0]),
+            self.observation("microphone", chunk: "chunk-m", track: .microphone, label: "Speaker 1", embedding: [1, 0]),
+        ])
+
+        XCTAssertNotEqual(result.speakerIDByObservationKey["application"], result.speakerIDByObservationKey["microphone"])
+    }
+}
+
 final class MeetingSessionModelTests: XCTestCase {
     func testMeetingRecordingDefaultsRoundTripStableSourceIdentifiers() throws {
         let defaults = MeetingRecordingDefaults(
@@ -2282,6 +2455,8 @@ private actor FakeMeetingSessionStore: MeetingSessionStoring {
 }
 
 private actor FakeMeetingCaptureController: MeetingCaptureControlling {
+    func preflightPermissions() async throws {}
+
     struct Snapshot: Sendable {
         var startCallCount: Int
         var stopCallCount: Int
@@ -2423,14 +2598,14 @@ private final class FakeMeetingAudioActivityArbiter: MeetingAudioActivityArbitra
     private(set) var releaseCallCount = 0
     private var activeLease: MeetingAudioActivityLease?
 
-    func acquireMeetingCapture() throws -> MeetingAudioActivityLease {
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         self.acquireCallCount += 1
         let lease = MeetingAudioActivityLease(id: UUID())
         self.activeLease = lease
         return lease
     }
 
-    func release(_ lease: MeetingAudioActivityLease) {
+    func release(_ lease: MeetingAudioActivityLease) async {
         guard self.activeLease == lease else { return }
         self.activeLease = nil
         self.releaseCallCount += 1

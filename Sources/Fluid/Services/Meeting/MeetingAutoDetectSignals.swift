@@ -51,7 +51,7 @@ protocol MicActivitySignalProviding: AnyObject {
 
 @MainActor
 protocol AudioProcessActivityProviding: AnyObject {
-    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) -> Bool
+    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) async -> Bool
 }
 
 nonisolated struct WindowSnapshot: Sendable, Equatable {
@@ -169,49 +169,64 @@ final class WorkspaceEventsMonitor: WorkspaceEventsProviding {
 /// (deadlock-avoidance precedent) rather than acting synchronously inside the HAL callback.
 @MainActor
 final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
+    private struct ListenerIdentity: Equatable, Sendable {
+        let deviceID: AudioObjectID
+        let uid: String
+        let listenerEpoch: UInt64
+        let lifecycleGeneration: UInt64
+    }
+
+    private struct Registration: @unchecked Sendable {
+        let identity: ListenerIdentity
+        let token: AudioObjectPropertyListenerBlock
+    }
+
     var onEdge: ((MicActivityEdge) -> Void)?
 
     private var deviceListToken: AudioObjectPropertyListenerBlock?
-    private var perDeviceTokens: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    private var serviceRestartedToken: AudioObjectPropertyListenerBlock?
+    private var perDeviceTokens: [AudioObjectID: Registration] = [:]
     private var lastKnownRunning: [AudioObjectID: Bool] = [:]
+    private var desiredUIDs: [AudioObjectID: String] = [:]
     private var started = false
+    private var lifecycleGeneration: UInt64 = 0
+    private var reconciliationEpoch: UInt64 = 0
+    private var listenerEpoch: UInt64 = 0
 
     func start() {
         guard !self.started else { return }
         self.started = true
-        self.registerDeviceListListener()
-        self.resyncMonitoredDevices()
+        self.lifecycleGeneration &+= 1
+        let generation = self.lifecycleGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.bootstrap(generation: generation)
+        }
     }
 
     func stop() {
         guard self.started else { return }
         self.started = false
-        var devicesAddress = Self.devicesAddress
-        if let token = self.deviceListToken {
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: devicesAddress.mSelector, scope: devicesAddress.mScope, element: devicesAddress.mElement, queueRole: .mainControl, phase: .listener)
-            #endif
-            let status = AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddress, DispatchQueue.main, token)
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: devicesAddress.mSelector, scope: devicesAddress.mScope, element: devicesAddress.mElement, queueRole: .mainControl, phase: .listener, status: status)
-            #endif
-        }
+        self.lifecycleGeneration &+= 1
+        self.reconciliationEpoch &+= 1
+        let deviceListToken = self.deviceListToken
+        let serviceRestartedToken = self.serviceRestartedToken
+        let registrations = Array(self.perDeviceTokens.values)
         self.deviceListToken = nil
-        for (deviceID, token) in self.perDeviceTokens {
-            var address = Self.runningSomewhereAddress
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
-            #endif
-            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
-            #endif
-        }
+        self.serviceRestartedToken = nil
         self.perDeviceTokens = [:]
         self.lastKnownRunning = [:]
+        self.desiredUIDs = [:]
+        Task {
+            await Self.remove(
+                deviceListToken: deviceListToken,
+                serviceRestartedToken: serviceRestartedToken,
+                registrations: registrations
+            )
+        }
     }
 
-    private static var devicesAddress: AudioObjectPropertyAddress {
+    nonisolated private static var devicesAddress: AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -219,7 +234,7 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
         )
     }
 
-    private static var runningSomewhereAddress: AudioObjectPropertyAddress {
+    nonisolated private static var runningSomewhereAddress: AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -227,102 +242,263 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
         )
     }
 
-    private func registerDeviceListListener() {
-        var address = Self.devicesAddress
+    nonisolated private static var serviceRestartedAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyServiceRestarted,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private func bootstrap(generation: UInt64) async {
+        while self.isCurrent(generation) {
+            if await self.registerDeviceListListener(generation: generation) {
+                await self.resyncMonitoredDevices(generation: generation)
+                return
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    private func registerDeviceListListener(generation: UInt64) async -> Bool {
+        let address = Self.devicesAddress
         let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             #if DEBUG
-            AudioTopologyDiagnostics.record(.callback, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDevices, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
             #endif
-            DispatchQueue.main.async { self?.resyncMonitoredDevices() }
+            guard let signal = self else { return }
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { @MainActor in
+                    await signal.resyncMonitoredDevices(generation: generation, replaceAll: true)
+                }
+            }
         }
+        let restartedToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let signal = self else { return }
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { @MainActor in
+                    await signal.handleServiceRestart(generation: generation)
+                }
+            }
+        }
+        // Restart protection must exist before any other token can be invalidated by coreaudiod.
+        let restartedStatus = await AudioTopologyListenerExecution.add(
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            address: Self.serviceRestartedAddress,
+            token: restartedToken
+        )
+        if restartedStatus == noErr, self.isCurrent(generation) {
+            self.serviceRestartedToken = restartedToken
+        } else {
+            if restartedStatus == noErr {
+                _ = await AudioTopologyListenerExecution.remove(
+                    objectID: AudioObjectID(kAudioObjectSystemObject),
+                    address: Self.serviceRestartedAddress,
+                    token: restartedToken
+                )
+            }
+            return false
+        }
+
         #if DEBUG
-        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, token)
+        let status = await AudioTopologyListenerExecution.add(
+            objectID: AudioObjectID(kAudioObjectSystemObject), address: address, token: token
+        )
         #if DEBUG
-        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingDetector, objectID: AudioObjectID(kAudioObjectSystemObject), selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
-        if status == noErr {
+        if status == noErr, self.isCurrent(generation) {
             self.deviceListToken = token
+            return true
         }
+        if status == noErr {
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: AudioObjectID(kAudioObjectSystemObject), address: address, token: token
+            )
+        }
+        if self.isCurrent(generation), let restartToken = self.serviceRestartedToken {
+            self.serviceRestartedToken = nil
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                address: Self.serviceRestartedAddress,
+                token: restartToken
+            )
+        }
+        return false
     }
 
-    private func resyncMonitoredDevices() {
-        let currentIDs = Set(AudioDevice.listInputDevices().map(\.id))
-        let previousIDs = Set(self.perDeviceTokens.keys)
+    private func resyncMonitoredDevices(generation: UInt64, replaceAll: Bool = false) async {
+        guard self.isCurrent(generation) else { return }
+        self.reconciliationEpoch &+= 1
+        let reconciliation = self.reconciliationEpoch
+        let devices = await AudioTopologyListenerExecution.perform { AudioDevice.listInputDevices() }
+        guard self.isCurrent(generation), self.reconciliationEpoch == reconciliation else { return }
 
-        for removedID in previousIDs.subtracting(currentIDs) {
-            var address = Self.runningSomewhereAddress
-            if let token = self.perDeviceTokens[removedID] {
-                #if DEBUG
-                AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingDetector, objectID: removedID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
-                #endif
-                let status = AudioObjectRemovePropertyListenerBlock(removedID, &address, DispatchQueue.main, token)
-                #if DEBUG
-                AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingDetector, objectID: removedID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
-                #endif
-            }
-            self.perDeviceTokens[removedID] = nil
-            self.lastKnownRunning[removedID] = nil
+        let desired = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0.uid) })
+        self.desiredUIDs = desired
+        // A topology event is an incarnation boundary. HAL may have discarded a listener during
+        // a disconnect/reconnect even when AudioObjectID and UID are both reused.
+        let obsolete = self.perDeviceTokens.values.filter {
+            replaceAll || desired[$0.identity.deviceID] != $0.identity.uid
         }
+        for registration in obsolete {
+            self.perDeviceTokens[registration.identity.deviceID] = nil
+            self.lastKnownRunning[registration.identity.deviceID] = nil
+        }
+        for registration in obsolete {
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: registration.identity.deviceID,
+                address: Self.runningSomewhereAddress,
+                token: registration.token
+            )
+        }
+        guard self.isCurrent(generation), self.reconciliationEpoch == reconciliation else { return }
 
-        for addedID in currentIDs.subtracting(previousIDs) {
-            self.lastKnownRunning[addedID] = self.queryIsRunningSomewhere(addedID)
-            var address = Self.runningSomewhereAddress
+        for device in devices where self.perDeviceTokens[device.id] == nil {
+            let initialRunning = await AudioTopologyListenerExecution.perform {
+                Self.queryIsRunningSomewhere(device.id)
+            }
+            guard self.isCurrent(generation), self.reconciliationEpoch == reconciliation,
+                  self.desiredUIDs[device.id] == device.uid, self.perDeviceTokens[device.id] == nil
+            else { return }
+            self.listenerEpoch &+= 1
+            let identity = ListenerIdentity(
+                deviceID: device.id, uid: device.uid,
+                listenerEpoch: self.listenerEpoch, lifecycleGeneration: generation
+            )
             let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
                 #if DEBUG
-                AudioTopologyDiagnostics.record(.callback, owner: .meetingDetector, objectID: addedID, selector: kAudioDevicePropertyDeviceIsRunningSomewhere, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+                AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingDetector, objectID: device.id, selector: kAudioDevicePropertyDeviceIsRunningSomewhere, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+                defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingDetector, objectID: device.id, selector: kAudioDevicePropertyDeviceIsRunningSomewhere, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
                 #endif
-                DispatchQueue.main.async { self?.handleRunningSomewhereChanged(deviceID: addedID) }
+                guard let signal = self else { return }
+                MeetingMicrophoneEventExecution.afterHALCallback {
+                    Task { @MainActor in
+                        await signal.handleRunningSomewhereChanged(identity: identity)
+                    }
+                }
             }
             #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingDetector, objectID: addedID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+            AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingDetector, objectID: device.id, selector: Self.runningSomewhereAddress.mSelector, scope: Self.runningSomewhereAddress.mScope, element: Self.runningSomewhereAddress.mElement, queueRole: .dedicatedControl, phase: .listener)
             #endif
-            let status = AudioObjectAddPropertyListenerBlock(addedID, &address, DispatchQueue.main, token)
+            let status = await AudioTopologyListenerExecution.add(
+                objectID: device.id, address: Self.runningSomewhereAddress, token: token
+            )
             #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingDetector, objectID: addedID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
+            AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingDetector, objectID: device.id, selector: Self.runningSomewhereAddress.mSelector, scope: Self.runningSomewhereAddress.mScope, element: Self.runningSomewhereAddress.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
             #endif
-            if status == noErr {
-                self.perDeviceTokens[addedID] = token
+            guard status == noErr else { continue }
+            guard self.isCurrent(generation), self.reconciliationEpoch == reconciliation,
+                  self.desiredUIDs[device.id] == device.uid, self.perDeviceTokens[device.id] == nil
+            else {
+                _ = await AudioTopologyListenerExecution.remove(
+                    objectID: device.id, address: Self.runningSomewhereAddress, token: token
+                )
+                return
             }
+            self.perDeviceTokens[device.id] = Registration(identity: identity, token: token)
+            self.lastKnownRunning[device.id] = initialRunning
+
+            // Closes the callback-before-token-commit window: re-read after ownership is visible.
+            await self.handleRunningSomewhereChanged(identity: identity)
         }
     }
 
-    private func handleRunningSomewhereChanged(deviceID: AudioObjectID) {
-        let isRunning = self.queryIsRunningSomewhere(deviceID)
-        let wasRunning = self.lastKnownRunning[deviceID] ?? false
-        self.lastKnownRunning[deviceID] = isRunning
+    private func handleRunningSomewhereChanged(identity: ListenerIdentity) async {
+        guard self.isCurrent(identity.lifecycleGeneration),
+              self.perDeviceTokens[identity.deviceID]?.identity == identity
+        else { return }
+        let isRunning = await AudioTopologyListenerExecution.perform {
+            Self.queryIsRunningSomewhere(identity.deviceID)
+        }
+        guard self.isCurrent(identity.lifecycleGeneration),
+              self.perDeviceTokens[identity.deviceID]?.identity == identity
+        else { return }
+        let wasRunning = self.lastKnownRunning[identity.deviceID] ?? false
+        self.lastKnownRunning[identity.deviceID] = isRunning
         guard isRunning != wasRunning else { return }
         self.onEdge?(MicActivityEdge(isActive: isRunning))
     }
 
-    private func queryIsRunningSomewhere(_ deviceID: AudioObjectID) -> Bool {
+    private nonisolated static func queryIsRunningSomewhere(_ deviceID: AudioObjectID) -> Bool {
         var address = Self.runningSomewhereAddress
         var value: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
+        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
         return status == noErr && value != 0
+    }
+
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        self.started && self.lifecycleGeneration == generation
+    }
+
+    private func handleServiceRestart(generation: UInt64) async {
+        guard self.isCurrent(generation) else { return }
+        // coreaudiod discarded these registrations. Drop ownership without attempting removal,
+        // invalidate every callback/query, then build one fresh listener set.
+        self.lifecycleGeneration &+= 1
+        self.reconciliationEpoch &+= 1
+        let replacementGeneration = self.lifecycleGeneration
+        self.deviceListToken = nil
+        self.serviceRestartedToken = nil
+        self.perDeviceTokens = [:]
+        self.lastKnownRunning = [:]
+        self.desiredUIDs = [:]
+        await self.bootstrap(generation: replacementGeneration)
+    }
+
+    private nonisolated static func remove(
+        deviceListToken: AudioObjectPropertyListenerBlock?,
+        serviceRestartedToken: AudioObjectPropertyListenerBlock?,
+        registrations: [Registration]
+    ) async {
+        if let deviceListToken {
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                address: Self.devicesAddress,
+                token: deviceListToken
+            )
+        }
+        if let serviceRestartedToken {
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                address: Self.serviceRestartedAddress,
+                token: serviceRestartedToken
+            )
+        }
+        for registration in registrations {
+            _ = await AudioTopologyListenerExecution.remove(
+                objectID: registration.identity.deviceID,
+                address: Self.runningSomewhereAddress,
+                token: registration.token
+            )
+        }
     }
 }
 
 @MainActor
 final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
-    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) -> Bool {
-        guard #available(macOS 14.4, *) else { return false }
-        return Self.processObjectIDs().contains { processID in
-            guard let bundleIdentifier = Self.bundleIdentifier(for: processID), bundleIdentifiers.contains(bundleIdentifier) else { return false }
-            return Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningInput)
-                || Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningOutput)
+    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) async -> Bool {
+        await AudioTopologyListenerExecution.perform {
+            guard #available(macOS 14.4, *) else { return false }
+            return Self.processObjectIDs().contains { processID in
+                guard let bundleIdentifier = Self.bundleIdentifier(for: processID), bundleIdentifiers.contains(bundleIdentifier) else { return false }
+                return Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningInput)
+                    || Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningOutput)
+            }
         }
     }
 
-    private static func processObjectIDs() -> [AudioObjectID] {
+    nonisolated private static func processObjectIDs() -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -331,26 +507,26 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         var size: UInt32 = 0
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
         let sizeStatus = AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: sizeStatus)
+        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: sizeStatus)
         #endif
         guard sizeStatus == noErr else { return [] }
         var processIDs = Array(repeating: AudioObjectID(), count: Int(size) / MemoryLayout<AudioObjectID>.size)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
         let dataStatus = AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &processIDs)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: dataStatus)
+        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: dataStatus)
         #endif
         guard dataStatus == noErr else { return [] }
         return processIDs
     }
 
-    private static func bundleIdentifier(for processID: AudioObjectID) -> String? {
+    nonisolated private static func bundleIdentifier(for processID: AudioObjectID) -> String? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioProcessPropertyBundleID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -359,17 +535,17 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         var value: CFString = "" as CFString
         var size = UInt32(MemoryLayout<CFString>.size)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
         let status = AudioObjectGetPropertyData(processID, &address, 0, nil, &size, &value)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
+        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
         guard status == noErr else { return nil }
         return value as String
     }
 
-    private static func isRunning(_ processID: AudioObjectID, selector: AudioObjectPropertySelector) -> Bool {
+    nonisolated private static func isRunning(_ processID: AudioObjectID, selector: AudioObjectPropertySelector) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -378,11 +554,11 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         var value: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener)
+        AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
         let status = AudioObjectGetPropertyData(processID, &address, 0, nil, &size, &value)
         #if DEBUG
-        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .mainControl, phase: .listener, status: status)
+        AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
         return status == noErr && value != 0
     }
@@ -557,7 +733,7 @@ final class LiveDetectionActivityGate: DetectionActivityGate {
         guard self.isIdle else { return .busy }
         guard CGPreflightScreenCaptureAccess() else { return .needsSetup(.screenRecording) }
         guard AVCaptureDeviceAuthorization.isMicrophoneAuthorized() else { return .needsSetup(.microphone) }
-        guard !AudioDevice.listInputDevices().isEmpty else { return .needsSetup(.noInputDevice) }
+        guard AppServices.shared.audioObserver.hasAvailableInputDevice else { return .needsSetup(.noInputDevice) }
         guard MeetingStorageReadiness.hasSufficientFreeSpace() else { return .needsSetup(.storage) }
         return .ready
     }

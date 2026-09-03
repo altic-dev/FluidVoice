@@ -1295,7 +1295,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         let block: AudioObjectPropertyListenerBlock = { [weak self, weak input] listenerObjectID, _ in
             #if DEBUG
                 AudioTopologyDiagnostics.record(
-                    .callback,
+                    .callbackBegin,
                     owner: .directCoreAudio,
                     objectID: listenerObjectID,
                     selector: selector,
@@ -1304,6 +1304,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                     queueRole: .dedicatedDelivery,
                     generation: generation
                 )
+                defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .directCoreAudio, objectID: listenerObjectID, selector: selector, scope: scope, element: kAudioObjectPropertyElementMain, queueRole: .dedicatedDelivery, generation: generation) }
             #endif
             let deviceIsAlive =
                 name == "device_is_alive"

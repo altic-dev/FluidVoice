@@ -873,6 +873,7 @@ final class MeetingRecoveryTests: XCTestCase {
             asrProvider: "apple",
             asrModel: asrModel,
             languageCode: "en",
+            diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
             completedTrackID: completedTrackID,
             trackFingerprints: trackFingerprints,
             speakers: [],
@@ -913,6 +914,7 @@ final class MeetingRecoveryTests: XCTestCase {
             provider: String = "apple",
             model: String = "base",
             language: String = "en",
+            diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
             completedTrackID: MeetingAudioTrackID = trackID,
             expectedFingerprints: [MeetingAudioTrackID: [MeetingProcessingCheckpoint.ChunkFingerprint]] = fingerprints,
             session: MeetingSession = session
@@ -923,6 +925,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 provider: provider,
                 model: model,
                 language: language,
+                diarizationFingerprint: diarizationFingerprint,
                 completedTrackID: completedTrackID,
                 expectedFingerprints: expectedFingerprints
             )
@@ -933,6 +936,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(isValid(provider: "other"))
         XCTAssertFalse(isValid(model: "other"))
         XCTAssertFalse(isValid(language: "fr"))
+        XCTAssertFalse(isValid(diarizationFingerprint: "different-diarizer"))
         XCTAssertFalse(isValid(completedTrackID: UUID()))
         var otherSession = session
         otherSession.id = UUID()
@@ -2301,41 +2305,166 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - ASR activity arbiter
 
-    func testArbiterDoubleAcquireThrowsRecordingAlreadyActive() throws {
+    func testPermissionPreflightCompletesBeforeMeetingLeaseAcquisition() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var continuation: CheckedContinuation<Void, Never>?
+        capture.onPreflight = {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir),
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: arbiter
+        )
+
+        let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
+        while capture.preflightCount == 0 { await Task.yield() }
+        XCTAssertEqual(arbiter.acquireCount, 0, "permission prompt must not hold the meeting audio lease")
+
+        continuation?.resume()
+        _ = try await start.value
+        XCTAssertEqual(arbiter.acquireCount, 1)
+    }
+
+    func testDeniedPermissionNeverAcquiresMeetingLease() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.preflightError = MeetingCaptureError.microphonePermissionDenied
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir),
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: arbiter
+        )
+
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeConfiguration())
+            XCTFail("denied microphone permission must fail before audio ownership")
+        } catch {
+            guard case MeetingCaptureError.microphonePermissionDenied = error else {
+                return XCTFail("Expected microphonePermissionDenied, got \(error)")
+            }
+        }
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertNil(coordinator.activeSession)
+        XCTAssertEqual(coordinator.state, .idle)
+    }
+
+    func testArbiterDoubleAcquireThrowsRecordingAlreadyActive() async throws {
         let leasing = FakeASRActivityLeasing()
         let arbiter = AudioActivityArbiter { leasing }
 
-        _ = try arbiter.acquireMeetingCapture()
-        XCTAssertThrowsError(try arbiter.acquireMeetingCapture()) { error in
+        _ = try await arbiter.acquireMeetingCapture()
+        do {
+            _ = try await arbiter.acquireMeetingCapture()
+            XCTFail("Expected .recordingAlreadyActive")
+        } catch {
             guard case MeetingCoordinatorError.recordingAlreadyActive = error else {
                 return XCTFail("Expected .recordingAlreadyActive, got \(error)")
             }
         }
         XCTAssertEqual(leasing.acquireCount, 1)
+        XCTAssertEqual(leasing.prepareCount, 1)
     }
 
-    func testArbiterReleaseThenReacquireSucceeds() throws {
+    func testArbiterRejectsSecondAcquireWhileFirstHandoffIsSuspended() async throws {
+        let leasing = SuspendedHandoffASRActivityLeasing()
+        let arbiter = AudioActivityArbiter { leasing }
+        let firstAcquire = Task { try await arbiter.acquireMeetingCapture() }
+
+        while leasing.prepareStarted == false { await Task.yield() }
+        do {
+            _ = try await arbiter.acquireMeetingCapture()
+            XCTFail("Expected the published preparing lease to reject re-entrant acquisition")
+        } catch {
+            guard case MeetingCoordinatorError.recordingAlreadyActive = error else {
+                return XCTFail("Expected .recordingAlreadyActive, got \(error)")
+            }
+        }
+
+        leasing.resumePrepare()
+        let lease = try await firstAcquire.value
+        await arbiter.release(lease)
+        XCTAssertEqual(leasing.handbackCount, 1)
+    }
+
+    func testCancelledSuspendedHandoffRollsBackBeforeReturningLease() async throws {
+        let leasing = SuspendedHandoffASRActivityLeasing()
+        let arbiter = AudioActivityArbiter { leasing }
+        let acquire = Task { try await arbiter.acquireMeetingCapture() }
+
+        while leasing.prepareStarted == false { await Task.yield() }
+        acquire.cancel()
+        leasing.resumePrepare()
+
+        do {
+            _ = try await acquire.value
+            XCTFail("Canceled handoff must not return a usable meeting lease")
+        } catch is CancellationError {}
+        XCTAssertEqual(leasing.handbackCount, 1)
+
+        let replacement = try await arbiter.acquireMeetingCapture()
+        await arbiter.release(replacement)
+    }
+
+    func testArbiterReleaseThenReacquireSucceeds() async throws {
         let leasing = FakeASRActivityLeasing()
         let arbiter = AudioActivityArbiter { leasing }
 
-        let lease = try arbiter.acquireMeetingCapture()
-        arbiter.release(lease)
+        let lease = try await arbiter.acquireMeetingCapture()
+        await arbiter.release(lease)
         XCTAssertEqual(leasing.releaseCount, 1)
+        XCTAssertEqual(leasing.handbackCount, 1)
 
-        let reacquired = try arbiter.acquireMeetingCapture()
+        let reacquired = try await arbiter.acquireMeetingCapture()
         XCTAssertNotEqual(lease, reacquired)
         XCTAssertEqual(leasing.acquireCount, 2)
     }
 
-    func testArbiterReleaseWithStaleLeaseIsNoOp() throws {
+    func testConcurrentDuplicateReleaseCoalescesUntilHandbackCompletes() async throws {
+        let leasing = SuspendedHandbackASRActivityLeasing()
+        let arbiter = AudioActivityArbiter { leasing }
+        let lease = try await arbiter.acquireMeetingCapture()
+
+        let firstRelease = Task { await arbiter.release(lease) }
+        while leasing.handbackStarted == false { await Task.yield() }
+        let duplicateRelease = Task { await arbiter.release(lease) }
+        await Task.yield()
+
+        XCTAssertEqual(leasing.handbackCount, 1, "duplicate release must await the retained handback")
+        do {
+            _ = try await arbiter.acquireMeetingCapture()
+            XCTFail("meeting ownership must remain published until handback finishes")
+        } catch {
+            guard case MeetingCoordinatorError.recordingAlreadyActive = error else {
+                return XCTFail("Expected .recordingAlreadyActive, got \(error)")
+            }
+        }
+
+        leasing.resumeHandback()
+        await firstRelease.value
+        await duplicateRelease.value
+        XCTAssertEqual(leasing.handbackCount, 1)
+
+        let replacement = try await arbiter.acquireMeetingCapture()
+        await arbiter.release(replacement)
+    }
+
+    func testArbiterReleaseWithStaleLeaseIsNoOp() async throws {
         let leasing = FakeASRActivityLeasing()
         let arbiter = AudioActivityArbiter { leasing }
 
-        let lease = try arbiter.acquireMeetingCapture()
-        arbiter.release(MeetingAudioActivityLease(id: UUID())) // stale, not the held lease
+        let lease = try await arbiter.acquireMeetingCapture()
+        await arbiter.release(MeetingAudioActivityLease(id: UUID())) // stale, not the held lease
         XCTAssertEqual(leasing.releaseCount, 0, "a stale lease must not release the real ASR activity")
 
-        arbiter.release(lease)
+        await arbiter.release(lease)
         XCTAssertEqual(leasing.releaseCount, 1)
     }
 
@@ -2737,6 +2866,15 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var startResult = MeetingCaptureStartResult(tracks: [], firstPresentationTime: nil)
     var startError: Error?
     var onStart: (@Sendable () async -> Void)?
+    var preflightError: Error?
+    var onPreflight: (@Sendable () async -> Void)?
+    private(set) var preflightCount = 0
+
+    func preflightPermissions() async throws {
+        self.preflightCount += 1
+        await self.onPreflight?()
+        if let preflightError { throw preflightError }
+    }
 
     func start(
         session: MeetingSession,
@@ -2872,8 +3010,12 @@ private final class GatedProcessingController: MeetingProcessingControlling {
 
 @MainActor
 private final class StubArbiter: MeetingAudioActivityArbitrating {
-    func acquireMeetingCapture() throws -> MeetingAudioActivityLease { MeetingAudioActivityLease(id: UUID()) }
-    func release(_ lease: MeetingAudioActivityLease) {}
+    private(set) var acquireCount = 0
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
+        self.acquireCount += 1
+        return MeetingAudioActivityLease(id: UUID())
+    }
+    func release(_ lease: MeetingAudioActivityLease) async {}
 }
 
 /// Records acquire/release calls without touching a real ASRService.
@@ -2881,6 +3023,8 @@ private final class StubArbiter: MeetingAudioActivityArbitrating {
 private final class FakeASRActivityLeasing: ASRActivityLeasing {
     private(set) var acquireCount = 0
     private(set) var releaseCount = 0
+    private(set) var prepareCount = 0
+    private(set) var handbackCount = 0
     private var activeLease: ASRActivityLease?
 
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
@@ -2898,20 +3042,105 @@ private final class FakeASRActivityLeasing: ASRActivityLeasing {
         self.releaseCount += 1
         self.activeLease = nil
     }
+
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {
+        self.prepareCount += 1
+    }
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
+        self.handbackCount += 1
+        self.releaseExclusiveActivity(lease)
+    }
+}
+
+@MainActor
+private final class SuspendedHandoffASRActivityLeasing: ASRActivityLeasing {
+    private(set) var prepareStarted = false
+    private(set) var handbackCount = 0
+    private var activeLease: ASRActivityLease?
+    private var prepareContinuation: CheckedContinuation<Void, Never>?
+    private var prepareInvocationCount = 0
+
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard self.activeLease == nil else { throw ASRActivityError.activityInProgress(activity) }
+        let lease = ASRActivityLease(id: UUID(), activity: activity)
+        self.activeLease = lease
+        return lease
+    }
+
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {
+        guard self.activeLease == lease else { return }
+        self.activeLease = nil
+    }
+
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {
+        self.prepareInvocationCount += 1
+        self.prepareStarted = true
+        if self.prepareInvocationCount == 1 {
+            await withCheckedContinuation { self.prepareContinuation = $0 }
+        }
+    }
+
+    func resumePrepare() {
+        let continuation = self.prepareContinuation
+        self.prepareContinuation = nil
+        continuation?.resume()
+    }
+
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
+        self.handbackCount += 1
+        self.releaseExclusiveActivity(lease)
+    }
+}
+
+@MainActor
+private final class SuspendedHandbackASRActivityLeasing: ASRActivityLeasing {
+    private(set) var handbackStarted = false
+    private(set) var handbackCount = 0
+    private var activeLease: ASRActivityLease?
+    private var handbackContinuation: CheckedContinuation<Void, Never>?
+
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard self.activeLease == nil else { throw ASRActivityError.activityInProgress(activity) }
+        let lease = ASRActivityLease(id: UUID(), activity: activity)
+        self.activeLease = lease
+        return lease
+    }
+
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {
+        guard self.activeLease == lease else { return }
+        self.activeLease = nil
+    }
+
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {}
+
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {
+        self.handbackCount += 1
+        self.handbackStarted = true
+        if self.handbackCount == 1 {
+            await withCheckedContinuation { self.handbackContinuation = $0 }
+        }
+        self.releaseExclusiveActivity(lease)
+    }
+
+    func resumeHandback() {
+        let continuation = self.handbackContinuation
+        self.handbackContinuation = nil
+        continuation?.resume()
+    }
 }
 
 /// Throws on the first `acquireMeetingCapture()` call, then succeeds on every subsequent call.
 @MainActor
 private final class ThrowOnceArbiter: MeetingAudioActivityArbitrating {
     private var hasThrown = false
-    func acquireMeetingCapture() throws -> MeetingAudioActivityLease {
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         guard self.hasThrown else {
             self.hasThrown = true
             throw MeetingCoordinatorError.dictationActive
         }
         return MeetingAudioActivityLease(id: UUID())
     }
-    func release(_ lease: MeetingAudioActivityLease) {}
+    func release(_ lease: MeetingAudioActivityLease) async {}
 }
 
 /// Wraps a real `MeetingSessionStore`, suspending `delete(id:)` until `openGate()` is called —

@@ -29,7 +29,7 @@ private final class FakeMicActivity: MicActivitySignalProviding {
 private final class FakeAudioProcessActivity: AudioProcessActivityProviding {
     var activeBundleIdentifiers: Set<String> = []
 
-    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) -> Bool {
+    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) async -> Bool {
         !self.activeBundleIdentifiers.isDisjoint(with: bundleIdentifiers)
     }
 }
@@ -411,7 +411,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.prompts.count, 1)
     }
 
-    func testProcessAudioConfirmsMutedZoomJoinWithoutDeviceMicEdge() {
+    func testProcessAudioConfirmsMutedZoomJoinWithoutDeviceMicEdge() async {
         let h = DetectorHarness()
         h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "us.zoom.xos", processID: 5), at: h.clock.now())
         h.detector.handleWindowSnapshot(
@@ -419,7 +419,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
             at: h.clock.now()
         )
         h.audioProcessActivity.activeBundleIdentifiers = ["us.zoom.caphost"]
-        h.detector.pollAudioProcessActivity(at: h.clock.now())
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
         XCTAssertEqual(h.prompts.count, 1)
     }
 

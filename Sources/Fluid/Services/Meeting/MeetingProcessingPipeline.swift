@@ -145,6 +145,10 @@ nonisolated struct MeetingSpeakerEmbeddingIndex: Sendable {
         )
     }
 
+    mutating func replace(prototype: Prototype) {
+        self.prototypes[prototype.speakerID] = prototype
+    }
+
     func prototype(for speakerID: SessionSpeakerID) -> Prototype? {
         self.prototypes[speakerID]
     }
@@ -174,6 +178,338 @@ nonisolated struct MeetingSpeakerEmbeddingIndex: Sendable {
         let magnitude = sqrt(embedding.reduce(Float.zero) { $0 + $1 * $1 })
         guard magnitude > 0, magnitude.isFinite else { return nil }
         return embedding.map { $0 / magnitude }
+    }
+}
+
+/// Deterministically joins per-chunk diarizer labels into session identities.
+///
+/// This is deliberately a pure value type. It has no knowledge of transcription or capture
+/// state, and it never uses observation order as an identity signal. Quality is a diarizer
+/// quality metric, not a probability; it is used with speech duration only for the explicit
+/// eligibility gates below.
+nonisolated struct MeetingGlobalSpeakerStitcher: Sendable {
+    nonisolated struct Observation: Sendable, Equatable {
+        let key: String
+        let chunkKey: String
+        let trackKind: MeetingAudioTrackKind
+        let localLabel: String
+        let embedding: [Float]
+        let quality: Float
+        let effectiveSpeechDuration: TimeInterval
+
+        init(
+            key: String,
+            chunkKey: String,
+            trackKind: MeetingAudioTrackKind,
+            localLabel: String,
+            embedding: [Float],
+            quality: Float,
+            effectiveSpeechDuration: TimeInterval
+        ) {
+            self.key = key
+            self.chunkKey = chunkKey
+            self.trackKind = trackKind
+            self.localLabel = localLabel
+            self.embedding = embedding
+            self.quality = quality
+            self.effectiveSpeechDuration = effectiveSpeechDuration
+        }
+    }
+
+    nonisolated struct Prototype: Sendable, Equatable {
+        let speakerID: SessionSpeakerID
+        let embedding: [Float]
+        let observationCount: Int
+        let averageQuality: Float
+        let effectiveSpeechDuration: TimeInterval
+        let containsReliableCore: Bool
+    }
+
+    nonisolated struct Result: Sendable, Equatable {
+        let speakerIDByObservationKey: [String: SessionSpeakerID]
+        let prototypes: [SessionSpeakerID: Prototype]
+    }
+
+    /// These thresholds are intentionally named and injectable so behavior can be pinned by tests.
+    struct Configuration: Sendable, Equatable {
+        var coreMaximumDistance: Float = 0.35
+        var deferredMaximumDistance: Float = 0.25
+        var deferredAmbiguityMargin: Float = 0.10
+        var coreMinimumQuality: Float = 0.65
+        var coreMinimumDuration: TimeInterval = 1.0
+        var coreMaximumPairwiseDistance: Float = 0.35
+        var bootstrapMinimumQuality: Float = 0.45
+        var bootstrapMinimumDuration: TimeInterval = 2.0
+        var prototypeUpdateMaximumDistance: Float = 0.12
+        // These can be lower than the core gates because the much tighter distance gate above
+        // supplies the additional evidence required to update an established prototype.
+        var prototypeUpdateMinimumQuality: Float = 0.55
+        var prototypeUpdateMinimumDuration: TimeInterval = 0.5
+    }
+
+    let configuration: Configuration
+
+    init(configuration: Configuration = Configuration()) {
+        self.configuration = configuration
+    }
+
+    func stitch(_ observations: [Observation]) -> Result {
+        var assignments: [String: SessionSpeakerID] = [:]
+        var prototypes: [SessionSpeakerID: Prototype] = [:]
+
+        for trackKind in MeetingAudioTrackKind.allCases {
+            let trackObservations = observations
+                .filter { $0.trackKind == trackKind }
+                .sorted(by: Self.observationPrecedes)
+            guard !trackObservations.isEmpty else { continue }
+
+            var clusters: [Cluster] = []
+            for observation in trackObservations where self.isReliableCore(observation) {
+                guard let normalized = Self.normalized(observation.embedding) else { continue }
+                clusters.append(Cluster(observation: observation, embedding: normalized))
+            }
+
+            // Avoid a hard regression to "Unknown" when a quiet track has no strict core at all.
+            // Bootstrap only from longer, valid observations; once any strict core exists this
+            // relaxed path is disabled for the entire track.
+            if clusters.isEmpty {
+                for observation in trackObservations where self.isBootstrapCore(observation) {
+                    guard let normalized = Self.normalized(observation.embedding) else { continue }
+                    clusters.append(Cluster(observation: observation, embedding: normalized))
+                }
+            }
+
+            // Merge reliable cores only. The closest eligible pair is selected with stable
+            // tie-breaks, and a cluster merge is rejected if it would violate cannot-link.
+            while let pair = self.closestMergeablePair(in: clusters) {
+                let right = clusters.remove(at: pair.right)
+                let left = clusters.remove(at: pair.left)
+                clusters.append(Self.merged(left, right))
+                clusters.sort { $0.identityKey < $1.identityKey }
+            }
+
+            for index in clusters.indices {
+                for observation in clusters[index].observations {
+                    assignments[observation.key] = clusters[index].speakerID
+                }
+            }
+
+            // Deferred observations can attach to cores, never to another deferred observation.
+            // A failed attachment gets its own deterministic identity and is not added as a core.
+            let coreObservationKeys = Set(clusters.flatMap { $0.observations.map(\.key) })
+            for observation in trackObservations where !coreObservationKeys.contains(observation.key) {
+                guard let normalized = Self.normalized(observation.embedding) else {
+                    let singleton = Self.singletonCluster(for: observation)
+                    assignments[observation.key] = singleton.speakerID
+                    prototypes[singleton.speakerID] = singleton.prototype()
+                    continue
+                }
+
+                let candidates = clusters.indices.compactMap { index -> (index: Int, distance: Float)? in
+                    let cluster = clusters[index]
+                    guard self.canLink(observation, to: cluster),
+                          let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(normalized, cluster.embedding)
+                    else { return nil }
+                    return (index, distance)
+                }.sorted {
+                    if $0.distance == $1.distance {
+                        return clusters[$0.index].identityKey < clusters[$1.index].identityKey
+                    }
+                    return $0.distance < $1.distance
+                }
+
+                guard let closest = candidates.first,
+                      closest.distance <= self.configuration.deferredMaximumDistance,
+                      candidates.dropFirst().first.map({ $0.distance - closest.distance >= self.configuration.deferredAmbiguityMargin }) ?? true
+                else {
+                    let singleton = Self.singletonCluster(for: observation)
+                    assignments[observation.key] = singleton.speakerID
+                    prototypes[singleton.speakerID] = singleton.prototype()
+                    continue
+                }
+
+                let clusterIndex = closest.index
+                let clusterID = clusters[clusterIndex].speakerID
+                assignments[observation.key] = clusterID
+                // Cannot-link membership is independent from whether this observation is trusted
+                // enough to move the speaker prototype.
+                clusters[clusterIndex].recordConstraint(observation)
+                if closest.distance <= self.configuration.prototypeUpdateMaximumDistance,
+                   self.isEligibleForPrototypeUpdate(observation)
+                {
+                    clusters[clusterIndex].add(observation: observation, embedding: normalized)
+                }
+            }
+
+            for cluster in clusters {
+                prototypes[cluster.speakerID] = cluster.prototype()
+            }
+        }
+
+        return Result(
+            speakerIDByObservationKey: assignments,
+            prototypes: prototypes
+        )
+    }
+
+    private struct Cluster {
+        var speakerID: SessionSpeakerID
+        var identityKey: String
+        var observations: [Observation]
+        var constrainedLabelsByChunk: [String: Set<String>]
+        var embedding: [Float]
+        var containsReliableCore: Bool
+
+        init(observation: Observation, embedding: [Float]) {
+            self.speakerID = MeetingGlobalSpeakerStitcher.stableUUID(trackKind: observation.trackKind, key: observation.key)
+            self.identityKey = observation.key
+            self.observations = [observation]
+            self.constrainedLabelsByChunk = [observation.chunkKey: [observation.localLabel]]
+            self.embedding = embedding
+            self.containsReliableCore = true
+        }
+
+        mutating func add(observation: Observation, embedding: [Float]) {
+            let count = Float(self.observations.count)
+            let combined = zip(self.embedding, embedding).map { ($0 * count + $1) / (count + 1) }
+            self.embedding = MeetingGlobalSpeakerStitcher.normalized(combined) ?? self.embedding
+            self.observations.append(observation)
+        }
+
+        mutating func recordConstraint(_ observation: Observation) {
+            self.constrainedLabelsByChunk[observation.chunkKey, default: []].insert(observation.localLabel)
+        }
+
+        func prototype() -> Prototype {
+            Prototype(
+                speakerID: self.speakerID,
+                embedding: self.embedding,
+                observationCount: self.observations.count,
+                averageQuality: self.observations.reduce(Float.zero) { $0 + $1.quality } / Float(self.observations.count),
+                effectiveSpeechDuration: self.observations.reduce(0) { $0 + max(0, $1.effectiveSpeechDuration) },
+                containsReliableCore: self.containsReliableCore
+            )
+        }
+    }
+
+    private func isReliableCore(_ observation: Observation) -> Bool {
+        guard Self.normalized(observation.embedding) != nil else { return false }
+        return observation.quality >= self.configuration.coreMinimumQuality
+            && observation.effectiveSpeechDuration >= self.configuration.coreMinimumDuration
+    }
+
+    private func isBootstrapCore(_ observation: Observation) -> Bool {
+        guard Self.normalized(observation.embedding) != nil else { return false }
+        return observation.quality >= self.configuration.bootstrapMinimumQuality
+            && observation.effectiveSpeechDuration >= self.configuration.bootstrapMinimumDuration
+    }
+
+    private func isEligibleForPrototypeUpdate(_ observation: Observation) -> Bool {
+        observation.quality >= self.configuration.prototypeUpdateMinimumQuality
+            && observation.effectiveSpeechDuration >= self.configuration.prototypeUpdateMinimumDuration
+    }
+
+    private func canLink(_ observation: Observation, to cluster: Cluster) -> Bool {
+        guard let labels = cluster.constrainedLabelsByChunk[observation.chunkKey] else { return true }
+        return labels.allSatisfy { $0 == observation.localLabel }
+    }
+
+    private func closestMergeablePair(in clusters: [Cluster]) -> (left: Int, right: Int)? {
+        var best: (left: Int, right: Int, distance: Float)?
+        for left in clusters.indices {
+            for right in clusters.indices where right > left {
+                guard !clusters[left].observations.contains(where: { first in
+                    clusters[right].observations.contains { second in
+                        first.chunkKey == second.chunkKey && first.localLabel != second.localLabel
+                    }
+                }),
+                      self.coreClustersRespectDiameter(clusters[left], clusters[right]),
+                      let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(
+                          clusters[left].embedding, clusters[right].embedding
+                      ),
+                      distance <= self.configuration.coreMaximumDistance
+                else { continue }
+                let candidate = (left, right, distance)
+                if best == nil || distance < best!.distance
+                    || (distance == best!.distance && Self.pairPrecedes(candidate, best!, clusters: clusters))
+                {
+                    best = candidate
+                }
+            }
+        }
+        return best.map { ($0.left, $0.right) }
+    }
+
+    private func coreClustersRespectDiameter(_ left: Cluster, _ right: Cluster) -> Bool {
+        left.observations.allSatisfy { first in
+            right.observations.allSatisfy { second in
+                guard let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(first.embedding, second.embedding) else {
+                    return false
+                }
+                return distance <= self.configuration.coreMaximumPairwiseDistance
+            }
+        }
+    }
+
+    private static func pairPrecedes(
+        _ lhs: (Int, Int, Float),
+        _ rhs: (left: Int, right: Int, distance: Float),
+        clusters: [Cluster]
+    ) -> Bool {
+        let leftKey = clusters[lhs.0].identityKey + "\u{0}" + clusters[lhs.1].identityKey
+        let rightKey = clusters[rhs.left].identityKey + "\u{0}" + clusters[rhs.right].identityKey
+        return leftKey < rightKey
+    }
+
+    private static func merged(_ left: Cluster, _ right: Cluster) -> Cluster {
+        let ordered = (left.observations + right.observations).sorted(by: Self.observationPrecedes)
+        var merged = Cluster(observation: ordered[0], embedding: left.identityKey <= right.identityKey ? left.embedding : right.embedding)
+        merged.speakerID = MeetingGlobalSpeakerStitcher.stableUUID(trackKind: ordered[0].trackKind, key: ordered[0].key)
+        merged.identityKey = ordered[0].key
+        merged.observations = []
+        merged.constrainedLabelsByChunk = left.constrainedLabelsByChunk
+        for (chunkKey, labels) in right.constrainedLabelsByChunk {
+            merged.constrainedLabelsByChunk[chunkKey, default: []].formUnion(labels)
+        }
+        merged.containsReliableCore = left.containsReliableCore || right.containsReliableCore
+        for observation in ordered {
+            guard let normalized = normalized(observation.embedding) else { continue }
+            if merged.observations.isEmpty {
+                merged.embedding = normalized
+            }
+            merged.add(observation: observation, embedding: normalized)
+        }
+        return merged
+    }
+
+    private static func singletonCluster(for observation: Observation) -> Cluster {
+        let embedding = Self.normalized(observation.embedding) ?? []
+        var cluster = Cluster(observation: observation, embedding: embedding)
+        cluster.containsReliableCore = false
+        return cluster
+    }
+
+    private static func observationPrecedes(_ lhs: Observation, _ rhs: Observation) -> Bool {
+        let left = [lhs.key, lhs.chunkKey, lhs.localLabel, lhs.trackKind.rawValue].joined(separator: "\u{0}")
+        let right = [rhs.key, rhs.chunkKey, rhs.localLabel, rhs.trackKind.rawValue].joined(separator: "\u{0}")
+        return left < right
+    }
+
+    private static func normalized(_ embedding: [Float]) -> [Float]? {
+        guard let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(embedding, embedding), distance.isFinite else { return nil }
+        let magnitude = sqrt(embedding.reduce(Float.zero) { $0 + $1 * $1 })
+        guard magnitude > 0, magnitude.isFinite else { return nil }
+        return embedding.map { $0 / magnitude }
+    }
+
+    private static func stableUUID(trackKind: MeetingAudioTrackKind, key: String) -> UUID {
+        var bytes = Array(SHA256.hash(data: Data("global-speaker:\(trackKind.rawValue):\(key)".utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x50
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }
 
@@ -320,7 +656,7 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    static let pipelineVersion = 7
+    static let pipelineVersion = 8
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -379,6 +715,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             ),
             prototypeSpeakerIDs: prototypeSpeakerIDs
         )
+    }
+
+    nonisolated static func trustedMicrophoneObservationKeys(
+        from turns: [StagedMicrophoneTurn]
+    ) -> Set<String> {
+        Set(turns.compactMap { turn in
+            turn.isLikelyEcho ? nil : turn.diarizationObservationKey
+        })
     }
 
     /// Why "You" was or was not elected. Without this the only visible symptom is an entire
@@ -548,6 +892,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var index: Int
         var clusterID: SessionSpeakerID
         var clusterLabel: String
+        var diarizationObservationKey: String? = nil
         var start: TimeInterval
         var end: TimeInterval
         var text: String
@@ -572,6 +917,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var effectiveEcho: Bool {
             (self.isLikelyEcho || self.signalVerdict == .echo) && self.signalVerdict != .containsLocalSpeech
         }
+    }
+
+    private struct PendingDiarizedTurn {
+        let observation: MeetingGlobalSpeakerStitcher.Observation
+        let trackID: MeetingAudioTrackID
+        let chunkID: MeetingAudioChunkID
+        let index: Int
+        let start: TimeInterval
+        let end: TimeInterval
+        let text: String
     }
 
     // MARK: - Echo signal veto
@@ -895,26 +1250,21 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             return id
         }
 
-        mutating func resolveCluster(
-            trackKind: MeetingAudioTrackKind,
-            newClusterKey: String,
-            profile: SpeakerDiarizationService.SpeakerProfile?,
-            excluding: Set<SessionSpeakerID>
-        ) -> (speakerID: SessionSpeakerID, matchedExisting: Bool) {
-            var index = self.embeddingIndexByTrack[trackKind] ?? MeetingSpeakerEmbeddingIndex()
-            let existing = profile.flatMap {
-                index.bestMatch(for: $0.embedding, excluding: excluding)
-            }
-            let speakerID = existing ?? MeetingProcessingPipeline.stableUUID("speaker:\(newClusterKey)")
-            if let profile {
-                index.observe(
-                    speakerID: speakerID,
-                    embedding: profile.embedding,
-                    quality: profile.averageQuality
-                )
+        mutating func applyGlobalStitch(
+            _ result: MeetingGlobalSpeakerStitcher.Result,
+            trackKind: MeetingAudioTrackKind
+        ) {
+            var index = MeetingSpeakerEmbeddingIndex()
+            for prototype in result.prototypes.values.sorted(by: { $0.speakerID.uuidString < $1.speakerID.uuidString }) {
+                guard prototype.containsReliableCore, !prototype.embedding.isEmpty else { continue }
+                index.replace(prototype: MeetingSpeakerEmbeddingIndex.Prototype(
+                    speakerID: prototype.speakerID,
+                    embedding: prototype.embedding,
+                    observationCount: prototype.observationCount,
+                    averageQuality: prototype.averageQuality
+                ))
             }
             self.embeddingIndexByTrack[trackKind] = index
-            return (speakerID, existing != nil)
         }
 
         mutating func addResolvedSpeaker(
@@ -1026,7 +1376,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             asrProvider: provider.name,
             asrModel: selectedModel.rawValue,
             languageCode: languagePin.languageCode,
-            diarizationModel: SpeakerDiarizationService.isSupported ? "FluidAudio-offline-v1" : nil,
+            diarizationModel: SpeakerDiarizationService.isSupported
+                ? MeetingProcessingCheckpoint.currentDiarizationFingerprint
+                : nil,
             lastCompletedTrackID: nil,
             errorCode: nil
         )
@@ -1097,6 +1449,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             asrProvider: provider.name,
                             asrModel: selectedModel.rawValue,
                             languageCode: languagePin.languageCode,
+                            diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
                             completedTrackID: applicationTrack.id,
                             trackFingerprints: expectedFingerprints,
                             speakers: accumulator.speakers,
@@ -1198,11 +1551,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         skippedChunkIDs: inout [MeetingAudioChunkID]
     ) async throws {
         let diarizer = SpeakerDiarizationService()
+        var pendingTurns: [PendingDiarizedTurn] = []
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             // Snapshot so a mid-chunk partial mutation (e.g. some turns transcribed before an
             // unreadable read) never leaks into the accumulated result for a skipped chunk.
             let accumulatorSnapshot = accumulator
             let remoteSpeechSnapshot = remoteSpeech
+            let pendingTurnsSnapshot = pendingTurns
             do {
                 try await self.processApplicationChunk(
                     chunk,
@@ -1210,15 +1565,84 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     diarizer: diarizer,
                     context: context,
                     accumulator: &accumulator,
-                    remoteSpeech: &remoteSpeech
+                    remoteSpeech: &remoteSpeech,
+                    pendingTurns: &pendingTurns
                 )
             } catch {
                 if error is CancellationError { throw error }
                 guard case MeetingProcessingError.audioUnreadable = error else { throw error }
                 accumulator = accumulatorSnapshot
                 remoteSpeech = remoteSpeechSnapshot
+                pendingTurns = pendingTurnsSnapshot
                 skippedChunkIDs.append(chunk.id)
             }
+        }
+        self.finishApplicationTrack(track, pendingTurns: pendingTurns, accumulator: &accumulator)
+    }
+
+    private func finishApplicationTrack(
+        _ track: MeetingAudioTrack,
+        pendingTurns: [PendingDiarizedTurn],
+        accumulator: inout Accumulator
+    ) {
+        guard !pendingTurns.isEmpty else { return }
+        var observationsByKey: [String: MeetingGlobalSpeakerStitcher.Observation] = [:]
+        for pending in pendingTurns { observationsByKey[pending.observation.key] = pending.observation }
+        let result = MeetingGlobalSpeakerStitcher().stitch(observationsByKey.values.sorted { $0.key < $1.key })
+        accumulator.applyGlobalStitch(result, trackKind: .applicationAudio)
+
+        let orderedTurns = pendingTurns.sorted {
+            if $0.start == $1.start { return $0.observation.key < $1.observation.key }
+            return $0.start < $1.start
+        }
+        var emittedSpeakerIDs = Set<SessionSpeakerID>()
+        for pending in orderedTurns {
+            guard let speakerID = result.speakerIDByObservationKey[pending.observation.key] else {
+                DebugLogger.shared.warning(
+                    "Meeting speaker stitch omitted application observation \(pending.observation.key); preserving text as unattributed",
+                    source: "MeetingProcessingPipeline"
+                )
+                let fallbackSpeakerID = accumulator.speaker(
+                    key: "meeting-audio",
+                    displayName: "Meeting Audio",
+                    trackKind: .applicationAudio,
+                    isLocalUser: false,
+                    clusterID: nil
+                )
+                accumulator.segments.append(Self.segment(
+                    key: "remote:\(pending.chunkID.uuidString):\(pending.index)",
+                    trackID: track.id,
+                    speakerID: fallbackSpeakerID,
+                    start: pending.start,
+                    end: pending.end,
+                    text: pending.text,
+                    overlap: .none
+                ))
+                continue
+            }
+            if emittedSpeakerIDs.insert(speakerID).inserted {
+                let firstLabel = orderedTurns.first {
+                    result.speakerIDByObservationKey[$0.observation.key] == speakerID
+                }?.observation.localLabel
+                accumulator.addResolvedSpeaker(
+                    id: speakerID,
+                    key: "remote-cluster:\(speakerID.uuidString)",
+                    displayName: "Speaker \(accumulator.nextRemoteSpeaker)",
+                    clusterID: firstLabel,
+                    trackKind: .applicationAudio,
+                    isLocalUser: false
+                )
+                accumulator.nextRemoteSpeaker += 1
+            }
+            accumulator.segments.append(Self.segment(
+                key: "remote:\(pending.chunkID.uuidString):\(pending.index)",
+                trackID: track.id,
+                speakerID: speakerID,
+                start: pending.start,
+                end: pending.end,
+                text: pending.text,
+                overlap: .none
+            ))
         }
     }
 
@@ -1228,7 +1652,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         diarizer: SpeakerDiarizationService,
         context: ProcessingContext,
         accumulator: inout Accumulator,
-        remoteSpeech: inout [TimelineInterval]
+        remoteSpeech: inout [TimelineInterval],
+        pendingTurns: inout [PendingDiarizedTurn]
     ) async throws {
         let url = chunk.fileURL(relativeTo: context.sessionDirectory)
         let chunkOffset = chunk.presentationStart.seconds - context.origin
@@ -1265,45 +1690,34 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             end: chunkOffset + turn.endSeconds
                         )
                     })
-                    var speakerIDByLabel: [String: SessionSpeakerID] = [:]
-                    var usedSpeakerIDs = Set<SessionSpeakerID>()
-                    for (_, turn, _) in transcribedTurns where speakerIDByLabel[turn.speakerLabel] == nil {
-                        let resolved = accumulator.resolveCluster(
-                            trackKind: .applicationAudio,
-                            newClusterKey: "remote:\(chunk.id.uuidString):\(turn.speakerLabel)",
-                            profile: diarization.profilesByLabel[turn.speakerLabel],
-                            excluding: usedSpeakerIDs
-                        )
-                        let displayName: String
-                        if resolved.matchedExisting {
-                            displayName = "Speaker"
-                        } else {
-                            displayName = "Speaker \(accumulator.nextRemoteSpeaker)"
-                            accumulator.nextRemoteSpeaker += 1
+                    let observationsByLabel: [String: MeetingGlobalSpeakerStitcher.Observation] = Dictionary(
+                        uniqueKeysWithValues: Set(transcribedTurns.map { $0.turn.speakerLabel }).sorted().map { label in
+                            let profile = diarization.profilesByLabel[label]
+                            return (label, MeetingGlobalSpeakerStitcher.Observation(
+                                key: "application:\(chunk.id.uuidString):\(label)",
+                                chunkKey: chunk.id.uuidString,
+                                trackKind: .applicationAudio,
+                                localLabel: label,
+                                embedding: profile?.embedding ?? [],
+                                quality: profile?.averageQuality ?? 0,
+                                effectiveSpeechDuration: transcribedTurns
+                                    .filter { $0.turn.speakerLabel == label }
+                                    .reduce(0) { $0 + max(0, $1.turn.durationSeconds) }
+                            ))
                         }
-                        accumulator.addResolvedSpeaker(
-                            id: resolved.speakerID,
-                            key: "remote-cluster:\(resolved.speakerID.uuidString)",
-                            displayName: displayName,
-                            clusterID: turn.speakerLabel,
-                            trackKind: .applicationAudio,
-                            isLocalUser: false
-                        )
-                        speakerIDByLabel[turn.speakerLabel] = resolved.speakerID
-                        usedSpeakerIDs.insert(resolved.speakerID)
-                    }
+                    )
                     for (index, turn, text) in transcribedTurns {
                         let absoluteStart = chunkOffset + turn.startSeconds
                         let absoluteEnd = chunkOffset + turn.endSeconds
-                        guard let speakerID = speakerIDByLabel[turn.speakerLabel] else { continue }
-                        accumulator.segments.append(Self.segment(
-                            key: "remote:\(chunk.id.uuidString):\(index)",
+                        guard let observation = observationsByLabel[turn.speakerLabel] else { continue }
+                        pendingTurns.append(PendingDiarizedTurn(
+                            observation: observation,
                             trackID: track.id,
-                            speakerID: speakerID,
+                            chunkID: chunk.id,
+                            index: index,
                             start: absoluteStart,
                             end: absoluteEnd,
-                            text: text,
-                            overlap: .none
+                            text: text
                         ))
                     }
                     return
@@ -1368,6 +1782,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         )
         var stagedTurns: [StagedMicrophoneTurn] = []
+        var pendingTurns: [PendingDiarizedTurn] = []
         var echoMonitor = EchoMonitorAccumulator()
         let eras = Self.microphoneEras(for: track, origin: context.origin)
         // Era 0 has no writer-boundary anchor, so de-drift anchors it at the track's own first PTS.
@@ -1375,6 +1790,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         for chunk in track.chunks where chunk.finalizationState == .finalized {
             let accumulatorSnapshot = accumulator
             let stagedTurnsSnapshot = stagedTurns
+            let pendingTurnsSnapshot = pendingTurns
+            let epochStateSnapshot = epochState
+            let echoMonitorSnapshot = echoMonitor
             do {
                 try await self.processMicrophoneChunk(
                     chunk,
@@ -1388,14 +1806,52 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     epochState: &epochState,
                     echoMonitor: &echoMonitor,
                     accumulator: &accumulator,
-                    stagedTurns: &stagedTurns
+                    stagedTurns: &stagedTurns,
+                    pendingTurns: &pendingTurns
                 )
             } catch {
                 if error is CancellationError { throw error }
                 guard case MeetingProcessingError.audioUnreadable = error else { throw error }
                 accumulator = accumulatorSnapshot
                 stagedTurns = stagedTurnsSnapshot
+                pendingTurns = pendingTurnsSnapshot
+                epochState = epochStateSnapshot
+                echoMonitor = echoMonitorSnapshot
                 skippedChunkIDs.append(chunk.id)
+            }
+        }
+
+        // Apply the existing text-only echo evidence before building microphone prototypes.
+        // A chunk-local label represented only by confirmed far-end echo must not become a
+        // first-class voice profile or compete in the later "You" election.
+        let profileEligibleTurns = session.selectedMicrophone.role == .personal
+            ? Self.rejectingFarField(stagedTurns, eras: eras)
+            : stagedTurns
+        let preclassified = Self.classifyMicrophoneTurns(
+            profileEligibleTurns,
+            eras: eras,
+            applicationTrackID: applicationTrack?.id,
+            segments: accumulator.segments,
+            fallbackSpeakerID: accumulator.speakerIDByKey["meeting-audio"]
+        )
+        stagedTurns = preclassified.turns
+        let trustedObservationKeys = Self.trustedMicrophoneObservationKeys(from: stagedTurns)
+        var observationsByKey: [String: MeetingGlobalSpeakerStitcher.Observation] = [:]
+        for pending in pendingTurns where trustedObservationKeys.contains(pending.observation.key) {
+            observationsByKey[pending.observation.key] = pending.observation
+        }
+        let stitchResult = MeetingGlobalSpeakerStitcher().stitch(observationsByKey.values.sorted { $0.key < $1.key })
+        accumulator.applyGlobalStitch(stitchResult, trackKind: .microphone)
+        for index in stagedTurns.indices {
+            if let observationKey = stagedTurns[index].diarizationObservationKey,
+               let speakerID = stitchResult.speakerIDByObservationKey[observationKey]
+            {
+                stagedTurns[index].clusterID = speakerID
+            } else if let observationKey = stagedTurns[index].diarizationObservationKey {
+                DebugLogger.shared.warning(
+                    "Meeting speaker stitch omitted microphone observation \(observationKey); keeping it outside trusted prototypes",
+                    source: "MeetingProcessingPipeline"
+                )
             }
         }
 
@@ -1422,7 +1878,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         epochState: inout EchoDelayEpochState,
         echoMonitor: inout EchoMonitorAccumulator,
         accumulator: inout Accumulator,
-        stagedTurns: inout [StagedMicrophoneTurn]
+        stagedTurns: inout [StagedMicrophoneTurn],
+        pendingTurns: inout [PendingDiarizedTurn]
     ) async throws {
         let url = chunk.fileURL(relativeTo: context.sessionDirectory)
         let chunkOffset = chunk.presentationStart.seconds - context.origin
@@ -1449,17 +1906,33 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             source: "MeetingProcessingPipeline"
                         )
                     }
-                    var clusterIDByLabel: [String: SessionSpeakerID] = [:]
-                    var usedClusterIDs = Set<SessionSpeakerID>()
-                    for (_, turn, _) in transcribedTurns where clusterIDByLabel[turn.speakerLabel] == nil {
-                        let resolved = accumulator.resolveCluster(
-                            trackKind: .microphone,
-                            newClusterKey: "microphone:\(chunk.id.uuidString):\(turn.speakerLabel)",
-                            profile: diarization.profilesByLabel[turn.speakerLabel],
-                            excluding: usedClusterIDs
-                        )
-                        clusterIDByLabel[turn.speakerLabel] = resolved.speakerID
-                        usedClusterIDs.insert(resolved.speakerID)
+                    let observationsByLabel: [String: MeetingGlobalSpeakerStitcher.Observation] = Dictionary(
+                        uniqueKeysWithValues: Set(transcribedTurns.map { $0.turn.speakerLabel }).sorted().map { label in
+                            let profile = diarization.profilesByLabel[label]
+                            return (label, MeetingGlobalSpeakerStitcher.Observation(
+                                key: "microphone:\(chunk.id.uuidString):\(label)",
+                                chunkKey: chunk.id.uuidString,
+                                trackKind: .microphone,
+                                localLabel: label,
+                                embedding: profile?.embedding ?? [],
+                                quality: profile?.averageQuality ?? 0,
+                                effectiveSpeechDuration: transcribedTurns
+                                    .filter { $0.turn.speakerLabel == label }
+                                    .reduce(0) { $0 + max(0, $1.turn.durationSeconds) }
+                            ))
+                        }
+                    )
+                    for (index, turn, text) in transcribedTurns {
+                        guard let observation = observationsByLabel[turn.speakerLabel] else { continue }
+                        pendingTurns.append(PendingDiarizedTurn(
+                            observation: observation,
+                            trackID: track.id,
+                            chunkID: chunk.id,
+                            index: index,
+                            start: 0,
+                            end: 0,
+                            text: text
+                        ))
                     }
 
                     var signalVerdictByIndex: [Int: TurnEchoVerdict] = [:]
@@ -1523,12 +1996,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         let overlapsRemote = remoteSpeech.contains {
                             min(end, $0.end) - max(start, $0.start) > 0.15
                         }
-                        guard let clusterID = clusterIDByLabel[turn.speakerLabel] else { continue }
+                        let observationKey = "microphone:\(chunk.id.uuidString):\(turn.speakerLabel)"
                         stagedTurns.append(StagedMicrophoneTurn(
                             chunkID: chunk.id,
                             index: index,
-                            clusterID: clusterID,
+                            clusterID: Self.stableUUID("pending-microphone:\(observationKey)"),
                             clusterLabel: turn.speakerLabel,
+                            diarizationObservationKey: observationKey,
                             start: start,
                             end: end,
                             text: text,
@@ -1707,9 +2181,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         accumulator: inout Accumulator
     ) {
         let eras = Self.microphoneEras(for: track, origin: origin)
-        let stagedTurns = session.selectedMicrophone.role == .personal
-            ? Self.rejectingFarField(allStagedTurns, eras: eras)
-            : allStagedTurns
+        // Personal-mic turns were already near-field filtered before profile stitching. Applying
+        // the relative loudness gate again would recompute its reference from a narrower set and
+        // could reject a turn that passed the original, correctly calibrated gate.
+        let stagedTurns = allStagedTurns
 
         if session.mode == .inRoom {
             for turn in stagedTurns {

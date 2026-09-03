@@ -120,10 +120,10 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
 
     func savedMicrophone(in identities: [MeetingMicrophoneIdentity]) -> MeetingMicrophoneIdentity? {
         guard self.isConfigured else { return nil }
-        return self.microphoneCaptureDeviceID.flatMap { captureDeviceID in
-            identities.first(where: { $0.captureDeviceID == captureDeviceID })
-        } ?? self.microphoneCoreAudioUID.flatMap { coreAudioUID in
+        return self.microphoneCoreAudioUID.flatMap { coreAudioUID in
             identities.first(where: { $0.coreAudioUID == coreAudioUID })
+        } ?? self.microphoneCaptureDeviceID.flatMap { captureDeviceID in
+            identities.first(where: { $0.captureDeviceID == captureDeviceID })
         }
     }
 }
@@ -155,21 +155,31 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
 }
 
 nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable, Sendable {
-    /// `AVCaptureDevice.uniqueID`, which is the identifier ScreenCaptureKit accepts.
+    /// Stable product-selection identifier. New identities use the Core Audio UID;
+    /// manifests written before identity schema 2 may contain an AVCaptureDevice uniqueID.
     var captureDeviceID: String
-    /// Kept only for reconciling the existing FluidVoice Core Audio preference.
+    /// Stable Core Audio UID used by VPIO and FluidVoice microphone preferences.
     var coreAudioUID: String?
+    /// Resolved only inside an AVFoundation/ScreenCaptureKit capture adapter, after
+    /// the dictation-to-meeting audio handoff has completed.
+    var avCaptureDeviceID: String?
+    /// Nil identifies a legacy manifest whose `captureDeviceID` may be an AV uniqueID.
+    var identitySchemaVersion: Int?
     var displayName: String
     var role: MeetingMicrophoneRole
 
     init(
         captureDeviceID: String,
         coreAudioUID: String? = nil,
+        avCaptureDeviceID: String? = nil,
+        identitySchemaVersion: Int? = 2,
         displayName: String,
         role: MeetingMicrophoneRole = .unknown
     ) {
         self.captureDeviceID = captureDeviceID
         self.coreAudioUID = coreAudioUID
+        self.avCaptureDeviceID = avCaptureDeviceID
+        self.identitySchemaVersion = identitySchemaVersion
         self.displayName = displayName
         self.role = role
     }
@@ -1016,7 +1026,13 @@ nonisolated struct MeetingProcessingResult: Sendable {
 /// No pipelineVersion bump for batch de-drift: this checkpoint snapshots only the application-audio
 /// pass; the mic pass re-derives its correction deterministically from `clockDrift` every run.
 nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
+
+    /// Immutable identity of the diarization implementation used to produce persisted speaker
+    /// state. A dependency or configuration change must update this value so stale checkpoints
+    /// cannot be resumed with different clustering behavior.
+    static let currentDiarizationFingerprint =
+        "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;config=community-default-v1"
 
     nonisolated struct ChunkFingerprint: Codable, Equatable, Sendable {
         var id: MeetingAudioChunkID
@@ -1035,6 +1051,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
     var asrProvider: String
     var asrModel: String
     var languageCode: String
+    var diarizationFingerprint: String
     var completedTrackID: MeetingAudioTrackID
     var trackFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
     var speakers: [MeetingSessionSpeaker]
@@ -1058,6 +1075,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
         provider: String,
         model: String,
         language: String,
+        diarizationFingerprint: String = Self.currentDiarizationFingerprint,
         completedTrackID: MeetingAudioTrackID,
         expectedFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
     ) -> Bool {
@@ -1067,6 +1085,7 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
             && self.asrProvider == provider
             && self.asrModel == model
             && self.languageCode == language
+            && self.diarizationFingerprint == diarizationFingerprint
             && self.completedTrackID == completedTrackID
             && self.trackFingerprints == expectedFingerprints
     }

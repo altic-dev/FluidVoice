@@ -48,6 +48,11 @@ nonisolated enum AudioTopologyTraceEvent: UInt32, CaseIterable, Sendable {
     case readiness
     case isolationActive
     case policyExcluded
+    case callbackBegin
+    case callbackEnd
+    case mainHopBegin
+    case mainHopEnd
+    case ownerWillDeinit
 
     var label: String {
         String(describing: self)
@@ -69,6 +74,11 @@ nonisolated enum AudioTopologyTraceOwner: UInt32, CaseIterable, Sendable {
     case meetingCatalog
     case meetingCoordinator
     case phaseZeroProbe
+    case meetingCaptureEngine
+    case screenCapture
+    case avCapture
+    case asrActivityLease
+    case asrEngineConfiguration
 
     var label: String {
         String(describing: self)
@@ -98,6 +108,16 @@ nonisolated enum AudioTopologyTracePhase: UInt32, CaseIterable, Sendable {
     case recovery
     case handoff
     case quiescing
+    case coordinatorStop
+    case captureStop
+    case runtimeStop
+    case writerStop
+    case outputRouteRelease
+    case avCaptureStop
+    case screenCaptureStop
+    case processing
+    case activityLease
+    case microphoneStop
 
     var label: String {
         String(describing: self)
@@ -173,7 +193,7 @@ final nonisolated class AudioTopologyDiagnostics: @unchecked Sendable {
         "kind", "sequence", "continuous_time", "wall_unix_ns", "event", "owner",
         "object_id", "selector", "scope", "element", "queue_role", "phase",
         "transport", "status", "generation", "pid", "heartbeat_age_ms",
-        "stall_classification", "trace_path", "stall_path",
+        "stall_classification", "trace_path", "stall_path", "is_main_thread",
     ]
 
     private let drainQueue = DispatchQueue(
@@ -500,13 +520,26 @@ final nonisolated class AudioTopologyDiagnostics: @unchecked Sendable {
             var category: UInt8
             var owner: UInt32
             var objectID: UInt32
+            var selector: UInt32
+            var scope: UInt32
+            var element: UInt32
+            var phase: UInt32
             var generation: UInt64
         }
         var openCounts: [Key: Int] = [:]
         for event in events {
             guard let kind = AudioTopologyTraceEvent(rawValue: event.event) else { continue }
             guard let pair = Self.phasePair(for: kind) else { continue }
-            let key = Key(category: pair.category, owner: event.owner, objectID: event.objectID, generation: event.generation)
+            let key = Key(
+                category: pair.category,
+                owner: event.owner,
+                objectID: event.objectID,
+                selector: event.selector,
+                scope: event.scope,
+                element: event.element,
+                phase: event.phase,
+                generation: event.generation
+            )
             if pair.isBegin {
                 openCounts[key, default: 0] += 1
             } else if let count = openCounts[key], count > 0 {
@@ -550,6 +583,10 @@ final nonisolated class AudioTopologyDiagnostics: @unchecked Sendable {
         case .phaseEnd: (15, false)
         case .probeCycleBegin: (16, true)
         case .probeCycleEnd: (16, false)
+        case .callbackBegin: (17, true)
+        case .callbackEnd: (17, false)
+        case .mainHopBegin: (18, true)
+        case .mainHopEnd: (18, false)
         default: nil
         }
     }
@@ -566,6 +603,7 @@ final nonisolated class AudioTopologyDiagnostics: @unchecked Sendable {
             "\"selector\":\(event.selector),\"scope\":\(event.scope)," +
             "\"element\":\(event.element),\"queue_role\":\"\(queueLabel)\"," +
             "\"phase\":\"\(phaseLabel)\",\"transport\":\"\(transportLabel)\"," +
+            "\"is_main_thread\":\(event.isMainThread != 0)," +
             "\"status\":\(event.status),\"generation\":\(event.generation)}\n"
         return Array(line.utf8)
     }

@@ -451,9 +451,10 @@ struct MeetingTranscriptionView: View {
         }
 
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-            let identities = MeetingCaptureSourceCatalog.availableMicrophones()
+            let snapshot = await MeetingCaptureSourceCatalog.microphoneSnapshot()
+            let identities = snapshot.identities
             self.microphones = identities.map(MeetingMicrophoneOption.init)
-            self.selectPreferredMicrophone(from: identities)
+            self.selectPreferredMicrophone(from: identities, systemDefaultUID: snapshot.defaultCoreAudioUID)
         } else {
             self.microphones = []
             self.setupDraft.selectedMicrophoneID = nil
@@ -497,7 +498,10 @@ struct MeetingTranscriptionView: View {
         self.regenerateDefaultTitleIfNeeded()
     }
 
-    private func selectPreferredMicrophone(from identities: [MeetingMicrophoneIdentity]) {
+    private func selectPreferredMicrophone(
+        from identities: [MeetingMicrophoneIdentity],
+        systemDefaultUID: String?
+    ) {
         if let selectedID = setupDraft.selectedMicrophoneID,
            identities.contains(where: { $0.captureDeviceID == selectedID })
         {
@@ -506,14 +510,15 @@ struct MeetingTranscriptionView: View {
 
         let defaults = SettingsStore.shared.meetingRecordingDefaults
         let savedMicrophone = defaults.savedMicrophone(in: identities)
+        let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         // Default preselection follows the system's current input, not the remembered device.
         let selection = MeetingMicrophonePreselection.select(
             identities: identities,
             savedDeviceID: savedMicrophone?.captureDeviceID,
             savedRole: defaults.microphoneRole,
-            systemDefaultUID: AudioDevice.getDefaultInputDevice()?.uid,
-            preferredInputUID: SettingsStore.shared.preferredInputDeviceUID,
-            systemDefaultCaptureID: AVCaptureDevice.default(for: .audio)?.uniqueID
+            systemDefaultUID: systemDefaultUID,
+            preferredInputUID: preferredInputUID,
+            systemDefaultCaptureID: nil
         )
         self.setupDraft.selectedMicrophoneID = selection.deviceID
         self.setupDraft.microphoneRole = selection.role

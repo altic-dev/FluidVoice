@@ -3,6 +3,7 @@
 #include <dispatch/dispatch.h>
 #include <limits.h>
 #include <mach/mach_time.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@
 // realtime producer strictly allocation-free.
 #define FV_RING_CAPACITY 64u
 #define FV_MAX_FRAMES_PER_PACKET 8192u
-#define FV_AUDIO_TOPOLOGY_TRACE_CAPACITY 2048u
+#define FV_AUDIO_TOPOLOGY_TRACE_CAPACITY 8192u
 
 typedef struct {
     float samples[FV_MAX_FRAMES_PER_PACKET];
@@ -52,6 +53,7 @@ typedef struct {
     _Atomic uint32_t queueRole;
     _Atomic uint32_t phase;
     _Atomic uint32_t transport;
+    _Atomic uint32_t isMainThread;
     _Atomic int32_t status;
 } FVAudioTopologyTraceSlot;
 
@@ -119,6 +121,7 @@ uint64_t fv_audio_topology_trace_record(
     atomic_store_explicit(&slot->queueRole, queueRole, memory_order_relaxed);
     atomic_store_explicit(&slot->phase, phase, memory_order_relaxed);
     atomic_store_explicit(&slot->transport, transport, memory_order_relaxed);
+    atomic_store_explicit(&slot->isMainThread, pthread_main_np() != 0, memory_order_relaxed);
     atomic_store_explicit(&slot->status, status, memory_order_relaxed);
     atomic_store_explicit(
         &slot->publishedSequence,
@@ -178,6 +181,7 @@ uint32_t fv_audio_topology_trace_snapshot(
             .queueRole = atomic_load_explicit(&slot->queueRole, memory_order_relaxed),
             .phase = atomic_load_explicit(&slot->phase, memory_order_relaxed),
             .transport = atomic_load_explicit(&slot->transport, memory_order_relaxed),
+            .isMainThread = atomic_load_explicit(&slot->isMainThread, memory_order_relaxed),
             .status = atomic_load_explicit(&slot->status, memory_order_relaxed),
         };
         atomic_thread_fence(memory_order_acquire);
@@ -248,6 +252,7 @@ void fv_audio_topology_trace_reset(void) {
         atomic_store_explicit(&slot->queueRole, 0, memory_order_relaxed);
         atomic_store_explicit(&slot->phase, 0, memory_order_relaxed);
         atomic_store_explicit(&slot->transport, 0, memory_order_relaxed);
+        atomic_store_explicit(&slot->isMainThread, 0, memory_order_relaxed);
         atomic_store_explicit(&slot->status, 0, memory_order_relaxed);
     }
 }

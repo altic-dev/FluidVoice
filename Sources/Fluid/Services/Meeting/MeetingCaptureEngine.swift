@@ -7,6 +7,10 @@ import IOKit.pwr_mgt
 import ScreenCaptureKit
 
 nonisolated protocol MeetingCaptureControlling: Sendable {
+    /// Any user-facing permission request must complete before the coordinator reserves
+    /// the exclusive ASR meeting lease.
+    func preflightPermissions() async throws
+
     func start(
         session: MeetingSession,
         configuration: MeetingCaptureConfiguration,
@@ -32,6 +36,10 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
     private var displaySleepAssertionID: IOPMAssertionID?
     private var terminating = false
 
+    func preflightPermissions() async throws {
+        try await Self.requestMicrophonePermissionIfNeeded()
+    }
+
     func start(
         session: MeetingSession,
         configuration: MeetingCaptureConfiguration,
@@ -46,7 +54,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         self.startingSessionID = session.id
         defer { self.startingSessionID = nil }
         try Self.preflightStorage(at: sessionDirectory)
-        try await Self.ensureMicrophonePermission()
+        try Self.verifyMicrophonePermission()
 
         let tracks = Self.makeTracks(session: session, configuration: configuration)
         let writers = try tracks.map { track in
@@ -158,14 +166,29 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         }
 
         let task = Task<MeetingCaptureStopResult, Error> {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop)
+            #endif
             let runtimeFailure: Error?
             do {
                 try await activeCapture.runtime.stop()
                 runtimeFailure = nil
+                #if DEBUG
+                AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop)
+                #endif
             } catch {
                 runtimeFailure = error
+                #if DEBUG
+                AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop, status: -1)
+                #endif
             }
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
+            #endif
             let tracks = await Self.stopWriters(activeCapture.writers)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
+            #endif
             let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: Date())
             if let runtimeFailure {
                 throw MeetingCaptureError.captureStopFailed(
@@ -178,12 +201,24 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         self.stopTask = task
         do {
             let result = try await task.value
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .captureStop)
+            #endif
             self.activeCapture = nil
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .captureStop)
+            #endif
             self.stopTask = nil
             self.releaseDisplaySleepAssertion()
             return result
         } catch {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .captureStop)
+            #endif
             self.activeCapture = nil
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .captureStop, status: -1)
+            #endif
             self.stopTask = nil
             self.releaseDisplaySleepAssertion()
             throw error
@@ -261,7 +296,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         return tracks
     }
 
-    private nonisolated static func ensureMicrophonePermission() async throws {
+    private nonisolated static func requestMicrophonePermissionIfNeeded() async throws {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return
@@ -273,6 +308,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         case .denied, .restricted:
             throw MeetingCaptureError.microphonePermissionDenied
         @unknown default:
+            throw MeetingCaptureError.microphonePermissionDenied
+        }
+    }
+
+    private nonisolated static func verifyMicrophonePermission() throws {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw MeetingCaptureError.microphonePermissionDenied
         }
     }
@@ -411,12 +452,19 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> ScreenCaptureMeetingRuntime {
-        let built = try await Self.buildStream(application: application, microphone: microphone, includeMicrophone: includeMicrophone)
+        let resolvedMicrophone = includeMicrophone
+            ? try MeetingAVCaptureMicrophoneResolver.resolve(microphone)
+            : microphone
+        let built = try await Self.buildStream(
+            application: application,
+            microphone: resolvedMicrophone,
+            includeMicrophone: includeMicrophone
+        )
         let runtime = ScreenCaptureMeetingRuntime(
             stream: built.stream,
             scope: built.scope,
             application: application,
-            microphone: microphone,
+            microphone: resolvedMicrophone,
             includeMicrophone: includeMicrophone,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
@@ -533,6 +581,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     func stop() async throws {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop)
+        defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop) }
+        #endif
         self.markStopping()
         let (currentStream, streamAlreadyDead) = self.stateLock.withLock { (self.stream, self.rebuilding) }
         // Mid-rebuild the current stream already stopped on its own; stopCapture would only time out.
@@ -705,7 +757,10 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
         super.init()
-        guard let device = AVCaptureDevice(uniqueID: microphone.captureDeviceID) else {
+        let resolvedMicrophone = try MeetingAVCaptureMicrophoneResolver.resolve(microphone)
+        guard let captureDeviceID = resolvedMicrophone.avCaptureDeviceID,
+              let device = AVCaptureDevice(uniqueID: captureDeviceID)
+        else {
             throw MeetingCaptureError.microphoneUnavailable
         }
         let input = try AVCaptureDeviceInput(device: device)
@@ -724,6 +779,9 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     }
 
     deinit {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.ownerWillDeinit, owner: .avCapture, queueRole: .callbackCurrent, phase: .avCaptureStop)
+        #endif
         for observer in self.notificationObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -740,6 +798,10 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     }
 
     func stop() async throws {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .avCapture, queueRole: .dedicatedControl, phase: .avCaptureStop)
+        defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .avCapture, queueRole: .dedicatedControl, phase: .avCaptureStop) }
+        #endif
         self.stateLock.withLock { self.stopping = true }
         let result = await withCheckedContinuation { continuation in
             let completion = MeetingOneShotCompletion(continuation)
@@ -818,27 +880,95 @@ private final nonisolated class MeetingOneShotValue<T: Sendable>: @unchecked Sen
     }
 }
 
-/// Reusable AVCaptureSession mic component: `wasInterrupted` restarts only if still not running; runtime errors get ONE bounded restart.
+/// Serializes an uninterruptible framework start with its retirement barrier.
+/// `stop()` cannot complete until an already-enqueued `start()` has returned and
+/// the stop operation has run behind it on the same queue.
+final nonisolated class MeetingSerializedCaptureLifecycle: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let admissionLock = NSLock()
+    private let startOperation: @Sendable () -> Bool
+    private let stopOperation: @Sendable () -> Void
+    private var nextOrdinal: UInt64 = 0
+    private var retirementOrdinal: UInt64?
+
+    init(
+        label: String = "com.fluidvoice.meeting.avcapture.control",
+        start: @escaping @Sendable () -> Bool,
+        stop: @escaping @Sendable () -> Void
+    ) {
+        self.queue = DispatchQueue(label: label)
+        self.startOperation = start
+        self.stopOperation = stop
+    }
+
+    func start() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let enqueued = self.admissionLock.withLock { () -> Bool in
+                guard self.retirementOrdinal == nil else { return false }
+                self.nextOrdinal &+= 1
+                let startOrdinal = self.nextOrdinal
+                // Enqueue while admission is locked. A competing stop therefore
+                // either queues behind this admitted start or seals admission first.
+                self.queue.async {
+                    let mayRun = self.admissionLock.withLock {
+                        self.retirementOrdinal.map { startOrdinal < $0 } ?? true
+                    }
+                    continuation.resume(returning: mayRun ? self.startOperation() : false)
+                }
+                return true
+            }
+            if !enqueued { continuation.resume(returning: false) }
+        }
+    }
+
+    func stop() async {
+        await withCheckedContinuation { continuation in
+            self.admissionLock.withLock {
+                if self.retirementOrdinal == nil {
+                    self.nextOrdinal &+= 1
+                    self.retirementOrdinal = self.nextOrdinal
+                }
+                // The permanent seal and barrier enqueue are one atomic admission
+                // operation, so no start can slip behind stopRunning.
+                self.queue.async {
+                    self.stopOperation()
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func perform(_ work: @escaping @Sendable () -> Void) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                work()
+                continuation.resume()
+            }
+        }
+    }
+}
+
+/// Reusable AVCaptureSession mic component: `wasInterrupted` restarts only if still not running; runtime errors get ONE serialized restart.
 final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
     private static let interruptionEndedWaitSeconds: Double = 3
-    private static let restartSupervisionSeconds: Double = 3
-    private static let stopTimeoutSeconds: Double = 3
 
     let deviceUID: String?
     let deviceName: String
 
-    private let session = AVCaptureSession()
-    private let output = AVCaptureAudioDataOutput()
-    private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.avcapture.control")
+    private let session: AVCaptureSession
+    private let output: AVCaptureAudioDataOutput
+    private let lifecycle: MeetingSerializedCaptureLifecycle
     private let stateLock = NSLock()
     private let onSample: @Sendable (CMSampleBuffer) -> Void
     private let onTerminalStop: @Sendable (String) -> Void
     private var stopping = false
+    private var fullyRetired = false
     private var emittedTerminalStop = false
     private var runtimeErrorRestarted = false
     private var didStopRunningRestarted = false
+    private var deliveredSampleCount: UInt64 = 0
     private var interruptionEndWaiters: [MeetingOneShotValue<Void>] = []
 
     init(
@@ -846,12 +976,36 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         onSample: @escaping @Sendable (CMSampleBuffer) -> Void,
         onTerminalStop: @escaping @Sendable (String) -> Void
     ) throws {
+        let session = AVCaptureSession()
+        let output = AVCaptureAudioDataOutput()
+        self.session = session
+        self.output = output
+        self.lifecycle = MeetingSerializedCaptureLifecycle(
+            start: {
+                session.startRunning()
+                return session.isRunning
+            },
+            stop: {
+                if session.isRunning { session.stopRunning() }
+                // `stopRunning()` only stops delivery; the session still owns its
+                // input device until its graph is dismantled. VPIO must never be
+                // enabled while those AVFoundation objects retain the device.
+                output.setSampleBufferDelegate(nil, queue: nil)
+                session.beginConfiguration()
+                for sessionOutput in session.outputs { session.removeOutput(sessionOutput) }
+                for sessionInput in session.inputs { session.removeInput(sessionInput) }
+                session.commitConfiguration()
+            }
+        )
         self.deviceUID = microphone.coreAudioUID
         self.deviceName = microphone.displayName
         self.onSample = onSample
         self.onTerminalStop = onTerminalStop
         super.init()
-        guard let device = AVCaptureDevice(uniqueID: microphone.captureDeviceID) else {
+        let resolvedMicrophone = try MeetingAVCaptureMicrophoneResolver.resolve(microphone)
+        guard let captureDeviceID = resolvedMicrophone.avCaptureDeviceID,
+              let device = AVCaptureDevice(uniqueID: captureDeviceID)
+        else {
             throw MeetingCaptureError.microphoneUnavailable
         }
         let input = try AVCaptureDeviceInput(device: device)
@@ -870,66 +1024,60 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
     }
 
     deinit {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.ownerWillDeinit, owner: .avCapture, queueRole: .callbackCurrent, phase: .avCaptureStop)
+        #endif
         for observer in self.observers { NotificationCenter.default.removeObserver(observer) }
     }
 
     private var observers: [NSObjectProtocol] = []
 
-    /// Bounded retry at 0.5/1/2s on `startRunning` failure plus a supervised overall timeout.
+    /// Runs `startRunning` on the serial control queue. This intentionally has no
+    /// detached timeout: a timed-out AVFoundation call could otherwise finish after
+    /// meeting ownership was released and collide with dictation.
     func start() async throws {
         for (attempt, delay) in ([0] + Self.startRetryDelays).enumerated() {
             if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             if self.stateLock.withLock({ self.stopping }) { throw CancellationError() }
-            let started = await MeetingSupervisedTimeout.run(seconds: Self.startSupervisionSeconds) { [session] in
-                await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                    let box = MeetingOneShotValue<Bool>(continuation)
-                    self.controlQueue.async {
-                        session.startRunning()
-                        box.resume(session.isRunning)
-                    }
-                }
-            }
-            if started == true { return }
+            if await self.startRunningOnControlQueue() { return }
         }
         throw MeetingCaptureError.captureStartFailed("The microphone did not start.")
     }
 
     private static let startRetryDelays: [Double] = [0.5, 1.0, 2.0]
-    private static let startSupervisionSeconds: Double = 4
+
+    private func startRunningOnControlQueue() async -> Bool {
+        await self.lifecycle.start()
+    }
 
     func stop() async throws {
-        self.stateLock.lock()
-        self.stopping = true
-        let waiters = self.interruptionEndWaiters
-        self.interruptionEndWaiters = []
-        self.stateLock.unlock()
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .avCapture, queueRole: .dedicatedControl, phase: .avCaptureStop)
+        defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .avCapture, queueRole: .dedicatedControl, phase: .avCaptureStop) }
+        #endif
+        let waiters = self.stateLock.withLock { () -> [MeetingOneShotValue<Void>] in
+            self.stopping = true
+            defer { self.interruptionEndWaiters = [] }
+            return self.interruptionEndWaiters
+        }
         waiters.forEach { $0.resume(()) }
 
-        let result = await withCheckedContinuation { continuation in
-            let completion = MeetingOneShotCompletion(continuation)
-            self.controlQueue.async { [session] in
-                if session.isRunning { session.stopRunning() }
-                completion.resume(.success)
-            }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Self.stopTimeoutSeconds) {
-                completion.resume(.failure("Timed out while stopping microphone capture."))
-            }
+        await self.lifecycle.stop()
+        let observers = self.stateLock.withLock { () -> [NSObjectProtocol] in
+            defer { self.observers.removeAll() }
+            return self.observers
         }
-        if case let .failure(detail) = result {
-            throw MeetingCaptureRuntimeError.stopFailed(detail)
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        await self.lifecycle.perform { [self] in
+            let proven = !self.session.isRunning
+                && self.session.inputs.isEmpty
+                && self.session.outputs.isEmpty
+            self.stateLock.withLock { self.fullyRetired = proven }
         }
     }
 
-    /// `onComplete(false)` means the supervision window elapsed before `stop()` finished.
-    func stopDetached(supervisedSeconds: Double, onComplete: @escaping @Sendable (Bool) -> Void) {
-        Task { [weak self] in
-            guard let self else { onComplete(false); return }
-            let completed = await MeetingSupervisedTimeout.run(seconds: supervisedSeconds) {
-                try? await self.stop()
-                return true
-            }
-            onComplete(completed == true)
-        }
+    func isFullyRetired() -> Bool {
+        self.stateLock.withLock { self.fullyRetired }
     }
 
     func captureOutput(
@@ -939,9 +1087,14 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
     ) {
         self.stateLock.lock()
         let shouldAccept = !self.stopping
+        if shouldAccept { self.deliveredSampleCount &+= 1 }
         self.stateLock.unlock()
         guard shouldAccept else { return }
         self.onSample(sampleBuffer)
+    }
+
+    func sampleCount() -> UInt64 {
+        self.stateLock.withLock { self.deliveredSampleCount }
     }
 
     private func observeSessionLifecycle() {
@@ -1027,17 +1180,8 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
 
     private func attemptSupervisedRestart(reason: String) async {
         guard !(self.stateLock.withLock({ self.stopping })) else { return }
-        let restarted = await MeetingSupervisedTimeout.run(seconds: Self.restartSupervisionSeconds) { [session] in
-            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                let box = MeetingOneShotValue<Bool>(continuation)
-                self.controlQueue.async {
-                    guard !session.isRunning else { box.resume(true); return }
-                    session.startRunning()
-                    box.resume(session.isRunning)
-                }
-            }
-        }
-        guard restarted != true, !(self.stateLock.withLock({ self.stopping })) else { return }
+        let restarted = await self.startRunningOnControlQueue()
+        guard !restarted, !(self.stateLock.withLock({ self.stopping })) else { return }
         self.emitTerminalStopIfNeeded(detail: reason)
     }
 
@@ -1049,6 +1193,24 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         }
         guard shouldEmit else { return }
         self.onTerminalStop(detail)
+    }
+}
+
+/// Identity fence for terminal callbacks. A retired candidate from an earlier
+/// retry can share the transition generation but must never fail its successor.
+final nonisolated class MeetingAVCaptureAttemptToken: @unchecked Sendable {}
+
+nonisolated enum MeetingAVCaptureFailureAdmission {
+    static func accepts(
+        currentGeneration: UInt64,
+        eventGeneration: UInt64,
+        activeToken: MeetingAVCaptureAttemptToken?,
+        eventToken: MeetingAVCaptureAttemptToken,
+        stopRequested: Bool
+    ) -> Bool {
+        !stopRequested
+            && currentGeneration == eventGeneration
+            && activeToken === eventToken
     }
 }
 
@@ -1194,7 +1356,7 @@ nonisolated enum MeetingCaptureError: LocalizedError {
     }
 }
 
-enum MeetingCaptureSourceCatalog {
+nonisolated enum MeetingCaptureSourceCatalog {
     static let preferredFallbackBundleIdentifiers = [
         "us.zoom.xos",
         "com.google.Chrome",
@@ -1254,20 +1416,89 @@ enum MeetingCaptureSourceCatalog {
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
-    static func availableMicrophones() -> [MeetingMicrophoneIdentity] {
-        let coreAudioDevices = AudioDevice.listInputDevices()
-        #if DEBUG
-            if Self.usesCoreAudioOnlyIsolationCatalog {
-                return coreAudioDevices.compactMap { device in
-                    guard device.uid.isEmpty == false else { return nil }
-                    return MeetingMicrophoneIdentity(
-                        captureDeviceID: device.uid,
-                        coreAudioUID: device.uid,
-                        displayName: device.name
-                    )
-                }
+    static func microphoneSnapshot() async -> MeetingMicrophoneCatalogSnapshot {
+        await AudioTopologyListenerExecution.perform {
+            let identities = AudioDevice.listInputDevicesRefreshingLiveness().compactMap { device -> MeetingMicrophoneIdentity? in
+                guard device.isAlive, device.uid.isEmpty == false else { return nil }
+                return MeetingMicrophoneIdentity(
+                    captureDeviceID: device.uid,
+                    coreAudioUID: device.uid,
+                    displayName: device.name
+                )
             }
-        #endif
+            return MeetingMicrophoneCatalogSnapshot(
+                identities: identities,
+                defaultCoreAudioUID: AudioDevice.getDefaultInputDevice()?.uid
+            )
+        }
+    }
+
+    static func availableMicrophones() async -> [MeetingMicrophoneIdentity] {
+        await self.microphoneSnapshot().identities
+    }
+
+    static func defaultMicrophone(preferredCoreAudioUID: String? = nil) async throws -> MeetingMicrophoneIdentity {
+        let snapshot = await self.microphoneSnapshot()
+        let microphones = snapshot.identities
+        if let preferredCoreAudioUID,
+           let preferred = microphones.first(where: { $0.coreAudioUID == preferredCoreAudioUID })
+        {
+            return preferred
+        }
+        guard let defaultUID = snapshot.defaultCoreAudioUID,
+              let microphone = microphones.first(where: { $0.coreAudioUID == defaultUID })
+        else { throw MeetingCaptureError.microphoneUnavailable }
+        return microphone
+    }
+}
+
+nonisolated struct MeetingMicrophoneCatalogSnapshot: Sendable, Equatable {
+    var identities: [MeetingMicrophoneIdentity]
+    var defaultCoreAudioUID: String?
+}
+
+nonisolated struct MeetingAVCaptureDeviceDescriptor: Equatable, Sendable {
+    var uniqueID: String
+    var displayName: String
+}
+
+/// Pure, fail-closed bridge from FluidVoice's stable Core Audio selection identity
+/// to the AVCaptureDevice unique ID required by ScreenCaptureKit/AVCaptureSession.
+nonisolated enum MeetingAVCaptureDeviceSelection {
+    static func select(
+        microphone: MeetingMicrophoneIdentity,
+        candidates: [MeetingAVCaptureDeviceDescriptor]
+    ) -> String? {
+        func exact(_ identifier: String?) -> String? {
+            guard let identifier, !identifier.isEmpty else { return nil }
+            return candidates.first(where: { $0.uniqueID == identifier })?.uniqueID
+        }
+
+        if let explicit = exact(microphone.avCaptureDeviceID) { return explicit }
+        if microphone.identitySchemaVersion == nil,
+           let legacy = exact(microphone.captureDeviceID)
+        {
+            return legacy
+        }
+        if let coreAudio = exact(microphone.coreAudioUID) { return coreAudio }
+
+        let normalizedName = Self.normalize(microphone.displayName)
+        guard !normalizedName.isEmpty else { return nil }
+        let nameMatches = candidates.filter { Self.normalize($0.displayName) == normalizedName }
+        guard nameMatches.count == 1 else { return nil }
+        return nameMatches[0].uniqueID
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
+/// AVFoundation discovery is intentionally isolated here. Callers are capture adapters
+/// that run only after the ASR meeting lease has drained dictation audio ownership.
+nonisolated enum MeetingAVCaptureMicrophoneResolver {
+    static func resolve(_ microphone: MeetingMicrophoneIdentity) throws -> MeetingMicrophoneIdentity {
         #if DEBUG
         AudioTopologyDiagnostics.record(.avfDiscoveryBegin, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog)
         #endif
@@ -1279,52 +1510,19 @@ enum MeetingCaptureSourceCatalog {
         #if DEBUG
         AudioTopologyDiagnostics.record(.avfDiscoveryEnd, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog, status: Int32(clamping: devices.count))
         #endif
-        return devices.map { device in
-            let sameName = coreAudioDevices.filter { $0.name == device.localizedName }
-            return MeetingMicrophoneIdentity(
-                captureDeviceID: device.uniqueID,
-                coreAudioUID: sameName.count == 1 ? sameName[0].uid : nil,
-                displayName: device.localizedName
-            )
+        let descriptors = devices.map {
+            MeetingAVCaptureDeviceDescriptor(uniqueID: $0.uniqueID, displayName: $0.localizedName)
         }
+        guard let uniqueID = MeetingAVCaptureDeviceSelection.select(
+            microphone: microphone,
+            candidates: descriptors
+        ) else {
+            throw MeetingCaptureError.microphoneUnavailable
+        }
+        var resolved = microphone
+        resolved.avCaptureDeviceID = uniqueID
+        return resolved
     }
-
-    static func defaultMicrophone(preferredCoreAudioUID: String? = nil) throws -> MeetingMicrophoneIdentity {
-        let microphones = self.availableMicrophones()
-        if let preferredCoreAudioUID,
-           let preferred = microphones.first(where: { $0.coreAudioUID == preferredCoreAudioUID })
-        {
-            return preferred
-        }
-        #if DEBUG
-            if Self.usesCoreAudioOnlyIsolationCatalog {
-                guard let defaultUID = AudioDevice.getDefaultInputDevice()?.uid,
-                      let microphone = microphones.first(where: { $0.coreAudioUID == defaultUID })
-                else { throw MeetingCaptureError.microphoneUnavailable }
-                return microphone
-            }
-        #endif
-        #if DEBUG
-        AudioTopologyDiagnostics.record(.avfDefaultBegin, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog)
-        #endif
-        let defaultDevice = AVCaptureDevice.default(for: .audio)
-        #if DEBUG
-        AudioTopologyDiagnostics.record(.avfDefaultEnd, owner: .meetingCatalog, queueRole: .actorControl, phase: .catalog, status: defaultDevice == nil ? -1 : noErr)
-        #endif
-        guard let defaultDevice,
-              let microphone = microphones.first(where: { $0.captureDeviceID == defaultDevice.uniqueID })
-        else { throw MeetingCaptureError.microphoneUnavailable }
-        return microphone
-    }
-
-    #if DEBUG
-        /// Phase-0 isolation only. This is intentionally meeting-catalog scoped and inert unless
-        /// the signed Debug app is launched with the exact opt-in value. It does not alter the
-        /// dictation catalog, preferred microphone, or Core Audio listener ownership.
-        private static var usesCoreAudioOnlyIsolationCatalog: Bool {
-            ProcessInfo.processInfo.environment["FLUIDVOICE_MEETING_COREAUDIO_CATALOG_ISOLATION"] == "1"
-        }
-    #endif
 }
 
 private extension CGRect {
@@ -1337,6 +1535,222 @@ private extension CGRect {
 nonisolated enum MeetingCapturePathDecision: Sendable, Equatable {
     case voiceProcessing
     case screenCaptureKit(reason: String)
+}
+
+nonisolated enum MeetingCaptureTransitionPolicy {
+    static let allowsWithinSessionVoiceProcessingUpgrade = true
+    static let maximumRouteRecoveryAttempts = 3
+    static let recoveryDwellSeconds: Double = 2
+
+    static func shouldAttemptVoiceProcessingRecovery(
+        routeDrivenFallback: Bool,
+        attempts: Int,
+        microphone: MeetingMicrophoneIdentity,
+        outputRoute: MeetingOutputRouteSnapshot
+    ) -> Bool {
+        MeetingVoiceProcessingUpgradeDwell.shouldArm(
+            phaseIsAVCapture: true,
+            dwellAlreadyArmed: false,
+            quarantined: false,
+            stopRequested: false,
+            routeDrivenFallback: routeDrivenFallback,
+            attempts: attempts,
+            microphone: microphone,
+            outputRoute: outputRoute
+        )
+    }
+}
+
+nonisolated enum MeetingVoiceProcessingUpgradeDwell {
+    static var seconds: Double { MeetingCaptureTransitionPolicy.recoveryDwellSeconds }
+
+    static func shouldArm(
+        phaseIsAVCapture: Bool,
+        dwellAlreadyArmed: Bool,
+        quarantined: Bool,
+        stopRequested: Bool,
+        routeDrivenFallback: Bool,
+        attempts: Int,
+        microphone: MeetingMicrophoneIdentity,
+        outputRoute: MeetingOutputRouteSnapshot
+    ) -> Bool {
+        guard MeetingCaptureTransitionPolicy.allowsWithinSessionVoiceProcessingUpgrade,
+              phaseIsAVCapture,
+              !dwellAlreadyArmed,
+              !quarantined,
+              !stopRequested,
+              routeDrivenFallback,
+              attempts < MeetingCaptureTransitionPolicy.maximumRouteRecoveryAttempts
+        else { return false }
+        return MeetingCapturePathDecider.decide(
+            mode: .onlineCall,
+            microphone: microphone,
+            outputRoute: outputRoute
+        ) == .voiceProcessing
+    }
+}
+
+nonisolated enum MeetingVoiceProcessingUpgradeOwnership {
+    enum Step: Equatable {
+        case cancelWatchdog
+        case fenceAndQuiesce
+        case stopRunning
+        case removeObservers
+        case removeDelegate
+        case removeSessionIO
+        case clearRuntimeRef
+        case clearLocalRef
+        case electAndDecide
+        case parkCandidate
+        case constructVoiceProcessing
+        case startVoiceProcessing
+        case awaitFirstBuffer
+        case commit
+        case startWatchdog
+    }
+
+    static let stopOldFirstSequence: [Step] = [
+        .cancelWatchdog,
+        .fenceAndQuiesce,
+        .stopRunning,
+        .removeObservers,
+        .removeDelegate,
+        .removeSessionIO,
+        .clearRuntimeRef,
+        .clearLocalRef,
+        .electAndDecide,
+        .constructVoiceProcessing,
+        .parkCandidate,
+        .startVoiceProcessing,
+        .awaitFirstBuffer,
+        .commit,
+        .startWatchdog,
+    ]
+
+    static func mayConstructVoiceProcessing(
+        avCaptureRuntimeRef: Bool,
+        avCaptureLocalRef: Bool,
+        avCaptureRunning: Bool,
+        teardownProven: Bool
+    ) -> Bool {
+        !avCaptureRuntimeRef && !avCaptureLocalRef && !avCaptureRunning && teardownProven
+    }
+
+    static func mayPhaseAVCapture(hasComponent: Bool, componentStopped: Bool) -> Bool {
+        hasComponent && !componentStopped
+    }
+
+    enum TeardownFailureAction: Equatable {
+        case quarantineAndFail
+    }
+
+    static let actionIfTeardownUnproven = TeardownFailureAction.quarantineAndFail
+
+    enum RollbackStep: Equatable {
+        case stopAndReleaseVoiceProcessing
+        case elect
+        case recreateAVCapture
+        case awaitFirstBuffer
+        case commitAVCapture
+    }
+
+    static let rollbackSequence: [RollbackStep] = [
+        .stopAndReleaseVoiceProcessing,
+        .elect,
+        .recreateAVCapture,
+        .awaitFirstBuffer,
+        .commitAVCapture,
+    ]
+
+    static let watchdogRunsDuringIntentionalGap = false
+}
+
+nonisolated enum MeetingVoiceProcessingUpgradeCommit {
+    static let publishedCaptureMethod: MeetingAudioTrackCaptureMethod = .voiceProcessing
+    static let discardsOverlappingSamples = false
+
+    enum Stage: Equatable {
+        case beginSplice
+        case appendVoiceProcessingEra
+        case setCaptureMethod
+        case publishMethodChanged
+        case awaitAck
+        case flushRing
+        case phaseVPIO
+        case startWatchdog
+    }
+
+    static let orderedStages: [Stage] = [
+        .beginSplice,
+        .appendVoiceProcessingEra,
+        .setCaptureMethod,
+        .publishMethodChanged,
+        .awaitAck,
+        .flushRing,
+        .phaseVPIO,
+        .startWatchdog,
+    ]
+}
+
+nonisolated enum MeetingCaptureRouteReplay {
+    enum Backend: Equatable {
+        case vpio
+        case avCapture
+    }
+
+    static func shouldReplay(dirty: Bool, stopRequested: Bool, backend: Backend?) -> Bool {
+        dirty && !stopRequested && backend != nil
+    }
+
+    enum Action: Equatable {
+        case downgradeFromVPIO
+        case rebindAVCapture
+        case none
+    }
+
+    static func action(backend: Backend, outputRouteDeclineReason: String?) -> Action {
+        switch backend {
+        case .vpio:
+            return outputRouteDeclineReason == nil ? .none : .downgradeFromVPIO
+        case .avCapture:
+            return .rebindAVCapture
+        }
+    }
+}
+
+nonisolated enum MeetingVoiceProcessingUpgradeAdmission {
+    static func isCurrent(
+        currentGeneration: UInt64,
+        eventGeneration: UInt64,
+        stopRequested: Bool,
+        phaseIsTransitioning: Bool
+    ) -> Bool {
+        !stopRequested && currentGeneration == eventGeneration && phaseIsTransitioning
+    }
+
+    static func canCommit(
+        currentGeneration: UInt64,
+        eventGeneration: UInt64,
+        stopRequested: Bool,
+        phaseIsTransitioning: Bool
+    ) -> Bool {
+        self.isCurrent(
+            currentGeneration: currentGeneration,
+            eventGeneration: eventGeneration,
+            stopRequested: stopRequested,
+            phaseIsTransitioning: phaseIsTransitioning
+        )
+    }
+}
+
+/// Sticky means the safe AVCapture backend remains selected; it does not mean a
+/// disconnected physical microphone remains selected.
+nonisolated enum MeetingAVCaptureRebindDecision {
+    static func shouldRebind(activeCoreAudioUID: String?, electedCoreAudioUID: String?, forced: Bool) -> Bool {
+        if forced { return true }
+        guard let electedCoreAudioUID, !electedCoreAudioUID.isEmpty else { return false }
+        return activeCoreAudioUID != electedCoreAudioUID
+    }
 }
 
 /// Output-route facts the decision needs, as a plain value so `decide` is unit-testable headless.
@@ -1392,7 +1806,7 @@ nonisolated enum MeetingScreenCaptureAudioSettings {
         configuration.excludesCurrentProcessAudio = true
         configuration.captureMicrophone = includeMicrophone
         if includeMicrophone {
-            configuration.microphoneCaptureDeviceID = microphone.captureDeviceID
+            configuration.microphoneCaptureDeviceID = microphone.avCaptureDeviceID
         }
     }
 }
@@ -1501,121 +1915,216 @@ nonisolated enum MeetingVoiceProcessingWatchdog {
     }
 }
 
-/// Re-evaluates the output-route predicate on default-output-device or data-source change.
+/// Re-evaluates meeting capture on default-input, default-output, or output data-source change.
 /// Registration failure at init means VPIO is not viable — fail closed. Re-registers everything on
 /// `kAudioHardwarePropertyServiceRestarted`, since CoreAudio discards all prior listeners on reset.
-private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable {
+private actor MeetingOutputRouteListener {
+    private enum Lifecycle: Equatable {
+        case idle
+        case starting
+        case ready
+    }
+
     private let onChange: @Sendable () -> Void
-    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var dataSourceEpoch: UInt64 = 0
+    private var active = false
+    private var lifecycle: Lifecycle = .idle
+    private var defaultInputDirty = false
+    private var defaultOutputDirty = false
+    private var serviceRestartDirty = false
+    private var defaultInputToken: AudioObjectPropertyListenerBlock?
     private var defaultOutputToken: AudioObjectPropertyListenerBlock?
     private var serviceRestartedToken: AudioObjectPropertyListenerBlock?
     private var dataSourceToken: AudioObjectPropertyListenerBlock?
     private var dataSourceDeviceID: AudioObjectID?
 
-    init?(onChange: @escaping @Sendable () -> Void) {
+    private init(onChange: @escaping @Sendable () -> Void) {
         self.onChange = onChange
-        guard self.register() else { return nil }
     }
 
-    deinit {
-        self.unregister()
+    static func make(onChange: @escaping @Sendable () -> Void) async -> MeetingOutputRouteListener? {
+        let listener = MeetingOutputRouteListener(onChange: onChange)
+        guard await listener.start() else { return nil }
+        return listener
     }
 
-    private func reevaluate() {
-        self.onChange()
+    private func start() async -> Bool {
+        guard !self.active else { return true }
+        self.generation &+= 1
+        let generation = self.generation
+        self.active = true
+        self.lifecycle = .starting
+        self.defaultInputDirty = false
+        self.defaultOutputDirty = false
+        self.serviceRestartDirty = false
+        guard await self.registerSystemListeners(generation: generation),
+              await self.attachDataSourceListener(generation: generation)
+        else {
+            if self.isCurrent(generation) {
+                await self.stop()
+            }
+            return false
+        }
+        return await self.finishStarting(generation: generation)
     }
 
-    @discardableResult
-    private func register() -> Bool {
+    private func registerSystemListeners(generation: UInt64) async -> Bool {
         let sys = AudioObjectID(kAudioObjectSystemObject)
-        var defaultOutAddr = AudioObjectPropertyAddress(
+        let defaultInAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultOutAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var restartedAddr = AudioObjectPropertyAddress(
+        let restartedAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyServiceRestarted,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
+        let defaultInToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultInputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultInputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
+            #endif
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { await self?.handleDefaultInputChanged(generation: generation) }
+            }
+        }
         let defaultOutToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             #if DEBUG
-            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
             #endif
-            self?.reattachDataSourceListener()
-            self?.reevaluate()
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { await self?.handleDefaultOutputChanged(generation: generation) }
+            }
         }
         let restartedToken: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             #if DEBUG
-            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyServiceRestarted, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyServiceRestarted, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingOutputRoute, objectID: sys, selector: kAudioHardwarePropertyServiceRestarted, scope: kAudioObjectPropertyScopeGlobal, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
             #endif
-            self?.reregisterAfterServiceRestart()
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { await self?.handleServiceRestart(generation: generation) }
+            }
         }
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultInAddr.mSelector, scope: defaultInAddr.mScope, element: defaultInAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let defaultInputStatus = await AudioTopologyListenerExecution.add(objectID: sys, address: defaultInAddr, token: defaultInToken)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultInAddr.mSelector, scope: defaultInAddr.mScope, element: defaultInAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: defaultInputStatus)
+        #endif
+        guard defaultInputStatus == noErr, self.isCurrent(generation) else {
+            if defaultInputStatus == noErr {
+                _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultInAddr, token: defaultInToken)
+            }
+            return false
+        }
+        self.defaultInputToken = defaultInToken
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
-        let defaultStatus = AudioObjectAddPropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
+        let defaultStatus = await AudioTopologyListenerExecution.add(objectID: sys, address: defaultOutAddr, token: defaultOutToken)
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: defaultStatus)
         #endif
         guard defaultStatus == noErr else {
+            _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultInAddr, token: defaultInToken)
+            if self.generation == generation { self.defaultInputToken = nil }
             return false
         }
-        #if DEBUG
-        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
-        #endif
-        let restartedStatus = AudioObjectAddPropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, restartedToken)
-        #if DEBUG
-        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: restartedStatus)
-        #endif
-        guard restartedStatus == noErr else {
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
-            #endif
-            let cleanupStatus = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, defaultOutToken)
-            #if DEBUG
-            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: cleanupStatus)
-            #endif
+        guard self.isCurrent(generation) else {
+            _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultInAddr, token: defaultInToken)
+            _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultOutAddr, token: defaultOutToken)
             return false
         }
         self.defaultOutputToken = defaultOutToken
-        self.serviceRestartedToken = restartedToken
-        guard self.attachDataSourceListener() else {
-            self.unregister()
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+        #endif
+        let restartedStatus = await AudioTopologyListenerExecution.add(objectID: sys, address: restartedAddr, token: restartedToken)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: restartedStatus)
+        #endif
+        guard restartedStatus == noErr, self.isCurrent(generation) else {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
+            #endif
+            let cleanupStatus = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultOutAddr, token: defaultOutToken)
+            _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultInAddr, token: defaultInToken)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: cleanupStatus)
+            #endif
+            if self.generation == generation {
+                self.defaultInputToken = nil
+                self.defaultOutputToken = nil
+            }
+            if restartedStatus == noErr {
+                _ = await AudioTopologyListenerExecution.remove(objectID: sys, address: restartedAddr, token: restartedToken)
+            }
             return false
         }
+        self.serviceRestartedToken = restartedToken
         return true
     }
 
-    private func attachDataSourceListener() -> Bool {
+    private func handleDefaultInputChanged(generation: UInt64) {
+        guard self.isCurrent(generation) else { return }
+        guard self.lifecycle == .ready else {
+            self.defaultInputDirty = true
+            return
+        }
+        self.onChange()
+    }
+
+    private func attachDataSourceListener(generation: UInt64) async -> Bool {
+        guard self.isCurrent(generation) else { return false }
         guard let device = AudioDevice.getDefaultOutputDevice() else { return false }
-        var address = AudioObjectPropertyAddress(
+        self.dataSourceEpoch &+= 1
+        let epoch = self.dataSourceEpoch
+        let address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDataSource,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain
         )
         let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             #if DEBUG
-            AudioTopologyDiagnostics.record(.callback, owner: .meetingOutputRoute, objectID: device.id, selector: kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            AudioTopologyDiagnostics.record(.callbackBegin, owner: .meetingOutputRoute, objectID: device.id, selector: kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery)
+            defer { AudioTopologyDiagnostics.record(.callbackEnd, owner: .meetingOutputRoute, objectID: device.id, selector: kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput, element: kAudioObjectPropertyElementMain, queueRole: .mainDelivery) }
             #endif
-            self?.reevaluate()
+            MeetingMicrophoneEventExecution.afterHALCallback {
+                Task { await self?.handleDataSourceChanged(generation: generation, epoch: epoch) }
+            }
         }
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerAddBegin, owner: .meetingOutputRoute, objectID: device.id, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
-        let status = AudioObjectAddPropertyListenerBlock(device.id, &address, DispatchQueue.main, token)
+        let status = await AudioTopologyListenerExecution.add(objectID: device.id, address: address, token: token)
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerAddEnd, owner: .meetingOutputRoute, objectID: device.id, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
         guard status == noErr else { return false }
+        guard self.isCurrent(generation), self.dataSourceEpoch == epoch else {
+            _ = await AudioTopologyListenerExecution.remove(objectID: device.id, address: address, token: token)
+            return false
+        }
         self.dataSourceToken = token
         self.dataSourceDeviceID = device.id
         return true
     }
 
-    private func detachDataSourceListener() {
+    private func detachDataSourceListener() async {
+        self.dataSourceEpoch &+= 1
         guard let deviceID = self.dataSourceDeviceID, let token = self.dataSourceToken else { return }
-        var address = AudioObjectPropertyAddress(
+        self.dataSourceToken = nil
+        self.dataSourceDeviceID = nil
+        let address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDataSource,
             mScope: kAudioObjectPropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain
@@ -1623,61 +2132,178 @@ private final nonisolated class MeetingOutputRouteListener: @unchecked Sendable 
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
         #endif
-        let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, DispatchQueue.main, token)
+        let status = await AudioTopologyListenerExecution.remove(objectID: deviceID, address: address, token: token)
         #if DEBUG
         AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: deviceID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
-        self.dataSourceToken = nil
-        self.dataSourceDeviceID = nil
     }
 
-    private func reattachDataSourceListener() {
-        self.detachDataSourceListener()
-        _ = self.attachDataSourceListener()
+    private func handleDefaultOutputChanged(generation: UInt64) async {
+        guard self.isCurrent(generation) else { return }
+        guard self.lifecycle == .ready else {
+            self.defaultOutputDirty = true
+            return
+        }
+        await self.detachDataSourceListener()
+        guard self.isCurrent(generation) else { return }
+        _ = await self.attachDataSourceListener(generation: generation)
+        guard self.isCurrent(generation) else { return }
+        self.onChange()
     }
 
-    private func reregisterAfterServiceRestart() {
-        self.unregister()
-        guard self.register() else {
+    private func handleDataSourceChanged(generation: UInt64, epoch: UInt64) {
+        guard self.isCurrent(generation), self.dataSourceEpoch == epoch else { return }
+        self.onChange()
+    }
+
+    private func handleServiceRestart(generation: UInt64) async {
+        guard self.isCurrent(generation) else { return }
+        guard self.lifecycle == .ready else {
+            self.serviceRestartDirty = true
+            return
+        }
+        let oldTokens = self.detachAll(invalidateLifecycle: true)
+        let replacementGeneration = self.generation
+        self.active = true
+        self.lifecycle = .starting
+        self.defaultInputDirty = false
+        self.defaultOutputDirty = false
+        self.serviceRestartDirty = false
+        await Self.remove(tokens: oldTokens)
+        guard self.isCurrent(replacementGeneration) else { return }
+        guard await self.registerSystemListeners(generation: replacementGeneration),
+              await self.attachDataSourceListener(generation: replacementGeneration)
+        else {
+            if self.isCurrent(replacementGeneration) {
+                await self.stop()
+            }
             self.onChange()
             return
         }
-        self.reevaluate()
+        if await self.finishStarting(generation: replacementGeneration),
+           self.generation == replacementGeneration
+        {
+            self.onChange()
+        }
     }
 
-    private func unregister() {
+    /// Listener callbacks may arrive after HAL installs a token but before the async add
+    /// continuation commits ownership. Latch those callbacks while starting, then replay only
+    /// after all three tokens are owned. A service restart takes precedence over a route refresh.
+    private func finishStarting(generation: UInt64) async -> Bool {
+        guard self.isCurrent(generation), self.lifecycle == .starting else { return false }
+        self.lifecycle = .ready
+        let restartWasDirty = self.serviceRestartDirty
+        let inputWasDirty = self.defaultInputDirty
+        let defaultWasDirty = self.defaultOutputDirty
+        self.serviceRestartDirty = false
+        self.defaultInputDirty = false
+        self.defaultOutputDirty = false
+        if restartWasDirty {
+            await self.handleServiceRestart(generation: generation)
+            return self.active && self.lifecycle == .ready
+        }
+        if inputWasDirty {
+            self.handleDefaultInputChanged(generation: generation)
+        }
+        if defaultWasDirty {
+            await self.handleDefaultOutputChanged(generation: generation)
+        }
+        return self.active && self.lifecycle == .ready
+    }
+
+    func stop() async {
+        guard self.active || self.defaultInputToken != nil || self.defaultOutputToken != nil || self.serviceRestartedToken != nil || self.dataSourceToken != nil else { return }
+        let tokens = self.detachAll(invalidateLifecycle: true)
+        self.lifecycle = .idle
+        self.defaultInputDirty = false
+        self.defaultOutputDirty = false
+        self.serviceRestartDirty = false
+        await Self.remove(tokens: tokens)
+    }
+
+    private struct Tokens: @unchecked Sendable {
+        let defaultInput: AudioObjectPropertyListenerBlock?
+        let defaultOutput: AudioObjectPropertyListenerBlock?
+        let serviceRestarted: AudioObjectPropertyListenerBlock?
+        let dataSource: AudioObjectPropertyListenerBlock?
+        let dataSourceDeviceID: AudioObjectID?
+    }
+
+    private func detachAll(invalidateLifecycle: Bool) -> Tokens {
+        if invalidateLifecycle {
+            self.active = false
+            self.generation &+= 1
+        }
+        self.dataSourceEpoch &+= 1
+        let tokens = Tokens(
+            defaultInput: self.defaultInputToken,
+            defaultOutput: self.defaultOutputToken,
+            serviceRestarted: self.serviceRestartedToken,
+            dataSource: self.dataSourceToken,
+            dataSourceDeviceID: self.dataSourceDeviceID
+        )
+        self.defaultInputToken = nil
+        self.defaultOutputToken = nil
+        self.serviceRestartedToken = nil
+        self.dataSourceToken = nil
+        self.dataSourceDeviceID = nil
+        return tokens
+    }
+
+    private static func remove(tokens: Tokens) async {
         let sys = AudioObjectID(kAudioObjectSystemObject)
-        var defaultOutAddr = AudioObjectPropertyAddress(
+        let defaultInAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultOutAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var restartedAddr = AudioObjectPropertyAddress(
+        let restartedAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyServiceRestarted,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        if let token = self.defaultOutputToken {
+        if let token = tokens.defaultInput {
+            let status = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultInAddr, token: token)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultInAddr.mSelector, scope: defaultInAddr.mScope, element: defaultInAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
+            #endif
+        }
+        if let token = tokens.defaultOutput {
             #if DEBUG
             AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
             #endif
-            let status = AudioObjectRemovePropertyListenerBlock(sys, &defaultOutAddr, DispatchQueue.main, token)
+            let status = await AudioTopologyListenerExecution.remove(objectID: sys, address: defaultOutAddr, token: token)
             #if DEBUG
             AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: defaultOutAddr.mSelector, scope: defaultOutAddr.mScope, element: defaultOutAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
             #endif
         }
-        if let token = self.serviceRestartedToken {
+        if let token = tokens.serviceRestarted {
             #if DEBUG
             AudioTopologyDiagnostics.record(.listenerRemoveBegin, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener)
             #endif
-            let status = AudioObjectRemovePropertyListenerBlock(sys, &restartedAddr, DispatchQueue.main, token)
+            let status = await AudioTopologyListenerExecution.remove(objectID: sys, address: restartedAddr, token: token)
             #if DEBUG
             AudioTopologyDiagnostics.record(.listenerRemoveEnd, owner: .meetingOutputRoute, objectID: sys, selector: restartedAddr.mSelector, scope: restartedAddr.mScope, element: restartedAddr.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
             #endif
         }
-        self.defaultOutputToken = nil
-        self.serviceRestartedToken = nil
-        self.detachDataSourceListener()
+        if let token = tokens.dataSource, let deviceID = tokens.dataSourceDeviceID {
+            let address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDataSource,
+                mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            _ = await AudioTopologyListenerExecution.remove(objectID: deviceID, address: address, token: token)
+        }
+    }
+
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        self.active && self.generation == generation
     }
 }
 
@@ -1703,11 +2329,12 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
     var identity: MeetingMicrophoneIdentity
     var role: MeetingMicrophoneRole
 
-    static func elect(original: MeetingMicrophoneIdentity) -> MeetingCaptureDeviceElection {
-        Self.decide(
+    static func elect(original: MeetingMicrophoneIdentity) async -> MeetingCaptureDeviceElection {
+        let snapshot = await MeetingCaptureSourceCatalog.microphoneSnapshot()
+        return Self.decide(
             original: original,
-            catalog: MeetingCaptureSourceCatalog.availableMicrophones(),
-            defaultInputUID: AudioDevice.getDefaultInputDevice()?.uid
+            catalog: snapshot.identities,
+            defaultInputUID: snapshot.defaultCoreAudioUID
         )
     }
 
@@ -1723,8 +2350,20 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
         guard let matched = catalog.first(where: { $0.coreAudioUID == defaultInputUID }) else {
             return MeetingCaptureDeviceElection(identity: original, role: original.role)
         }
-        if matched.captureDeviceID == original.captureDeviceID {
-            return MeetingCaptureDeviceElection(identity: matched, role: original.role)
+        let isSamePhysicalDevice = {
+            if let originalUID = original.coreAudioUID, !originalUID.isEmpty,
+               let matchedUID = matched.coreAudioUID, !matchedUID.isEmpty
+            {
+                return originalUID == matchedUID
+            }
+            return matched.captureDeviceID == original.captureDeviceID
+        }()
+        if isSamePhysicalDevice {
+            var merged = matched
+            merged.role = original.role
+            merged.avCaptureDeviceID = original.avCaptureDeviceID
+                ?? (original.identitySchemaVersion == nil ? original.captureDeviceID : nil)
+            return MeetingCaptureDeviceElection(identity: merged, role: original.role)
         }
         // A built-in mic is inherently the owner's; .unknown would block VPIO on upgrades.
         let role: MeetingMicrophoneRole = matched.coreAudioUID == "BuiltInMicrophoneDevice" ? .personal : .unknown
@@ -1740,31 +2379,25 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
     }
 }
 
-/// Pure discard rule extracted from the upgrade's ring-flush for hardware-free testing.
-nonisolated enum MeetingUpgradeRingDiscard {
-    static func discardingSamples(atOrBehind boundary: CMTime?, from samples: [CMSampleBuffer]) -> [CMSampleBuffer] {
-        guard let boundary else { return samples }
-        return samples.filter { CMSampleBufferGetPresentationTimeStamp($0) > boundary }
-    }
-}
-
 /// Owns a swappable mic component (VPIO or AVCaptureSession) plus an app-audio-only SCStream that never stops across a swap.
 private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRuntime, @unchecked Sendable {
     private static let totalStartDeadlineSeconds: Double = 10
     private static let firstBufferDeadlineSeconds: Double = 2
     private static let downgradeSettleSeconds: Double = 0.75
-    private static let upgradeSettleSeconds: Double = 0.75
-    private static let upgradeDwellSeconds: Double = 10
-    private static let maxUpgradeAttemptsPerSession = 3
-    private static let upgradeBackoffBaseSeconds: Double = 5
-    private static let oldProducerStopSupervisionSeconds: Double = 0.3
 
     private enum Phase: Equatable {
         case starting
         case vpio
         case transitioning
+        case committing
         case avCapture
         case failed
+    }
+
+    private enum DowngradeCommitDecision {
+        case committed
+        case stale
+        case failed(String)
     }
 
     private let application: MeetingApplicationIdentity
@@ -1787,12 +2420,17 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private var watchdogTask: Task<Void, Never>?
     private var outputRouteListener: MeetingOutputRouteListener?
     private var transitionTask: Task<Void, Never>?
-    private var dwellTask: Task<Void, Never>?
-    private var dwellArming = false
+    private var transitionGeneration: UInt64 = 0
+    private var pendingAVCaptureFailure: (generation: UInt64, detail: String)?
+    private var avCaptureFailureToken: MeetingAVCaptureAttemptToken?
+    private var routeChangeDirty = false
     private var stopRequested = false
+    private var routeDrivenFallback = false
+    private var voiceProcessingRecoveryAttempts = 0
+    private var recoveryDwellTask: Task<Void, Never>?
+    /// Parked before `start()` so stop/supersede can never lose ownership of it.
+    private var pendingVoiceProcessingCapture: MeetingMicrophoneCapture?
     private var quarantined = false
-    private var upgradeAttempts = 0
-    private let abortedCaptureDrain = DispatchGroup()
 
     var captureScope: MeetingCaptureScope? {
         if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) { return fallback.captureScope }
@@ -1814,6 +2452,12 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
     }
+
+    #if DEBUG
+    deinit {
+        AudioTopologyDiagnostics.record(.ownerWillDeinit, owner: .meetingCaptureEngine, queueRole: .callbackCurrent, phase: .runtimeStop)
+    }
+    #endif
 
     static func make(
         application: MeetingApplicationIdentity,
@@ -1856,7 +2500,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 defer { self.outputRouteListener = nil }
                 return (self.gate, self.micCapture, self.outputRouteListener)
             }
-            _ = staleListener // released here, outside the lock
+            await staleListener?.stop()
             gateToAbort.abort()
             await captureToStop.stop()
             await self.stopAppOnlyIfStarted()
@@ -1942,7 +2586,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             guard let next = self.gate.continueCommitFlush() else { break }
             batch = next
         }
-        self.startOutputRouteWatch()
+        await self.startOutputRouteWatch()
         self.startWatchdog()
     }
 
@@ -1983,6 +2627,19 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         return false
     }
 
+    private func waitForBufferProgress(
+        timeoutSeconds: Double,
+        using component: MeetingAVCaptureMicrophoneComponent
+    ) async -> Bool {
+        let baseline = component.sampleCount()
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if component.sampleCount() > baseline { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
+    }
+
     private func startWatchdog() {
         let task = Task { [weak self] in
             guard let self else { return }
@@ -2008,25 +2665,94 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         self.stateLock.withLock { self.watchdogTask = task }
     }
 
+    private func startAVCaptureWatchdog(
+        generation: UInt64,
+        component: MeetingAVCaptureMicrophoneComponent
+    ) {
+        let task = Task { [weak self] in
+            guard let self else { return }
+            var lastCount = component.sampleCount()
+            var lastProgress = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                let stillOwnsComponent = self.stateLock.withLock {
+                    self.phase == .avCapture
+                        && self.transitionGeneration == generation
+                        && self.avCaptureComponent === component
+                }
+                guard stillOwnsComponent else { return }
+                let current = component.sampleCount()
+                if current != lastCount {
+                    lastCount = current
+                    lastProgress = Date()
+                    continue
+                }
+                if MeetingVoiceProcessingWatchdog.isStalled(
+                    secondsSinceLastEmittedBuffer: Date().timeIntervalSince(lastProgress)
+                ) {
+                    self.beginAVCaptureRebind(
+                        detail: "The active microphone stopped delivering audio buffers.",
+                        forced: true
+                    )
+                    return
+                }
+            }
+        }
+        self.stateLock.withLock { self.watchdogTask = task }
+    }
+
     /// Registered once: `handleRouteChange()` re-reads `phase` on every fire, so it never needs re-arming.
-    private func startOutputRouteWatch() {
-        let listener = MeetingOutputRouteListener { [weak self] in
+    private func startOutputRouteWatch() async {
+        let listener = await MeetingOutputRouteListener.make { [weak self] in
             self?.handleRouteChange()
         }
-        self.stateLock.withLock { self.outputRouteListener = listener }
+        let retained = self.stateLock.withLock { () -> Bool in
+            guard !self.stopRequested else { return false }
+            self.outputRouteListener = listener
+            return true
+        }
+        if !retained {
+            await listener?.stop()
+        }
     }
 
     private func handleRouteChange() {
-        let currentPhase = self.stateLock.withLock { self.phase }
-        switch currentPhase {
-        case .vpio:
+        enum Action { case evaluateVPIO, evaluateAVCapture, none }
+        let action = self.stateLock.withLock { () -> Action in
+            switch self.phase {
+            case .vpio:
+                return .evaluateVPIO
+            case .avCapture:
+                // Claim the observation before releasing the lock. If recovery wins
+                // the next lock acquisition, finishTransition() will replay it
+                // against whichever backend commits.
+                self.routeChangeDirty = true
+                return .evaluateAVCapture
+            case .transitioning, .committing:
+                self.routeChangeDirty = true
+                return .none
+            case .starting, .failed:
+                return .none
+            }
+        }
+        switch action {
+        case .evaluateVPIO:
             let reason = MeetingCapturePathDecider.outputRouteDeclineReason(MeetingCaptureEngine.currentOutputRouteSnapshot())
             if let reason {
-                self.beginDowngradeTransition(reason: "Output route changed: \(reason)")
+                self.beginDowngradeTransition(
+                    reason: "Output route changed: \(reason)",
+                    routeDriven: true
+                )
             }
-        case .avCapture:
-            self.armUpgradeDwellIfViable()
-        default:
+        case .evaluateAVCapture:
+            // The backend stays sticky, but the physical input must follow the live
+            // system default when a headset is attached or removed.
+            self.beginAVCaptureRebind(
+                detail: "The default microphone route changed.",
+                forced: false
+            )
+        case .none:
             break
         }
     }
@@ -2065,7 +2791,10 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         case .defaultInputChanged:
             guard let requestedUID = self.originalMicrophone.coreAudioUID else { return }
             if AudioDevice.getDefaultInputDevice()?.uid != requestedUID {
-                self.beginDowngradeTransition(reason: "The default input device changed away from the requested microphone.")
+                self.beginDowngradeTransition(
+                    reason: "The default input device changed away from the requested microphone.",
+                    routeDriven: true
+                )
             }
         case .overload:
             self.eventHandler(.interrupted(kind: .voiceProcessingOverload, trackID: nil, detail: "Voice-processing microphone reported an overload."))
@@ -2074,73 +2803,129 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
     }
 
-    private func handleAVCaptureFailureSignal(detail: String) {
-        guard self.stateLock.withLock({ self.phase == .avCapture }) else { return }
+    private func handleAVCaptureFailureSignal(
+        detail: String,
+        generation: UInt64,
+        token: MeetingAVCaptureAttemptToken
+    ) {
         let shouldEmit = self.stateLock.withLock { () -> Bool in
-            guard !self.interruptedThisEra else { return false }
-            self.interruptedThisEra = true
-            self.phase = .failed
-            return true
+            guard MeetingAVCaptureFailureAdmission.accepts(
+                currentGeneration: self.transitionGeneration,
+                eventGeneration: generation,
+                activeToken: self.avCaptureFailureToken,
+                eventToken: token,
+                stopRequested: self.stopRequested
+            ) else { return false }
+            switch self.phase {
+            case .transitioning, .committing:
+                if self.pendingAVCaptureFailure == nil {
+                    self.pendingAVCaptureFailure = (generation, detail)
+                }
+                return false
+            case .avCapture:
+                guard !self.interruptedThisEra else { return false }
+                self.interruptedThisEra = true
+                self.phase = .failed
+                return true
+            case .starting, .vpio, .failed:
+                return false
+            }
         }
         guard shouldEmit else { return }
         self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
     }
 
-    private func beginDowngradeTransition(reason: String) {
-        self.beginDowngradeTransition(detail: reason)
+    private func invalidateAVCaptureFailureToken(
+        _ token: MeetingAVCaptureAttemptToken,
+        generation: UInt64
+    ) {
+        self.stateLock.withLock {
+            guard self.transitionGeneration == generation,
+                  self.avCaptureFailureToken === token
+            else { return }
+            self.avCaptureFailureToken = nil
+            if self.pendingAVCaptureFailure?.generation == generation {
+                self.pendingAVCaptureFailure = nil
+            }
+        }
     }
 
-    private func beginDowngradeTransition(detail: String) {
-        let shouldStart = self.stateLock.withLock { () -> Bool in
-            guard self.phase == .vpio, !self.stopRequested else { return false }
+    private func beginDowngradeTransition(reason: String, routeDriven: Bool = false) {
+        self.beginDowngradeTransition(detail: reason, routeDriven: routeDriven)
+    }
+
+    private func beginDowngradeTransition(detail: String, routeDriven: Bool = false) {
+        let watchdog = self.stateLock.withLock { () -> Task<Void, Never>? in
+            guard self.phase == .vpio, !self.stopRequested else { return nil }
             self.phase = .transitioning
-            return true
+            self.transitionGeneration &+= 1
+            let generation = self.transitionGeneration
+            self.pendingAVCaptureFailure = nil
+            self.routeChangeDirty = false
+            self.routeDrivenFallback = routeDriven
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.runDowngrade(detail: detail, generation: generation)
+            }
+            self.transitionTask = task
+            defer { self.watchdogTask = nil }
+            return self.watchdogTask
         }
-        guard shouldStart else { return }
-        let cancellables = self.stateLock.withLock { () -> [Task<Void, Never>?] in
-            defer { self.dwellTask = nil; self.watchdogTask = nil }
-            return [self.dwellTask, self.watchdogTask]
-        }
-        cancellables.forEach { $0?.cancel() }
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.runDowngrade(detail: detail)
-        }
-        self.stateLock.withLock { self.transitionTask = task }
+        watchdog?.cancel()
     }
 
-    private func runDowngrade(detail: String) async {
+    private func runDowngrade(detail: String, generation: UInt64) async {
         try? await Task.sleep(nanoseconds: UInt64(Self.downgradeSettleSeconds * 1_000_000_000))
-        guard !(self.stateLock.withLock({ self.stopRequested })) else {
-            self.finishTransition()
+        guard self.ownsDowngradeTransition(generation) else {
+            self.finishTransition(generation)
             return
         }
 
         let oldFence = self.stateLock.withLock { self.currentFence }
-        let oldMicCapture = self.stateLock.withLock { self.micCapture }
+        var oldMicCapture: MeetingMicrophoneCapture? = self.stateLock.withLock { self.micCapture }
         await oldFence.quiesce()
-        let statsSnapshot = await oldMicCapture.statistics()
+        let statsSnapshot = await oldMicCapture!.statistics()
         let drift = MeetingClockDriftRecord(
             cumulativeAbsorbedSeconds: statsSnapshot.cumulativeAbsorbedCorrectionSeconds,
             elapsedValidHostSeconds: MeetingVoiceProcessingDriftSnapshot.elapsedValidHostSeconds(statsSnapshot),
             eligible: MeetingVoiceProcessingDriftSnapshot.isEligible(statsSnapshot)
         )
-        // Detached, supervised: releases the HAL device before the new client opens it, without blocking the swap.
-        oldMicCapture.stopDetachedSupervised(seconds: Self.oldProducerStopSupervisionSeconds) { [weak self] completedInTime in
-            guard let self, !completedInTime else { return }
-            self.stateLock.withLock { self.quarantined = true }
+        // Hard lifetime barrier: VPIO, its tap, and its Core Audio listeners must be
+        // completely gone before any AVFoundation discovery/session construction.
+        await oldMicCapture!.stop()
+        self.stateLock.withLock {
+            if self.micCapture === oldMicCapture {
+                self.micCapture = MeetingMicrophoneCapture()
+            }
         }
+        oldMicCapture = nil
 
-        guard !(self.stateLock.withLock({ self.stopRequested })) else {
-            self.finishTransition()
+        guard self.ownsDowngradeTransition(generation) else {
+            self.finishTransition(generation)
             return
         }
 
-        let elected = MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        guard self.ownsDowngradeTransition(generation) else {
+            self.finishTransition(generation)
+            return
+        }
         let newFence = MeetingEraAcceptanceFence()
         let newGate = MeetingVoiceProcessingCommitGate()
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let failureToken = MeetingAVCaptureAttemptToken()
+        guard self.stateLock.withLock({ () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested
+            else { return false }
+            self.avCaptureFailureToken = failureToken
+            return true
+        }) else {
+            self.finishTransition(generation)
+            return
+        }
         let component: MeetingAVCaptureMicrophoneComponent
         do {
             component = try MeetingAVCaptureMicrophoneComponent(
@@ -2157,24 +2942,103 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     }
                 },
                 onTerminalStop: { [weak self] detail in
-                    self?.handleAVCaptureFailureSignal(detail: detail)
+                    self?.handleAVCaptureFailureSignal(
+                        detail: detail,
+                        generation: generation,
+                        token: failureToken
+                    )
                 }
             )
-            try await component.start()
         } catch {
-            self.stateLock.withLock { self.phase = .failed }
-            self.eventHandler(.interrupted(
-                kind: .captureStoppedUnexpectedly, trackID: nil,
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            self.failPendingDowngrade(
+                generation: generation,
                 detail: "Microphone unavailable after a route change: \(error.localizedDescription)"
-            ))
-            self.finishTransition()
+            )
+            self.finishTransition(generation)
             return
         }
 
-        if self.stateLock.withLock({ self.stopRequested }) {
+        do {
+            try await component.start()
+        } catch {
+            // `stop()` is a true control-queue barrier: if startRunning was still
+            // executing, retirement cannot finish (or release the meeting lease)
+            // until it returns and stopRunning has run behind it.
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
             try? await component.stop()
-            self.finishTransition()
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "Microphone unavailable after a route change: \(error.localizedDescription)"
+            )
+            self.finishTransition(generation)
             return
+        }
+
+        guard await self.waitForBufferProgress(
+            timeoutSeconds: Self.firstBufferDeadlineSeconds,
+            using: component
+        ) else {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "The replacement microphone started but delivered no audio buffers."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        // Promote the bounded gate before the runtime's point of no return. If its
+        // cap was exhausted while AVCapture started, fail with no era/event side
+        // effects. Once promoted, arrivals are retained uncapped and in order
+        // while metadata and the coordinator acknowledgement complete.
+        guard var pendingBatch = newGate.beginCommitFlush() else {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "Microphone buffering overflowed before the route-change handoff could commit."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        // Point of no return. Before this lock succeeds, stop may cancel the
+        // transition with no published method/era. After it succeeds, stop waits
+        // for the complete metadata -> acknowledgement -> gate-flush transaction.
+        let commitDecision = self.stateLock.withLock { () -> DowngradeCommitDecision in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested
+            else { return .stale }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                self.pendingAVCaptureFailure = nil
+                self.phase = .failed
+                return .failed(failure.detail)
+            }
+            self.currentFence = newFence
+            self.avCaptureComponent = component
+            self.phase = .committing
+            self.interruptedThisEra = false
+            return .committed
+        }
+        switch commitDecision {
+        case .stale:
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        case let .failed(failureDetail):
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly, trackID: nil, detail: failureDetail
+            ))
+            self.finishTransition(generation)
+            return
+        case .committed:
+            break
         }
 
         let boundary = await self.microphoneWriter.beginSplice()
@@ -2210,28 +3074,398 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             )
         }
 
-        self.stateLock.withLock {
-            self.currentFence = newFence
-            self.avCaptureComponent = component
-            self.phase = .avCapture
-            self.interruptedThisEra = false
-        }
-
         // Ack before flushing: readers must re-arm before any post-boundary sample reaches them.
         let ack = MeetingCaptureMethodChangeAck()
         self.eventHandler(.captureMethodChanged(trackID: self.microphoneWriter.trackID, method: .avCaptureSession, ack: ack))
         await ack.wait()
 
-        if var batch = newGate.beginCommitFlush() {
-            while true {
-                await self.flushBatch(batch)
-                guard let next = newGate.continueCommitFlush() else { break }
-                batch = next
-            }
+        while true {
+            await self.flushBatch(pendingBatch)
+            guard let next = newGate.continueCommitFlush() else { break }
+            pendingBatch = next
         }
 
-        self.finishTransition()
-        self.armUpgradeDwellIfViable()
+        let terminalFailure = self.stateLock.withLock { () -> String? in
+            guard self.phase == .committing, self.transitionGeneration == generation else { return nil }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                self.pendingAVCaptureFailure = nil
+                self.interruptedThisEra = true
+                self.phase = .failed
+                return failure.detail
+            }
+            self.phase = .avCapture
+            return nil
+        }
+        if let terminalFailure {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly, trackID: nil, detail: terminalFailure
+            ))
+        } else {
+            self.startAVCaptureWatchdog(generation: generation, component: component)
+        }
+
+        self.finishTransition(generation)
+        if terminalFailure == nil { self.armSafeVoiceProcessingRecoveryIfViable() }
+    }
+
+    private func beginAVCaptureRebind(detail: String, forced: Bool) {
+        let watchdog = self.stateLock.withLock { () -> Task<Void, Never>? in
+            guard self.phase == .avCapture,
+                  self.avCaptureComponent != nil,
+                  !self.stopRequested
+            else { return nil }
+            let previousGeneration = self.transitionGeneration
+            self.phase = .transitioning
+            self.transitionGeneration &+= 1
+            let generation = self.transitionGeneration
+            self.pendingAVCaptureFailure = nil
+            self.routeChangeDirty = false
+            if forced { self.routeDrivenFallback = false }
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.runAVCaptureRebind(
+                    detail: detail,
+                    forced: forced,
+                    generation: generation,
+                    previousGeneration: previousGeneration
+                )
+            }
+            self.transitionTask = task
+            defer { self.watchdogTask = nil }
+            return self.watchdogTask
+        }
+        watchdog?.cancel()
+    }
+
+    private func runAVCaptureRebind(
+        detail: String,
+        forced: Bool,
+        generation: UInt64,
+        previousGeneration: UInt64
+    ) async {
+        try? await Task.sleep(nanoseconds: UInt64(Self.downgradeSettleSeconds * 1_000_000_000))
+        guard self.ownsDowngradeTransition(generation),
+              let oldComponent = self.stateLock.withLock({ self.avCaptureComponent })
+        else {
+            self.finishTransition(generation)
+            return
+        }
+
+        // The settle window coalesces everything observed so far. Clear the dirty
+        // bit immediately before the snapshot so only changes racing the snapshot
+        // or the subsequent handoff need a replay.
+        let readyToSnapshot = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested
+            else { return false }
+            self.routeChangeDirty = false
+            return true
+        }
+        guard readyToSnapshot else {
+            self.finishTransition(generation)
+            return
+        }
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        guard self.ownsDowngradeTransition(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        guard MeetingAVCaptureRebindDecision.shouldRebind(
+            activeCoreAudioUID: oldComponent.deviceUID,
+            electedCoreAudioUID: elected.identity.coreAudioUID,
+            forced: forced
+        ) else {
+            let restored = self.stateLock.withLock { () -> (restored: Bool, replay: Bool) in
+                guard self.phase == .transitioning,
+                      self.transitionGeneration == generation,
+                      !self.stopRequested,
+                      self.avCaptureComponent === oldComponent
+                else { return (false, false) }
+                let replay = self.routeChangeDirty
+                self.phase = .avCapture
+                self.transitionGeneration = previousGeneration
+                self.routeChangeDirty = false
+                self.transitionTask = nil
+                return (true, replay)
+            }
+            if restored.restored {
+                self.startAVCaptureWatchdog(generation: previousGeneration, component: oldComponent)
+                if restored.replay { self.handleRouteChange() }
+                self.armSafeVoiceProcessingRecoveryIfViable()
+            }
+            return
+        }
+
+        DebugLogger.shared.log(
+            "Meeting AVCapture input rebind: \(oldComponent.deviceName) -> \(elected.identity.displayName) (\(detail))",
+            source: "MeetingCaptureEngine"
+        )
+
+        // This is the same ownership invariant as the VPIO downgrade: retire the
+        // old producer completely before AVFoundation discovers or starts another.
+        let oldFence = self.stateLock.withLock { self.currentFence }
+        await oldFence.quiesce()
+        try? await oldComponent.stop()
+
+        guard self.ownsDowngradeTransition(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        let microphoneWriter = self.microphoneWriter
+        let liveAudioHandler = self.liveAudioHandler
+        var selectedElection: MeetingCaptureDeviceElection?
+        var selectedFence: MeetingEraAcceptanceFence?
+        var selectedGate: MeetingVoiceProcessingCommitGate?
+        var selectedComponent: MeetingAVCaptureMicrophoneComponent?
+        var selectedFailureToken: MeetingAVCaptureAttemptToken?
+        var lastCandidateFailure = "The replacement microphone was unavailable."
+
+        // CoreAudio and AVFoundation do not settle atomically during Bluetooth
+        // removal. Re-elect once after a bounded delay instead of permanently
+        // failing the meeting on a transient catalog mismatch.
+        for (attempt, retryDelay) in [0.0, 0.75].enumerated() {
+            if retryDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+            }
+            guard self.ownsDowngradeTransition(generation) else {
+                self.finishTransition(generation)
+                return
+            }
+            let candidateElection = attempt == 0
+                ? elected
+                : await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+            guard self.ownsDowngradeTransition(generation) else {
+                self.finishTransition(generation)
+                return
+            }
+            self.stateLock.withLock {
+                if self.transitionGeneration == generation { self.pendingAVCaptureFailure = nil }
+            }
+
+            let candidateFence = MeetingEraAcceptanceFence()
+            let candidateGate = MeetingVoiceProcessingCommitGate()
+            let failureToken = MeetingAVCaptureAttemptToken()
+            let tokenInstalled = self.stateLock.withLock { () -> Bool in
+                guard self.phase == .transitioning,
+                      self.transitionGeneration == generation,
+                      !self.stopRequested
+                else { return false }
+                self.avCaptureFailureToken = failureToken
+                return true
+            }
+            guard tokenInstalled else {
+                self.finishTransition(generation)
+                return
+            }
+            let candidate: MeetingAVCaptureMicrophoneComponent
+            do {
+                candidate = try MeetingAVCaptureMicrophoneComponent(
+                    microphone: candidateElection.identity,
+                    onSample: { sample in
+                        guard candidateFence.beginSample() else { return }
+                        defer { candidateFence.endSample() }
+                        switch candidateGate.offer(sample) {
+                        case .passthrough:
+                            microphoneWriter.enqueue(sample)
+                            liveAudioHandler?(.microphone, sample)
+                        case .buffered, .aborted:
+                            break
+                        }
+                    },
+                    onTerminalStop: { [weak self] failure in
+                        self?.handleAVCaptureFailureSignal(
+                            detail: failure,
+                            generation: generation,
+                            token: failureToken
+                        )
+                    }
+                )
+            } catch {
+                self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+                lastCandidateFailure = error.localizedDescription
+                continue
+            }
+
+            do {
+                try await candidate.start()
+            } catch {
+                // Even a failed start is retired through the same serialized
+                // barrier before another candidate is constructed.
+                self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+                try? await candidate.stop()
+                lastCandidateFailure = error.localizedDescription
+                continue
+            }
+
+            guard await self.waitForBufferProgress(
+                timeoutSeconds: Self.firstBufferDeadlineSeconds,
+                using: candidate
+            ) else {
+                self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+                try? await candidate.stop()
+                lastCandidateFailure = "The microphone started but delivered no audio buffers."
+                continue
+            }
+
+            let candidateFailed = self.stateLock.withLock {
+                self.pendingAVCaptureFailure?.generation == generation
+            }
+            if candidateFailed {
+                lastCandidateFailure = self.stateLock.withLock {
+                    self.pendingAVCaptureFailure?.detail ?? "The microphone stopped before commit."
+                }
+                self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+                try? await candidate.stop()
+                continue
+            }
+
+            selectedElection = candidateElection
+            selectedFence = candidateFence
+            selectedGate = candidateGate
+            selectedComponent = candidate
+            selectedFailureToken = failureToken
+            break
+        }
+
+        guard let elected = selectedElection,
+              let newFence = selectedFence,
+              let newGate = selectedGate,
+              let component = selectedComponent,
+              let failureToken = selectedFailureToken
+        else {
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "Microphone rebind failed after retry: \(lastCandidateFailure)"
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        guard var pendingBatch = newGate.beginCommitFlush() else {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "Microphone buffering overflowed before the input rebind could commit."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        let commitDecision = self.stateLock.withLock { () -> DowngradeCommitDecision in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.avCaptureComponent === oldComponent,
+                  self.avCaptureFailureToken === failureToken
+            else { return .stale }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                self.pendingAVCaptureFailure = nil
+                self.phase = .failed
+                return .failed(failure.detail)
+            }
+            self.currentFence = newFence
+            self.avCaptureComponent = component
+            self.phase = .committing
+            self.interruptedThisEra = false
+            return .committed
+        }
+        switch commitDecision {
+        case .stale:
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        case let .failed(failureDetail):
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            try? await component.stop()
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly, trackID: nil, detail: failureDetail
+            ))
+            self.finishTransition(generation)
+            return
+        case .committed:
+            break
+        }
+
+        let boundary = await self.microphoneWriter.beginSplice()
+        do {
+            try await self.microphoneWriter.updateTrackMetadata { track in
+                var eras = track.captureEras ?? [self.legacyEra(from: track)]
+                if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
+                    eras.append(MeetingCaptureEra(
+                        method: .avCaptureSession,
+                        deviceUID: elected.identity.coreAudioUID,
+                        deviceName: elected.identity.displayName,
+                        roleAtElection: elected.role,
+                        startSeconds: boundary.seconds
+                    ))
+                }
+                track.captureEras = eras
+                track.captureMethod = .avCaptureSession
+            }
+        } catch {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            await newFence.quiesce()
+            try? await component.stop()
+            let shouldEmit = self.stateLock.withLock { () -> Bool in
+                guard self.phase == .committing, self.transitionGeneration == generation else { return false }
+                self.phase = .failed
+                self.interruptedThisEra = true
+                return true
+            }
+            if shouldEmit {
+                self.eventHandler(.interrupted(
+                    kind: .captureStoppedUnexpectedly,
+                    trackID: nil,
+                    detail: "Could not persist the microphone rebind: \(error.localizedDescription)"
+                ))
+            }
+            self.finishTransition(generation)
+            return
+        }
+
+        // Re-arm live microphone segmentation before any sample from the new
+        // physical source is released, even though the backend method is unchanged.
+        let ack = MeetingCaptureMethodChangeAck()
+        self.eventHandler(.captureMethodChanged(
+            trackID: self.microphoneWriter.trackID,
+            method: .avCaptureSession,
+            ack: ack
+        ))
+        await ack.wait()
+
+        while true {
+            await self.flushBatch(pendingBatch)
+            guard let next = newGate.continueCommitFlush() else { break }
+            pendingBatch = next
+        }
+
+        let terminalFailure = self.stateLock.withLock { () -> String? in
+            guard self.phase == .committing, self.transitionGeneration == generation else { return nil }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                self.pendingAVCaptureFailure = nil
+                self.interruptedThisEra = true
+                self.phase = .failed
+                return failure.detail
+            }
+            self.phase = .avCapture
+            return nil
+        }
+        if let terminalFailure {
+            self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly, trackID: nil, detail: terminalFailure
+            ))
+        } else {
+            self.startAVCaptureWatchdog(generation: generation, component: component)
+        }
+        self.finishTransition(generation)
+        if terminalFailure == nil { self.armSafeVoiceProcessingRecoveryIfViable() }
     }
 
     private func legacyEra(from track: MeetingAudioTrack) -> MeetingCaptureEra {
@@ -2246,8 +3480,12 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         )
     }
 
+    #if false
+    // Retained only as source history during the transition rollout. Compiled out so
+    // an AVCapture fallback cannot create a second VPIO owner in this meeting.
     /// `dwellArming` reserves the slot in the SAME critical section as the `dwellTask == nil` check.
     private func armUpgradeDwellIfViable() {
+        guard MeetingCaptureTransitionPolicy.allowsWithinSessionVoiceProcessingUpgrade else { return }
         guard self.stateLock.withLock({
             guard self.phase == .avCapture, self.dwellTask == nil, !self.dwellArming, !self.quarantined,
                   !self.stopRequested, self.upgradeAttempts < Self.maxUpgradeAttemptsPerSession
@@ -2315,7 +3553,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             return
         }
 
-        let elected = MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
         let candidateMicCapture = MeetingMicrophoneCapture()
         let candidateGate = MeetingVoiceProcessingCommitGate()
         let candidateFence = MeetingEraAcceptanceFence()
@@ -2443,7 +3681,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
         self.stateLock.withLock { self.phase = .avCapture }
         self.finishTransition()
-        self.armUpgradeDwellIfViable()
+        // Sticky fallback intentionally does not schedule another VPIO owner.
     }
 
     private func drainAbortedCaptures() async {
@@ -2453,29 +3691,667 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             }
         }
     }
+    #endif
 
-    private func finishTransition() {
-        self.stateLock.withLock { self.transitionTask = nil }
+    // MARK: - Stop-first AVCapture -> VPIO recovery
+
+    private func armSafeVoiceProcessingRecoveryIfViable() {
+        let outputRoute = MeetingCaptureEngine.currentOutputRouteSnapshot()
+        let task = self.stateLock.withLock { () -> Task<Void, Never>? in
+            guard self.phase == .avCapture,
+                  self.avCaptureComponent != nil,
+                  self.recoveryDwellTask == nil,
+                  !self.stopRequested,
+                  !self.quarantined,
+                  MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+                      routeDrivenFallback: self.routeDrivenFallback,
+                      attempts: self.voiceProcessingRecoveryAttempts,
+                      microphone: self.originalMicrophone,
+                      outputRoute: outputRoute
+                  )
+            else { return nil }
+            let task = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(
+                    MeetingVoiceProcessingUpgradeDwell.seconds * 1_000_000_000
+                ))
+                guard let self, !Task.isCancelled else { return }
+                await self.beginSafeVoiceProcessingRecovery()
+            }
+            self.recoveryDwellTask = task
+            return task
+        }
+        _ = task // retained by runtime; silence the intentional local discard
+    }
+
+    private func beginSafeVoiceProcessingRecovery() async {
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        let outputRoute = MeetingCaptureEngine.currentOutputRouteSnapshot()
+        let started = self.stateLock.withLock { () -> Bool in
+            self.recoveryDwellTask = nil
+            guard self.phase == .avCapture,
+                  self.avCaptureComponent != nil,
+                  !self.stopRequested,
+                  !self.quarantined,
+                  MeetingCaptureTransitionPolicy.shouldAttemptVoiceProcessingRecovery(
+                      routeDrivenFallback: self.routeDrivenFallback,
+                      attempts: self.voiceProcessingRecoveryAttempts,
+                      microphone: elected.identity,
+                      outputRoute: outputRoute
+                  )
+            else { return false }
+            self.phase = .transitioning
+            self.transitionGeneration &+= 1
+            let generation = self.transitionGeneration
+            self.voiceProcessingRecoveryAttempts += 1
+            self.routeChangeDirty = false
+            self.pendingAVCaptureFailure = nil
+            self.avCaptureFailureToken = nil
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.runSafeVoiceProcessingRecovery(generation: generation)
+            }
+            self.transitionTask = task
+            return true
+        }
+        if started {
+            let watchdog = self.stateLock.withLock { () -> Task<Void, Never>? in
+                defer { self.watchdogTask = nil }
+                return self.watchdogTask
+            }
+            watchdog?.cancel()
+        }
+    }
+
+    private func ownsSafeRecovery(_ generation: UInt64) -> Bool {
+        self.stateLock.withLock {
+            (self.phase == .transitioning || self.phase == .committing)
+                && self.transitionGeneration == generation
+                && !self.stopRequested
+        }
+    }
+
+    private func runSafeVoiceProcessingRecovery(generation: UInt64) async {
+        guard self.ownsSafeRecovery(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        let oldFence = self.stateLock.withLock { self.currentFence }
+        var retiringComponent = self.stateLock.withLock { self.avCaptureComponent }
+        guard retiringComponent != nil else {
+            self.failPendingDowngrade(
+                generation: generation,
+                detail: "Voice-processing recovery had no active fallback microphone to retire."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        await oldFence.quiesce()
+        do {
+            try await retiringComponent?.stop()
+        } catch {
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "Could not retire fallback microphone capture: \(error.localizedDescription)"
+            )
+            self.finishTransition(generation)
+            return
+        }
+        guard retiringComponent?.isFullyRetired() == true else {
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "Fallback microphone teardown could not be proven; recovery was quarantined."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        // Remove every runtime strong reference, then drop the final local reference.
+        // `MeetingAVCaptureMicrophoneComponent.stop()` has already dismantled the
+        // session graph and removed observers on its serialized control queue.
+        let cleared = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  self.avCaptureComponent === retiringComponent
+            else { return false }
+            self.avCaptureComponent = nil
+            self.avCaptureFailureToken = nil
+            self.pendingAVCaptureFailure = nil
+            return true
+        }
+        retiringComponent = nil
+        guard cleared, self.ownsSafeRecovery(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        let boundary = await self.microphoneWriter.beginSplice()
+        guard self.ownsSafeRecovery(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        // Re-elect only after AVFoundation has released the old physical device.
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        guard self.ownsSafeRecovery(generation),
+              MeetingCapturePathDecider.decide(
+                  mode: .onlineCall,
+                  microphone: elected.identity,
+                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+              ) == .voiceProcessing
+        else {
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "The audio route changed before voice processing could restart."
+            )
+            return
+        }
+
+        // Optional by design: every rollback path explicitly drops the final local
+        // reference after stop() and before constructing a fresh AVCaptureSession.
+        var candidate: MeetingMicrophoneCapture? = MeetingMicrophoneCapture()
+        let candidateGate = MeetingVoiceProcessingCommitGate()
+        let candidateFence = MeetingEraAcceptanceFence()
+        let microphoneWriter = self.microphoneWriter
+        let liveAudioHandler = self.liveAudioHandler
+        let parked = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.avCaptureComponent == nil
+            else { return false }
+            guard let candidate else { return false }
+            self.pendingVoiceProcessingCapture = candidate
+            self.micCapture = candidate
+            return true
+        }
+        guard parked else {
+            await candidate?.stop()
+            candidate = nil
+            self.finishTransition(generation)
+            return
+        }
+
+        let outcome: MeetingMicrophoneBindingOutcome
+        do {
+            outcome = try await candidate!.start(
+                microphone: elected.identity,
+                authorizationPreflighted: true,
+                onSample: { sample in
+                    guard candidateFence.beginSample() else { return }
+                    defer { candidateFence.endSample() }
+                    switch candidateGate.offer(sample) {
+                    case .passthrough:
+                        microphoneWriter.enqueue(sample)
+                        liveAudioHandler?(.microphone, sample)
+                    case .buffered, .aborted:
+                        break
+                    }
+                },
+                onEvent: { [weak self, weak candidate] event in
+                    guard let candidate else { return }
+                    self?.handleMicEvent(event, owner: candidate)
+                }
+            )
+        } catch {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "Voice processing could not restart: \(error.localizedDescription)"
+            )
+            return
+        }
+        if case .unavailable = outcome {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "Voice-processing microphone capture was unavailable."
+            )
+            return
+        }
+
+        guard self.ownsSafeRecovery(generation),
+              await self.waitForBufferProgress(
+                  timeoutSeconds: Self.firstBufferDeadlineSeconds,
+                  using: candidate!
+              ),
+              self.ownsSafeRecovery(generation),
+              MeetingCapturePathDecider.decide(
+                  mode: .onlineCall,
+                  microphone: elected.identity,
+                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+              ) == .voiceProcessing
+        else {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "Voice processing did not become ready on the settled audio route."
+            )
+            return
+        }
+
+        guard var pendingBatch = candidateGate.beginCommitFlush() else {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "Voice-processing buffering overflowed before recovery could commit."
+            )
+            return
+        }
+        let mayCommit = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.pendingVoiceProcessingCapture === candidate,
+                  self.avCaptureComponent == nil,
+                  self.pendingAVCaptureFailure == nil
+            else { return false }
+            self.phase = .committing
+            return true
+        }
+        guard mayCommit else {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            self.finishTransition(generation)
+            return
+        }
+
+        let settled = await candidate!.settledConfiguration()
+        do {
+            try await self.microphoneWriter.updateTrackMetadata { track in
+                var eras = track.captureEras ?? [self.legacyEra(from: track)]
+                if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
+                    eras.append(MeetingCaptureEra(
+                        method: .voiceProcessing,
+                        deviceUID: elected.identity.coreAudioUID,
+                        deviceName: elected.identity.displayName,
+                        roleAtElection: elected.role,
+                        startSeconds: boundary.seconds,
+                        settledConfig: settled
+                    ))
+                }
+                track.captureEras = eras
+                track.captureMethod = .voiceProcessing
+                track.voiceProcessingConfig = settled
+            }
+        } catch {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            await self.restoreAVCaptureAfterRecoveryFailure(
+                generation: generation,
+                boundary: boundary,
+                detail: "Could not persist voice-processing recovery: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        let ack = MeetingCaptureMethodChangeAck()
+        self.eventHandler(.captureMethodChanged(
+            trackID: self.microphoneWriter.trackID,
+            method: .voiceProcessing,
+            ack: ack
+        ))
+        await ack.wait()
+        guard self.ownsSafeRecovery(generation) else {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            self.finishTransition(generation)
+            return
+        }
+
+        while true {
+            await self.flushBatch(pendingBatch)
+            guard let next = candidateGate.continueCommitFlush() else { break }
+            pendingBatch = next
+        }
+
+        let committed = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .committing,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.pendingVoiceProcessingCapture === candidate,
+                  self.pendingAVCaptureFailure == nil
+            else { return false }
+            self.currentFence = candidateFence
+            self.gate = candidateGate
+            self.pendingVoiceProcessingCapture = nil
+            self.phase = .vpio
+            self.routeDrivenFallback = false
+            self.interruptedThisEra = false
+            return true
+        }
+        guard committed else {
+            await self.retirePendingVoiceProcessingCapture(generation: generation)
+            candidate = nil
+            self.finishTransition(generation)
+            return
+        }
+        DebugLogger.shared.log(
+            "Meeting microphone recovered voice processing on \(elected.identity.displayName).",
+            source: "MeetingCaptureEngine"
+        )
+        self.startWatchdog()
+        self.finishTransition(generation)
+    }
+
+    private func retirePendingVoiceProcessingCapture(generation: UInt64) async {
+        let capture = self.stateLock.withLock { self.pendingVoiceProcessingCapture }
+        await capture?.stop()
+        self.stateLock.withLock {
+            guard self.transitionGeneration == generation,
+                  self.pendingVoiceProcessingCapture === capture
+            else { return }
+            self.pendingVoiceProcessingCapture = nil
+            self.micCapture = MeetingMicrophoneCapture()
+        }
+    }
+
+    private func restoreAVCaptureAfterRecoveryFailure(
+        generation: UInt64,
+        boundary: MeetingMediaTime?,
+        detail: String
+    ) async {
+        guard self.ownsSafeRecovery(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+        let elected = await MeetingCaptureDeviceElection.elect(original: self.originalMicrophone)
+        guard self.ownsSafeRecovery(generation) else {
+            self.finishTransition(generation)
+            return
+        }
+
+        let fence = MeetingEraAcceptanceFence()
+        let gate = MeetingVoiceProcessingCommitGate()
+        let token = MeetingAVCaptureAttemptToken()
+        let microphoneWriter = self.microphoneWriter
+        let liveAudioHandler = self.liveAudioHandler
+        let component: MeetingAVCaptureMicrophoneComponent
+        do {
+            component = try MeetingAVCaptureMicrophoneComponent(
+                microphone: elected.identity,
+                onSample: { sample in
+                    guard fence.beginSample() else { return }
+                    defer { fence.endSample() }
+                    switch gate.offer(sample) {
+                    case .passthrough:
+                        microphoneWriter.enqueue(sample)
+                        liveAudioHandler?(.microphone, sample)
+                    case .buffered, .aborted:
+                        break
+                    }
+                },
+                onTerminalStop: { [weak self] failure in
+                    self?.handleAVCaptureFailureSignal(
+                        detail: failure,
+                        generation: generation,
+                        token: token
+                    )
+                }
+            )
+        } catch {
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "\(detail) Fallback microphone recreation failed: \(error.localizedDescription)"
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        let parked = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning || self.phase == .committing,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.pendingVoiceProcessingCapture == nil,
+                  self.avCaptureComponent == nil
+            else { return false }
+            self.phase = .transitioning
+            self.avCaptureComponent = component
+            self.avCaptureFailureToken = token
+            self.pendingAVCaptureFailure = nil
+            return true
+        }
+        guard parked else {
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        }
+
+        do {
+            try await component.start()
+        } catch {
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "\(detail) Fallback microphone could not start: \(error.localizedDescription)"
+            )
+            self.finishTransition(generation)
+            return
+        }
+        guard self.ownsSafeRecovery(generation),
+              await self.waitForBufferProgress(
+                  timeoutSeconds: Self.firstBufferDeadlineSeconds,
+                  using: component
+              ),
+              self.ownsSafeRecovery(generation),
+              var pendingBatch = gate.beginCommitFlush()
+        else {
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "\(detail) Fallback microphone delivered no audio."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        let promotion = self.stateLock.withLock { () -> DowngradeCommitDecision in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.avCaptureComponent === component,
+                  self.avCaptureFailureToken === token
+            else { return .stale }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                return .failed(failure.detail)
+            }
+            self.phase = .committing
+            return .committed
+        }
+        switch promotion {
+        case .committed:
+            break
+        case .stale:
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        case let .failed(failureDetail):
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.failSafeRecovery(generation: generation, detail: failureDetail)
+            self.finishTransition(generation)
+            return
+        }
+        do {
+            try await self.microphoneWriter.updateTrackMetadata { track in
+                var eras = track.captureEras ?? [self.legacyEra(from: track)]
+                if let boundary, boundary.seconds > (eras.last?.startSeconds ?? -.infinity) {
+                    eras.append(MeetingCaptureEra(
+                        method: .avCaptureSession,
+                        deviceUID: elected.identity.coreAudioUID,
+                        deviceName: elected.identity.displayName,
+                        roleAtElection: elected.role,
+                        startSeconds: boundary.seconds
+                    ))
+                }
+                track.captureEras = eras
+                track.captureMethod = .avCaptureSession
+            }
+        } catch {
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.failSafeRecovery(
+                generation: generation,
+                detail: "\(detail) Fallback microphone metadata could not be saved."
+            )
+            self.finishTransition(generation)
+            return
+        }
+
+        let ack = MeetingCaptureMethodChangeAck()
+        self.eventHandler(.captureMethodChanged(
+            trackID: self.microphoneWriter.trackID,
+            method: .avCaptureSession,
+            ack: ack
+        ))
+        await ack.wait()
+        guard self.ownsSafeRecovery(generation) else {
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        }
+        while true {
+            await self.flushBatch(pendingBatch)
+            guard let next = gate.continueCommitFlush() else { break }
+            pendingBatch = next
+        }
+
+        let commitDecision = self.stateLock.withLock { () -> DowngradeCommitDecision in
+            guard self.phase == .committing,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested,
+                  self.avCaptureComponent === component,
+                  self.avCaptureFailureToken === token
+            else { return .stale }
+            if let failure = self.pendingAVCaptureFailure, failure.generation == generation {
+                return .failed(failure.detail)
+            }
+            self.currentFence = fence
+            self.phase = .avCapture
+            // Route-driven recovery remains eligible for a bounded retry. The
+            // policy's attempt cap prevents churn while allowing transient HAL
+            // settling failures after Bluetooth removal to recover echo control.
+            self.interruptedThisEra = false
+            return .committed
+        }
+        switch commitDecision {
+        case .committed:
+            break
+        case .stale:
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.finishTransition(generation)
+            return
+        case let .failed(failureDetail):
+            self.invalidateAVCaptureFailureToken(token, generation: generation)
+            try? await component.stop()
+            self.failSafeRecovery(generation: generation, detail: failureDetail)
+            self.finishTransition(generation)
+            return
+        }
+        DebugLogger.shared.warning(
+            "\(detail) Continued with fallback microphone capture.",
+            source: "MeetingCaptureEngine"
+        )
+        self.startAVCaptureWatchdog(generation: generation, component: component)
+        self.finishTransition(generation)
+        self.armSafeVoiceProcessingRecoveryIfViable()
+    }
+
+    private func failSafeRecovery(generation: UInt64, detail: String) {
+        let shouldEmit = self.stateLock.withLock { () -> Bool in
+            guard self.transitionGeneration == generation, !self.stopRequested else { return false }
+            self.pendingVoiceProcessingCapture = nil
+            self.avCaptureComponent = nil
+            self.avCaptureFailureToken = nil
+            self.pendingAVCaptureFailure = nil
+            self.quarantined = true
+            self.phase = .failed
+            self.interruptedThisEra = true
+            return true
+        }
+        if shouldEmit {
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly,
+                trackID: nil,
+                detail: detail
+            ))
+        }
+    }
+
+    private func ownsDowngradeTransition(_ generation: UInt64) -> Bool {
+        self.stateLock.withLock {
+            self.phase == .transitioning
+                && self.transitionGeneration == generation
+                && !self.stopRequested
+        }
+    }
+
+    private func failPendingDowngrade(generation: UInt64, detail: String) {
+        let shouldEmit = self.stateLock.withLock { () -> Bool in
+            guard self.phase == .transitioning,
+                  self.transitionGeneration == generation,
+                  !self.stopRequested
+            else { return false }
+            self.pendingAVCaptureFailure = nil
+            self.phase = .failed
+            self.interruptedThisEra = true
+            return true
+        }
+        if shouldEmit {
+            self.eventHandler(.interrupted(
+                kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail
+            ))
+        }
+    }
+
+    private func finishTransition(_ generation: UInt64) {
+        let shouldReplayRouteChange = self.stateLock.withLock { () -> Bool in
+            guard self.transitionGeneration == generation else { return false }
+            self.transitionTask = nil
+            guard (self.phase == .avCapture || self.phase == .vpio),
+                  self.routeChangeDirty,
+                  !self.stopRequested
+            else { return false }
+            self.routeChangeDirty = false
+            return true
+        }
+        if shouldReplayRouteChange { self.handleRouteChange() }
     }
 
     func stop() async throws {
-        let dwell = self.stateLock.withLock { () -> Task<Void, Never>? in
+        let recoveryDwell = self.stateLock.withLock { () -> Task<Void, Never>? in
             self.stopRequested = true
-            defer { self.dwellTask = nil }
-            return self.dwellTask
+            self.avCaptureFailureToken = nil
+            self.pendingAVCaptureFailure = nil
+            defer { self.recoveryDwellTask = nil }
+            return self.recoveryDwellTask
         }
-        dwell?.cancel()
+        recoveryDwell?.cancel()
 
         if let transitionTask = self.stateLock.withLock({ self.transitionTask }) {
             await transitionTask.value
         }
-        await self.drainAbortedCaptures()
         let (watchdog, staleListener) = self.stateLock.withLock { () -> (Task<Void, Never>?, MeetingOutputRouteListener?) in
             defer { self.watchdogTask = nil; self.outputRouteListener = nil }
             return (self.watchdogTask, self.outputRouteListener)
         }
         watchdog?.cancel()
-        _ = staleListener // released here, outside the lock
+        await staleListener?.stop()
 
         if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) {
             try await fallback.stop()
@@ -2486,7 +4362,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         guard phase == .vpio || phase == .avCapture else {
             let (gateToAbort, captureToStop) = self.stateLock.withLock { (self.gate, self.micCapture) }
             gateToAbort.abort()
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingMicrophone, queueRole: .actorControl, phase: .microphoneStop)
+            #endif
             await captureToStop.stop()
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .microphoneStop)
+            #endif
             if let component = self.stateLock.withLock({ self.avCaptureComponent }) {
                 try? await component.stop()
             }
@@ -2497,7 +4379,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         if phase == .vpio {
             // Quiesce first — stats must not be snapshotted while the tap can still emit.
             let micCapture = self.stateLock.withLock { self.micCapture }
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingMicrophone, queueRole: .actorControl, phase: .microphoneStop)
+            #endif
             await micCapture.stop()
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingMicrophone, queueRole: .actorControl, phase: .microphoneStop)
+            #endif
             let statsSnapshot = await micCapture.statistics()
             let drift = MeetingClockDriftRecord(
                 cumulativeAbsorbedSeconds: statsSnapshot.cumulativeAbsorbedCorrectionSeconds,
@@ -2513,10 +4401,20 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 }
             }
         } else if let component = self.stateLock.withLock({ self.avCaptureComponent }) {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .avCapture, queueRole: .actorControl, phase: .avCaptureStop)
+            #endif
             try? await component.stop()
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .avCapture, queueRole: .actorControl, phase: .avCaptureStop)
+            #endif
         }
 
         if let appOnly = self.stateLock.withLock({ self.appOnlyRuntime }) {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop)
+            defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop) }
+            #endif
             try await appOnly.stop()
         }
     }

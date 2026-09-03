@@ -83,6 +83,7 @@ typedef struct {
     uint32_t queueRole;
     uint32_t phase;
     uint32_t transport;
+    uint32_t isMainThread;
     int32_t status;
 } FVAudioTopologyTraceEvent;
 

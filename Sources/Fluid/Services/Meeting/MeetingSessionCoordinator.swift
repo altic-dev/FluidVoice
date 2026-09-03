@@ -20,8 +20,8 @@ struct MeetingAudioActivityLease: Equatable, Sendable {
 
 @MainActor
 protocol MeetingAudioActivityArbitrating: AnyObject {
-    func acquireMeetingCapture() throws -> MeetingAudioActivityLease
-    func release(_ lease: MeetingAudioActivityLease)
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease
+    func release(_ lease: MeetingAudioActivityLease) async
 }
 
 /// Matches ASRService's exclusive-activity lease API so the arbiter can depend on a protocol
@@ -30,6 +30,8 @@ protocol MeetingAudioActivityArbitrating: AnyObject {
 protocol ASRActivityLeasing: AnyObject {
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease
     func releaseExclusiveActivity(_ lease: ASRActivityLease)
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async
 }
 
 extension ASRService: ASRActivityLeasing {}
@@ -40,12 +42,14 @@ final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
     private var meetingLease: MeetingAudioActivityLease?
     private var sharedActivityLease: ASRActivityLease?
     private weak var activeASRService: (any ASRActivityLeasing)?
+    private var releaseTask: Task<Void, Never>?
+    private var releaseTaskLease: MeetingAudioActivityLease?
 
     init(asrServiceProvider: @escaping @MainActor () throws -> any ASRActivityLeasing) {
         self.asrServiceProvider = asrServiceProvider
     }
 
-    func acquireMeetingCapture() throws -> MeetingAudioActivityLease {
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         guard self.meetingLease == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
         let asrService = try self.asrServiceProvider()
         let sharedLease = try asrService.acquireExclusiveActivity(.meeting)
@@ -53,17 +57,50 @@ final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
         self.activeASRService = asrService
         self.sharedActivityLease = sharedLease
         self.meetingLease = lease
-        return lease
+        do {
+            try await asrService.prepareMeetingAudioHandoff(sharedLease)
+            try Task.checkCancellation()
+            guard self.meetingLease == lease,
+                  self.sharedActivityLease == sharedLease
+            else { throw CancellationError() }
+            return lease
+        } catch {
+            if self.meetingLease == lease, self.sharedActivityLease == sharedLease {
+                // Rollback retains the ASR lease until every partially-started handoff
+                // operation is drained; only then can dictation or another meeting enter.
+                await asrService.completeMeetingAudioHandback(sharedLease)
+                self.activeASRService = nil
+                self.sharedActivityLease = nil
+                self.meetingLease = nil
+            }
+            throw error
+        }
     }
 
-    func release(_ lease: MeetingAudioActivityLease) {
-        guard self.meetingLease == lease else { return }
-        if let sharedActivityLease = self.sharedActivityLease {
-            self.activeASRService?.releaseExclusiveActivity(sharedActivityLease)
+    func release(_ lease: MeetingAudioActivityLease) async {
+        if self.releaseTaskLease == lease, let releaseTask = self.releaseTask {
+            await releaseTask.value
+            return
         }
-        self.activeASRService = nil
-        self.sharedActivityLease = nil
-        self.meetingLease = nil
+        guard self.meetingLease == lease else { return }
+        let sharedActivityLease = self.sharedActivityLease
+        let asrService = self.activeASRService
+        let releaseTask = Task { @MainActor in
+            if let sharedActivityLease {
+                await asrService?.completeMeetingAudioHandback(sharedActivityLease)
+            }
+        }
+        self.releaseTaskLease = lease
+        self.releaseTask = releaseTask
+        await releaseTask.value
+        guard self.releaseTaskLease == lease else { return }
+        if self.meetingLease == lease, self.sharedActivityLease == sharedActivityLease {
+            self.activeASRService = nil
+            self.sharedActivityLease = nil
+            self.meetingLease = nil
+        }
+        self.releaseTask = nil
+        self.releaseTaskLease = nil
     }
 }
 
@@ -209,7 +246,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         preferredWindowID: UInt32?,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
-        let microphone = try MeetingCaptureSourceCatalog.defaultMicrophone(
+        let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
         var application: MeetingApplicationIdentity?
@@ -246,7 +283,24 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw MeetingCoordinatorError.maintenanceInProgress
         }
 
-        let lease = try self.audioArbiter.acquireMeetingCapture()
+        // Permission prompts are outside the exclusive audio lease. A prompt can remain
+        // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
+        try await self.capture.preflightPermissions()
+        try Task.checkCancellation()
+        guard self.activeSession == nil, !self.hasBlockingActivityTask else {
+            throw MeetingCoordinatorError.recordingAlreadyActive
+        }
+        guard !self.isMutatingSession else {
+            throw MeetingCoordinatorError.maintenanceInProgress
+        }
+
+        let lease = try await self.audioArbiter.acquireMeetingCapture()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            await self.audioArbiter.release(lease)
+            throw error
+        }
         self.activityLease = lease
         let generation = UUID()
         self.captureGeneration = generation
@@ -353,7 +407,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.degradeReason = nil
             self.operationGeneration = nil
             self.state = .failed(session.id, failure)
-            self.releaseActivityLease()
+            await self.releaseActivityLease()
             throw error
         }
     }
@@ -448,7 +502,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         // Acquire before displacing/adopting so a throw here never strands activeSession mid-transition.
         if self.activityLease == nil {
-            self.activityLease = try self.audioArbiter.acquireMeetingCapture()
+            self.activityLease = try await self.audioArbiter.acquireMeetingCapture()
         }
 
         // Target is valid — only now displace the passive recovery offer it replaces.
@@ -474,7 +528,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
         var session = inputSession
         if self.activityLease == nil {
-            self.activityLease = try self.audioArbiter.acquireMeetingCapture()
+            self.activityLease = try await self.audioArbiter.acquireMeetingCapture()
         }
         let generation = UUID()
         self.operationGeneration = generation
@@ -1113,7 +1167,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.flushQueuedPersistence()
             await self.capture.shutdownForTermination()
             await self.tearDownLiveTranscription()
-            self.releaseActivityLease()
+            await self.releaseActivityLease()
             return
         }
 
@@ -1161,17 +1215,30 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.activeSession = nil
             self.trackHealth = [:]
             self.state = .idle
-            self.releaseActivityLease()
+            await self.releaseActivityLease()
             return
         } catch {
             // Preserve today's behavior: reinstall as interrupted despite the save failure.
         }
         self.activeSession = session
         self.state = .interrupted(session.id)
-        self.releaseActivityLease()
+        await self.releaseActivityLease()
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .coordinatorStop)
+        var diagnosticsStopSucceeded = false
+        defer {
+            AudioTopologyDiagnostics.record(
+                .phaseEnd,
+                owner: .meetingCoordinator,
+                queueRole: .mainControl,
+                phase: .coordinatorStop,
+                status: diagnosticsStopSucceeded ? 0 : -1
+            )
+        }
+        #endif
         guard var session = self.activeSession else { throw MeetingCoordinatorError.noActiveMeeting }
         self.state = .stopping(session.id)
         session.state = .stopping
@@ -1183,8 +1250,17 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let stopResult: MeetingCaptureStopResult
         do {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
+            #endif
             stopResult = try await self.capture.stop(sessionID: session.id)
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
+            #endif
         } catch {
+            #if DEBUG
+            AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop, status: -1)
+            #endif
             await self.handleStopFailure(error, session: session, generation: generation)
             throw error
         }
@@ -1201,10 +1277,27 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         try? await self.store.save(session)
-        return try await self.process(session, generation: generation)
+        let processed = try await self.process(session, generation: generation)
+        #if DEBUG
+        diagnosticsStopSucceeded = true
+        #endif
+        return processed
     }
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .processing)
+        var diagnosticsProcessingSucceeded = false
+        defer {
+            AudioTopologyDiagnostics.record(
+                .phaseEnd,
+                owner: .meetingCoordinator,
+                queueRole: .mainControl,
+                phase: .processing,
+                status: diagnosticsProcessingSucceeded ? 0 : -1
+            )
+        }
+        #endif
         var session = inputSession
         do {
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
@@ -1253,9 +1346,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.latestCompletedSession = session
             self.state = .completed(session.id)
             self.operationGeneration = nil
-            self.releaseActivityLease()
+            await self.releaseActivityLease()
             // afterTranscription policy deletes here; sweep failures are logged, never affect this result.
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
+            #if DEBUG
+            diagnosticsProcessingSucceeded = true
+            #endif
             return session
         } catch {
             guard self.operationGeneration == generation else {
@@ -1269,7 +1365,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.activeSession = session
                 self.state = .interrupted(session.id)
                 self.operationGeneration = nil
-                self.releaseActivityLease()
+                await self.releaseActivityLease()
                 throw error
             }
             let failure = Self.failure(from: error, domain: .processing, recoverable: true)
@@ -1285,7 +1381,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.activeSession = session
             self.state = .failed(session.id, failure)
             self.operationGeneration = nil
-            self.releaseActivityLease()
+            await self.releaseActivityLease()
             throw error
         }
     }
@@ -1444,7 +1540,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         self.state = .interrupted(session.id)
-        self.releaseActivityLease()
+        await self.releaseActivityLease()
         self.interruptionTask = nil
     }
 
@@ -1484,7 +1580,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         self.state = .interrupted(session.id)
-        self.releaseActivityLease()
+        await self.releaseActivityLease()
     }
 
     private func enqueuePersistence(_ session: MeetingSession) {
@@ -1517,9 +1613,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscript = .empty
     }
 
-    private func releaseActivityLease() {
+    private func releaseActivityLease() async {
         guard let lease = self.activityLease else { return }
-        self.audioArbiter.release(lease)
+        #if DEBUG
+        AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .activityLease)
+        defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .activityLease) }
+        #endif
+        await self.audioArbiter.release(lease)
         self.activityLease = nil
     }
 

@@ -228,6 +228,23 @@ final class MeetingEchoVetoTests: XCTestCase {
         XCTAssertFalse(turn(isLikelyEcho: false, signalVerdict: .unknown).effectiveEcho)
     }
 
+    func testTextEchoObservationIsExcludedBeforeMicrophoneStitching() {
+        func turn(key: String, isLikelyEcho: Bool) -> MeetingProcessingPipeline.StagedMicrophoneTurn {
+            MeetingProcessingPipeline.StagedMicrophoneTurn(
+                chunkID: UUID(), index: 0, clusterID: UUID(), clusterLabel: "0",
+                diarizationObservationKey: key,
+                start: 0, end: 1, text: "hi", overlapsRemote: true,
+                isLikelyEcho: isLikelyEcho, echoScored: true
+            )
+        }
+        let keys = MeetingProcessingPipeline.trustedMicrophoneObservationKeys(from: [
+            turn(key: "echo", isLikelyEcho: true),
+            turn(key: "local", isLikelyEcho: false),
+        ])
+
+        XCTAssertEqual(keys, ["local"])
+    }
+
     // MARK: - 6. Local-speaker election is unchanged by signal verdicts
 
     func testLocalSpeakerElectionIsUnchangedBySignalVerdict() {
@@ -324,6 +341,7 @@ final class MeetingEchoVetoTests: XCTestCase {
             asrProvider: "apple",
             asrModel: "base",
             languageCode: "en",
+            diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
             completedTrackID: trackID,
             trackFingerprints: fingerprints,
             speakers: [],

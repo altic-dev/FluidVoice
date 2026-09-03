@@ -10,7 +10,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
-        .package(url: "https://github.com/altic-dev/FluidAudio.git", branch: "main"),
+        // Diarization evaluation and checkpoints depend on exact clustering behavior.
+        // Keep this immutable and update it only with a reviewed before/after evaluation.
+        .package(
+            url: "https://github.com/altic-dev/FluidAudio.git",
+            revision: "3fd63887eef1dc25edea8263ce4b44aa854d898b"
+        ),
         .package(url: "https://github.com/mxcl/PromiseKit", from: "6.0.0"),
         .package(url: "https://github.com/altic-dev/DynamicNotchKit.git", branch: "main"),
         .package(url: "https://github.com/altic-dev/transcribe-cpp-swift.git", exact: "0.1.2"),

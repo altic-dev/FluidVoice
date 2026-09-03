@@ -48,6 +48,7 @@ final class MeetingAutoDetector {
     var onHealthChanged: ((Health) -> Void)?
 
     private struct CandidateRecord {
+        var incarnation: UInt64
         var pid: Int32
         var bundleIdentifier: String
         var tier: MeetingDetectionTier
@@ -98,6 +99,8 @@ final class MeetingAutoDetector {
     private var dismissedBundleUntil: [String: Date] = [:]
     private var dismissalTimestamps: [Date] = []
     private var pollTask: Task<Void, Never>?
+    private var runGeneration: UInt64 = 0
+    private var candidateIncarnation: UInt64 = 0
     private var lastBrowserPollAt: [Int32: Date] = [:]
     private var titleEnrichmentGeneration: [Int32: UInt64] = [:]
     private var titleEnrichmentInFlight: Set<Int32> = []
@@ -129,6 +132,8 @@ final class MeetingAutoDetector {
 
     func start() {
         guard self.pollTask == nil else { return }
+        self.runGeneration &+= 1
+        let runGeneration = self.runGeneration
         self.workspaceEvents.onEvent = { [weak self] event in self?.handleWorkspaceEvent(event, at: self?.clock.now() ?? Date()) }
         self.workspaceEvents.start(isRegistryApp: { MeetingAppRegistry.tier(forBundleIdentifier: $0) != nil }) { [weak self] backfill in
             self?.handleBackfill(backfill)
@@ -141,12 +146,13 @@ final class MeetingAutoDetector {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard let self else { return }
-                await self.pollTick()
+                await self.pollTick(runGeneration: runGeneration)
             }
         }
     }
 
     func stop() {
+        self.runGeneration &+= 1
         self.pollTask?.cancel()
         self.pollTask = nil
         self.workspaceEvents.stop()
@@ -156,10 +162,12 @@ final class MeetingAutoDetector {
         self.removeTransientDisarmObservers()
     }
 
-    private func pollTick() async {
+    private func pollTick(runGeneration: UInt64) async {
+        guard self.isCurrentRun(runGeneration) else { return }
         let now = self.clock.now()
         if self.isNativeDetectionEnabled() {
-            self.pollAudioProcessActivity(at: now)
+            await self.pollAudioProcessActivity(at: now, expectedRunGeneration: runGeneration)
+            guard self.isCurrentRun(runGeneration) else { return }
         }
         if self.shouldCollectEvidence(at: now) {
             if self.isNativeDetectionEnabled() {
@@ -169,10 +177,16 @@ final class MeetingAutoDetector {
                 }
             }
             if self.isBrowserDetectionEnabled() {
-                await self.pollBrowserTabsIfDue(at: now)
+                await self.pollBrowserTabsIfDue(at: now, runGeneration: runGeneration)
+                guard self.isCurrentRun(runGeneration) else { return }
             }
         }
+        guard self.isCurrentRun(runGeneration) else { return }
         self.tick(at: self.clock.now())
+    }
+
+    private func isCurrentRun(_ generation: UInt64) -> Bool {
+        !Task.isCancelled && self.runGeneration == generation && self.pollTask != nil
     }
 
     private func shouldCollectEvidence(at now: Date) -> Bool {
@@ -183,12 +197,16 @@ final class MeetingAutoDetector {
         }
     }
 
-    private func pollBrowserTabsIfDue(at now: Date) async {
+    private func pollBrowserTabsIfDue(at now: Date, runGeneration: UInt64) async {
         for (pid, record) in self.records where record.tier == .browserTier2 {
+            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled() else { return }
             let lastPoll = self.lastBrowserPollAt[pid]
             guard lastPoll == nil || now.timeIntervalSince(lastPoll!) >= 2 else { continue }
-            self.lastBrowserPollAt[pid] = now
             let url = await self.browserTabReader.frontmostTabURL(bundleIdentifier: record.bundleIdentifier, processID: pid)
+            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled(),
+                  self.records[pid]?.incarnation == record.incarnation
+            else { continue }
+            self.lastBrowserPollAt[pid] = now
             self.handleBrowserTabURL(url, pid: pid, bundleIdentifier: record.bundleIdentifier, at: self.clock.now())
         }
     }
@@ -225,7 +243,13 @@ final class MeetingAutoDetector {
 
     private func armIfNeeded(pid: Int32, bundleIdentifier: String, tier: MeetingDetectionTier) {
         guard self.records[pid] == nil else { return }
-        self.records[pid] = CandidateRecord(pid: pid, bundleIdentifier: bundleIdentifier, tier: tier)
+        self.candidateIncarnation &+= 1
+        self.records[pid] = CandidateRecord(
+            incarnation: self.candidateIncarnation,
+            pid: pid,
+            bundleIdentifier: bundleIdentifier,
+            tier: tier
+        )
         DebugLogger.shared.log("record-armed bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
     }
 
@@ -255,9 +279,17 @@ final class MeetingAutoDetector {
         }
     }
 
-    func pollAudioProcessActivity(at now: Date) {
+    func pollAudioProcessActivity(at now: Date) async {
+        await self.pollAudioProcessActivity(at: now, expectedRunGeneration: nil)
+    }
+
+    private func pollAudioProcessActivity(at now: Date, expectedRunGeneration: UInt64?) async {
         for (pid, record) in self.records where record.tier == .nativeTier1 {
-            let isActive = self.audioProcessActivity.isAudioActive(forBundleIdentifiers: MeetingAppRegistry.audioProcessBundleIdentifiers(for: record.bundleIdentifier))
+            let isActive = await self.audioProcessActivity.isAudioActive(forBundleIdentifiers: MeetingAppRegistry.audioProcessBundleIdentifiers(for: record.bundleIdentifier))
+            guard !Task.isCancelled,
+                  expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true,
+                  self.records[pid]?.incarnation == record.incarnation
+            else { continue }
             self.handleAudioProcessActivity(isActive, pid: pid, at: now)
         }
     }
