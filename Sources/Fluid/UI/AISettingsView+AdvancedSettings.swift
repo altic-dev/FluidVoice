@@ -1493,7 +1493,7 @@ extension AIEnhancementSettingsView {
 
     private var activeEditModeProviderID: String {
         if self.settings.rewriteModeLinkedToGlobal {
-            return self.viewModel.selectedProviderID
+            return self.settings.selectedProviderID
         }
         return self.editModeSelectedProviderID
     }
@@ -1558,7 +1558,7 @@ extension AIEnhancementSettingsView {
     }
 
     private func syncEditModeToGlobalSelection() {
-        let global = self.viewModel.selectedProviderID
+        let global = self.settings.selectedProviderID
         guard !global.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             self.settings.rewriteModeSelectedProviderID = ""
             self.settings.rewriteModeSelectedModel = nil

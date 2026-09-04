@@ -21,21 +21,14 @@ enum DictationAIPostProcessingGate {
             return false
         }
 
-        if promptSelection == .privateAI {
-            let route = DictationProviderRoute.resolve(
-                settings: settings,
-                dictationSlot: slot,
-                appBundleID: appBundleID
-            )
-            return route.usesPrivateAI && self.isPrivateProviderConfigured(settings: settings)
-        }
-
         let route = DictationProviderRoute.resolve(
             settings: settings,
             dictationSlot: slot,
             appBundleID: appBundleID
         )
-        guard !route.usesPrivateAI else { return false }
+        if route.usesPrivateAI {
+            return self.isPrivateProviderConfigured(settings: settings)
+        }
         return self.isProviderConfigured(route: route, settings: settings)
     }
 
