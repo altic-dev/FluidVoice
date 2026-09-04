@@ -2095,9 +2095,14 @@ extension DictationE2ETests {
 
             viewModel.configureProvider("lmstudio")
             viewModel.saveSavedProviders()
+            viewModel.cachedVerifiedProviderItems = [
+                .init(id: "openai", name: "OpenAI", isBuiltIn: true),
+                .init(id: "lmstudio", name: "LM Studio", isBuiltIn: true),
+            ]
 
             XCTAssertEqual(viewModel.selectedProviderID, "lmstudio")
             XCTAssertEqual(settings.selectedProviderID, "openai")
+            XCTAssertEqual(viewModel.defaultVerifiedPromptProviderID(), "openai")
 
             viewModel.finishConfiguringProvider()
             XCTAssertEqual(viewModel.selectedProviderID, "openai")

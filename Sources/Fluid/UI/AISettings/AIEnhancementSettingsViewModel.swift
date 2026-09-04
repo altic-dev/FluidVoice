@@ -1937,8 +1937,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func defaultVerifiedPromptProviderID() -> String {
         let verified = self.verifiedPromptProviders()
-        if verified.contains(where: { $0.id == self.selectedProviderID }) {
-            return self.selectedProviderID
+        let persistedProviderID = self.settings.selectedProviderID
+        if verified.contains(where: { $0.id == persistedProviderID }) {
+            return persistedProviderID
         }
         return verified.first?.id ?? ""
     }
