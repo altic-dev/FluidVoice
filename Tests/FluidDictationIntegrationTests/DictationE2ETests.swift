@@ -694,6 +694,9 @@ final class DictationE2ETests: XCTestCase {
         )
     }
 
+}
+
+extension DictationE2ETests {
     func testDictionaryTrainingNormalizesSamplesAndIgnoresIntendedText() {
         let triggers = CustomDictionaryTrainingMerge.normalizedTriggers(
             from: [" Fluid Voice. ", "FluidVoice", "fluid voice", " "],

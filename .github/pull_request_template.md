@@ -20,7 +20,7 @@ Closes #(issue number), or links to an accepted Discussion/roadmap item.
 - [ ] Tested on Intel Mac
 - [ ] Tested on Apple Silicon Mac
 - [ ] Tested on macOS version:
-- [ ] Ran linter locally: `swiftlint --strict --config .swiftlint.yml Sources`
+- [ ] Ran linter locally: `swiftlint --strict --config .swiftlint.yml Sources Tests Package.swift`
 - [ ] Ran formatter locally: `swiftformat --config .swiftformat Sources`
 - [ ] Ran tests locally:
 
