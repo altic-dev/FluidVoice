@@ -185,12 +185,7 @@ final class RewriteModeService: ObservableObject {
         let builtInDefaultPrompt = SettingsStore.defaultSystemPromptText(for: promptMode)
         let systemPromptBeforeContext = settings.effectiveSystemPrompt(for: promptMode, appBundleID: appBundleID)
         // Use global provider/model when linked, otherwise use Edit Mode's independent settings.
-        let providerID: String = {
-            if settings.rewriteModeLinkedToGlobal {
-                return settings.selectedProviderID
-            }
-            return settings.rewriteModeSelectedProviderID
-        }()
+        let providerID = settings.effectiveRewriteModeProviderID
         guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NSError(
                 domain: "RewriteMode",
@@ -235,27 +230,7 @@ final class RewriteModeService: ObservableObject {
             self.logPromptTrace("Conversation input (Q/history)", value: messageDump.isEmpty ? "<empty>" : messageDump)
         }
 
-        let model: String = {
-            let taskModels = ModelRepository.shared.defaultModels(for: providerID, task: .edit)
-            if settings.rewriteModeLinkedToGlobal {
-                let key: String
-                if ModelRepository.shared.isBuiltIn(providerID) {
-                    key = providerID
-                } else if providerID.hasPrefix("custom:") {
-                    key = providerID
-                } else {
-                    key = "custom:\(providerID)"
-                }
-                let selected = settings.selectedModelByProvider[key] ?? settings.selectedModel
-                return ModelRepository.eligibleModel(preferred: selected, from: taskModels)
-                    ?? ""
-            }
-            return ModelRepository.eligibleModel(
-                preferred: settings.rewriteModeSelectedModel,
-                from: taskModels
-            )
-                ?? ""
-        }()
+        let model = settings.effectiveRewriteModeSelectedModel
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NSError(
                 domain: "RewriteMode",

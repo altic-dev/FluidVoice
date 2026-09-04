@@ -30,6 +30,7 @@ final class DictationE2ETests: XCTestCase {
     private let commandModeLinkedToGlobalKey = "CommandModeLinkedToGlobal"
     private let commandModeSelectedProviderIDKey = "CommandModeSelectedProviderID"
     private let commandModeSelectedModelKey = "CommandModeSelectedModel"
+    private let rewriteModeLinkedToGlobalKey = "RewriteModeLinkedToGlobal"
     private let rewriteModeSelectedProviderIDKey = "RewriteModeSelectedProviderID"
     private let rewriteModeSelectedModelKey = "RewriteModeSelectedModel"
     private var privateAISelectedModelIDKey: String {
@@ -693,7 +694,6 @@ final class DictationE2ETests: XCTestCase {
             [.text("Run /status please")]
         )
     }
-
 }
 
 extension DictationE2ETests {
@@ -1883,6 +1883,51 @@ extension DictationE2ETests {
 
             XCTAssertEqual(route.providerID, "openai")
             XCTAssertEqual(route.model, "gpt-4.1")
+        }
+    }
+
+    func testEditModelResolutionPreservesConfiguredLocalProviderModel() {
+        self.withRestoredDefaults(
+            keys: [
+                self.savedProvidersKey,
+                self.availableModelsByProviderKey,
+                self.selectedModelByProviderKey,
+                self.selectedProviderIDKey,
+                self.rewriteModeLinkedToGlobalKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            settings.rewriteModeLinkedToGlobal = true
+            settings.selectedProviderID = "lmstudio"
+            settings.availableModelsByProvider = ["lmstudio": ["local-edit-model"]]
+            settings.selectedModelByProvider = ["lmstudio": "local-edit-model"]
+
+            XCTAssertEqual(settings.availableModels(for: "lmstudio", task: .edit), ["local-edit-model"])
+            XCTAssertEqual(settings.effectiveRewriteModeProviderID, "lmstudio")
+            XCTAssertEqual(settings.effectiveRewriteModeSelectedModel, "local-edit-model")
+        }
+    }
+
+    func testEditAnalyticsReportsResolvedEditModel() {
+        self.withRestoredDefaults(
+            keys: [
+                self.availableModelsByProviderKey,
+                self.rewriteModeLinkedToGlobalKey,
+                self.rewriteModeSelectedProviderIDKey,
+                self.rewriteModeSelectedModelKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            settings.rewriteModeLinkedToGlobal = false
+            settings.rewriteModeSelectedProviderID = "ollama"
+            settings.availableModelsByProvider = ["ollama": ["edit-model", "other-model"]]
+            settings.rewriteModeSelectedModel = "edit-model"
+
+            XCTAssertEqual(settings.effectiveRewriteModeSelectedModel, "edit-model")
+            XCTAssertEqual(
+                settings.analyticsAIModelDescriptor(for: .edit),
+                AnalyticsModelDescriptor(provider: "ollama", model: "edit-model")
+            )
         }
     }
 

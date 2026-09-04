@@ -3983,13 +3983,54 @@ final class SettingsStore: ObservableObject {
         return ModelRepository.shared.defaultModels(for: providerID).first
     }
 
+    func availableModels(for providerID: String, task: PrivateAIModelTask) -> [String] {
+        if self.isPrivateAIProviderID(providerID) {
+            return ModelRepository.shared.defaultModels(for: providerID, task: task)
+        }
+
+        if let configured = ModelRepository.shared.providerKeys(for: providerID).lazy
+            .compactMap({ self.availableModelsByProvider[$0] })
+            .first(where: { !$0.isEmpty })
+        {
+            return configured
+        }
+
+        let savedProviderID = providerID.hasPrefix("custom:") ?
+            String(providerID.dropFirst("custom:".count)) : providerID
+        if let configured = self.savedProviders.first(where: { $0.id == savedProviderID })?.models,
+           !configured.isEmpty
+        {
+            return configured
+        }
+
+        return ModelRepository.shared.defaultModels(for: providerID)
+    }
+
+    var effectiveRewriteModeProviderID: String {
+        self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
+    }
+
+    var effectiveRewriteModeSelectedModel: String {
+        let providerID = self.effectiveRewriteModeProviderID
+        let models = self.availableModels(for: providerID, task: .edit)
+        let preferred: String? = if self.rewriteModeLinkedToGlobal {
+            ModelRepository.shared.providerKeys(for: providerID).lazy
+                .compactMap { self.selectedModelByProvider[$0] }
+                .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                ?? self.selectedModel
+        } else {
+            self.rewriteModeSelectedModel
+        }
+        return ModelRepository.eligibleModel(preferred: preferred, from: models) ?? ""
+    }
+
     func analyticsAIModelDescriptor(for mode: AnalyticsUsageMode) -> AnalyticsModelDescriptor? {
         let providerID: String
         let selectedModel: String?
         switch mode {
         case .edit:
-            providerID = self.rewriteModeLinkedToGlobal ? self.selectedProviderID : self.rewriteModeSelectedProviderID
-            selectedModel = self.rewriteModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.rewriteModeSelectedModel
+            providerID = self.effectiveRewriteModeProviderID
+            selectedModel = self.effectiveRewriteModeSelectedModel
         case .command:
             providerID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
             selectedModel = self.commandModeLinkedToGlobal ? self.modelSelection(for: providerID) : self.commandModeSelectedModel

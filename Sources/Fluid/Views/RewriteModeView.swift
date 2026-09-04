@@ -282,28 +282,12 @@ struct RewriteModeView: View {
         }
 
         // Pull models from the shared pool configured in AI Settings
-        let possibleKeys = self.providerKeys(for: currentProviderID)
-        let storedList = possibleKeys.lazy
-            .compactMap { SettingsStore.shared.availableModelsByProvider[$0] }
-            .first { !$0.isEmpty }
-
-        if let stored = storedList {
-            self.availableModels = stored
-        } else {
-            self.availableModels = ModelRepository.shared.defaultModels(
-                for: currentProviderID,
-                task: .edit
-            )
-        }
+        self.availableModels = self.settings.availableModels(for: currentProviderID, task: .edit)
 
         // If current model not in list, select first available
         if !self.availableModels.contains(currentModel) {
             self.settings.rewriteModeSelectedModel = self.availableModels.first
         }
-    }
-
-    private func providerKeys(for providerID: String) -> [String] {
-        return ModelRepository.shared.providerKeys(for: providerID)
     }
 
     private var builtInProvidersList: [(id: String, name: String)] {
