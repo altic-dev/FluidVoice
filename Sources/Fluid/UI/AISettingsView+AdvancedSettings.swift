@@ -1770,14 +1770,21 @@ extension AIEnhancementSettingsView {
                             }
 
                             let hotkeyDisplay = self.settings.primaryDictationShortcutDisplayString
-                            let canTest = self.viewModel.isAIPostProcessingConfiguredForDictation()
+                            let canTest = DictationAIPostProcessingGate.isProviderConfigured(
+                                providerID: self.promptEditorProviderIDDraft,
+                                model: self.promptEditorModelDraft
+                            )
 
                             Toggle(isOn: Binding(
                                 get: { self.promptTest.isActive },
                                 set: { enabled in
                                     if enabled {
                                         let combined = self.viewModel.combinedDraftPrompt(self.viewModel.draftPromptText, mode: self.viewModel.draftPromptMode)
-                                        self.promptTest.activate(draftPromptText: combined)
+                                        self.promptTest.activate(
+                                            draftPromptText: combined,
+                                            providerID: self.promptEditorProviderIDDraft,
+                                            model: self.promptEditorModelDraft
+                                        )
                                     } else {
                                         self.promptTest.deactivate()
                                     }

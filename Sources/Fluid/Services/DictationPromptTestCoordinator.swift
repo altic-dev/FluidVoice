@@ -10,6 +10,8 @@ final class DictationPromptTestCoordinator: ObservableObject {
 
     @Published private(set) var isActive: Bool = false
     @Published private(set) var draftPromptText: String = ""
+    @Published private(set) var draftProviderID: String = ""
+    @Published private(set) var draftModel: String = ""
     @Published var isProcessing: Bool = false
 
     @Published var lastTranscriptionText: String = ""
@@ -18,9 +20,11 @@ final class DictationPromptTestCoordinator: ObservableObject {
 
     private init() {}
 
-    func activate(draftPromptText: String) {
+    func activate(draftPromptText: String, providerID: String, model: String) {
         self.isActive = true
         self.draftPromptText = draftPromptText
+        self.draftProviderID = providerID
+        self.draftModel = model
         self.isProcessing = false
         self.lastTranscriptionText = ""
         self.lastOutputText = ""
@@ -30,6 +34,8 @@ final class DictationPromptTestCoordinator: ObservableObject {
     func deactivate() {
         self.isActive = false
         self.draftPromptText = ""
+        self.draftProviderID = ""
+        self.draftModel = ""
         self.isProcessing = false
     }
 

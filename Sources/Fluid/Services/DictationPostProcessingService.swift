@@ -103,6 +103,28 @@ struct DictationProviderRoute: Equatable {
         )
     }
 
+    static func resolve(settings: SettingsStore, providerID: String, model: String) -> Self {
+        let trimmedProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let saved = settings.savedProviders.first(where: { $0.id == trimmedProviderID }) {
+            let key = "custom:\(saved.id)"
+            return Self(
+                providerID: trimmedProviderID,
+                providerKey: key,
+                baseURL: saved.baseURL,
+                model: trimmedModel,
+                apiKey: settings.providerAPIKeys[key] ?? settings.providerAPIKeys[trimmedProviderID] ?? ""
+            )
+        }
+        return Self(
+            providerID: trimmedProviderID,
+            providerKey: trimmedProviderID,
+            baseURL: ModelRepository.shared.defaultBaseURL(for: trimmedProviderID),
+            model: trimmedModel,
+            apiKey: settings.providerAPIKeys[trimmedProviderID] ?? ""
+        )
+    }
+
     static func externalFallbackProviderID(from providerID: String) -> String {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed == PrivateAIProviderFeature.shared.providerID ? "" : trimmed

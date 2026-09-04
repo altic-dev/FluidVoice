@@ -719,7 +719,7 @@ extension DictationE2ETests {
 
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
             current: [existingReplacement, oldReplacement],
-            replacement: " fluidvoice ",
+            replacement: " FluidVoice ",
             triggers: ["Fluid Voice.", "fluid boys", "FluidVoice", ""]
         )
 
@@ -728,7 +728,7 @@ extension DictationE2ETests {
 
         XCTAssertEqual(entries.count, 2)
         XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Old"])
-        XCTAssertEqual(Set(fluidVoiceEntry?.triggers ?? []), Set(["fluidvoice", "fluid voice", "fluid boys"]))
+        XCTAssertEqual(Set(fluidVoiceEntry?.triggers ?? []), Set(["fluid voice", "fluid boys"]))
         XCTAssertEqual(oldEntry?.triggers, ["old trigger"])
     }
 
@@ -1706,6 +1706,30 @@ extension DictationE2ETests {
 
             XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
             XCTAssertEqual(settings.selectedProviderID, "openai")
+        }
+    }
+
+    func testPromptTestConfigurationUsesDraftProviderInsteadOfGlobalProvider() {
+        self.withRestoredDefaults(keys: [self.selectedProviderIDKey, self.verifiedProviderFingerprintsKey]) {
+            let settings = SettingsStore.shared
+            let baseURL = ModelRepository.shared.defaultBaseURL(for: "ollama")
+            settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
+            settings.verifiedProviderFingerprints = [
+                "ollama": DictationAIPostProcessingGate.providerFingerprint(baseURL: baseURL, apiKey: "") ?? "",
+            ]
+
+            XCTAssertTrue(
+                DictationAIPostProcessingGate.isProviderConfigured(
+                    providerID: "ollama",
+                    model: "draft-model"
+                )
+            )
+            XCTAssertFalse(
+                DictationAIPostProcessingGate.isProviderConfigured(
+                    providerID: "openai",
+                    model: "draft-model"
+                )
+            )
         }
     }
 

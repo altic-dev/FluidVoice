@@ -43,6 +43,15 @@ enum DictationAIPostProcessingGate {
         return self.isProviderConfigured(route: route, settings: settings)
     }
 
+    static func isProviderConfigured(providerID: String, model: String) -> Bool {
+        let settings = SettingsStore.shared
+        let route = DictationProviderRoute.resolve(settings: settings, providerID: providerID, model: model)
+        if route.usesPrivateAI {
+            return self.isPrivateProviderConfigured(settings: settings)
+        }
+        return self.isProviderConfigured(route: route, settings: settings)
+    }
+
     private static func isProviderConfigured(route: DictationProviderRoute, settings: SettingsStore) -> Bool {
         let providerID = route.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = route.model.trimmingCharacters(in: .whitespacesAndNewlines)

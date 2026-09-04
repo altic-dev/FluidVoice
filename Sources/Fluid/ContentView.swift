@@ -2160,12 +2160,16 @@ struct ContentView: View {
     private func processTextWithAI(
         _ inputText: String,
         overrideSystemPrompt: String? = nil,
+        overrideProviderID: String? = nil,
+        overrideModel: String? = nil,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         streamHandler: PrivateAIStreamHandler? = nil
     ) async throws -> String {
         try await self.processTextWithAIMetrics(
             inputText,
             overrideSystemPrompt: overrideSystemPrompt,
+            overrideProviderID: overrideProviderID,
+            overrideModel: overrideModel,
             dictationSlot: dictationSlot,
             streamHandler: streamHandler
         ).text
@@ -2174,15 +2178,26 @@ struct ContentView: View {
     private func processTextWithAIMetrics(
         _ inputText: String,
         overrideSystemPrompt: String? = nil,
+        overrideProviderID: String? = nil,
+        overrideModel: String? = nil,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         streamHandler: PrivateAIStreamHandler? = nil
     ) async throws -> AITextProcessingResult {
         let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
-        let route = DictationProviderRoute.resolve(
-            settings: SettingsStore.shared,
-            dictationSlot: dictationSlot,
-            appBundleID: appInfo.bundleId
-        )
+        let route: DictationProviderRoute
+        if let overrideProviderID, let overrideModel {
+            route = DictationProviderRoute.resolve(
+                settings: SettingsStore.shared,
+                providerID: overrideProviderID,
+                model: overrideModel
+            )
+        } else {
+            route = DictationProviderRoute.resolve(
+                settings: SettingsStore.shared,
+                dictationSlot: dictationSlot,
+                appBundleID: appInfo.bundleId
+            )
+        }
         let currentSelectedProviderID = route.providerID
         let derivedCurrentProvider = route.providerKey
         let derivedBaseURL = route.baseURL
@@ -2511,7 +2526,10 @@ struct ContentView: View {
             promptTest.lastOutputText = ""
             promptTest.lastError = ""
 
-            guard DictationAIPostProcessingGate.isProviderConfigured() else {
+            guard DictationAIPostProcessingGate.isProviderConfigured(
+                providerID: promptTest.draftProviderID,
+                model: promptTest.draftModel
+            ) else {
                 promptTest.lastError = "AI post-processing is not configured. Configure a provider/model (and API key for non-local endpoints) to test prompts."
                 self.menuBarManager.setProcessing(false)
                 return
@@ -2525,7 +2543,12 @@ struct ContentView: View {
             }
 
             do {
-                let result = try await self.processTextWithAI(transcribedText, overrideSystemPrompt: promptTest.draftPromptText)
+                let result = try await self.processTextWithAI(
+                    transcribedText,
+                    overrideSystemPrompt: promptTest.draftPromptText,
+                    overrideProviderID: promptTest.draftProviderID,
+                    overrideModel: promptTest.draftModel
+                )
                 let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
                 let literalFormattedResult = ASRService.applyDictationLiteralFormatting(
                     result,

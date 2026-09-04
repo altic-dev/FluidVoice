@@ -1657,6 +1657,7 @@ extension AIEnhancementSettingsView {
         let fluidDownloadProgress = self.privateAILoadState.downloadProgress(for: fluidModel.id)
         let isFluidLoading = self.privateAILoadState.isLoading(fluidModel.id)
         let hasFluidLoadFailure = self.privateAILoadState.failureMessage(for: fluidModel.id) != nil
+        let hasFluidUpdate = self.privateAIModelUpdateStatusByID[fluidModel.id]?.state == .updateAvailable
         let isFluidVerified = self.isPrivateAIModelVerified(fluidModel)
         let isFluidTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == PrivateAIProviderFeature.shared.providerID
         let isFluidBusy = isFluidDownloading || isFluidLoading || isFluidTesting
@@ -1730,8 +1731,19 @@ extension AIEnhancementSettingsView {
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
-                        Color.clear
+                        if hasFluidUpdate {
+                            self.companionIconButton(
+                                systemName: "arrow.down.circle",
+                                help: "Update and verify model"
+                            ) {
+                                self.updatePrivateAIModel(fluidModel)
+                            }
+                            .disabled(isFluidBusy)
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        } else {
+                            Color.clear
+                                .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
+                        }
 
                         Button(action: {
                             self.viewModel.configureProvider(item.id)
