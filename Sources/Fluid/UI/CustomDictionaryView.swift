@@ -2943,14 +2943,13 @@ enum CustomDictionaryTrainingMerge {
             $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         let replacementID = matchingIndex.map { entries[$0].id }
-        let storedReplacementText = matchingIndex.map { entries[$0].replacement } ?? replacementText
         let matchingEntries = entries.filter {
-            $0.replacement.caseInsensitiveCompare(storedReplacementText) == .orderedSame
+            $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         let existingTriggers = matchingEntries.flatMap(\.triggers)
         let combinedTriggers = self.normalizedTriggers(
             from: existingTriggers + incomingTriggers,
-            intendedReplacement: storedReplacementText
+            intendedReplacement: replacementText
         )
         let triggerKeys = Set(combinedTriggers)
 
@@ -2958,11 +2957,11 @@ enum CustomDictionaryTrainingMerge {
             SettingsStore.CustomDictionaryEntry(
                 id: $0,
                 triggers: combinedTriggers,
-                replacement: storedReplacementText
+                replacement: replacementText
             )
         } ?? SettingsStore.CustomDictionaryEntry(
             triggers: combinedTriggers,
-            replacement: storedReplacementText
+            replacement: replacementText
         )
 
         var didInsertMergedEntry = false
@@ -2970,7 +2969,7 @@ enum CustomDictionaryTrainingMerge {
         updatedEntries.reserveCapacity(entries.count + (matchingIndex == nil ? 1 : 0))
 
         for entry in entries {
-            if entry.replacement.caseInsensitiveCompare(storedReplacementText) == .orderedSame {
+            if entry.replacement.caseInsensitiveCompare(replacementText) == .orderedSame {
                 if !didInsertMergedEntry {
                     updatedEntries.append(mergedEntry)
                     didInsertMergedEntry = true

@@ -759,6 +759,23 @@ extension DictationE2ETests {
         XCTAssertEqual(entries.first?.triggers, ["dflash"])
     }
 
+    func testDictionaryTrainingUpdatesExistingReplacementCapitalization() {
+        let existing = SettingsStore.CustomDictionaryEntry(
+            triggers: ["d flash"],
+            replacement: "Dflash"
+        )
+
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [existing],
+            replacement: "DFlash",
+            triggers: ["Dflash"]
+        )
+
+        XCTAssertEqual(entries.first?.id, existing.id)
+        XCTAssertEqual(entries.first?.replacement, "DFlash")
+        XCTAssertEqual(Set(entries.first?.triggers ?? []), Set(["d flash", "dflash"]))
+    }
+
     func testManualDictionaryEntryParsesCommaSeparatedVariants() {
         XCTAssertEqual(
             CustomDictionaryManualEntry.normalizedDraftTriggers("fluid voice, fluid boys, fluid voice"),
