@@ -556,7 +556,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.savedProviders = self.savedProviders
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
-        self.settings.selectedProviderID = self.selectedProviderID
         self.refreshProviderItems()
     }
 

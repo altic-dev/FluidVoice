@@ -41,6 +41,13 @@ struct DictationProviderRoute: Equatable {
                 selectedProviderID = providerID
                 configuredModel = model
             } else {
+                if self.shouldUseLegacyPrivateAIRoute(
+                    selectedProviderID: settings.selectedProviderID,
+                    configuredProviderID: providerID,
+                    configuredModel: model
+                ) {
+                    return self.privateAIRoute(settings: settings)
+                }
                 selectedProviderID = self.externalFallbackProviderID(from: settings.selectedProviderID)
                 configuredModel = nil
             }
@@ -98,6 +105,15 @@ struct DictationProviderRoute: Equatable {
     static func externalFallbackProviderID(from providerID: String) -> String {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed == PrivateAIProviderFeature.shared.providerID ? "" : trimmed
+    }
+
+    static func shouldUseLegacyPrivateAIRoute(
+        selectedProviderID: String,
+        configuredProviderID: String,
+        configuredModel: String
+    ) -> Bool {
+        selectedProviderID == PrivateAIProviderFeature.shared.providerID &&
+            configuredProviderID.isEmpty && configuredModel.isEmpty
     }
 
     static func resolveForPostProcessing(

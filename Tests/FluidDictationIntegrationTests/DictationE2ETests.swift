@@ -2035,6 +2035,7 @@ extension DictationE2ETests {
             )
 
             viewModel.configureProvider("lmstudio")
+            viewModel.saveSavedProviders()
 
             XCTAssertEqual(viewModel.selectedProviderID, "lmstudio")
             XCTAssertEqual(settings.selectedProviderID, "openai")
@@ -2043,6 +2044,25 @@ extension DictationE2ETests {
             XCTAssertEqual(viewModel.selectedProviderID, "openai")
             XCTAssertEqual(settings.selectedProviderID, "openai")
         }
+    }
+
+    func testLegacyFluidIntelligenceDefaultUsesPrivateRouteOnlyWithoutExplicitConfiguration() {
+        let providerID = PrivateAIProviderFeature.shared.providerID
+
+        XCTAssertTrue(
+            DictationProviderRoute.shouldUseLegacyPrivateAIRoute(
+                selectedProviderID: providerID,
+                configuredProviderID: "",
+                configuredModel: ""
+            )
+        )
+        XCTAssertFalse(
+            DictationProviderRoute.shouldUseLegacyPrivateAIRoute(
+                selectedProviderID: providerID,
+                configuredProviderID: "lmstudio",
+                configuredModel: "local-model"
+            )
+        )
     }
 
     func testPrivateAIProviderPrefixKVCache_defaultsOnAndPersistsToggle() {
