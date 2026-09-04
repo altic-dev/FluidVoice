@@ -1929,6 +1929,12 @@ extension AIEnhancementSettingsView {
         .onChange(of: self.viewModel.promptEditorSessionID) { _, _ in
             self.preparePromptEditorConfigurationDraft(mode: mode)
         }
+        .onChange(of: self.promptEditorProviderIDDraft) { _, providerID in
+            self.promptTest.updateDraftConfiguration(providerID: providerID, model: self.promptEditorModelDraft)
+        }
+        .onChange(of: self.promptEditorModelDraft) { _, model in
+            self.promptTest.updateDraftConfiguration(providerID: self.promptEditorProviderIDDraft, model: model)
+        }
         .onChange(of: self.activeShortcutRecordingTarget) { oldValue, newValue in
             if case .newPrompt = mode {
                 if newValue == nil, oldValue != nil {

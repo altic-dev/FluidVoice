@@ -43,4 +43,10 @@ final class DictationPromptTestCoordinator: ObservableObject {
         guard self.isActive else { return }
         self.draftPromptText = text
     }
+
+    func updateDraftConfiguration(providerID: String, model: String) {
+        guard self.isActive else { return }
+        self.draftProviderID = providerID
+        self.draftModel = model
+    }
 }

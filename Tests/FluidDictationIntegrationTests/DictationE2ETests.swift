@@ -1733,6 +1733,17 @@ extension DictationE2ETests {
         }
     }
 
+    func testActivePromptTestTracksDraftProviderChanges() {
+        let coordinator = DictationPromptTestCoordinator.shared
+        defer { coordinator.deactivate() }
+        coordinator.activate(draftPromptText: "Polish", providerID: "ollama", model: "first")
+
+        coordinator.updateDraftConfiguration(providerID: "openai", model: "second")
+
+        XCTAssertEqual(coordinator.draftProviderID, "openai")
+        XCTAssertEqual(coordinator.draftModel, "second")
+    }
+
     func testLMStudioCleanupRouteIsIndependentOfFluidIntelligenceProviderState() {
         self.withRestoredDefaults(
             keys: [
