@@ -1862,10 +1862,10 @@ extension DictationE2ETests {
     }
 
     func testFluidIntelligenceSelectionSupportsAppOverride() {
-        XCTAssertTrue(DictationProviderRoute.selectionSupportsAppOverride(.privateAI))
-        XCTAssertTrue(DictationProviderRoute.selectionSupportsAppOverride(.default))
-        XCTAssertFalse(DictationProviderRoute.selectionSupportsAppOverride(.profile("global")))
-        XCTAssertFalse(DictationProviderRoute.selectionSupportsAppOverride(.off))
+        XCTAssertTrue(SettingsStore.dictationSelectionSupportsAppOverride(.privateAI))
+        XCTAssertTrue(SettingsStore.dictationSelectionSupportsAppOverride(.default))
+        XCTAssertFalse(SettingsStore.dictationSelectionSupportsAppOverride(.profile("global")))
+        XCTAssertFalse(SettingsStore.dictationSelectionSupportsAppOverride(.off))
     }
 
     func testPostProcessingRouteUsesGlobalProviderWithoutAppContext() {

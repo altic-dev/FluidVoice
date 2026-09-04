@@ -720,11 +720,9 @@ final class SettingsStore: ObservableObject {
         switch self.dictationPromptSelection(for: slot) {
         case .off:
             return nil
-        case .privateAI:
-            return nil
         case let .profile(promptID):
             return self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate })
-        case .default:
+        case .default, .privateAI:
             guard let binding = self.appPromptBinding(for: .dictate, appBundleID: appBundleID) else { return nil }
             let promptID = binding.promptID
             return self.dictationPromptProfiles.first {
@@ -734,8 +732,13 @@ final class SettingsStore: ObservableObject {
     }
 
     func isAppDictationPromptBindingActive(for slot: DictationShortcutSlot, appBundleID: String?) -> Bool {
-        guard self.dictationPromptSelection(for: slot) == .default else { return false }
+        let selection = self.dictationPromptSelection(for: slot)
+        guard Self.dictationSelectionSupportsAppOverride(selection) else { return false }
         return self.hasAppPromptBinding(for: .dictate, appBundleID: appBundleID)
+    }
+
+    static func dictationSelectionSupportsAppOverride(_ selection: DictationPromptSelection) -> Bool {
+        selection == .default || selection == .privateAI
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
@@ -748,7 +751,15 @@ final class SettingsStore: ObservableObject {
                 return name.isEmpty ? "Untitled" : name
             }
             return "Default"
-        case .privateAI: return PrivateAIProviderFeature.displayName
+        case .privateAI:
+            if self.isAppDictationPromptBindingActive(for: slot, appBundleID: appBundleID) {
+                if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID) {
+                    let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return name.isEmpty ? "Untitled" : name
+                }
+                return "Default"
+            }
+            return PrivateAIProviderFeature.displayName
         case let .profile(promptID):
             guard let profile = self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate }) else {
                 return "Default"
