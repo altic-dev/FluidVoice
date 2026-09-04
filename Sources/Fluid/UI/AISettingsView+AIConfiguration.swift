@@ -576,9 +576,10 @@ extension AIEnhancementSettingsView {
             self.expandedProviderID = nil
             self.viewModel.clearEditProviderDraft()
             self.viewModel.setEditingAPIKey(false, for: providerID)
+            self.viewModel.finishConfiguringProvider()
         } else {
             self.expandedProviderID = providerID
-            self.selectProvider(providerID)
+            self.viewModel.configureProvider(providerID)
         }
     }
 
@@ -1643,7 +1644,7 @@ extension AIEnhancementSettingsView {
         let primaryPromptSelection = self.viewModel.dictationPromptSelection(for: .primary)
         let isDefaultProvider = isPrivateAIProvider
             ? primaryPromptSelection == .privateAI
-            : primaryPromptSelection == .default && item.id == self.viewModel.selectedProviderID
+            : primaryPromptSelection == .default && item.id == self.settings.selectedProviderID
         let fluidModel = self.selectedPrivateAIModel
         let fluidStatus = self.privateAIModelStatus(for: fluidModel)
         let isFluidInstalled = PrivateAIIntegrationService.isModelInstalled(fluidModel)
@@ -1961,10 +1962,6 @@ extension AIEnhancementSettingsView {
         }
 
         return nil
-    }
-
-    func selectProvider(_ providerID: String) {
-        self.viewModel.selectProvider(providerID)
     }
 
     private func activateProvider(_ providerID: String) {

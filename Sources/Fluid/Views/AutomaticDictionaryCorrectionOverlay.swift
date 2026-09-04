@@ -36,7 +36,6 @@ final class DictionaryCorrectionOverlayController {
         onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void
     ) {
         self.generation &+= 1
-        let currentGeneration = self.generation
         self.dismissTask?.cancel()
         self.session?.cancel()
         self.outcomeHandler = onOutcome
@@ -66,7 +65,7 @@ final class DictionaryCorrectionOverlayController {
             },
             onFrequencyChange: { [weak self] frequency in
                 SettingsStore.shared.automaticDictionarySuggestionFrequency = frequency
-                self?.keepVisible()
+                self?.scheduleChoiceDismissal()
             },
             onDisableSuggestions: { [weak self] in
                 SettingsStore.shared.automaticDictionaryLearningEnabled = false
@@ -98,6 +97,12 @@ final class DictionaryCorrectionOverlayController {
             panel.animator().alphaValue = 1
         }
 
+        self.scheduleChoiceDismissal()
+    }
+
+    private func scheduleChoiceDismissal() {
+        self.keepVisible()
+        let currentGeneration = self.generation
         self.dismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: Self.displayDurationNanoseconds)
             guard !Task.isCancelled,

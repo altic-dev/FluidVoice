@@ -45,8 +45,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var providerAPIKeys: [String: String] = [:]
     @Published var currentProvider: String = ""
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
+    private var persistsSelectedProvider = true
     @Published var selectedProviderID: String {
         didSet {
+            guard self.persistsSelectedProvider else { return }
             self.settings.selectedProviderID = self.selectedProviderID
             self.syncPromptSelectionForSelectedProvider()
         }
@@ -446,9 +448,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.fetchedModelsProviders.contains(self.providerKey(for: providerID))
     }
 
-    func selectProvider(_ providerID: String) {
+    func configureProvider(_ providerID: String) {
+        self.persistsSelectedProvider = false
         self.selectProviderForUse(providerID)
+        self.persistsSelectedProvider = true
         self.setEditingAPIKey(true, for: providerID)
+    }
+
+    func finishConfiguringProvider() {
+        self.persistsSelectedProvider = false
+        self.selectProviderForUse(self.settings.selectedProviderID)
+        self.persistsSelectedProvider = true
     }
 
     private func selectProviderForUse(_ providerID: String) {

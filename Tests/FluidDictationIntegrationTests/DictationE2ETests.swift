@@ -2024,6 +2024,27 @@ extension DictationE2ETests {
         }
     }
 
+    func testOpeningProviderConfigurationDoesNotChangeDefaultProvider() {
+        self.withRestoredDefaults(keys: [self.selectedProviderIDKey]) {
+            let settings = SettingsStore.shared
+            settings.selectedProviderID = "openai"
+            let viewModel = AIEnhancementSettingsViewModel(
+                settings: settings,
+                menuBarManager: MenuBarManager(),
+                promptTest: .shared
+            )
+
+            viewModel.configureProvider("lmstudio")
+
+            XCTAssertEqual(viewModel.selectedProviderID, "lmstudio")
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+
+            viewModel.finishConfiguringProvider()
+            XCTAssertEqual(viewModel.selectedProviderID, "openai")
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+        }
+    }
+
     func testPrivateAIProviderPrefixKVCache_defaultsOnAndPersistsToggle() {
         self.withRestoredDefaults(keys: [self.privateAIPrefixKVCacheEnabledKey]) {
             let settings = SettingsStore.shared
