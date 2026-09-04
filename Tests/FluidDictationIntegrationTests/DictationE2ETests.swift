@@ -724,7 +724,7 @@ final class DictationE2ETests: XCTestCase {
 
         XCTAssertEqual(entries.count, 2)
         XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Old"])
-        XCTAssertEqual(Set(fluidVoiceEntry?.triggers ?? []), Set(["fluid voice", "fluid boys"]))
+        XCTAssertEqual(Set(fluidVoiceEntry?.triggers ?? []), Set(["fluidvoice", "fluid voice", "fluid boys"]))
         XCTAssertEqual(oldEntry?.triggers, ["old trigger"])
     }
 
@@ -742,6 +742,17 @@ final class DictationE2ETests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Existing"])
         XCTAssertEqual(entries.first?.triggers, ["fluid voice"])
+    }
+
+    func testDictionaryTrainingPreservesCapitalizationCorrection() {
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [],
+            replacement: "DFlash",
+            triggers: ["Dflash"]
+        )
+
+        XCTAssertEqual(entries.first?.replacement, "DFlash")
+        XCTAssertEqual(entries.first?.triggers, ["dflash"])
     }
 
     func testManualDictionaryEntryParsesCommaSeparatedVariants() {
@@ -1044,16 +1055,19 @@ final class DictationE2ETests: XCTestCase {
         ))
     }
 
-    func testAutomaticDictionaryCorrectionIgnoresCaseOnlyEdit() {
-        let before = "fluidvoice"
-        let after = "FluidVoice"
+    func testAutomaticDictionaryCorrectionDetectsCaseOnlyEdit() {
+        let before = "Use Dflash today"
+        let after = "Use DFlash today"
         let insertedRange = NSRange(location: 0, length: (before as NSString).length)
 
-        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
             before: before,
             after: after,
             insertedRange: insertedRange
-        ))
+        )
+
+        XCTAssertEqual(candidate?.heardText, "Dflash")
+        XCTAssertEqual(candidate?.correctedText, "DFlash")
     }
 
     func testAutomaticDictionaryCorrectionIgnoresPunctuationAndSpacingOnlyEdit() {
@@ -1082,8 +1096,7 @@ final class DictationE2ETests: XCTestCase {
 
     func testAutomaticDictionarySuggestionRequiresRepeatedCorrection() throws {
         let defaults = try self.makeSuggestionPolicyDefaults()
-        var configuration = DictionarySuggestionPolicyConfig()
-        configuration.globalCooldown = 0
+        let configuration = DictionarySuggestionPolicyConfig()
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
         let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
         let now = Date(timeIntervalSince1970: 1000)
@@ -1096,7 +1109,6 @@ final class DictationE2ETests: XCTestCase {
         let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
-        configuration.globalCooldown = 0
         configuration.dismissedPairCooldown = 100
         let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
         let now = Date(timeIntervalSince1970: 2000)
@@ -1111,27 +1123,24 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(restoredPolicy.shouldShow(candidate, now: now.addingTimeInterval(101)))
     }
 
-    func testAutomaticDictionarySuggestionAppliesGlobalCooldown() throws {
+    func testAutomaticDictionarySuggestionAllowsImmediateDifferentCorrection() throws {
         let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
-        configuration.globalCooldown = 600
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
-        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
-        let second = AutomaticDictionaryCorrectionCandidate(heardText: "Floral Voice", correctedText: "FluidVoice")
-        let now = Date(timeIntervalSince1970: 3000)
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Claud", correctedText: "Claude")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "cloud", correctedText: "Claude")
+        let now = Date(timeIntervalSince1970: 3500)
 
         XCTAssertTrue(policy.shouldShow(first, now: now))
         policy.markShown(first, now: now)
-        XCTAssertFalse(policy.shouldShow(second, now: now.addingTimeInterval(60)))
-        XCTAssertTrue(policy.shouldShow(second, now: now.addingTimeInterval(601)))
+        XCTAssertTrue(policy.shouldShow(second, now: now.addingTimeInterval(30)))
     }
 
     func testAutomaticDictionarySuggestionStopsAfterSessionIgnoreLimit() throws {
         let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
-        configuration.globalCooldown = 0
         configuration.dismissedPairCooldown = 0
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
         let now = Date(timeIntervalSince1970: 4000)
@@ -1154,7 +1163,6 @@ final class DictationE2ETests: XCTestCase {
         let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
-        configuration.globalCooldown = 0
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
         let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
         let now = Date(timeIntervalSince1970: 5000)
@@ -1164,23 +1172,55 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10_000)))
     }
 
-    func testAutomaticDictionarySuggestionStopsAfterPairDismissalLimit() throws {
+    func testAutomaticDictionarySuggestionDismissalRemainsTemporary() throws {
         let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
-        configuration.globalCooldown = 0
         configuration.dismissedPairCooldown = 0
         configuration.maximumSessionIgnores = 10
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
         let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
         let now = Date(timeIntervalSince1970: 6000)
 
-        for index in 0..<configuration.maximumPairDismissals {
+        for index in 0..<4 {
             let date = now.addingTimeInterval(Double(index))
             XCTAssertTrue(policy.shouldShow(candidate, now: date))
             policy.record(.dismissed, for: candidate, now: date)
         }
-        XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10)))
+        XCTAssertTrue(policy.shouldShow(candidate, now: now.addingTimeInterval(10)))
+    }
+
+    func testAutomaticDictionarySuggestionCountsDifferentMishearingsForSameCorrection() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        let configuration = DictionarySuggestionPolicyConfig()
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let now = Date(timeIntervalSince1970: 7000)
+
+        XCTAssertFalse(policy.shouldShow(
+            .init(heardText: "Barad", correctedText: "Barath"),
+            requiredOccurrences: 2,
+            now: now
+        ))
+        XCTAssertTrue(policy.shouldShow(
+            .init(heardText: "Bharat", correctedText: "Barath"),
+            requiredOccurrences: 2,
+            now: now.addingTimeInterval(10)
+        ))
+    }
+
+    func testAutomaticDictionarySuggestionIgnoreOnlySuppressesExactCorrection() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let ignored = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let alternative = AutomaticDictionaryCorrectionCandidate(heardText: "Bharat", correctedText: "Barath")
+        let now = Date(timeIntervalSince1970: 8000)
+
+        XCTAssertTrue(policy.shouldShow(ignored, now: now))
+        policy.record(.ignored, for: ignored, now: now)
+        XCTAssertFalse(policy.shouldShow(ignored, now: now.addingTimeInterval(10)))
+        XCTAssertTrue(policy.shouldShow(alternative, now: now.addingTimeInterval(20)))
     }
 
     private func makeSuggestionPolicyDefaults() throws -> UserDefaults {

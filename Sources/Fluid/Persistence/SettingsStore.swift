@@ -3329,6 +3329,7 @@ final class SettingsStore: ObservableObject {
             contextAwareCapitalizationEnabled: self.contextAwareCapitalizationEnabled,
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
             automaticDictionaryLearningEnabled: self.automaticDictionaryLearningEnabled,
+            automaticDictionarySuggestionFrequency: self.automaticDictionarySuggestionFrequency,
             pronunciationMatchingEnabled: self.pronunciationMatchingEnabled,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
@@ -3506,6 +3507,9 @@ final class SettingsStore: ObservableObject {
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
         if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
             self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
+        }
+        if let automaticDictionarySuggestionFrequency = payload.automaticDictionarySuggestionFrequency {
+            self.automaticDictionarySuggestionFrequency = automaticDictionarySuggestionFrequency
         }
         if let pronunciationMatchingEnabled = payload.pronunciationMatchingEnabled {
             self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
@@ -4532,11 +4536,38 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    enum AutomaticDictionarySuggestionFrequency: Int, Codable, CaseIterable, Identifiable {
+        case first = 1
+        case second = 2
+        case third = 3
+
+        var id: Int { self.rawValue }
+
+        var displayName: String {
+            switch self {
+            case .first: "1 correction"
+            case .second: "2 corrections"
+            case .third: "3 corrections"
+            }
+        }
+    }
+
     var automaticDictionaryLearningEnabled: Bool {
         get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
+        }
+    }
+
+    var automaticDictionarySuggestionFrequency: AutomaticDictionarySuggestionFrequency {
+        get {
+            let stored = self.defaults.integer(forKey: Keys.automaticDictionarySuggestionFrequency)
+            return AutomaticDictionarySuggestionFrequency(rawValue: stored) ?? .first
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionarySuggestionFrequency)
         }
     }
 
@@ -5450,6 +5481,7 @@ private extension SettingsStore {
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
         static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
+        static let automaticDictionarySuggestionFrequency = "AutomaticDictionarySuggestionFrequency"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
         static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
 

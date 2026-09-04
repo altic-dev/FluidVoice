@@ -108,7 +108,6 @@ enum AutomaticDictionaryCorrectionDetector {
               self.isValidCandidate(corrected),
               self.isMeaningfulCorrection(heard: heard, corrected: corrected),
               heard != corrected,
-              heard.caseInsensitiveCompare(corrected) != .orderedSame,
               heard.count + corrected.count <= self.maxCombinedLength
         else {
             return nil
@@ -224,8 +223,8 @@ enum AutomaticDictionaryCorrectionDetector {
             return false
         }
 
-        let heardSemantic = String(String.UnicodeScalarView(heardCharacters)).lowercased()
-        let correctedSemantic = String(String.UnicodeScalarView(correctedCharacters)).lowercased()
+        let heardSemantic = String(String.UnicodeScalarView(heardCharacters))
+        let correctedSemantic = String(String.UnicodeScalarView(correctedCharacters))
         return heardSemantic != correctedSemantic
     }
 }
@@ -233,9 +232,7 @@ enum AutomaticDictionaryCorrectionDetector {
 struct DictionarySuggestionPolicyConfig {
     var requiredOccurrences = 2
     var occurrenceWindow: TimeInterval = 7 * 24 * 60 * 60
-    var globalCooldown: TimeInterval = 10 * 60
     var dismissedPairCooldown: TimeInterval = 7 * 24 * 60 * 60
-    var maximumPairDismissals = 3
     var maximumSessionIgnores = 3
     var retentionDuration: TimeInterval = 30 * 24 * 60 * 60
     var maximumStoredPairs = 200
@@ -243,6 +240,7 @@ struct DictionarySuggestionPolicyConfig {
 
 enum AutomaticDictionarySuggestionOutcome {
     case accepted
+    case ignored
     case dismissed
     case timedOut
 }
@@ -257,13 +255,11 @@ final class AutomaticDictionarySuggestionPolicy {
         var occurrences: [Date] = []
         var lastShownAt: Date?
         var dismissedUntil: Date?
-        var dismissalCount = 0
         var isAccepted = false
     }
 
     private struct PersistedState: Codable {
         var records: [String: PairRecord] = [:]
-        var lastShownAt: Date?
     }
 
     private static let defaultsKey = "AutomaticDictionarySuggestionPolicyStateV1"
@@ -288,7 +284,11 @@ final class AutomaticDictionarySuggestionPolicy {
         }
     }
 
-    func shouldShow(_ candidate: AutomaticDictionaryCorrectionCandidate, now: Date = Date()) -> Bool {
+    func shouldShow(
+        _ candidate: AutomaticDictionaryCorrectionCandidate,
+        requiredOccurrences: Int? = nil,
+        now: Date = Date()
+    ) -> Bool {
         self.prune(now: now)
         let key = self.key(for: candidate)
         var record = self.state.records[key] ?? PairRecord(
@@ -300,12 +300,16 @@ final class AutomaticDictionarySuggestionPolicy {
         self.state.records[key] = record
         self.save()
 
+        let correctedText = self.normalized(candidate.correctedText)
+        let occurrenceCount = self.state.records.values
+            .filter { self.normalized($0.correctedText) == correctedText }
+            .flatMap(\.occurrences)
+            .filter { now.timeIntervalSince($0) <= self.configuration.occurrenceWindow }
+            .count
         guard !record.isAccepted,
-              record.dismissalCount < self.configuration.maximumPairDismissals,
               record.dismissedUntil.map({ $0 <= now }) ?? true,
-              record.occurrences.count >= self.configuration.requiredOccurrences,
-              self.sessionIgnoreCount < self.configuration.maximumSessionIgnores,
-              self.state.lastShownAt.map({ now.timeIntervalSince($0) >= self.configuration.globalCooldown }) ?? true
+              occurrenceCount >= (requiredOccurrences ?? self.configuration.requiredOccurrences),
+              self.sessionIgnoreCount < self.configuration.maximumSessionIgnores
         else {
             return false
         }
@@ -317,7 +321,6 @@ final class AutomaticDictionarySuggestionPolicy {
         guard var record = self.state.records[key] else { return }
         record.lastShownAt = now
         self.state.records[key] = record
-        self.state.lastShownAt = now
         self.save()
     }
 
@@ -329,11 +332,10 @@ final class AutomaticDictionarySuggestionPolicy {
         let key = self.key(for: candidate)
         guard var record = self.state.records[key] else { return }
         switch outcome {
-        case .accepted:
+        case .accepted, .ignored:
             record.isAccepted = true
             record.dismissedUntil = nil
         case .dismissed, .timedOut:
-            record.dismissalCount += 1
             record.dismissedUntil = now.addingTimeInterval(self.configuration.dismissedPairCooldown)
             self.sessionIgnoreCount += 1
         }
@@ -684,7 +686,10 @@ final class AutomaticDictionaryCorrectionTracker {
               !self.isAlreadySaved(candidate),
               !AppServices.shared.asr.isRunning,
               !DictionaryCorrectionOverlayController.shared.isPresented,
-              AutomaticDictionarySuggestionPolicy.shared.shouldShow(candidate)
+              AutomaticDictionarySuggestionPolicy.shared.shouldShow(
+                  candidate,
+                  requiredOccurrences: SettingsStore.shared.automaticDictionarySuggestionFrequency.rawValue
+              )
         else {
             return
         }
@@ -804,6 +809,8 @@ private let automaticDictionaryAXObserverCallback: AXObserverCallback = { _, _, 
         case kAXValueChangedNotification as String:
             tracker.handleObservedValueChange()
         case kAXSelectedTextChangedNotification as String:
+            // Web-backed editors may move the caret without emitting a value-change notification.
+            tracker.handleObservedValueChange()
             tracker.handleObservedSelectionChange()
         case kAXFocusedUIElementChangedNotification as String:
             tracker.handleObservedFocusChange()

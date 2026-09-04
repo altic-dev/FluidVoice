@@ -110,6 +110,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let contextAwareCapitalizationEnabled: Bool?
     let pauseMediaDuringTranscription: Bool
     let automaticDictionaryLearningEnabled: Bool?
+    let automaticDictionarySuggestionFrequency: SettingsStore.AutomaticDictionarySuggestionFrequency?
     let pronunciationMatchingEnabled: Bool?
     let vocabularyBoostingEnabled: Bool
     let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]

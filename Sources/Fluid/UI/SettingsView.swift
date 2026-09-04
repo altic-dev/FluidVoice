@@ -959,6 +959,10 @@ struct SettingsView: View {
                                     .settingsSearchTarget(.pauseMedia)
                                     Divider().opacity(0.2)
 
+                                    DictionarySuggestionsSettingsRow()
+                                        .settingsSearchTarget(.dictionarySuggestions)
+                                    Divider().opacity(0.2)
+
                                     self.optionToggleRow(
                                         title: "Share Detailed Anonymous Analytics",
                                         description: "Share anonymous daily feature, onboarding, and model metrics. " +
@@ -2921,6 +2925,48 @@ private extension SettingsView {
                 }
                 .padding(.leading, 12)
             }
+        }
+    }
+}
+
+private struct DictionarySuggestionsSettingsRow: View {
+    @Environment(\.theme) private var theme
+    @ObservedObject private var settings = SettingsStore.shared
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Dictionary Suggestions")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text("Suggest saving words after you correct dictated text.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Picker("Suggest after", selection: self.$settings.automaticDictionarySuggestionFrequency) {
+                ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
+                    Text(frequency.displayName).tag(frequency)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 138)
+            .disabled(!self.settings.automaticDictionaryLearningEnabled)
+
+            Toggle("", isOn: Binding(
+                get: { self.settings.automaticDictionaryLearningEnabled },
+                set: { enabled in
+                    self.settings.automaticDictionaryLearningEnabled = enabled
+                    if !enabled {
+                        AutomaticDictionaryCorrectionTracker.shared.cancel()
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .tint(self.theme.palette.accent)
+            .labelsHidden()
         }
     }
 }

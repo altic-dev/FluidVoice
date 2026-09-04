@@ -23,7 +23,6 @@ struct CustomDictionaryView: View {
 
     @State private var boostStatusMessage = "Add custom words for better Parakeet recognition."
     @State private var boostHasError = false
-    @State private var automaticDictionaryLearningEnabled = SettingsStore.shared.automaticDictionaryLearningEnabled
     @State private var vocabBoostingEnabled: Bool = SettingsStore.shared.vocabularyBoostingEnabled
     @State private var isCustomWordsPresented = false
     @State private var isBoostWordEditorPresented = false
@@ -303,7 +302,6 @@ struct CustomDictionaryView: View {
         .onAppear {
             self.entries = SettingsStore.shared.customDictionaryEntries
             self.loadBoostTerms()
-            self.automaticDictionaryLearningEnabled = SettingsStore.shared.automaticDictionaryLearningEnabled
             self.pronunciationMatchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled
             if !SettingsStore.shared.selectedSpeechModel.supportsPronunciationMatching {
                 self.pronunciationMatchingEnabled = false
@@ -342,8 +340,6 @@ struct CustomDictionaryView: View {
             Spacer(minLength: self.theme.metrics.spacing.md)
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                self.automaticLearningToggle
-
                 Button(action: self.importDictionary) {
                     Label("Import", systemImage: "square.and.arrow.down")
                 }
@@ -355,49 +351,6 @@ struct CustomDictionaryView: View {
                 .fluidButton(.compact, size: .compact)
             }
         }
-    }
-
-    private var automaticLearningToggle: some View {
-        HStack(spacing: self.theme.metrics.spacing.sm) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Auto-learn words")
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                    .lineLimit(1)
-
-                Text("Show notifications")
-                    .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .lineLimit(1)
-            }
-
-            Toggle("Auto-learn words while typing", isOn: self.$automaticDictionaryLearningEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(self.theme.palette.accent)
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 40)
-        .background(
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
-                        .stroke(
-                            self.automaticDictionaryLearningEnabled
-                                ? self.theme.palette.accent.opacity(0.42)
-                                : self.theme.palette.cardBorder.opacity(0.3),
-                            lineWidth: 1
-                        )
-                )
-        )
-        .onChange(of: self.automaticDictionaryLearningEnabled) { _, newValue in
-            SettingsStore.shared.automaticDictionaryLearningEnabled = newValue
-            if !newValue {
-                AutomaticDictionaryCorrectionTracker.shared.cancel()
-            }
-        }
-        .help("Notice corrections to recent dictation and show Train by Voice suggestions.")
     }
 
     private func settingsIconTile(systemName: String) -> some View {
@@ -2958,8 +2911,11 @@ enum CustomDictionaryTrainingMerge {
         result.reserveCapacity(values.count)
 
         for value in values {
-            guard let trigger = self.normalizedTrigger(value),
-                  trigger.caseInsensitiveCompare(replacement) != .orderedSame,
+            let visibleTrigger = value.trimmingCharacters(
+                in: CharacterSet.whitespacesAndNewlines.union(self.edgePunctuation)
+            )
+            guard visibleTrigger != replacement,
+                  let trigger = self.normalizedTrigger(value),
                   !seen.contains(trigger)
             else {
                 continue
