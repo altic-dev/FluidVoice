@@ -41,7 +41,8 @@ struct DictationProviderRoute: Equatable {
                 selectedProviderID = providerID
                 configuredModel = model
             } else {
-                if selection == .default, self.shouldUseLegacyPrivateAIRoute(
+                let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
+                if selection == .default, !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
                     selectedProviderID: settings.selectedProviderID,
                     configuredProviderID: providerID,
                     configuredModel: model

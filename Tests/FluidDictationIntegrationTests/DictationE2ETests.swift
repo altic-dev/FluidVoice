@@ -2106,6 +2106,32 @@ extension DictationE2ETests {
         }
     }
 
+    func testAppDefaultOverrideDoesNotUseLegacyFluidIntelligenceRoute() {
+        self.withPromptAndProviderSettingsRestored {
+            let settings = SettingsStore.shared
+            let appBundleID = "com.example.editor"
+            settings.appPromptBindings = [
+                SettingsStore.AppPromptBinding(
+                    mode: .dictate,
+                    appBundleID: appBundleID,
+                    appName: "Editor",
+                    promptID: nil
+                ),
+            ]
+            settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
+            settings.setDictationPromptSelection(.default)
+
+            let route = DictationProviderRoute.resolve(
+                settings: settings,
+                dictationSlot: .primary,
+                appBundleID: appBundleID
+            )
+
+            XCTAssertFalse(route.usesPrivateAI)
+            XCTAssertTrue(route.providerID.isEmpty)
+        }
+    }
+
     func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() {
         self.withProviderSettingsRestored {
             let settings = SettingsStore.shared
