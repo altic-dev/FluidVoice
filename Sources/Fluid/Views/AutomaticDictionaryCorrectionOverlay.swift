@@ -714,7 +714,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             Divider()
 
-            Button("Turn Off Suggestions", role: .destructive, action: self.onDisableSuggestions)
+            Button("Turn Off Auto-Learn", role: .destructive, action: self.onDisableSuggestions)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 12, weight: .semibold))

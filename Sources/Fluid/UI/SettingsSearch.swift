@@ -265,7 +265,7 @@ enum SettingsSearchIndex {
         ),
         .init(
             target: .dictionarySuggestions,
-            title: "Dictionary Suggestions",
+            title: "Auto-Learn Corrections",
             terms: ["automatic corrections learn words custom dictionary frequency ignore"]
         ),
         .init(

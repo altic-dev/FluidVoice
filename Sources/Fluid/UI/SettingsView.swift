@@ -2936,7 +2936,7 @@ private struct DictionarySuggestionsSettingsRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Dictionary Suggestions")
+                Text("Auto-Learn Corrections")
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.theme.palette.primaryText)
                 Text("Suggest saving words after you correct dictated text.")
