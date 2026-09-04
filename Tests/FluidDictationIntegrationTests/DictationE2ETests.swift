@@ -2070,6 +2070,18 @@ extension DictationE2ETests {
                 configuredModel: "local-model"
             )
         )
+        XCTAssertTrue(
+            DictationProviderRoute.allowsPrivateAIRoute(
+                selection: .default,
+                selectedProviderID: providerID
+            )
+        )
+        XCTAssertFalse(
+            DictationProviderRoute.allowsPrivateAIRoute(
+                selection: .profile("external"),
+                selectedProviderID: providerID
+            )
+        )
     }
 
     func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() {

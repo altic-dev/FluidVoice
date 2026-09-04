@@ -116,6 +116,14 @@ struct DictationProviderRoute: Equatable {
             configuredProviderID.isEmpty && configuredModel.isEmpty
     }
 
+    static func allowsPrivateAIRoute(
+        selection: SettingsStore.DictationPromptSelection,
+        selectedProviderID: String
+    ) -> Bool {
+        selection == .privateAI ||
+            (selection == .default && selectedProviderID == PrivateAIProviderFeature.shared.providerID)
+    }
+
     static func resolveForPostProcessing(
         settings: SettingsStore,
         dictationSlot: SettingsStore.DictationShortcutSlot
@@ -185,12 +193,15 @@ final class DictationPostProcessingService {
             source: "DictationPostProcessingService"
         )
 
-        let usesPrivateAISelection = settings.dictationPromptSelection(for: dictationSlot) == .privateAI
-        guard usesPrivateAISelection || !resolved.usesPrivateAI else {
+        let allowsPrivateAIRoute = DictationProviderRoute.allowsPrivateAIRoute(
+            selection: settings.dictationPromptSelection(for: dictationSlot),
+            selectedProviderID: settings.selectedProviderID
+        )
+        guard allowsPrivateAIRoute || !resolved.usesPrivateAI else {
             throw AIProcessingError.noVerifiedProvider
         }
 
-        if usesPrivateAISelection,
+        if allowsPrivateAIRoute,
            resolved.usesPrivateAI || PrivateAIIntegrationService.shouldHandleDictation(model: resolved.model)
         {
             let response = try await PrivateAIIntegrationService.shared.enhanceDictation(
