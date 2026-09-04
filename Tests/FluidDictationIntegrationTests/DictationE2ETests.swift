@@ -2084,6 +2084,28 @@ extension DictationE2ETests {
         )
     }
 
+    func testExplicitExternalStyleDoesNotUseLegacyFluidIntelligenceRoute() {
+        self.withPromptAndProviderSettingsRestored {
+            let settings = SettingsStore.shared
+            let profile = SettingsStore.DictationPromptProfile(
+                name: "External",
+                prompt: "Polish this",
+                mode: .dictate
+            )
+            settings.dictationPromptProfiles = [profile]
+            settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
+            settings.setDictationPromptSelection(.profile(profile.id))
+
+            let route = DictationProviderRoute.resolve(
+                settings: settings,
+                dictationSlot: .primary
+            )
+
+            XCTAssertFalse(route.usesPrivateAI)
+            XCTAssertTrue(route.providerID.isEmpty)
+        }
+    }
+
     func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() {
         self.withProviderSettingsRestored {
             let settings = SettingsStore.shared

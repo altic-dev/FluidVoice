@@ -41,7 +41,7 @@ struct DictationProviderRoute: Equatable {
                 selectedProviderID = providerID
                 configuredModel = model
             } else {
-                if self.shouldUseLegacyPrivateAIRoute(
+                if selection == .default, self.shouldUseLegacyPrivateAIRoute(
                     selectedProviderID: settings.selectedProviderID,
                     configuredProviderID: providerID,
                     configuredModel: model
