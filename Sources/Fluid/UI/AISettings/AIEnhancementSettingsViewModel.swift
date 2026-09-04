@@ -393,7 +393,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 self.settings.verifiedPrivateAIModelFingerprints = modelFingerprints
                 self.selectedModelByProvider[key] = currentModel.id
                 self.settings.selectedModelByProvider = self.selectedModelByProvider
-                self.selectProviderForUse(providerID)
                 self.updateConnectionStatus(.success, for: providerID)
                 DebugLogger.shared.info(
                     "Private AI Provider verification succeeded for \(currentModel.id)",

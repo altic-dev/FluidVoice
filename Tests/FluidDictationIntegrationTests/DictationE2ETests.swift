@@ -53,6 +53,7 @@ final class DictationE2ETests: XCTestCase {
     private let privateAIContextDefaultMigratedTo4KKey = "PrivateAIProviderContextDefaultMigratedTo4K"
 
     private let verifiedProviderFingerprintsKey = "VerifiedProviderFingerprints"
+    private let verifiedPrivateAIModelFingerprintsKey = "VerifiedPrivateAIModelFingerprints"
 
     private var punctuationFormattingDefaultsKeys: [String] {
         [
@@ -1994,6 +1995,35 @@ extension DictationE2ETests {
         }
     }
 
+    func testPrivateAIVerificationStateDoesNotReplaceExternalCleanupRoute() {
+        self.withPromptAndProviderSettingsRestored {
+            let settings = SettingsStore.shared
+            let privateProviderID = PrivateAIProviderFeature.shared.providerID
+            let privateModelID = PrivateAIProviderFeature.shared.defaultModelID
+            settings.selectedProviderID = "openai"
+            settings.selectedModelByProvider = [
+                "openai": "gpt-4.1",
+                privateProviderID: privateModelID,
+            ]
+            settings.verifiedProviderFingerprints = [
+                privateProviderID: "private-model-fingerprint",
+            ]
+            settings.verifiedPrivateAIModelFingerprints = [
+                privateModelID: "private-model-fingerprint",
+            ]
+            settings.setDictationPromptSelection(.default)
+
+            let route = DictationProviderRoute.resolveForPostProcessing(
+                settings: settings,
+                dictationSlot: .primary
+            )
+
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+            XCTAssertEqual(route.providerID, "openai")
+            XCTAssertEqual(route.model, "gpt-4.1")
+        }
+    }
+
     func testPrivateAIProviderPrefixKVCache_defaultsOnAndPersistsToggle() {
         self.withRestoredDefaults(keys: [self.privateAIPrefixKVCacheEnabledKey]) {
             let settings = SettingsStore.shared
@@ -2439,6 +2469,7 @@ extension DictationE2ETests {
                 self.availableModelsByProviderKey,
                 self.selectedModelByProviderKey,
                 self.verifiedProviderFingerprintsKey,
+                self.verifiedPrivateAIModelFingerprintsKey,
                 self.privateAISelectedModelIDKey,
             ],
             run: run
