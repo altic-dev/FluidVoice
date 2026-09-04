@@ -135,10 +135,11 @@ struct DictationProviderRoute: Equatable {
         appBundleID: String?
     ) -> SettingsStore.DictationPromptSelection {
         let selection = settings.dictationPromptSelection(for: dictationSlot)
-        guard selection != .off, selection != .privateAI else { return selection }
+        guard selection != .off else { return selection }
 
         let usesOnlyAppBindings = settings.promptRoutingScope(for: .dictate) == .selectedAppsOnly
-        guard usesOnlyAppBindings || selection == .default else { return selection }
+        let supportsAppOverride = self.selectionSupportsAppOverride(selection)
+        guard usesOnlyAppBindings || supportsAppOverride else { return selection }
         guard let binding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) else {
             return usesOnlyAppBindings ? .off : selection
         }
@@ -150,6 +151,10 @@ struct DictationProviderRoute: Equatable {
             return .default
         }
         return .profile(promptID)
+    }
+
+    static func selectionSupportsAppOverride(_ selection: SettingsStore.DictationPromptSelection) -> Bool {
+        selection == .default || selection == .privateAI
     }
 }
 
