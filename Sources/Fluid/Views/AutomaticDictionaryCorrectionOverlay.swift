@@ -707,6 +707,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
                     Button {
                         self.onFrequencyChange(frequency)
+                        self.startProgressAnimation()
                     } label: {
                         if self.settings.automaticDictionarySuggestionFrequency == frequency {
                             Label(frequency.displayName, systemImage: "checkmark")

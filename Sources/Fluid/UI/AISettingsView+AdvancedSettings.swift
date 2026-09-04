@@ -459,7 +459,7 @@ extension AIEnhancementSettingsView {
     }
 
     private var defaultExternalPromptProviderID: String {
-        DictationProviderRoute.externalFallbackProviderID(from: self.viewModel.selectedProviderID)
+        DictationProviderRoute.externalFallbackProviderID(from: self.settings.selectedProviderID)
     }
 
     private func promptEditorSelection(for mode: PromptEditorMode) -> SettingsStore.DictationPromptSelection? {

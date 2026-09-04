@@ -1061,6 +1061,7 @@ extension AIEnhancementSettingsView {
                     if let updateToken {
                         await PrivateAIIntegrationService.rollbackModelUpdate(updateToken)
                     }
+                    self.viewModel.updateConnectionStatus(.success, for: PrivateAIProviderFeature.shared.providerID)
                     let detail = self.viewModel.connectionErrorMessage.isEmpty
                         ? "The new model failed verification. The previous model is still active."
                         : "The new model failed verification. The previous model is still active. \(self.viewModel.connectionErrorMessage)"
