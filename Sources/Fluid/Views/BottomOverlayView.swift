@@ -3032,6 +3032,26 @@ struct BottomOverlayView: View {
         .opacity((appIcon != nil || showModelLoading || !self.layout.showsModeLabel) ? 1 : 0)
     }
 
+    private var leadingAppContextView: some View {
+        HStack(spacing: self.isPillSize ? 4 : 8) {
+            if self.showsSpokenSendIndicator {
+                SpokenSendIndicatorView(
+                    state: self.contentState.spokenSendIndicatorState,
+                    color: self.modeColor,
+                    size: self.isPillSize ? 14 : self.spokenSendIndicatorSize
+                )
+                .id(self.contentState.spokenSendCountdownID)
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+
+            self.targetAppIconView
+        }
+        .animation(
+            self.reduceMotion ? nil : .easeOut(duration: 0.14),
+            value: self.contentState.spokenSendIndicatorState
+        )
+    }
+
     private func scrollablePreviewText(_ previewText: String) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
@@ -3212,7 +3232,7 @@ struct BottomOverlayView: View {
                 // Waveform + Mode label row
                 HStack(spacing: self.isPillSize ? 4 : self.layout.hPadding / 1.5) {
                     if !self.layout.showsTopControls {
-                        self.targetAppIconView
+                        self.leadingAppContextView
                     }
 
                     // Waveform visualization
@@ -3228,47 +3248,14 @@ struct BottomOverlayView: View {
                         height: self.layout.waveformHeight
                     )
 
-                    if self.isPillSize, self.showsSpokenSendIndicator {
-                        SpokenSendIndicatorView(
-                            state: self.contentState.spokenSendIndicatorState,
-                            color: self.modeColor,
-                            size: 14
-                        )
-                        .id(self.contentState.spokenSendCountdownID)
-                        .transition(.scale(scale: 0.8).combined(with: .opacity))
-                    }
-
-                    // Larger overlays already identify the mode in the selector above.
-                    if self.layout.showsTopControls, self.showsSpokenSendIndicator {
-                        SpokenSendIndicatorView(
-                            state: self.contentState.spokenSendIndicatorState,
-                            color: self.modeColor,
-                            size: self.spokenSendIndicatorSize
-                        )
-                        .id(self.contentState.spokenSendCountdownID)
-                        .transition(.scale(scale: 0.8).combined(with: .opacity))
-                    }
-
                     // Compact overlays still need a visible mode because they have no selector.
                     if self.layout.showsModeLabel, !self.layout.showsTopControls {
                         VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(self.modeLabel)
-                                    .font(.system(size: self.layout.modeFontSize, weight: .semibold))
-                                    .foregroundStyle(self.modeColor)
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-
-                                if self.showsSpokenSendIndicator {
-                                    SpokenSendIndicatorView(
-                                        state: self.contentState.spokenSendIndicatorState,
-                                        color: self.modeColor,
-                                        size: self.spokenSendIndicatorSize
-                                    )
-                                    .id(self.contentState.spokenSendCountdownID)
-                                    .transition(.scale(scale: 0.8).combined(with: .opacity))
-                                }
-                            }
+                            Text(self.modeLabel)
+                                .font(.system(size: self.layout.modeFontSize, weight: .semibold))
+                                .foregroundStyle(self.modeColor)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
 
                             if !self.appServices.asr.isAsrReady &&
                                 (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
@@ -3290,7 +3277,7 @@ struct BottomOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .overlay(alignment: .leading) {
                     if self.layout.showsTopControls {
-                        self.targetAppIconView
+                        self.leadingAppContextView
                     }
                 }
                 .overlay(alignment: .trailing) {
