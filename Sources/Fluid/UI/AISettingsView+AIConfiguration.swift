@@ -1463,7 +1463,7 @@ extension AIEnhancementSettingsView {
                         opacity: canFetchModels ? 1 : 0.45,
                         help: "Refresh model list"
                     ) {
-                        self.activateProvider(item.id)
+                        self.viewModel.configureProvider(item.id)
                         Task { await self.viewModel.fetchModelsForCurrentProvider() }
                     }
                 }
@@ -1729,7 +1729,7 @@ extension AIEnhancementSettingsView {
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
                         Button(action: {
-                            self.activateProvider(item.id)
+                            self.viewModel.configureProvider(item.id)
                             if isEditing {
                                 self.viewModel.clearEditProviderDraft()
                             } else {
@@ -1758,7 +1758,7 @@ extension AIEnhancementSettingsView {
                             opacity: canFetchModels ? 1 : 0.45,
                             help: "Refresh model list"
                         ) {
-                            self.activateProvider(item.id)
+                            self.viewModel.configureProvider(item.id)
                             Task { await self.viewModel.fetchModelsForCurrentProvider() }
                         }
                         .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
@@ -1767,7 +1767,7 @@ extension AIEnhancementSettingsView {
                             .frame(width: iconColumnWidth, height: AISettingsLayout.providerRowControlHeight)
 
                         Button(action: {
-                            self.activateProvider(item.id)
+                            self.viewModel.configureProvider(item.id)
                             if isEditing {
                                 self.viewModel.clearEditProviderDraft()
                                 self.viewModel.setEditingAPIKey(false, for: item.id)
@@ -2001,7 +2001,7 @@ extension AIEnhancementSettingsView {
         let hasEnabledConfig = self.viewModel.isReasoningEnabled(for: providerID)
 
         return Button(action: {
-            self.activateProvider(providerID)
+            self.viewModel.configureProvider(providerID)
             self.viewModel.openReasoningConfig()
         }) {
             Image(systemName: hasEnabledConfig ? "brain.fill" : "brain")
