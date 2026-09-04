@@ -3263,6 +3263,7 @@ final class SettingsStore: ObservableObject {
             accentColorOption: self.accentColorOption,
             transcriptionStartSound: self.transcriptionStartSound,
             transcriptionSoundVolume: self.transcriptionSoundVolume,
+            transcriptionSoundIndependentVolume: false,
             autoUpdateCheckEnabled: self.autoUpdateCheckEnabled,
             betaReleasesEnabled: self.betaReleasesEnabled,
             enableDebugLogs: self.enableDebugLogs,

@@ -50,6 +50,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let accentColorOption: SettingsStore.AccentColorOption
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float
+    // Independent Volume was removed, but the key is still written (always false) so backups
+    // from this build decode on app versions that require it. Ignored on restore.
+    let transcriptionSoundIndependentVolume: Bool?
     let autoUpdateCheckEnabled: Bool
     let betaReleasesEnabled: Bool
     let enableDebugLogs: Bool

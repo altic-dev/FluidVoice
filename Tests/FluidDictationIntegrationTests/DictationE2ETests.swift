@@ -2424,6 +2424,19 @@ extension DictationE2ETests {
         settings.restore(from: legacyBackup.settings)
         XCTAssertEqual(settings.spokenFormattingActionRules, normalizedRulesBeforeLegacyRestore)
     }
+
+    func testBackupKeepsDeprecatedIndependentVolumeKeyAndDecodesWithoutIt() async throws {
+        let document = await BackupService.shared.makeBackupDocument()
+        let encoded = try BackupService.shared.encode(document)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var encodedSettings = try XCTUnwrap(root["settings"] as? [String: Any])
+        XCTAssertEqual(encodedSettings["transcriptionSoundIndependentVolume"] as? Bool, false)
+
+        encodedSettings.removeValue(forKey: "transcriptionSoundIndependentVolume")
+        root["settings"] = encodedSettings
+        let strippedBackup = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(strippedBackup.settings.transcriptionSoundIndependentVolume)
+    }
 }
 
 @MainActor
