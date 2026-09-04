@@ -501,7 +501,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
 
-        self.selectedProviderID = draft.id
+        self.configureProvider(draft.id)
         self.openAIBaseURL = ""
         self.updateCurrentProvider()
         self.availableModels = []
@@ -1098,9 +1098,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func deleteCurrentProvider() {
-        self.savedProviders.removeAll { $0.id == self.selectedProviderID }
+        let deletedProviderID = self.selectedProviderID
+        let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
+        self.savedProviders.removeAll { $0.id == deletedProviderID }
         self.saveSavedProviders()
-        let key = self.providerKey(for: self.selectedProviderID)
+        let key = self.providerKey(for: deletedProviderID)
         self.availableModelsByProvider.removeValue(forKey: key)
         self.selectedModelByProvider.removeValue(forKey: key)
         self.providerAPIKeys.removeValue(forKey: key)
@@ -1108,11 +1110,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
-        self.selectedProviderID = ""
-        self.openAIBaseURL = ""
-        self.updateCurrentProvider()
-        self.availableModels = []
-        self.selectedModel = ""
+        if deletedDefaultProvider {
+            self.settings.selectedProviderID = ""
+        }
+        self.finishConfiguringProvider()
         self.refreshVerifiedProviders()
         self.selectSoleVerifiedProviderIfNeeded()
     }

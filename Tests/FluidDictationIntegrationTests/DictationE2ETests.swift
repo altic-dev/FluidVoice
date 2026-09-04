@@ -2065,6 +2065,25 @@ extension DictationE2ETests {
         )
     }
 
+    func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() {
+        self.withProviderSettingsRestored {
+            let settings = SettingsStore.shared
+            settings.selectedProviderID = "openai"
+            let viewModel = AIEnhancementSettingsViewModel(
+                settings: settings,
+                menuBarManager: MenuBarManager(),
+                promptTest: .shared
+            )
+
+            XCTAssertNotNil(viewModel.createDraftProvider(named: "Draft"))
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+
+            viewModel.deleteCurrentProvider()
+            XCTAssertEqual(viewModel.selectedProviderID, "openai")
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+        }
+    }
+
     func testPrivateAIProviderPrefixKVCache_defaultsOnAndPersistsToggle() {
         self.withRestoredDefaults(keys: [self.privateAIPrefixKVCacheEnabledKey]) {
             let settings = SettingsStore.shared
