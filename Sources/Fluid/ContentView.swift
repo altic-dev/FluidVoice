@@ -3627,7 +3627,6 @@ struct ContentView: View {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: .primary)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
                     message: "overlay_phase phase=recording trigger=first_pcm",
@@ -3639,12 +3638,15 @@ struct ContentView: View {
             }
         }
 
-        // Pre-load model in background while recording (avoids 10s freeze on stop)
+        // Pre-load model in background while recording (avoids 10s freeze on stop).
+        // The AI runtime is warmed only after the speech model is ready so the two
+        // loads don't compete for disk and GPU; both finish long before stop.
         Task {
             do {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
                 try await self.asr.ensureAsrReady()
                 DebugLogger.shared.debug("Model pre-loaded during recording", source: "ContentView")
+                self.prewarmPrivateAIDictationIfNeeded(for: .primary)
             } catch {
                 DebugLogger.shared.error("Failed to pre-load model: \(error)", source: "ContentView")
             }
@@ -4295,7 +4297,12 @@ extension ContentView {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                // Speech model first, AI runtime second, so the two loads don't
+                // compete. ensureAsrReady() joins the load start() already kicked off.
+                Task {
+                    _ = try? await self.asr.ensureAsrReady()
+                    self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                }
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
             if startOutcome == .failed {
