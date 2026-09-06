@@ -56,6 +56,7 @@ final class MeetingAutoDetector {
         var audioEvidenceAt: Date?
         var audioEvidenceSource: AudioEvidenceSource?
         var processAudioWasActive = false
+        var processAudioObserved = false
         var processAudioInactiveAt: Date?
         var windowEvidenceAt: Date?
         var windowEvidenceKey: String?
@@ -105,6 +106,7 @@ final class MeetingAutoDetector {
     private var titleEnrichmentGeneration: [Int32: UInt64] = [:]
     private var titleEnrichmentInFlight: Set<Int32> = []
     private var lastHealth: Health?
+    private var audioQueryUnknown = false
 
     init(
         workspaceEvents: any WorkspaceEventsProviding,
@@ -284,19 +286,68 @@ final class MeetingAutoDetector {
     }
 
     private func pollAudioProcessActivity(at now: Date, expectedRunGeneration: UInt64?) async {
-        for (pid, record) in self.records where record.tier == .nativeTier1 {
-            let isActive = await self.audioProcessActivity.isAudioActive(forBundleIdentifiers: MeetingAppRegistry.audioProcessBundleIdentifiers(for: record.bundleIdentifier))
+        guard !Task.isCancelled,
+              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+        else { return }
+        let candidates = self.records.filter { $0.value.tier == .nativeTier1 }
+        let snapshot = await self.audioProcessActivity.snapshot()
+        guard !Task.isCancelled,
+              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+        else { return }
+        guard let activeInputByPID = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: snapshot) else {
+            if !self.audioQueryUnknown {
+                DebugLogger.shared.warning("audio-query-unavailable native confirmation paused", source: "MeetingAutoDetector")
+            }
+            self.audioQueryUnknown = true
+            for (pid, record) in candidates where self.records[pid]?.incarnation == record.incarnation {
+                self.records[pid]?.processAudioInactiveAt = nil
+            }
+            return
+        }
+        if self.audioQueryUnknown {
+            DebugLogger.shared.info("audio-query-recovered native activity reconciliation resumed", source: "MeetingAutoDetector")
+        }
+        self.audioQueryUnknown = false
+        for (pid, record) in candidates {
             guard !Task.isCancelled,
                   expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true,
                   self.records[pid]?.incarnation == record.incarnation
             else { continue }
+            let isActive = activeInputByPID[pid] != nil
+            let hasInput = activeInputByPID[pid] == true
+            guard !isActive || snapshot.owners.contains(where: { $0.processID == pid && $0.bundleIdentifier == record.bundleIdentifier }) else { continue }
+            // Generic helpers often expose output-only media while the app is idle. Require
+            // input for a new generic episode; an already-established episode is enough
+            // to make output-only activity meaningful. Zoom's muted output-only path remains
+            // supported because Zoom also requires an explicit meeting-window title.
+            let hasEstablishedEpisode = self.episodesByKey.values.contains { $0.pid == pid }
+            if isActive && !hasInput && record.bundleIdentifier != "us.zoom.xos" && !hasEstablishedEpisode {
+                self.handleAudioProcessActivity(false, pid: pid, at: now)
+                continue
+            }
             self.handleAudioProcessActivity(isActive, pid: pid, at: now)
         }
     }
 
     func handleAudioProcessActivity(_ isActive: Bool, pid: Int32, at now: Date) {
         guard var record = self.records[pid], record.tier == .nativeTier1 else { return }
-        guard isActive != record.processAudioWasActive else { return }
+        record.processAudioObserved = true
+        if isActive && record.processAudioWasActive {
+            // A continuous stream is still fresh evidence. Refreshing here allows a late window
+            // snapshot/activation to confirm without synthesizing duplicate episodes.
+            record.audioEvidenceAt = now
+            record.audioEvidenceSource = .process
+            record.processAudioInactiveAt = nil
+            self.records[pid] = record
+            self.attemptConfirm(pid: pid, at: now)
+            return
+        }
+        if !isActive && !record.processAudioWasActive {
+            // Inactivity must be continuously observed; an unknown snapshot resets this timer.
+            if record.processAudioInactiveAt == nil { record.processAudioInactiveAt = now }
+            self.records[pid] = record
+            return
+        }
         record.processAudioWasActive = isActive
         if isActive {
             record.processAudioInactiveAt = nil
@@ -437,6 +488,9 @@ final class MeetingAutoDetector {
               let windowEvidenceAt = record.windowEvidenceAt,
               let evidenceKey = record.windowEvidenceKey
         else { return }
+        if record.tier == .nativeTier1, self.audioQueryUnknown {
+            return // a transient HAL failure is not an inactive edge, but cannot confirm anew
+        }
         guard now.timeIntervalSince(audioEvidenceAt) <= Self.confirmDeadlineSeconds else {
             self.logConfirmRejected("deadline", bundleIdentifier: record.bundleIdentifier)
             return
@@ -600,12 +654,16 @@ final class MeetingAutoDetector {
         // the meeting's own evidence persists, never merely because our recording stopped.
         // Mic release ≥60s ends episodes too — Teams/Webex main windows persist after a call, so
         // window loss alone would keep their episodes alive (and back-to-back meetings silent) forever.
-        let micReleasedLongEnough = self.lastMicReleaseAt.map { now.timeIntervalSince($0) >= Self.micReleaseEpisodeEndSeconds } == true
         for (key, episode) in self.episodesByKey {
             let ended: Bool
             if let record = self.records[episode.pid] {
                 let windowGone = record.windowLostAt.map { now.timeIntervalSince($0) >= Self.micReleaseEpisodeEndSeconds } == true
-                let processAudioInactiveLongEnough = record.processAudioInactiveAt.map { now.timeIntervalSince($0) >= Self.micReleaseEpisodeEndSeconds } == true
+                let processAudioInactiveLongEnough = !self.audioQueryUnknown &&
+                    (record.processAudioInactiveAt.map { now.timeIntervalSince($0) >= Self.micReleaseEpisodeEndSeconds } == true)
+                // A global mic release can belong to another app/device transition. Process
+                // audio is app-specific and therefore wins over that global signal.
+                let micReleasedLongEnough = (record.processAudioObserved || (record.tier == .nativeTier1 && self.audioQueryUnknown)) ? false :
+                    (self.lastMicReleaseAt.map { now.timeIntervalSince($0) >= Self.micReleaseEpisodeEndSeconds } == true)
                 ended = windowGone || micReleasedLongEnough || processAudioInactiveLongEnough
             } else {
                 ended = true // the app quit
@@ -634,6 +692,7 @@ final class MeetingAutoDetector {
     // MARK: Disarm on lock / sleep / fast-user-switch — mic bits are unreliable across these.
 
     func disarmAndClearTransientState() {
+        self.audioQueryUnknown = false
         let unconsumedIDs = self.episodesByKey.values.compactMap { episode in
             episode.consumed ? nil : episode.id
         }

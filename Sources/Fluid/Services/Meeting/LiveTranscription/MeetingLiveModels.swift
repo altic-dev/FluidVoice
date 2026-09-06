@@ -2,8 +2,9 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-/// "You" is the microphone track, "Them" is the application-audio track. No diarization live —
-/// the offline pipeline resolves real speaker identity and replaces this transcript on completion.
+/// Internal live-only source tags: `.you` is the microphone track and `.them` is application audio.
+/// The UI deliberately presents neutral source labels because live capture has no speaker identity;
+/// the offline pipeline resolves speakers and replaces this transcript on completion.
 nonisolated enum MeetingLiveSpeaker: Sendable, Equatable {
     case you
     case them
@@ -133,7 +134,7 @@ nonisolated enum MeetingLiveTimeConversion {
     }
 }
 
-/// Thread-safe, set-once-per-session capture origin shared by both tracks so "You" and "Them"
+/// Thread-safe, set-once-per-session capture origin shared by both source tracks so their
 /// timestamps land on the same clock.
 final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -160,7 +161,7 @@ final nonisolated class MeetingLiveOriginBox: @unchecked Sendable {
 
 /// Echo suppression: on speakers, the far end bleeds into the microphone track. This is text-only
 /// (the offline signal scorer needs data live capture can't produce), comparing a mic utterance
-/// against recently finalized "Them" text.
+/// against recently finalized application-audio text.
 nonisolated enum MeetingLiveEchoFilter {
     static func recentThemText(
         from themUtterances: [MeetingLiveUtterance],

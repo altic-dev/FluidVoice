@@ -28,7 +28,6 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var title: String = Self.defaultTitle(mode: .onlineCall, applicationDisplayName: nil)
     var selectedApplicationID: String?
     var selectedMicrophoneID: String?
-    var microphoneRole: MeetingMicrophoneRole = .unknown
     /// Once true, the default title stops following the selected application/mode.
     var titleWasEdited = false
 
@@ -39,7 +38,6 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.selectedApplicationID = nil
         // Left unset here: selectPreferredMicrophone decides once identities load.
         self.selectedMicrophoneID = nil
-        self.microphoneRole = .unknown
     }
 
     static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
@@ -521,7 +519,6 @@ struct MeetingTranscriptionView: View {
             systemDefaultCaptureID: nil
         )
         self.setupDraft.selectedMicrophoneID = selection.deviceID
-        self.setupDraft.microphoneRole = selection.role
     }
 
     private func selectPreferredApplication(from identities: [MeetingApplicationIdentity]) {
@@ -584,7 +581,7 @@ struct MeetingTranscriptionView: View {
         }
 
         var microphone = microphoneOption.identity
-        microphone.role = self.setupDraft.mode == .onlineCall ? self.setupDraft.microphoneRole : .unknown
+        microphone.role = .unknown
 
         let applicationOption = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
         if self.setupDraft.mode == .onlineCall, applicationOption == nil { return nil }
@@ -776,14 +773,14 @@ struct MeetingTranscriptionView: View {
            let match = self.microphones.first(where: { $0.identity.coreAudioUID == coreAudioUID })
         {
             var identity = match.identity
-            identity.role = session.selectedMicrophone.role
+            identity.role = .unknown
             return identity
         }
         guard let match = self.microphones.first(where: { $0.identity.captureDeviceID == session.selectedMicrophone.captureDeviceID }) else {
             return nil
         }
         var identity = match.identity
-        identity.role = session.selectedMicrophone.role
+        identity.role = .unknown
         return identity
     }
 
@@ -982,7 +979,7 @@ struct MeetingTranscriptionView: View {
             applicationDisplayName: applicationDisplayName,
             microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
             microphoneCoreAudioUID: microphone.identity.coreAudioUID,
-            microphoneRole: self.setupDraft.microphoneRole
+            microphoneRole: .unknown
         )
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
@@ -1864,23 +1861,6 @@ private struct MeetingRecordingSettingsSheet: View {
                                 .accessibilityLabel("Default meeting microphone")
                             }
 
-                            if self.draft.mode == .onlineCall {
-                                Divider()
-                                MeetingAdaptiveSetupRow(
-                                    title: "Microphone use",
-                                    detail: "A personal mic can identify clean speech as You."
-                                ) {
-                                    Picker("Microphone use", selection: self.$draft.microphoneRole) {
-                                        Text("Only me").tag(MeetingMicrophoneRole.personal)
-                                        Text("Shared").tag(MeetingMicrophoneRole.shared)
-                                        Text("Not sure").tag(MeetingMicrophoneRole.unknown)
-                                    }
-                                    .labelsHidden()
-                                    .frame(width: 320, alignment: .trailing)
-                                    .accessibilityLabel("Default microphone use")
-                                }
-                            }
-
                             Divider()
                             MeetingAdaptiveSetupRow(title: "Language") {
                                 Text("English")
@@ -2090,17 +2070,8 @@ private struct MeetingSetupCanvas: View {
             ?? "Choose microphone"
     }
 
-    private var microphoneRoleName: String? {
-        guard self.draft.mode == .onlineCall else { return nil }
-        switch self.draft.microphoneRole {
-        case .personal: return "Personal mic"
-        case .shared: return "Shared mic"
-        case .unknown: return "Mic use not set"
-        }
-    }
-
     private var setupSummary: String {
-        [self.applicationName, self.microphoneName, self.microphoneRoleName]
+        [self.applicationName, self.microphoneName]
             .compactMap { $0 }
             .joined(separator: " · ")
     }
@@ -2371,8 +2342,8 @@ private struct MeetingRecordingCanvas: View {
     }
 }
 
-/// Live captions during recording only — speaker identity is unresolved here (You/Them by track,
-/// not by diarization); the offline pipeline replaces this view's content entirely on completion.
+/// Live captions during recording only — rows identify capture source, not a person; the offline
+/// diarization pipeline replaces this view's content entirely on completion.
 private struct MeetingLiveTranscriptCard: View {
     let snapshot: MeetingLiveTranscriptSnapshot
 
@@ -2787,12 +2758,12 @@ private struct MeetingResultCanvas: View {
         return "\(speaker.displayName) (You)"
     }
 
-    // The whole mic feed reads as "my side" of the chat, not just segments attributed to You.
+    // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
     private func isLocalSegment(_ segment: MeetingTranscriptSegment) -> Bool {
         guard let speakerID = segment.speakerID,
               let speaker = self.session.speakers.first(where: { $0.id == speakerID })
         else { return false }
-        return speaker.isLocalUser || speaker.trackKind == .microphone
+        return speaker.isLocalUser
     }
 
     @ViewBuilder

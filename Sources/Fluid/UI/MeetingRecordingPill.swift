@@ -407,6 +407,9 @@ struct MeetingRecordingPillContent: View {
         return VStack(spacing: 0) {
             VStack(spacing: 0) {
                 Color.clear
+                    .frame(height: MeetingOverlayPresentation.captionsControlsHeight)
+
+                Color.clear
                     .frame(height: MeetingOverlayPresentation.captionsTopInset)
 
                 Group {
@@ -422,24 +425,24 @@ struct MeetingRecordingPillContent: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                             .accessibilityHidden(true)
                     } else {
-                        Text(self.rollingSubtitle(rows: rows))
-                            .font(.system(size: 14, design: .monospaced))
-                            .lineSpacing(4)
-                            .foregroundStyle(Color.white.opacity(0.94))
-                            // fixedSize is load-bearing — a height-constrained Text truncates its END,
-                            // freezing the display on the oldest words instead of clipping the top.
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                            .accessibilityHidden(true)
+                        MeetingRollingCaptionView(
+                            text: self.rollingSubtitle(rows: rows),
+                            foregroundColor: NSColor.white.withAlphaComponent(0.94)
+                        )
+                        .frame(
+                            width: MeetingOverlayPresentation.captionsContentWidth,
+                            height: MeetingOverlayPresentation.captionsContentHeight,
+                            alignment: .bottomLeading
+                        )
+                        .accessibilityHidden(true)
                     }
                 }
                 .frame(
                     width: MeetingOverlayPresentation.captionsContentWidth,
                     height: MeetingOverlayPresentation.captionsContentHeight
                 )
-                // Clip strictly to the content rectangle so an overflowing fixedSize Text can never
-                // consume the top or bottom inset — clipping only at the outer viewport let overflow
-                // eat into the top inset before reaching that boundary.
+                // Clip strictly to the content rectangle; the TextKit view itself also draws only
+                // the selected suffix inside this frame.
                 .clipped()
 
                 Color.clear
@@ -462,7 +465,7 @@ struct MeetingRecordingPillContent: View {
             height: MeetingOverlayPresentation.captions.visibleSize.height
         )
         .background(self.captionsSurface)
-        // Pure text island; controls surface only on hover so it reads as subtitles, not a widget.
+        // Hover controls stay inside their permanently reserved top strip, never over text.
         .overlay(alignment: .topTrailing) {
             if self.isHoveringStrip {
                 HStack(spacing: 8) {
@@ -567,9 +570,9 @@ struct MeetingRecordingPillContent: View {
         return NSApplication.shared.applicationIconImage
     }
 
-    /// One rolling word stream across all turns — no bubbles, no speaker structure, just the last
-    /// words spoken. Oldest words fall off the front; "—" marks a speaker change, subtitle-style.
-    private func rollingSubtitle(rows: [MeetingLiveBubbleComposer.Row], maxWords: Int = 42) -> String {
+    /// One rolling stream across the most recent rows. TextKit selects complete wrapped lines;
+    /// this input bound prevents an ever-growing live transcript from retaining excess storage.
+    private func rollingSubtitle(rows: [MeetingLiveBubbleComposer.Row]) -> String {
         var words: [String] = []
         var previousSpeaker: MeetingLiveSpeaker?
         for row in rows.suffix(8) {
@@ -577,9 +580,9 @@ struct MeetingRecordingPillContent: View {
                 words.append("—")
             }
             previousSpeaker = row.speaker
-            words.append(contentsOf: row.text.split(separator: " ").map(String.init))
+            words.append(row.text)
         }
-        return words.suffix(maxWords).joined(separator: " ")
+        return String(words.joined(separator: " ").suffix(MeetingRollingCaptionLayout.maximumInputCharacters))
     }
 
     private func stopRecording() {

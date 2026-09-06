@@ -824,8 +824,9 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertNil(decoded.captureMethod)
     }
 
-    /// A single malformed era (unknown `method`) is skipped, not fatal to the whole track decode.
-    func testUnknownEraMethodRawValueIsSkippedNotFatal() throws {
+    /// An unknown middle era must fail the complete track closed; skipping it would extend a
+    /// neighbouring protected era across audio whose capture safety is unknowable.
+    func testUnknownEraMethodFailsCompleteTrackClosed() throws {
         let json = """
         {
             "id": "\(UUID().uuidString)",
@@ -842,8 +843,9 @@ extension MeetingMicrophoneCaptureTests {
         }
         """
         let decoded = try JSONDecoder().decode(MeetingAudioTrack.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.captureEras?.count, 1, "the malformed era is skipped, not fatal")
+        XCTAssertEqual(decoded.captureEras?.count, 1)
         XCTAssertEqual(decoded.captureEras?.first?.method, .avCaptureSession)
+        XCTAssertEqual(decoded.captureEras?.first?.echoProtection, .unprotected)
     }
 
     func testMultiEraTrackCaptureMethodIsAvCaptureSession() {

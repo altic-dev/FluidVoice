@@ -128,6 +128,11 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var degradeReason: DegradeReason?
     private var activityLease: MeetingAudioActivityLease?
+    /// Reservation held from the public start entry point through every async start step.
+    /// This closes the preflight/lease window where two starts could otherwise pass guards.
+    private var startReservation: UUID? {
+        willSet { if (newValue != nil) != (self.startReservation != nil) { self.objectWillChange.send() } }
+    }
     private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
     private var captureGeneration: UUID?
     private var operationGeneration: UUID?
@@ -188,13 +193,33 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
+    var hasPendingStart: Bool { self.startReservation != nil }
+
+    /// A recovery offer is not audio ownership. Only matching terminal states may
+    /// be displaced; preparing/stopping and inconsistent states remain blocked.
+    private var canBeginNewRecording: Bool {
+        guard self.activityLease == nil else { return false }
+        switch self.state {
+        case .idle, .completed:
+            return self.activeSession == nil
+        case let .failed(id, _):
+            return self.activeSession == nil ||
+                (self.activeSession?.id == id && self.activeSession?.state == .failed)
+        case let .interrupted(id):
+            return self.activeSession == nil ||
+                (self.activeSession?.id == id && self.activeSession?.state == .interrupted)
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing:
+            return false
+        }
+    }
+
     var isProcessing: Bool {
         if case .processing = self.state { return true }
         return false
     }
 
     private var hasBlockingActivityTask: Bool {
-        self.stopTask != nil || self.interruptionTask != nil || self.terminationTask != nil || self.retryTask != nil
+        self.hasBlockingActivityTaskExceptStart || self.startReservation != nil
     }
 
     /// True when no capture/stop/interruption/termination/retry activity is in flight and the
@@ -274,9 +299,44 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func startRecording(configuration: MeetingCaptureConfiguration) async throws -> MeetingSession {
+        return try await self.startRecording(configuration: configuration, passiveOffer: nil, resolvingSourceID: nil)
+    }
+
+    private func startRecording(
+        configuration: MeetingCaptureConfiguration,
+        passiveOffer: MeetingSession?,
+        resolvingSourceID: MeetingSessionID?
+    ) async throws -> MeetingSession {
+        guard self.startReservation == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
+        guard !self.hasBlockingActivityTask,
+              self.canBeginNewRecording, !self.isDeleting
+        else { throw MeetingCoordinatorError.recordingAlreadyActive }
+        let reservation = UUID()
+        self.startReservation = reservation
+        defer { if self.startReservation == reservation { self.startReservation = nil } }
         await self.ensureRestored()
+        let passiveOffer = passiveOffer ?? self.activeSession.flatMap { offer in
+            (offer.state == .interrupted || offer.state == .failed) ? offer : nil
+        }
+        return try await self.performStartRecording(
+            configuration: configuration, passiveOffer: passiveOffer,
+            resolvingSourceID: resolvingSourceID, reservation: reservation
+        )
+    }
+
+    private func performStartRecording(
+        configuration: MeetingCaptureConfiguration,
+        passiveOffer: MeetingSession?,
+        resolvingSourceID: MeetingSessionID?,
+        reservation: UUID
+    ) async throws -> MeetingSession {
+        try Task.checkCancellation()
         try configuration.validate()
-        guard self.activeSession == nil, !self.hasBlockingActivityTask else {
+        guard self.startReservation == reservation,
+              self.activeSession?.id == passiveOffer?.id,
+              !self.hasBlockingActivityTaskExceptStart,
+              self.canBeginNewRecording, !self.isDeleting
+        else {
             throw MeetingCoordinatorError.recordingAlreadyActive
         }
         guard !self.isMutatingSession else {
@@ -287,7 +347,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
-        guard self.activeSession == nil, !self.hasBlockingActivityTask else {
+        guard self.startReservation == reservation,
+              self.activeSession?.id == passiveOffer?.id,
+              !self.hasBlockingActivityTaskExceptStart,
+              self.canBeginNewRecording, !self.isDeleting
+        else {
             throw MeetingCoordinatorError.recordingAlreadyActive
         }
         guard !self.isMutatingSession else {
@@ -297,6 +361,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         let lease = try await self.audioArbiter.acquireMeetingCapture()
         do {
             try Task.checkCancellation()
+            guard self.startReservation == reservation,
+                  self.activeSession?.id == passiveOffer?.id,
+                  !self.hasBlockingActivityTaskExceptStart,
+                  self.canBeginNewRecording, !self.isDeleting, !self.isMutatingSession else {
+                throw CancellationError()
+            }
         } catch {
             await self.audioArbiter.release(lease)
             throw error
@@ -306,6 +376,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.captureGeneration = generation
         self.degradeReason = nil
         self.operationGeneration = generation
+        if passiveOffer != nil {
+            self.activeSession = nil
+            self.trackHealth = [:]
+            self.state = .idle
+        }
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
         session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -332,6 +407,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         do {
             try await self.store.create(session)
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
+            guard self.startReservation == reservation,
+                  self.operationGeneration == generation,
+                  self.terminationTask == nil,
+                  !Task.isCancelled
+            else { throw CancellationError() }
             captureStartAttempted = true
             let startResult = try await self.capture.start(
                 session: session,
@@ -363,6 +443,36 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
             self.state = .recording(session.id)
             try await self.store.save(session)
+            guard self.startReservation == reservation,
+                  self.operationGeneration == generation, !Task.isCancelled else {
+                throw CancellationError()
+            }
+            if let resolvingSourceID {
+                // Keep the start reservation held while serializing the explicit
+                // Record Again resolution against queued corrections/deletes.
+                await self.flushQueuedPersistence()
+                guard self.startReservation == reservation,
+                      self.operationGeneration == generation, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+                if var source = try? await self.store.load(id: resolvingSourceID) {
+                    guard self.startReservation == reservation,
+                          self.operationGeneration == generation, !Task.isCancelled else {
+                        throw CancellationError()
+                    }
+                    source.recoveryResolvedAt = Date()
+                    source.updatedAt = Date()
+                    do {
+                        try await self.store.save(source)
+                    } catch {
+                        DebugLogger.shared.log("Record Again source resolution failed; previous audio remains recoverable: \(error)")
+                    }
+                }
+            }
+            guard self.startReservation == reservation,
+                  self.operationGeneration == generation, !Task.isCancelled else {
+                throw CancellationError()
+            }
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
             return session
         } catch {
@@ -408,8 +518,24 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.operationGeneration = nil
             self.state = .failed(session.id, failure)
             await self.releaseActivityLease()
+            if let passiveOffer,
+               self.startReservation == reservation,
+               self.terminationTask == nil,
+               !hasRecoverableAudio,
+               self.activeSession == nil
+            {
+                self.activeSession = passiveOffer
+                self.trackHealth = Dictionary(uniqueKeysWithValues: passiveOffer.audioTracks.map { ($0.kind, $0.health) })
+                self.state = passiveOffer.state == .interrupted
+                    ? .interrupted(passiveOffer.id)
+                    : .failed(passiveOffer.id, passiveOffer.failures.last ?? failure)
+            }
             throw error
         }
+    }
+
+    private var hasBlockingActivityTaskExceptStart: Bool {
+        self.stopTask != nil || self.interruptionTask != nil || self.terminationTask != nil || self.retryTask != nil
     }
 
     @discardableResult
@@ -469,7 +595,8 @@ final class MeetingSessionCoordinator: ObservableObject {
               self.terminationTask == nil,
               !self.isProcessing,
               !self.isRecording,
-              !self.isDeleting
+              !self.isDeleting,
+              self.startReservation == nil
         else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
 
@@ -495,7 +622,8 @@ final class MeetingSessionCoordinator: ObservableObject {
               self.terminationTask == nil,
               !self.isProcessing,
               !self.isRecording,
-              !self.isDeleting
+              !self.isDeleting,
+              self.startReservation == nil
         else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
         guard session.hasRetryableAudio else { throw MeetingCoordinatorError.noRecoverableAudio }
@@ -599,45 +727,19 @@ final class MeetingSessionCoordinator: ObservableObject {
         _ snapshot: MeetingSession,
         configuration: MeetingCaptureConfiguration
     ) async throws -> MeetingSession {
-        self.activeSession = nil
-        self.trackHealth = [:]
-        self.state = .idle
-        do {
-            let newSession = try await self.startRecording(configuration: configuration)
-            var resolved = snapshot
-            resolved.recoveryResolvedAt = Date()
-            resolved.updatedAt = Date()
-            try? await self.store.save(resolved)
-            Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
+            let newSession = try await self.startRecording(
+                configuration: configuration, passiveOffer: snapshot, resolvingSourceID: snapshot.id
+            )
             return newSession
-        } catch {
-            if self.activeSession == nil {
-                self.activeSession = snapshot
-                self.trackHealth = Dictionary(uniqueKeysWithValues: snapshot.audioTracks.map { ($0.kind, $0.health) })
-                self.state = snapshot.state == .interrupted
-                    ? .interrupted(snapshot.id)
-                    : .failed(snapshot.id, snapshot.failures.last ?? Self.failure(from: error, domain: .capture, recoverable: true))
-            }
-            throw error
-        }
     }
 
     private func recordAgainFromHistory(
         sourceID: MeetingSessionID,
         configuration: MeetingCaptureConfiguration
     ) async throws -> MeetingSession {
-        let newSession = try await self.startRecording(configuration: configuration)
-        if var source = try? await self.store.load(id: sourceID) {
-            source.recoveryResolvedAt = Date()
-            source.updatedAt = Date()
-            do {
-                try await self.store.save(source)
-                Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
-            } catch {
-                DebugLogger.shared.log("recordAgain: could not stamp recoveryResolvedAt for \(sourceID): \(error)")
-            }
-        }
-        return newSession
+        return try await self.startRecording(
+            configuration: configuration, passiveOffer: nil, resolvingSourceID: sourceID
+        )
     }
 
     // MARK: - Transcript corrections
@@ -1150,6 +1252,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performShutdownForTermination() async {
+        // Invalidate a suspended permission/lease start before draining capture. Its
+        // post-await ownership checks will then release any acquired lease and abort.
+        self.startReservation = nil
         // Bounded: termination must never hang on a stuck mutation save.
         for _ in 0..<100 {
             guard self.isMutatingSession else { break }
@@ -1312,6 +1417,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.speakers = result.speakers
             session.transcriptSegments = result.segments
+            session.transcriptCoverageGaps = result.coverageGaps.isEmpty ? nil : result.coverageGaps
             session.processingAttempts.removeAll {
                 $0.completedAt == nil && $0.id != result.attempt.id
             }
@@ -1336,6 +1442,21 @@ final class MeetingSessionCoordinator: ObservableObject {
                         session.audioTracks[trackIndex].chunks[chunkIndex].finalizationState = .failed
                     }
                 }
+            }
+            if !result.coverageGaps.isEmpty {
+                let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in
+                    total + max(0, gap.end - gap.start)
+                }
+                session.events.append(MeetingSessionEvent(
+                    id: UUID(),
+                    occurredAt: Date(),
+                    kind: .microphoneChanged,
+                    trackID: result.coverageGaps.first?.trackID,
+                    detail: String(
+                        format: "%.1f seconds of unprotected microphone audio were excluded from the transcript.",
+                        excludedSeconds
+                    )
+                ))
             }
             session.state = .completed
             session.updatedAt = Date()

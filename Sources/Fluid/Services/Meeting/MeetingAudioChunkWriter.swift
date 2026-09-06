@@ -181,6 +181,26 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
         }
     }
 
+    /// Safety metadata must fail closed even when its manifest write fails. Publishing the
+    /// conservative candidate in memory ensures the track returned by `stop()` cannot resurrect
+    /// the prior optimistic era; the caller must still terminate capture after the thrown error.
+    func updateTrackMetadataFailClosed(_ mutate: @escaping (inout MeetingAudioTrack) -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.queue.async { [self] in
+                var candidate = self.track
+                mutate(&candidate)
+                do {
+                    try self.persistTrackManifest(candidate)
+                    self.track = candidate
+                    continuation.resume()
+                } catch {
+                    self.track = candidate
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     /// Splice point for a capture-side swap: finalizes the active chunk, returns its `presentationEnd`. No-op unless `.accepting`.
     func beginSplice() async -> MeetingMediaTime? {
         await withCheckedContinuation { (continuation: CheckedContinuation<MeetingMediaTime?, Never>) in

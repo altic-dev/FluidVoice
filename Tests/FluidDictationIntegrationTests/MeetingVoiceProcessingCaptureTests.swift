@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import AVFoundation
+import CoreAudio
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -10,7 +11,7 @@ import XCTest
 /// screen-recording/microphone permission and are not exercised here. This covers the pure
 /// decision, gate, drift-eligibility, de-drift transform and Codable pieces of Phase 3.
 final class MeetingVoiceProcessingCaptureTests: XCTestCase {
-    // MARK: - Decision table (incl. role)
+    // MARK: - Decision table
 
     private func mic(uid: String? = "mic-uid", role: MeetingMicrophoneRole = .personal) -> MeetingMicrophoneIdentity {
         MeetingMicrophoneIdentity(
@@ -77,20 +78,137 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(decision, .voiceProcessing)
     }
 
-    func testDecisionDeclinesForSharedRole() {
+    func testDecisionIgnoresSharedRoleForCaptureSafety() {
         let decision = MeetingCapturePathDecider.decide(
             mode: .onlineCall, microphone: self.mic(role: .shared), outputRoute: self.viableRoute()
         )
-        guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
-        XCTAssertTrue(reason.contains("personal"))
+        XCTAssertEqual(decision, .voiceProcessing)
     }
 
-    func testDecisionDeclinesForUnknownRole() {
+    func testDecisionIgnoresUnknownRoleForCaptureSafety() {
         let decision = MeetingCapturePathDecider.decide(
             mode: .onlineCall, microphone: self.mic(role: .unknown), outputRoute: self.viableRoute()
         )
-        guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
-        XCTAssertTrue(reason.contains("personal"))
+        XCTAssertEqual(decision, .voiceProcessing)
+    }
+
+    func testRawRouteRequiresPositiveHeadphoneEvidence() {
+        let unknownBluetooth = MeetingOutputRouteSnapshot(
+            deviceExists: true, isBluetooth: true, isBuiltIn: false,
+            isHeadphonesDataSource: false, terminalTypes: []
+        )
+        XCTAssertEqual(MeetingRawMicrophoneProtection.classify(unknownBluetooth), .unprotected)
+
+        var externalWithoutDataSource = unknownBluetooth
+        externalWithoutDataSource.isHeadphonesDataSource = true
+        XCTAssertEqual(
+            MeetingRawMicrophoneProtection.classify(externalWithoutDataSource),
+            .unprotected,
+            "AudioDevice reports missing data-source properties pessimistically; that alone is not closed-route proof"
+        )
+
+        var headphones = unknownBluetooth
+        headphones.terminalTypes = [kAudioStreamTerminalTypeHeadphones]
+        XCTAssertEqual(MeetingRawMicrophoneProtection.classify(headphones), .acousticallyClosed)
+
+        let builtInHeadphoneJack = MeetingOutputRouteSnapshot(
+            deviceExists: true, isBluetooth: false, isBuiltIn: true,
+            isHeadphonesDataSource: true
+        )
+        XCTAssertEqual(MeetingRawMicrophoneProtection.classify(builtInHeadphoneJack), .acousticallyClosed)
+    }
+
+    func testTranscriptGateFailsClosedAcrossTransition() {
+        let gate = MeetingMicrophoneTranscriptGate(.voiceProcessed)
+        XCTAssertTrue(gate.admitsTranscript())
+        gate.update(.unprotected)
+        XCTAssertFalse(gate.admitsTranscript())
+        gate.update(.acousticallyClosed)
+        XCTAssertTrue(gate.admitsTranscript())
+    }
+
+    func testTurnCrossingUnprotectedEraIsRejectedAsAWhole() {
+        let eras = [
+            MeetingCaptureEra(
+                method: .voiceProcessing, deviceUID: "mic", deviceName: "Mic",
+                roleAtElection: .unknown, echoProtection: .voiceProcessed, startSeconds: -.infinity
+            ),
+            MeetingCaptureEra(
+                method: .avCaptureSession, deviceUID: "mic", deviceName: "Mic",
+                roleAtElection: .unknown, echoProtection: .unprotected, startSeconds: 10
+            ),
+        ]
+        XCTAssertTrue(MeetingProcessingPipeline.microphoneIntervalIsAdmitted(start: 8, end: 9.9, eras: eras))
+        XCTAssertFalse(MeetingProcessingPipeline.microphoneIntervalIsAdmitted(start: 9.9, end: 10.1, eras: eras))
+        XCTAssertFalse(MeetingProcessingPipeline.microphoneIntervalIsAdmitted(start: 10, end: 11, eras: eras))
+    }
+
+    func testLegacyVoiceProcessingEraWithoutProtectionRetainsPositiveVPIOEvidence() throws {
+        let data = Data(#"{"method":"voiceProcessing","roleAtElection":"personal","startSeconds":0}"#.utf8)
+        let era = try JSONDecoder().decode(MeetingCaptureEra.self, from: data)
+        XCTAssertEqual(era.echoProtection, .voiceProcessed)
+    }
+
+    func testLegacyRawEraWithoutProtectionPreservesPreviouslyEligibleRecording() throws {
+        let data = Data(#"{"method":"avCaptureSession","roleAtElection":"personal","startSeconds":0}"#.utf8)
+        let era = try JSONDecoder().decode(MeetingCaptureEra.self, from: data)
+        XCTAssertEqual(era.echoProtection, .legacyUnclassified)
+        let roundTripped = try JSONDecoder().decode(
+            MeetingCaptureEra.self,
+            from: JSONEncoder().encode(era)
+        )
+        XCTAssertEqual(roundTripped.echoProtection, .legacyUnclassified)
+    }
+
+    func testTranscriptGateInvalidationUsesLastObservedSampleBoundary() {
+        let gate = MeetingMicrophoneTranscriptGate(.voiceProcessed)
+        XCTAssertTrue(gate.observeAndAdmit(self.makeSampleBuffer(ptsSeconds: 12.5)))
+        let boundary = gate.invalidate()
+        XCTAssertEqual(
+            boundary?.unsafeStartSeconds ?? -1,
+            12.5 - MeetingMicrophoneTranscriptGate.routeNotificationSafetySeconds,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(boundary?.observedSeconds ?? -1, 12.5, accuracy: 0.000_001)
+        XCTAssertFalse(gate.observeAndAdmit(self.makeSampleBuffer(ptsSeconds: 12.51)))
+    }
+
+    func testCoverageGapPersistsTheUnprotectedTail() {
+        let trackID = UUID()
+        let track = MeetingAudioTrack(
+            id: trackID,
+            kind: .microphone,
+            sourceIdentifier: "mic",
+            sourceDisplayName: "Mic",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(
+                startedHostTime: 0, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil
+            ),
+            health: .waiting,
+            chunks: [MeetingAudioChunk(
+                id: UUID(), sequence: 0, relativeFilePath: "mic.m4a",
+                presentationStart: MeetingMediaTime(value: 100, timescale: 1),
+                presentationEnd: MeetingMediaTime(value: 120, timescale: 1),
+                discontinuities: [], sha256: "x", byteCount: 1,
+                finalizationState: .finalized
+            )],
+            captureMethod: .avCaptureSession,
+            captureEras: [
+                MeetingCaptureEra(
+                    method: .voiceProcessing, deviceUID: "mic", deviceName: "Mic",
+                    roleAtElection: .unknown, echoProtection: .voiceProcessed, startSeconds: 0
+                ),
+                MeetingCaptureEra(
+                    method: .avCaptureSession, deviceUID: "mic", deviceName: "Mic",
+                    roleAtElection: .unknown, echoProtection: .unprotected, startSeconds: 110
+                ),
+            ]
+        )
+        let gaps = MeetingProcessingPipeline.microphoneCoverageGaps(track: track, origin: 100)
+        XCTAssertEqual(gaps, [MeetingTranscriptCoverageGap(
+            trackID: trackID, start: 10, end: 20, reason: .unprotectedMicrophone
+        )])
     }
 
     // MARK: - Commit gate
@@ -500,7 +618,8 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         )
         XCTAssertEqual(elected.identity.captureDeviceID, "core-id")
         XCTAssertEqual(elected.identity.avCaptureDeviceID, "legacy-av")
-        XCTAssertEqual(elected.role, .personal)
+        XCTAssertEqual(elected.role, .unknown)
+        XCTAssertEqual(elected.identity.role, .unknown)
 
         let ambiguous = [
             MeetingAVCaptureDeviceDescriptor(uniqueID: "legacy-av", displayName: "Shared Name"),
@@ -780,7 +899,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(selection.role, .unknown)
     }
 
-    func testPreselectionReusesSavedRoleOnlyWhenDeviceMatchesSaved() {
+    func testPreselectionNeutralizesSavedRoleEvenWhenDeviceMatches() {
         let identities = [self.identity("saved", uid: "saved-uid", role: .personal)]
         let selection = MeetingMicrophonePreselection.select(
             identities: identities,
@@ -791,7 +910,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
             systemDefaultCaptureID: nil
         )
         XCTAssertEqual(selection.deviceID, "saved")
-        XCTAssertEqual(selection.role, .personal)
+        XCTAssertEqual(selection.role, .unknown)
     }
 
     /// System default → preferred input UID → `AVCaptureDevice.default` unique ID → first identity.

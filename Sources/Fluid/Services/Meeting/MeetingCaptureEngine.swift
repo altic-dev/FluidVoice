@@ -75,22 +75,35 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                   let microphoneWriter = writersByKind[.microphone]
             else { throw MeetingCaptureError.applicationNotSelected }
 
+            let outputRoute = Self.currentOutputRouteSnapshot()
             let decision = MeetingCapturePathDecider.decide(
                 mode: configuration.mode,
                 microphone: configuration.microphone,
-                outputRoute: Self.currentOutputRouteSnapshot()
+                outputRoute: outputRoute
             )
             switch decision {
             case let .screenCaptureKit(reason):
+                let protection = MeetingRawMicrophoneProtection.classify(outputRoute)
                 DebugLogger.shared.log(
                     "Meeting voice-processing capture declined: \(reason)",
                     source: "MeetingCaptureEngine"
                 )
                 eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
+                try await microphoneWriter.updateTrackMetadata { track in
+                    track.captureEras = [MeetingCaptureEra(
+                        method: .screenCaptureKit,
+                        deviceUID: configuration.microphone.coreAudioUID,
+                        deviceName: configuration.microphone.displayName,
+                        roleAtElection: configuration.microphone.role,
+                        echoProtection: protection,
+                        startSeconds: 0
+                    )]
+                }
                 runtime = try await ScreenCaptureMeetingRuntime.make(
                     application: application,
                     microphone: configuration.microphone,
                     includeMicrophone: true,
+                    microphoneEchoProtection: protection,
                     applicationWriter: applicationWriter,
                     microphoneWriter: microphoneWriter,
                     eventHandler: eventHandler,
@@ -326,8 +339,42 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             deviceExists: true,
             isBluetooth: device.isBluetooth,
             isBuiltIn: device.isBuiltIn,
-            isHeadphonesDataSource: AudioDevice.outputDataSourceIsHeadphones(device.id)
+            isHeadphonesDataSource: AudioDevice.outputDataSourceIsHeadphones(device.id),
+            terminalTypes: Self.outputTerminalTypes(deviceID: device.id)
         )
+    }
+
+    private static func outputTerminalTypes(deviceID: AudioObjectID) -> Set<UInt32> {
+        var streamsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var byteCount: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &streamsAddress, 0, nil, &byteCount) == noErr,
+              byteCount >= UInt32(MemoryLayout<AudioStreamID>.size)
+        else { return [] }
+        var streams = [AudioStreamID](
+            repeating: 0,
+            count: Int(byteCount) / MemoryLayout<AudioStreamID>.size
+        )
+        let streamStatus = streams.withUnsafeMutableBytes { bytes in
+            AudioObjectGetPropertyData(deviceID, &streamsAddress, 0, nil, &byteCount, bytes.baseAddress!)
+        }
+        guard streamStatus == noErr else { return [] }
+        return Set(streams.compactMap { streamID in
+            var terminalAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioStreamPropertyTerminalType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var terminalType: UInt32 = kAudioStreamTerminalTypeUnknown
+            var terminalSize = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioObjectGetPropertyData(
+                streamID, &terminalAddress, 0, nil, &terminalSize, &terminalType
+            ) == noErr else { return nil }
+            return terminalType
+        })
     }
 
     private nonisolated static func preflightStorage(at directory: URL) throws {
@@ -390,6 +437,10 @@ nonisolated enum MeetingWindowSelector {
 private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCaptureRuntime, SCStreamOutput, SCStreamDelegate,
     @unchecked Sendable
 {
+    /// HAL notifications can arrive while the default input/output pair is still converging.
+    /// Admission stays closed until the latest route revision has settled.
+    private static let rawRouteSettleSeconds: Double = 0.75
+
     private struct BuiltStream {
         let stream: SCStream
         let delegateProxy: ScreenCaptureRuntimeDelegateProxy
@@ -403,6 +454,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private let microphone: MeetingMicrophoneIdentity
     /// Immutable for the runtime's lifetime: a rebuild never drops/adds the mic.
     private let includeMicrophone: Bool
+    private let microphoneTranscriptGate: MeetingMicrophoneTranscriptGate
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
@@ -415,6 +467,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private var rebuilding = false
     private var pendingStream: SCStream?
     private var pendingStreamFailed = false
+    private var outputRouteListener: MeetingOutputRouteListener?
+    private var outputRouteRevision: UInt64 = 0
+    private var routeSafetyPersistenceFailed = false
+    private let routeProtectionTasks = MeetingAsyncTaskChain()
 
     var captureScope: MeetingCaptureScope? {
         self.stateLock.withLock { self.scope }
@@ -426,6 +482,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         application: MeetingApplicationIdentity,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
+        microphoneEchoProtection: MeetingMicrophoneEchoProtection,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
@@ -436,6 +493,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         self.application = application
         self.microphone = microphone
         self.includeMicrophone = includeMicrophone
+        self.microphoneTranscriptGate = MeetingMicrophoneTranscriptGate(
+            includeMicrophone ? .unprotected : microphoneEchoProtection
+        )
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
@@ -447,6 +507,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         application: MeetingApplicationIdentity,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool = true,
+        microphoneEchoProtection: MeetingMicrophoneEchoProtection = .unprotected,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
@@ -466,6 +527,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             application: application,
             microphone: resolvedMicrophone,
             includeMicrophone: includeMicrophone,
+            microphoneEchoProtection: microphoneEchoProtection,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
             eventHandler: eventHandler,
@@ -572,10 +634,54 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     func start() async throws {
+        var installedListener: MeetingOutputRouteListener?
+        if self.includeMicrophone {
+            // Arm observation before promoting raw microphone admission. This closes the snapshot →
+            // stream-start hole: a route notification racing startup increments the revision and
+            // prevents the stale protection snapshot from opening the gate.
+            installedListener = await MeetingOutputRouteListener.make { [weak self] in
+                self?.invalidateRawMicrophoneAdmissionAfterRouteChange()
+            }
+            let baselineRevision = self.stateLock.withLock { () -> UInt64 in
+                self.outputRouteListener = installedListener
+                return self.outputRouteRevision
+            }
+            // Listener failure degrades transcript admission, never the recording itself.
+            let protection: MeetingMicrophoneEchoProtection = installedListener == nil
+                ? .unprotected
+                : MeetingRawMicrophoneProtection.classify(MeetingCaptureEngine.currentOutputRouteSnapshot())
+            do {
+                try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
+                    guard var eras = track.captureEras, !eras.isEmpty else { return }
+                    eras[eras.index(before: eras.endIndex)].echoProtection = protection
+                    track.captureEras = eras
+                }
+            } catch {
+                await installedListener?.stop()
+                self.stateLock.withLock { self.outputRouteListener = nil }
+                throw error
+            }
+            await self.routeProtectionTasks.drain()
+            let routeStayedStable = self.stateLock.withLock {
+                self.outputRouteRevision == baselineRevision && !self.stopping
+            }
+            if !routeStayedStable {
+                // A callback may have raced and completed before the startup metadata write. Make
+                // the final persisted state fail-closed as well as the already-closed live gate.
+                try await self.microphoneWriter.updateTrackMetadata { track in
+                    guard var eras = track.captureEras, !eras.isEmpty else { return }
+                    eras[eras.index(before: eras.endIndex)].echoProtection = .unprotected
+                    track.captureEras = eras
+                }
+            }
+            self.microphoneTranscriptGate.update(routeStayedStable ? protection : .unprotected)
+        }
         let currentStream = self.stateLock.withLock { self.stream }
         do {
             try await currentStream.startCapture()
         } catch {
+            await installedListener?.stop()
+            self.stateLock.withLock { self.outputRouteListener = nil }
             throw MeetingCaptureError.captureStartFailed(error.localizedDescription)
         }
     }
@@ -586,6 +692,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop) }
         #endif
         self.markStopping()
+        let routeListener = self.stateLock.withLock { () -> MeetingOutputRouteListener? in
+            defer { self.outputRouteListener = nil }
+            return self.outputRouteListener
+        }
+        await routeListener?.stop()
+        await self.routeProtectionTasks.drain()
         let (currentStream, streamAlreadyDead) = self.stateLock.withLock { (self.stream, self.rebuilding) }
         // Mid-rebuild the current stream already stopped on its own; stopCapture would only time out.
         guard !streamAlreadyDead else { return }
@@ -624,11 +736,134 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             self.liveAudioHandler?(.applicationAudio, sampleBuffer)
         case .microphone:
             self.microphoneWriter.enqueue(sampleBuffer)
-            self.liveAudioHandler?(.microphone, sampleBuffer)
+            if self.microphoneTranscriptGate.observeAndAdmit(sampleBuffer) {
+                self.liveAudioHandler?(.microphone, sampleBuffer)
+            }
         case .screen:
             break
         @unknown default:
             break
+        }
+    }
+
+    /// A raw ScreenCaptureKit microphone has no producer handoff. Close live admission at the
+    /// observation boundary and persist a new unprotected era from that point forward. Historical
+    /// audio remains classified by the route on which it was actually captured.
+    private func invalidateRawMicrophoneAdmissionAfterRouteChange() {
+        let revision = self.stateLock.withLock { () -> UInt64? in
+            guard !self.stopping else { return nil }
+            self.outputRouteRevision &+= 1
+            return self.outputRouteRevision
+        }
+        guard let revision else { return }
+        let boundary = self.microphoneTranscriptGate.invalidate()
+        self.routeProtectionTasks.enqueue { [weak self] in
+            guard let self else { return }
+            let invalidationPersisted: Bool
+            do {
+                try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
+                    guard var eras = track.captureEras, !eras.isEmpty else { return }
+                    if let boundary {
+                        if boundary.unsafeStartSeconds > (eras.last?.startSeconds ?? -.infinity) {
+                            var unsafeEra = eras[eras.index(before: eras.endIndex)]
+                            unsafeEra.echoProtection = .unprotected
+                            unsafeEra.startSeconds = boundary.unsafeStartSeconds
+                            unsafeEra.settledConfig = nil
+                            unsafeEra.clockDrift = nil
+                            eras.append(unsafeEra)
+                        } else {
+                            eras[eras.index(before: eras.endIndex)].echoProtection = .unprotected
+                        }
+                    } else {
+                        // No sample boundary exists yet, but admission remains fail-closed while
+                        // the input/output route pair settles.
+                        eras[eras.index(before: eras.endIndex)].echoProtection = .unprotected
+                    }
+                    track.captureEras = eras
+                }
+                invalidationPersisted = true
+            } catch {
+                invalidationPersisted = false
+                DebugLogger.shared.warning(
+                    "Raw microphone route safety could not be persisted; transcript admission remains closed: \(error.localizedDescription)",
+                    source: "MeetingCaptureEngine"
+                )
+                let shouldEmit = self.stateLock.withLock { () -> Bool in
+                    guard !self.routeSafetyPersistenceFailed else { return false }
+                    self.routeSafetyPersistenceFailed = true
+                    self.stopping = true
+                    return true
+                }
+                if shouldEmit {
+                    self.eventHandler(.interrupted(
+                        kind: .captureStoppedUnexpectedly,
+                        trackID: self.microphoneWriter.trackID,
+                        detail: "Microphone route safety metadata could not be saved; recording was stopped fail-closed."
+                    ))
+                }
+            }
+
+            guard invalidationPersisted else { return }
+            try? await Task.sleep(nanoseconds: UInt64(Self.rawRouteSettleSeconds * 1_000_000_000))
+            let isLatestBeforeClassification = self.stateLock.withLock {
+                self.outputRouteRevision == revision && !self.stopping
+            }
+            guard isLatestBeforeClassification else { return }
+
+            let settledProtection = MeetingRawMicrophoneProtection.classify(
+                MeetingCaptureEngine.currentOutputRouteSnapshot()
+            )
+            guard settledProtection.admitsTranscript else {
+                self.eventHandler(.interrupted(
+                    kind: .microphoneChanged,
+                    trackID: self.microphoneWriter.trackID,
+                    detail: "Microphone transcript admission remains disabled because the output route is not echo-protected."
+                ))
+                return
+            }
+            // A nil boundary means the route changed before the first microphone buffer. In that
+            // case no historical samples can be blessed accidentally, so era zero may be updated
+            // directly after the settled route has been positively classified.
+            let resumeAt = self.microphoneTranscriptGate.invalidate()?.observedSeconds
+
+            let resumePersisted: Bool
+            var wroteResumeEra = false
+            do {
+                try await self.microphoneWriter.updateTrackMetadata { track in
+                    guard var eras = track.captureEras, !eras.isEmpty else { return }
+                    if let resumeAt {
+                        guard resumeAt > (eras.last?.startSeconds ?? -.infinity) else { return }
+                        var resumedEra = eras[eras.index(before: eras.endIndex)]
+                        resumedEra.echoProtection = settledProtection
+                        resumedEra.startSeconds = resumeAt
+                        eras.append(resumedEra)
+                    } else {
+                        eras[eras.index(before: eras.endIndex)].echoProtection = settledProtection
+                    }
+                    track.captureEras = eras
+                    wroteResumeEra = true
+                }
+                resumePersisted = wroteResumeEra
+            } catch {
+                resumePersisted = false
+                DebugLogger.shared.warning(
+                    "Settled raw microphone protection could not be persisted; transcript admission remains closed: \(error.localizedDescription)",
+                    source: "MeetingCaptureEngine"
+                )
+            }
+            let isLatestAfterPersistence = self.stateLock.withLock {
+                self.outputRouteRevision == revision && !self.stopping
+            }
+            if resumePersisted, isLatestAfterPersistence {
+                self.microphoneTranscriptGate.update(settledProtection)
+            }
+            self.eventHandler(.interrupted(
+                kind: .microphoneChanged,
+                trackID: self.microphoneWriter.trackID,
+                detail: resumePersisted && isLatestAfterPersistence
+                    ? "Microphone transcript admission resumed after the output route settled."
+                    : "Microphone transcript admission remains disabled after the output route changed."
+            ))
         }
     }
 
@@ -1759,10 +1994,113 @@ nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
     var isBluetooth: Bool
     var isBuiltIn: Bool
     var isHeadphonesDataSource: Bool
+    var terminalTypes: Set<UInt32> = []
 }
 
-/// Pure decision table. Requires `role == .personal` — the election does too; role-blind VPIO
-/// would capture cleanly but never attribute.
+nonisolated enum MeetingRawMicrophoneProtection {
+    /// Closed must be positively identified. Unknown, aggregate, HDMI, virtual, and speaker
+    /// routes remain unprotected even when they are not the built-in speakers.
+    static func classify(_ route: MeetingOutputRouteSnapshot) -> MeetingMicrophoneEchoProtection {
+        guard route.deviceExists else { return .unprotected }
+        if (route.isBuiltIn && route.isHeadphonesDataSource)
+            || route.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones)
+        {
+            return .acousticallyClosed
+        }
+        return .unprotected
+    }
+}
+
+final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
+    /// Core Audio notifications are asynchronous relative to the physical route switch. Rewind the
+    /// persisted cut slightly so callback latency cannot bless the first speaker-leak buffers.
+    static let routeNotificationSafetySeconds: Double = 0.5
+    private let lock = NSLock()
+    private var protection: MeetingMicrophoneEchoProtection
+    private var latestPresentationSeconds: Double?
+
+    init(_ protection: MeetingMicrophoneEchoProtection = .unprotected) {
+        self.protection = protection
+    }
+
+    func update(_ protection: MeetingMicrophoneEchoProtection) {
+        self.lock.withLock { self.protection = protection }
+    }
+
+    func admitsTranscript() -> Bool {
+        self.lock.withLock { self.protection.admitsTranscript }
+    }
+
+    /// Atomically observes the sample boundary and decides live admission. A route callback taking
+    /// the same lock therefore has an exact conservative cut: samples ordered after invalidation
+    /// cannot leak into live transcription under the prior route's protection.
+    func observeAndAdmit(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        return self.lock.withLock {
+            if time.isValid, time.isNumeric {
+                let seconds = CMTimeGetSeconds(time)
+                if seconds.isFinite {
+                    self.latestPresentationSeconds = max(self.latestPresentationSeconds ?? seconds, seconds)
+                }
+            }
+            return self.protection.admitsTranscript
+        }
+    }
+
+    /// Closes admission first and returns the last observed sample PTS. Using that PTS as the next
+    /// era boundary deliberately excludes the final pre-notification buffer as a safety margin.
+    struct InvalidationBoundary: Equatable, Sendable {
+        let unsafeStartSeconds: Double
+        let observedSeconds: Double
+    }
+
+    func invalidate() -> InvalidationBoundary? {
+        self.lock.withLock {
+            self.protection = .unprotected
+            return self.latestPresentationSeconds.map { observed in
+                InvalidationBoundary(
+                    unsafeStartSeconds: max(0, observed - Self.routeNotificationSafetySeconds),
+                    observedSeconds: observed
+                )
+            }
+        }
+    }
+
+    func latestObservedSeconds() -> Double? {
+        self.lock.withLock { self.latestPresentationSeconds }
+    }
+}
+
+/// Serializes route-protection manifest updates without ever blocking an audio callback.
+final nonisolated class MeetingAsyncTaskChain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tail: Task<Void, Never>?
+    private var generation: UInt64 = 0
+
+    @discardableResult
+    func enqueue(_ operation: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
+        self.lock.withLock {
+            self.generation &+= 1
+            let predecessor = self.tail
+            let task = Task {
+                await predecessor?.value
+                await operation()
+            }
+            self.tail = task
+            return task
+        }
+    }
+
+    func drain() async {
+        while true {
+            let snapshot = self.lock.withLock { (self.generation, self.tail) }
+            await snapshot.1?.value
+            if self.lock.withLock({ self.generation == snapshot.0 }) { return }
+        }
+    }
+}
+
+/// Pure decision table. Capture safety is independent of semantic speaker ownership.
 nonisolated enum MeetingCapturePathDecider {
     static func decide(
         mode: MeetingCaptureMode,
@@ -1771,9 +2109,6 @@ nonisolated enum MeetingCapturePathDecider {
     ) -> MeetingCapturePathDecision {
         guard mode == .onlineCall else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
-        }
-        guard microphone.role == .personal else {
-            return .screenCaptureKit(reason: "Microphone role is not set to personal.")
         }
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
             return .screenCaptureKit(reason: "The selected microphone has no CoreAudio device UID.")
@@ -2324,7 +2659,8 @@ nonisolated enum MeetingVoiceProcessingDriftSnapshot {
 }
 
 
-/// Device election for a capture-side swap: prefers the system default input; role transfers only when it equals the saved/original device.
+/// Device election for a capture-side swap. Role is retained in the schema for old manifests but
+/// never inferred or used by new capture decisions.
 nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
     var identity: MeetingMicrophoneIdentity
     var role: MeetingMicrophoneRole
@@ -2345,10 +2681,14 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
         defaultInputUID: String?
     ) -> MeetingCaptureDeviceElection {
         guard let defaultInputUID else {
-            return MeetingCaptureDeviceElection(identity: original, role: original.role)
+            var neutral = original
+            neutral.role = .unknown
+            return MeetingCaptureDeviceElection(identity: neutral, role: .unknown)
         }
         guard let matched = catalog.first(where: { $0.coreAudioUID == defaultInputUID }) else {
-            return MeetingCaptureDeviceElection(identity: original, role: original.role)
+            var neutral = original
+            neutral.role = .unknown
+            return MeetingCaptureDeviceElection(identity: neutral, role: .unknown)
         }
         let isSamePhysicalDevice = {
             if let originalUID = original.coreAudioUID, !originalUID.isEmpty,
@@ -2360,21 +2700,19 @@ nonisolated struct MeetingCaptureDeviceElection: Sendable, Equatable {
         }()
         if isSamePhysicalDevice {
             var merged = matched
-            merged.role = original.role
+            merged.role = .unknown
             merged.avCaptureDeviceID = original.avCaptureDeviceID
                 ?? (original.identitySchemaVersion == nil ? original.captureDeviceID : nil)
-            return MeetingCaptureDeviceElection(identity: merged, role: original.role)
+            return MeetingCaptureDeviceElection(identity: merged, role: .unknown)
         }
-        // A built-in mic is inherently the owner's; .unknown would block VPIO on upgrades.
-        let role: MeetingMicrophoneRole = matched.coreAudioUID == "BuiltInMicrophoneDevice" ? .personal : .unknown
         return MeetingCaptureDeviceElection(
             identity: MeetingMicrophoneIdentity(
                 captureDeviceID: matched.captureDeviceID,
                 coreAudioUID: matched.coreAudioUID,
                 displayName: matched.displayName,
-                role: role
+                role: .unknown
             ),
-            role: role
+            role: .unknown
         )
     }
 }
@@ -2424,8 +2762,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private var pendingAVCaptureFailure: (generation: UInt64, detail: String)?
     private var avCaptureFailureToken: MeetingAVCaptureAttemptToken?
     private var routeChangeDirty = false
+    private var routeSafetyPersistenceFailed = false
     private var stopRequested = false
     private var routeDrivenFallback = false
+    private let routeProtectionTasks = MeetingAsyncTaskChain()
+    /// Pessimistically closed as soon as a route change is observed. A producer may reopen live
+    /// admission only as part of the same commit that persists its new era.
+    private let transcriptGate = MeetingMicrophoneTranscriptGate()
     private var voiceProcessingRecoveryAttempts = 0
     private var recoveryDwellTask: Task<Void, Never>?
     /// Parked before `start()` so stop/supersede can never lose ownership of it.
@@ -2504,10 +2847,34 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             gateToAbort.abort()
             await captureToStop.stop()
             await self.stopAppOnlyIfStarted()
+            let fallbackProtection = MeetingRawMicrophoneProtection.classify(
+                MeetingCaptureEngine.currentOutputRouteSnapshot()
+            )
+            let preFallbackTrack = await self.microphoneWriter.snapshot()
+            guard preFallbackTrack.chunks.isEmpty,
+                  preFallbackTrack.captureEras?.isEmpty != false
+            else {
+                throw MeetingCaptureError.captureStartFailed(
+                    "Voice-processing fallback refused because microphone audio provenance was already committed."
+                )
+            }
+            try await self.microphoneWriter.updateTrackMetadata { track in
+                track.captureMethod = .screenCaptureKit
+                track.voiceProcessingConfig = nil
+                track.captureEras = [MeetingCaptureEra(
+                    method: .screenCaptureKit,
+                    deviceUID: self.originalMicrophone.coreAudioUID,
+                    deviceName: self.originalMicrophone.displayName,
+                    roleAtElection: self.originalMicrophone.role,
+                    echoProtection: fallbackProtection,
+                    startSeconds: 0
+                )]
+            }
             let fallback = try await ScreenCaptureMeetingRuntime.make(
                 application: self.application,
                 microphone: self.originalMicrophone,
                 includeMicrophone: true,
+                microphoneEchoProtection: fallbackProtection,
                 applicationWriter: self.applicationWriter,
                 microphoneWriter: self.microphoneWriter,
                 eventHandler: self.eventHandler,
@@ -2522,6 +2889,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private func attemptVoiceProcessingStart() async throws {
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let transcriptGate = self.transcriptGate
         let gate = self.gate
         let fence = self.currentFence
         let capture = self.stateLock.withLock { self.micCapture }
@@ -2533,7 +2901,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 switch gate.offer(sample) {
                 case .passthrough:
                     microphoneWriter.enqueue(sample)
-                    liveAudioHandler?(.microphone, sample)
+                    if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                 case .buffered, .aborted:
                     break
                 }
@@ -2577,10 +2945,12 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 deviceUID: self.originalMicrophone.coreAudioUID,
                 deviceName: self.originalMicrophone.displayName,
                 roleAtElection: self.originalMicrophone.role,
+                echoProtection: .voiceProcessed,
                 startSeconds: 0,
                 settledConfig: settled
             )]
         }
+        self.transcriptGate.update(.voiceProcessed)
         while true {
             await self.flushBatch(batch)
             guard let next = self.gate.continueCommitFlush() else { break }
@@ -2609,7 +2979,9 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private func flushBatch(_ samples: [CMSampleBuffer]) async {
         for (index, sample) in samples.enumerated() {
             self.microphoneWriter.enqueue(sample)
-            self.liveAudioHandler?(.microphone, sample)
+            if self.transcriptGate.observeAndAdmit(sample) {
+                self.liveAudioHandler?(.microphone, sample)
+            }
             if index % 4 == 3 {
                 try? await Task.sleep(nanoseconds: 5_000_000)
             }
@@ -2719,17 +3091,26 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
 
     private func handleRouteChange() {
         enum Action { case evaluateVPIO, evaluateAVCapture, none }
+        let outputRoute = MeetingCaptureEngine.currentOutputRouteSnapshot()
+        let vpioDeclineReason = MeetingCapturePathDecider.outputRouteDeclineReason(outputRoute)
         let action = self.stateLock.withLock { () -> Action in
+            guard !self.stopRequested else { return .none }
             switch self.phase {
             case .vpio:
+                // VPIO remains echo-safe across notifications that do not actually make its route
+                // unsupported. This filters unrelated/default-device property churn.
+                guard vpioDeclineReason != nil else { return .none }
+                self.persistRouteInvalidation(self.transcriptGate.invalidate())
                 return .evaluateVPIO
             case .avCapture:
+                self.persistRouteInvalidation(self.transcriptGate.invalidate())
                 // Claim the observation before releasing the lock. If recovery wins
                 // the next lock acquisition, finishTransition() will replay it
                 // against whichever backend commits.
                 self.routeChangeDirty = true
                 return .evaluateAVCapture
             case .transitioning, .committing:
+                self.persistRouteInvalidation(self.transcriptGate.invalidate())
                 self.routeChangeDirty = true
                 return .none
             case .starting, .failed:
@@ -2738,8 +3119,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
         switch action {
         case .evaluateVPIO:
-            let reason = MeetingCapturePathDecider.outputRouteDeclineReason(MeetingCaptureEngine.currentOutputRouteSnapshot())
-            if let reason {
+            if let reason = vpioDeclineReason {
                 self.beginDowngradeTransition(
                     reason: "Output route changed: \(reason)",
                     routeDriven: true
@@ -2755,6 +3135,78 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         case .none:
             break
         }
+    }
+
+    /// Persists the same fail-closed boundary used by live admission. The task chain keeps rapid
+    /// attach/detach notifications ordered without blocking the Core Audio notification callback.
+    private func persistRouteInvalidation(_ boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?) {
+        self.routeProtectionTasks.enqueue { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
+                    guard var eras = track.captureEras, !eras.isEmpty else { return }
+                    if let boundary,
+                       boundary.unsafeStartSeconds > (eras.last?.startSeconds ?? -.infinity)
+                    {
+                        var unprotected = eras[eras.index(before: eras.endIndex)]
+                        unprotected.echoProtection = .unprotected
+                        unprotected.startSeconds = boundary.unsafeStartSeconds
+                        unprotected.settledConfig = nil
+                        unprotected.clockDrift = nil
+                        eras.append(unprotected)
+                    } else {
+                        eras[eras.index(before: eras.endIndex)].echoProtection = .unprotected
+                    }
+                    track.captureEras = eras
+                }
+            } catch {
+                let shouldEmit = self.stateLock.withLock { () -> Bool in
+                    guard !self.routeSafetyPersistenceFailed else { return false }
+                    self.routeSafetyPersistenceFailed = true
+                    self.phase = .failed
+                    self.interruptedThisEra = true
+                    return true
+                }
+                if shouldEmit {
+                    self.eventHandler(.interrupted(
+                        kind: .captureStoppedUnexpectedly,
+                        trackID: self.microphoneWriter.trackID,
+                        detail: "Microphone route safety metadata could not be saved; recording was stopped fail-closed."
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Reopens a raw era only after a matching protected boundary is durable. The gap between the
+    /// rewound invalidation cut and this observation absorbs route-notification latency.
+    private func persistRawRouteResume(_ protection: MeetingMicrophoneEchoProtection) async -> Bool {
+        guard protection.admitsTranscript,
+              let boundarySeconds = self.transcriptGate.latestObservedSeconds()
+        else { return false }
+        await self.routeProtectionTasks.drain()
+        var recorded = false
+        try? await self.microphoneWriter.updateTrackMetadata { track in
+            guard var eras = track.captureEras, !eras.isEmpty,
+                  boundarySeconds > (eras.last?.startSeconds ?? -.infinity)
+            else { return }
+            var resumed = eras[eras.index(before: eras.endIndex)]
+            resumed.echoProtection = protection
+            resumed.startSeconds = boundarySeconds
+            resumed.settledConfig = nil
+            resumed.clockDrift = nil
+            eras.append(resumed)
+            track.captureEras = eras
+            recorded = true
+        }
+        return recorded
+    }
+
+    /// A route event observed during a commit keeps the gate closed; `finishTransition` replays it
+    /// against the newly committed backend instead of briefly admitting audio under stale facts.
+    private func publishTranscriptProtection(_ protection: MeetingMicrophoneEchoProtection) {
+        let mayOpen = self.stateLock.withLock { !self.routeChangeDirty && !self.stopRequested }
+        self.transcriptGate.update(mayOpen ? protection : .unprotected)
     }
 
     private func handleMicEvent(_ event: MeetingMicrophoneCaptureEvent, owner: MeetingMicrophoneCapture) {
@@ -2857,6 +3309,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private func beginDowngradeTransition(detail: String, routeDriven: Bool = false) {
         let watchdog = self.stateLock.withLock { () -> Task<Void, Never>? in
             guard self.phase == .vpio, !self.stopRequested else { return nil }
+            self.transcriptGate.update(.unprotected)
             self.phase = .transitioning
             self.transitionGeneration &+= 1
             let generation = self.transitionGeneration
@@ -2914,6 +3367,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let newGate = MeetingVoiceProcessingCommitGate()
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let transcriptGate = self.transcriptGate
         let failureToken = MeetingAVCaptureAttemptToken()
         guard self.stateLock.withLock({ () -> Bool in
             guard self.phase == .transitioning,
@@ -2936,7 +3390,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     switch newGate.offer(sample) {
                     case .passthrough:
                         microphoneWriter.enqueue(sample)
-                        liveAudioHandler?(.microphone, sample)
+                        if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break
                     }
@@ -3041,7 +3495,11 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             break
         }
 
+        await self.routeProtectionTasks.drain()
         let boundary = await self.microphoneWriter.beginSplice()
+        let rawProtection = MeetingRawMicrophoneProtection.classify(
+            MeetingCaptureEngine.currentOutputRouteSnapshot()
+        )
 
         // A nil or non-monotonic boundary would misattribute audio; skip the era record instead.
         var recordedNewEra = false
@@ -3058,6 +3516,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     deviceUID: elected.identity.coreAudioUID,
                     deviceName: elected.identity.displayName,
                     roleAtElection: elected.role,
+                    echoProtection: rawProtection,
                     startSeconds: boundary.seconds
                 ))
                 recordedNewEra = true
@@ -3072,6 +3531,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 "Meeting downgrade: no valid splice boundary (nil or non-monotonic) — the AVCapture era was not recorded; turns after this point stay attributed to the prior era.",
                 source: "MeetingCaptureEngine"
             )
+        } else {
+            self.publishTranscriptProtection(rawProtection)
         }
 
         // Ack before flushing: readers must re-arm before any post-boundary sample reaches them.
@@ -3115,6 +3576,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                   self.avCaptureComponent != nil,
                   !self.stopRequested
             else { return nil }
+            self.transcriptGate.update(.unprotected)
             let previousGeneration = self.transitionGeneration
             self.phase = .transitioning
             self.transitionGeneration &+= 1
@@ -3192,6 +3654,12 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 return (true, replay)
             }
             if restored.restored {
+                let protection = MeetingRawMicrophoneProtection.classify(
+                    MeetingCaptureEngine.currentOutputRouteSnapshot()
+                )
+                if await self.persistRawRouteResume(protection) {
+                    self.publishTranscriptProtection(protection)
+                }
                 self.startAVCaptureWatchdog(generation: previousGeneration, component: oldComponent)
                 if restored.replay { self.handleRouteChange() }
                 self.armSafeVoiceProcessingRecoveryIfViable()
@@ -3217,6 +3685,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
 
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let transcriptGate = self.transcriptGate
         var selectedElection: MeetingCaptureDeviceElection?
         var selectedFence: MeetingEraAcceptanceFence?
         var selectedGate: MeetingVoiceProcessingCommitGate?
@@ -3271,7 +3740,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                         switch candidateGate.offer(sample) {
                         case .passthrough:
                             microphoneWriter.enqueue(sample)
-                            liveAudioHandler?(.microphone, sample)
+                            if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                         case .buffered, .aborted:
                             break
                         }
@@ -3392,7 +3861,12 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             break
         }
 
+        await self.routeProtectionTasks.drain()
         let boundary = await self.microphoneWriter.beginSplice()
+        let rawProtection = MeetingRawMicrophoneProtection.classify(
+            MeetingCaptureEngine.currentOutputRouteSnapshot()
+        )
+        var recordedNewEra = false
         do {
             try await self.microphoneWriter.updateTrackMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
@@ -3402,12 +3876,15 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                         deviceUID: elected.identity.coreAudioUID,
                         deviceName: elected.identity.displayName,
                         roleAtElection: elected.role,
+                        echoProtection: rawProtection,
                         startSeconds: boundary.seconds
                     ))
+                    recordedNewEra = true
                 }
                 track.captureEras = eras
                 track.captureMethod = .avCaptureSession
             }
+            if recordedNewEra { self.publishTranscriptProtection(rawProtection) }
         } catch {
             self.invalidateAVCaptureFailureToken(failureToken, generation: generation)
             await newFence.quiesce()
@@ -3469,11 +3946,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     }
 
     private func legacyEra(from track: MeetingAudioTrack) -> MeetingCaptureEra {
-        MeetingCaptureEra(
-            method: track.captureMethod ?? .voiceProcessing,
+        let method = track.captureMethod ?? .voiceProcessing
+        return MeetingCaptureEra(
+            method: method,
             deviceUID: self.originalMicrophone.coreAudioUID,
             deviceName: self.originalMicrophone.displayName,
             roleAtElection: self.originalMicrophone.role,
+            echoProtection: method == .voiceProcessing ? .voiceProcessed : .legacyUnclassified,
             startSeconds: 0,
             settledConfig: track.voiceProcessingConfig,
             clockDrift: track.clockDrift
@@ -3600,6 +4079,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let oldComponent = self.stateLock.withLock { self.avCaptureComponent }
         await oldFence.quiesce()
 
+        await self.routeProtectionTasks.drain()
         let boundary = await self.microphoneWriter.beginSplice()
         let boundaryTime = boundary.map { CMTime(value: $0.value, timescale: $0.timescale) }
 
@@ -3621,6 +4101,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     deviceUID: elected.identity.coreAudioUID,
                     deviceName: elected.identity.displayName,
                     roleAtElection: elected.role,
+                    echoProtection: .voiceProcessed,
                     startSeconds: boundary.seconds,
                     settledConfig: settled
                 ))
@@ -3635,6 +4116,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 "Meeting upgrade: no valid splice boundary (nil or non-monotonic) — the voice-processing era was not recorded; turns after this point stay attributed to the prior era.",
                 source: "MeetingCaptureEngine"
             )
+        } else {
+            self.publishTranscriptProtection(.voiceProcessed)
         }
 
         // Awaited: the MainActor hop (filter re-arm, history entry) must land before the gate opens.
@@ -3739,6 +4222,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                       outputRoute: outputRoute
                   )
             else { return false }
+            self.transcriptGate.update(.unprotected)
             self.phase = .transitioning
             self.transitionGeneration &+= 1
             let generation = self.transitionGeneration
@@ -3826,6 +4310,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             return
         }
 
+        await self.routeProtectionTasks.drain()
         let boundary = await self.microphoneWriter.beginSplice()
         guard self.ownsSafeRecovery(generation) else {
             self.finishTransition(generation)
@@ -3856,6 +4341,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let candidateFence = MeetingEraAcceptanceFence()
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let transcriptGate = self.transcriptGate
         let parked = self.stateLock.withLock { () -> Bool in
             guard self.phase == .transitioning,
                   self.transitionGeneration == generation,
@@ -3885,7 +4371,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     switch candidateGate.offer(sample) {
                     case .passthrough:
                         microphoneWriter.enqueue(sample)
-                        liveAudioHandler?(.microphone, sample)
+                        if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break
                     }
@@ -3967,6 +4453,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
 
         let settled = await candidate!.settledConfiguration()
+        var recordedNewEra = false
         do {
             try await self.microphoneWriter.updateTrackMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
@@ -3976,14 +4463,17 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                         deviceUID: elected.identity.coreAudioUID,
                         deviceName: elected.identity.displayName,
                         roleAtElection: elected.role,
+                        echoProtection: .voiceProcessed,
                         startSeconds: boundary.seconds,
                         settledConfig: settled
                     ))
+                    recordedNewEra = true
                 }
                 track.captureEras = eras
                 track.captureMethod = .voiceProcessing
                 track.voiceProcessingConfig = settled
             }
+            if recordedNewEra { self.publishTranscriptProtection(.voiceProcessed) }
         } catch {
             await self.retirePendingVoiceProcessingCapture(generation: generation)
             candidate = nil
@@ -4076,7 +4566,11 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let token = MeetingAVCaptureAttemptToken()
         let microphoneWriter = self.microphoneWriter
         let liveAudioHandler = self.liveAudioHandler
+        let transcriptGate = self.transcriptGate
         let component: MeetingAVCaptureMicrophoneComponent
+        let rawProtection = MeetingRawMicrophoneProtection.classify(
+            MeetingCaptureEngine.currentOutputRouteSnapshot()
+        )
         do {
             component = try MeetingAVCaptureMicrophoneComponent(
                 microphone: elected.identity,
@@ -4086,7 +4580,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     switch gate.offer(sample) {
                     case .passthrough:
                         microphoneWriter.enqueue(sample)
-                        liveAudioHandler?(.microphone, sample)
+                        if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break
                     }
@@ -4185,6 +4679,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             self.finishTransition(generation)
             return
         }
+        var recordedNewEra = false
         do {
             try await self.microphoneWriter.updateTrackMetadata { track in
                 var eras = track.captureEras ?? [self.legacyEra(from: track)]
@@ -4194,12 +4689,15 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                         deviceUID: elected.identity.coreAudioUID,
                         deviceName: elected.identity.displayName,
                         roleAtElection: elected.role,
+                        echoProtection: rawProtection,
                         startSeconds: boundary.seconds
                     ))
+                    recordedNewEra = true
                 }
                 track.captureEras = eras
                 track.captureMethod = .avCaptureSession
             }
+            if recordedNewEra { self.publishTranscriptProtection(rawProtection) }
         } catch {
             self.invalidateAVCaptureFailureToken(token, generation: generation)
             try? await component.stop()
@@ -4352,6 +4850,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
         watchdog?.cancel()
         await staleListener?.stop()
+        await self.routeProtectionTasks.drain()
 
         if let fallback = self.stateLock.withLock({ self.fallbackRuntime }) {
             try await fallback.stop()

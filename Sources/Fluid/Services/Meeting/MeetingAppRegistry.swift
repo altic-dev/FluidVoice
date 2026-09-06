@@ -60,18 +60,6 @@ nonisolated enum MeetingAppRegistry {
         self.tier(forBundleIdentifier: bundleIdentifier) == .browserTier2
     }
 
-    static func audioProcessBundleIdentifiers(for bundleIdentifier: String) -> Set<String> {
-        self.audioProcessBundleIdentifiersByPrimaryBundleIdentifier[bundleIdentifier] ?? [bundleIdentifier]
-    }
-
-    private static let audioProcessBundleIdentifiersByPrimaryBundleIdentifier: [String: Set<String>] = [
-        "us.zoom.xos": ["us.zoom.xos", "us.zoom.caphost"],
-        "com.microsoft.teams2": ["com.microsoft.teams2"],
-        "com.microsoft.teams": ["com.microsoft.teams"],
-        "com.cisco.webexmeetingsapp": ["com.cisco.webexmeetingsapp"],
-        "Cisco-Systems.Spark": ["Cisco-Systems.Spark"],
-    ]
-
     private static let zoomMeetingTitles: Set<String> = [
         // en
         "Zoom", "Zoom Meeting", "Zoom Webinar",

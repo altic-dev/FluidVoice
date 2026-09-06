@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import CoreAudio
+import Darwin
 import Foundation
 
 // MARK: - Protocols (unit-testable via fakes; no CoreAudio/AX/NSWorkspace in tests)
@@ -51,7 +52,62 @@ protocol MicActivitySignalProviding: AnyObject {
 
 @MainActor
 protocol AudioProcessActivityProviding: AnyObject {
-    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) async -> Bool
+    func snapshot() async -> AudioProcessActivitySnapshot
+}
+
+nonisolated struct AudioProcessDescriptor: Sendable, Equatable {
+    var processID: Int32
+    var bundleIdentifier: String?
+    var executablePath: String?
+    var isInputRunning: Bool
+    var isOutputRunning: Bool
+}
+
+nonisolated struct MeetingProcessOwner: Sendable, Equatable {
+    var processID: Int32
+    var bundleIdentifier: String
+    var bundlePath: String
+}
+
+nonisolated struct AudioProcessActivitySnapshot: Sendable, Equatable {
+    enum QueryState: Sendable, Equatable { case valid, unknown }
+    var processes: [AudioProcessDescriptor]
+    var owners: [MeetingProcessOwner]
+    var queryState: QueryState
+}
+
+/// Maps HAL process objects to the registered native application that owns them. Bundle IDs from
+/// HAL are advisory: helpers frequently report their own (or stale) IDs. Ownership is accepted
+/// only when the live executable is contained in the owning app bundle after symlink resolution.
+/// Ambiguous, missing, or malformed data is deliberately rejected.
+nonisolated enum MeetingAudioProcessResolver {
+    static func activeOwnerInputByPID(snapshot: AudioProcessActivitySnapshot) -> [Int32: Bool]? {
+        guard snapshot.queryState == .valid else { return nil }
+        var matches: [Int32: Bool] = [:]
+        for process in snapshot.processes where process.isInputRunning || process.isOutputRunning {
+            guard let path = canonicalPath(process.executablePath), process.processID > 0 else { return nil }
+            let candidates = snapshot.owners.filter { owner in
+                guard MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: owner.bundleIdentifier),
+                      let ownerPath = canonicalPath(owner.bundlePath), ownerPath.hasSuffix(".app")
+                else { return false }
+                guard path.hasPrefix(ownerPath + "/Contents/") else { return false }
+                // The owner list is built from live NSRunningApplication instances; requiring a
+                // positive PID prevents stale/placeholder identities from matching.
+                return owner.processID > 0
+            }
+            guard candidates.count <= 1 else { return nil }
+            guard let owner = candidates.first else { continue }
+            matches[owner.processID] = (matches[owner.processID] ?? false) || process.isInputRunning
+        }
+        return matches
+    }
+
+    private static func canonicalPath(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        guard path.hasPrefix("/") else { return nil }
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+        return url.path.hasPrefix("/") ? url.path : nil
+    }
 }
 
 nonisolated struct WindowSnapshot: Sendable, Equatable {
@@ -487,18 +543,62 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
 
 @MainActor
 final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
-    func isAudioActive(forBundleIdentifiers bundleIdentifiers: Set<String>) async -> Bool {
-        await AudioTopologyListenerExecution.perform {
-            guard #available(macOS 14.4, *) else { return false }
-            return Self.processObjectIDs().contains { processID in
-                guard let bundleIdentifier = Self.bundleIdentifier(for: processID), bundleIdentifiers.contains(bundleIdentifier) else { return false }
-                return Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningInput)
-                    || Self.isRunning(processID, selector: kAudioProcessPropertyIsRunningOutput)
+    func snapshot() async -> AudioProcessActivitySnapshot {
+        let owners = NSWorkspace.shared.runningApplications.compactMap { app -> MeetingProcessOwner? in
+            guard let bundle = app.bundleIdentifier,
+                  MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: bundle),
+                  !app.isTerminated, app.processIdentifier > 0,
+                  let path = app.bundleURL?.path else { return nil }
+            return MeetingProcessOwner(processID: app.processIdentifier, bundleIdentifier: bundle, bundlePath: path)
+        }
+        return await AudioTopologyListenerExecution.perform {
+            guard #available(macOS 14.4, *) else {
+                return AudioProcessActivitySnapshot(processes: [], owners: [], queryState: .unknown)
             }
+            guard let processIDs = Self.processObjectIDs() else {
+                return AudioProcessActivitySnapshot(processes: [], owners: owners, queryState: .unknown)
+            }
+            var queryFailed = false
+            let processes = processIDs.compactMap { processObjectID -> AudioProcessDescriptor? in
+                guard let input = Self.isRunning(processObjectID, selector: kAudioProcessPropertyIsRunningInput),
+                      let output = Self.isRunning(processObjectID, selector: kAudioProcessPropertyIsRunningOutput)
+                else { queryFailed = true; return nil }
+                guard input || output else { return nil }
+                guard let pid = Self.processID(for: processObjectID), pid > 0,
+                      let path = Self.executablePath(for: pid),
+                      Self.processID(for: processObjectID) == pid
+                else { queryFailed = true; return nil }
+                return AudioProcessDescriptor(
+                    processID: pid,
+                    bundleIdentifier: Self.bundleIdentifier(for: processObjectID),
+                    executablePath: path,
+                    isInputRunning: input,
+                    isOutputRunning: output
+                )
+            }
+            // Missing executable identity is not equivalent to silence. Keep the whole sample
+            // unknown so the detector preserves continuity without inventing an inactive edge.
+            let state: AudioProcessActivitySnapshot.QueryState = queryFailed ? .unknown : .valid
+            return AudioProcessActivitySnapshot(processes: processes, owners: owners, queryState: state)
         }
     }
 
-    nonisolated private static func processObjectIDs() -> [AudioObjectID] {
+    nonisolated private static func processID(for objectID: AudioObjectID) -> Int32? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyPID, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var pid: pid_t = 0
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &pid) == noErr else { return nil }
+        return Int32(pid)
+    }
+
+    nonisolated private static func executablePath(for pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    nonisolated private static func processObjectIDs() -> [AudioObjectID]? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -513,7 +613,8 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         #if DEBUG
         AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: sizeStatus)
         #endif
-        guard sizeStatus == noErr else { return [] }
+        guard sizeStatus == noErr, size % UInt32(MemoryLayout<AudioObjectID>.size) == 0 else { return nil }
+        guard size > 0 else { return [] }
         var processIDs = Array(repeating: AudioObjectID(), count: Int(size) / MemoryLayout<AudioObjectID>.size)
         #if DEBUG
         AudioTopologyDiagnostics.record(.halQueryBegin, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener)
@@ -522,8 +623,8 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         #if DEBUG
         AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: systemObject, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: dataStatus)
         #endif
-        guard dataStatus == noErr else { return [] }
-        return processIDs
+        guard dataStatus == noErr, size % UInt32(MemoryLayout<AudioObjectID>.size) == 0 else { return nil }
+        return Array(processIDs.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
     }
 
     nonisolated private static func bundleIdentifier(for processID: AudioObjectID) -> String? {
@@ -545,7 +646,7 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         return value as String
     }
 
-    nonisolated private static func isRunning(_ processID: AudioObjectID, selector: AudioObjectPropertySelector) -> Bool {
+    nonisolated private static func isRunning(_ processID: AudioObjectID, selector: AudioObjectPropertySelector) -> Bool? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -560,7 +661,8 @@ final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
         #if DEBUG
         AudioTopologyDiagnostics.record(.halQueryEnd, owner: .meetingDetector, objectID: processID, selector: address.mSelector, scope: address.mScope, element: address.mElement, queueRole: .dedicatedControl, phase: .listener, status: status)
         #endif
-        return status == noErr && value != 0
+        guard status == noErr, size == MemoryLayout<UInt32>.size else { return nil }
+        return value != 0
     }
 }
 

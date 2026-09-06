@@ -122,30 +122,34 @@ struct MeetingLiveBubbleRow: View, Equatable {
         lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
     }
 
-    private var isYou: Bool { self.row.speaker == .you }
+    private var isMicrophone: Bool { self.row.speaker == .you }
 
-    /// Same washes as the final transcript: accent for You, the first speaker-palette pastel for Them.
+    private var sourceLabel: String {
+        self.isMicrophone ? "Microphone" : "Meeting audio"
+    }
+
+    /// Distinguish capture sources without claiming that either source belongs to a person.
     private var fill: Color {
-        let base = self.isYou ? self.theme.palette.accent : MeetingSpeakerPalette.tint(forSpeakerIndex: 0)
+        let base = self.isMicrophone ? self.theme.palette.accent : MeetingSpeakerPalette.tint(forSpeakerIndex: 0)
         return base.opacity(self.row.isPartial ? 0.05 : 0.10)
     }
 
     var body: some View {
-        VStack(alignment: self.isYou ? .trailing : .leading, spacing: 4) {
+        VStack(alignment: self.isMicrophone ? .trailing : .leading, spacing: 4) {
             if self.row.showsLabel {
-                Text(self.isYou ? "You" : "Them")
+                Text(self.sourceLabel)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isYou ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                    .foregroundStyle(self.isMicrophone ? self.theme.palette.accent : self.theme.palette.secondaryText)
             }
             Text(self.row.text)
                 // The partial→final color swap solidifies in place; it must never animate.
                 .transaction { $0.animation = nil }
                 .meetingBubbleStyle(.final(fill: self.fill, foreground: self.row.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText))
         }
-        .frame(maxWidth: .infinity, alignment: self.isYou ? .trailing : .leading)
-        .padding(self.isYou ? .leading : .trailing, 32)
+        .frame(maxWidth: .infinity, alignment: self.isMicrophone ? .trailing : .leading)
+        .padding(self.isMicrophone ? .leading : .trailing, 32)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(self.isYou ? "You" : "Them"), \(self.row.text)")
+        .accessibilityLabel("\(self.sourceLabel), \(self.row.text)")
         .accessibilityHidden(self.hidesPartialFromAccessibility && self.row.isPartial)
     }
 }

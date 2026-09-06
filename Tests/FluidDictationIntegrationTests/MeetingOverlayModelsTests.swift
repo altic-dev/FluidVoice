@@ -1,6 +1,8 @@
 @testable import FluidVoice_Debug
+import AppKit
 import CoreGraphics
 import Foundation
+import SwiftUI
 import XCTest
 
 final class MeetingOverlayGeometryTests: XCTestCase {
@@ -28,8 +30,10 @@ final class MeetingOverlayGeometryTests: XCTestCase {
         XCTAssertEqual(MeetingOverlayPresentation.captionsHorizontalInset, 16)
         XCTAssertEqual(MeetingOverlayPresentation.captionsTopInset, 12)
         XCTAssertEqual(MeetingOverlayPresentation.captionsBottomInset, 7)
+        XCTAssertEqual(MeetingOverlayPresentation.captionsControlsHeight, 38)
         XCTAssertEqual(
-            MeetingOverlayPresentation.captionsTopInset
+            MeetingOverlayPresentation.captionsControlsHeight
+                + MeetingOverlayPresentation.captionsTopInset
                 + MeetingOverlayPresentation.captionsContentHeight
                 + MeetingOverlayPresentation.captionsBottomInset,
             MeetingOverlayPresentation.captionsViewportHeight
@@ -40,7 +44,64 @@ final class MeetingOverlayGeometryTests: XCTestCase {
             MeetingOverlayPresentation.captions.visibleSize.width
         )
         XCTAssertEqual(MeetingOverlayPresentation.captionsContentWidth, 308)
-        XCTAssertEqual(MeetingOverlayPresentation.captionsContentHeight, 102)
+        XCTAssertEqual(MeetingOverlayPresentation.captionsContentHeight, 64)
+    }
+
+    func testRollingCaptionLayoutUsesBoundedTextAndKeepsLatestGlyph() {
+        let text = String(repeating: "older words ", count: 500) + "最新の字幕 مرحبا 👩🏽‍💻 é"
+        let layout = MeetingRollingCaptionLayout.make(text)
+        XCTAssertLessThanOrEqual(layout.attributedText.string.count, MeetingRollingCaptionLayout.maximumInputCharacters)
+        XCTAssertNotNil(layout.layoutManager.textStorage)
+        XCTAssertEqual(layout.selectedGlyphRange.upperBound, layout.layoutManager.numberOfGlyphs)
+        XCTAssertEqual(MeetingRollingCaptionLayout.contentSize, CGSize(width: 308, height: 64))
+        XCTAssertTrue(CGRect(origin: .zero, size: MeetingRollingCaptionLayout.contentSize).contains(layout.inkBounds))
+    }
+
+    func testRollingCaptionLayoutHandlesShortUnicodeAndLongUnbrokenTokens() {
+        for text in ["", "短い字幕", "שלום RTL 😀 cafe\u{301}", String(repeating: "x", count: 1200)] {
+            let layout = MeetingRollingCaptionLayout.make(text)
+            XCTAssertNotNil(layout.layoutManager.textStorage)
+            XCTAssertTrue(layout.inkBounds.isEmpty || CGRect(origin: .zero, size: MeetingRollingCaptionLayout.contentSize).contains(layout.inkBounds))
+        }
+    }
+
+    @MainActor
+    func testCaptionHostingFrameNeverGrowsAcrossTextUpdates() {
+        func content(_ text: String) -> some View {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: MeetingOverlayPresentation.captionsControlsHeight)
+                Color.clear.frame(height: MeetingOverlayPresentation.captionsTopInset)
+                MeetingRollingCaptionView(text: text)
+                    .frame(width: MeetingOverlayPresentation.captionsContentWidth,
+                           height: MeetingOverlayPresentation.captionsContentHeight)
+                Color.clear.frame(height: MeetingOverlayPresentation.captionsBottomInset)
+                Color.gray.frame(height: MeetingOverlayPresentation.captionsFooterHeight)
+            }
+            .frame(width: 340, height: 156)
+        }
+        let host = NSHostingView(rootView: content(""))
+        host.frame = CGRect(x: 0, y: 0, width: 340, height: 156)
+        for text in ["short", String(repeating: "caption growing 👩🏽‍💻 字幕 ", count: 500), "rewritten latest caption"] {
+            host.rootView = content(text)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.frame.size, CGSize(width: 340, height: 156))
+            XCTAssertEqual(host.fittingSize.width, 340, accuracy: 0.01)
+            XCTAssertEqual(host.fittingSize.height, 156, accuracy: 0.01)
+        }
+    }
+
+    func testSelectedRangeStartsAtAWholeLineAndDropsOlderLines() {
+        let layout = MeetingRollingCaptionLayout.make(String(repeating: "Older words wrap into complete lines. ", count: 40) + "Newest words")
+        var lineRanges: [NSRange] = []
+        layout.layoutManager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: layout.layoutManager.numberOfGlyphs)) { _, _, _, range, _ in
+            lineRanges.append(range)
+        }
+        XCTAssertGreaterThan(layout.selectedGlyphRange.location, 0)
+        XCTAssertTrue(lineRanges.contains { $0.location == layout.selectedGlyphRange.location })
+        XCTAssertEqual(layout.selectedGlyphRange.upperBound, layout.layoutManager.numberOfGlyphs)
+        XCTAssertLessThanOrEqual(layout.inkBounds.height, MeetingOverlayPresentation.captionsContentHeight)
+        let cannotFit = MeetingRollingCaptionLayout.make("A full line", height: 1)
+        XCTAssertEqual(cannotFit.selectedGlyphRange.length, 0, "Never fall back to a vertically clipped line")
     }
 
     func testUnclampedLayoutVisibleSurfaceMatchesCanonicalPresentationSize() {

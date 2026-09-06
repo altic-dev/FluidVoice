@@ -858,6 +858,213 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(persistedOld?.recoveryResolvedAt)
     }
 
+    // A recoverable failed capture is passive after its lease is released; a later
+    // auto-detected start must be allowed to replace it without resolving its audio.
+    func testOrdinaryStartReplacesPassiveFailedOfferWithoutResolvingIt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let old = self.makeSession(
+            state: .failed,
+            endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])],
+            failures: [MeetingSessionFailure(id: UUID(), occurredAt: Date(), domain: .capture, code: "teams.noSpeech", message: "No speech", recoverable: true)]
+        )
+        try await store.create(old)
+
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        await coordinator.ensureRestored()
+        XCTAssertEqual(coordinator.activeSession?.id, old.id)
+
+        let fresh = try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Zoom"))
+        XCTAssertNotEqual(fresh.id, old.id)
+        XCTAssertEqual(coordinator.activeSession?.id, fresh.id)
+        let persistedOld = try await store.load(id: old.id)
+        XCTAssertNil(persistedOld?.recoveryResolvedAt)
+        XCTAssertTrue(persistedOld?.hasFinalizedAudio == true)
+    }
+
+    func testStartFailureRestoresPassiveOfferUnchanged() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let old = self.makeSession(
+            state: .interrupted,
+            endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
+        )
+        try await store.create(old)
+        let capture = StubCaptureController()
+        capture.startError = MeetingCaptureError.applicationNotSelected
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        await coordinator.ensureRestored()
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Retry"))
+            XCTFail("expected capture start to fail")
+        } catch {}
+        XCTAssertEqual(coordinator.activeSession?.id, old.id)
+        XCTAssertEqual(coordinator.activeSession?.audioTracks, old.audioTracks)
+        XCTAssertEqual(coordinator.state, .interrupted(old.id))
+        let persistedOld = try await store.load(id: old.id)
+        XCTAssertNil(persistedOld?.recoveryResolvedAt)
+    }
+
+    func testOrdinaryStartPreservesExpiredInterruptedAudioAndPendingAttempt() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let past = Date(timeIntervalSinceNow: -40 * 24 * 60 * 60)
+        let old = self.makeSession(
+            state: .interrupted, startedAt: past, endedAt: past,
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])],
+            processingAttempts: [MeetingProcessingAttempt(
+                id: UUID(), startedAt: past, completedAt: nil, stage: .pending,
+                pipelineVersion: MeetingProcessingPipeline.pipelineVersion,
+                asrProvider: nil, asrModel: nil, diarizationModel: nil,
+                lastCompletedTrackID: nil, errorCode: nil
+            )]
+        )
+        try await store.create(old)
+        let sessionDirectory = try await store.sessionDirectory(for: old.id)
+        let audio = sessionDirectory.appendingPathComponent("tracks/microphone/chunk_0.caf")
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 128).write(to: audio)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+        let before = try await store.load(id: old.id)
+        _ = try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Next app"))
+        await coordinator.sweepExpiredAudio()
+        let after = try await store.load(id: old.id)
+        XCTAssertNil(after?.recoveryResolvedAt)
+        XCTAssertNil(after?.retention.audioDeletedAt)
+        XCTAssertEqual(after?.processingAttempts, before?.processingAttempts)
+        XCTAssertEqual(after?.audioTracks, before?.audioTracks)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audio.path))
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testDeniedPermissionPreservesPassiveOfferAndReleasesStartReservation() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let old = self.makeSession(state: .interrupted, endedAt: Date(),
+                                   audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        try await store.create(old)
+        let capture = StubCaptureController()
+        capture.preflightError = MeetingCaptureError.microphonePermissionDenied
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        await coordinator.ensureRestored()
+        let before = coordinator.activeSession
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeConfiguration())
+            XCTFail("Permission denial must reject the new recording")
+        } catch {
+            guard case MeetingCaptureError.microphonePermissionDenied = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(coordinator.activeSession?.id, before?.id)
+        XCTAssertEqual(coordinator.activeSession?.audioTracks, before?.audioTracks)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertFalse(coordinator.hasPendingStart)
+        capture.preflightError = nil
+        let fresh = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        XCTAssertNotEqual(fresh.id, old.id)
+        XCTAssertFalse(coordinator.hasPendingStart)
+    }
+
+    func testConcurrentStartAndRecoveryActionsAreBlockedDuringPermissionPreflight() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        var continuation: CheckedContinuation<Void, Never>?
+        capture.onPreflight = {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
+        while capture.preflightCount == 0 { await Task.yield() }
+
+        do {
+            _ = try await coordinator.retryProcessing(sessionID: UUID())
+            XCTFail("retry must be rejected while start is reserved")
+        } catch let error as MeetingCoordinatorError {
+            guard case .activityInProgress = error else { return XCTFail("expected activityInProgress, got \(error)") }
+        }
+        XCTAssertEqual(arbiter.acquireCount, 0)
+
+        do {
+            _ = try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Second"))
+            XCTFail("duplicate start must be rejected while preflight is suspended")
+        } catch let error as MeetingCoordinatorError {
+            guard case .recordingAlreadyActive = error else {
+                return XCTFail("expected recordingAlreadyActive, got \(error)")
+            }
+        }
+        do {
+            try coordinator.resetForNewMeeting()
+            XCTFail("reset must be rejected while start is reserved")
+        } catch let error as MeetingCoordinatorError {
+            guard case .activityInProgress = error else {
+                return XCTFail("expected activityInProgress, got \(error)")
+            }
+        }
+        do {
+            try await coordinator.deleteSession(id: UUID())
+            XCTFail("delete must be rejected while start is reserved")
+        } catch let error as MeetingCoordinatorError {
+            guard case .activityInProgress = error else {
+                return XCTFail("expected activityInProgress, got \(error)")
+            }
+        }
+        continuation?.resume()
+        _ = try await start.value
+        XCTAssertEqual(capture.preflightCount, 1)
+    }
+
+    func testTerminationInvalidatesSuspendedStartBeforePermissionReturns() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        var continuation: CheckedContinuation<Void, Never>?
+        capture.onPreflight = { await withCheckedContinuation { continuation = $0 } }
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: dir), capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
+        while capture.preflightCount == 0 { await Task.yield() }
+        await coordinator.shutdownForTermination()
+        continuation?.resume()
+        do {
+            _ = try await start.value
+            XCTFail("terminated coordinator must not start capture after preflight")
+        } catch {}
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+    }
+
     // MARK: - Slice 3: checkpoint fixtures
 
     private func makeCheckpoint(
@@ -2309,6 +2516,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
         let arbiter = StubArbiter()
         var continuation: CheckedContinuation<Void, Never>?
         capture.onPreflight = {
@@ -2869,6 +3077,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var preflightError: Error?
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
+    private(set) var startCount = 0
 
     func preflightPermissions() async throws {
         self.preflightCount += 1
@@ -2883,6 +3092,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> MeetingCaptureStartResult {
+        self.startCount += 1
         await self.onStart?()
         if let startError { throw startError }
         return self.startResult

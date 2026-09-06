@@ -43,6 +43,9 @@ enum MeetingOverlayPresentation: Equatable, Sendable {
     /// moves as caption content grows or shrinks.
     static let captionsFooterHeight: CGFloat = 35
 
+    /// Always reserved, even when hover controls are hidden, so text never moves on hover.
+    static let captionsControlsHeight: CGFloat = 38
+
     /// Canonical caption text viewport height: the remainder of the captions canvas above the
     /// footer. viewport + footer must equal `captions.visibleSize.height`.
     static let captionsViewportHeight: CGFloat = MeetingOverlayPresentation.captions.visibleSize.height
@@ -62,9 +65,10 @@ enum MeetingOverlayPresentation: Equatable, Sendable {
         - (2 * MeetingOverlayPresentation.captionsHorizontalInset)
 
     /// Caption text content height: the viewport height minus the top and bottom insets. The live
-    /// text and empty state are clipped to exactly this rectangle so an overflowing fixedSize Text
-    /// can never consume the top or bottom inset.
+    /// renderer selects complete recent lines within this rectangle; the empty state and safety
+    /// clip use the same bounds so neither can consume the top or bottom inset.
     static let captionsContentHeight: CGFloat = MeetingOverlayPresentation.captionsViewportHeight
+        - MeetingOverlayPresentation.captionsControlsHeight
         - MeetingOverlayPresentation.captionsTopInset
         - MeetingOverlayPresentation.captionsBottomInset
 }

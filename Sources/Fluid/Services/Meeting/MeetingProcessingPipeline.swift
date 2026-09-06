@@ -656,7 +656,7 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    static let pipelineVersion = 8
+    static let pipelineVersion = 10
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -895,6 +895,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var diarizationObservationKey: String? = nil
         var start: TimeInterval
         var end: TimeInterval
+        /// Original capture clock coordinates. Echo-protection era boundaries live in this domain;
+        /// display/merge timestamps above may be de-drifted.
+        var rawStart: TimeInterval? = nil
+        var rawEnd: TimeInterval? = nil
         var text: String
         var overlapsRemote: Bool
         /// Loudness of this turn's microphone audio, for the near-field gate. Zero when unmeasured.
@@ -1467,7 +1471,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
         progress(.transcribing)
         var microphoneSkippedChunkIDs: [MeetingAudioChunkID] = []
+        var coverageGaps: [MeetingTranscriptCoverageGap] = []
         if let microphoneTrack = session.audioTracks.first(where: { $0.kind == .microphone }) {
+            if session.mode == .onlineCall {
+                coverageGaps = Self.microphoneCoverageGaps(
+                    track: microphoneTrack,
+                    origin: context.origin
+                )
+            }
             try await self.processMicrophoneTrack(
                 microphoneTrack,
                 session: session,
@@ -1500,7 +1511,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             speakers: accumulator.speakers,
             segments: accumulator.segments,
             attempt: attempt,
-            skippedChunkIDs: skippedChunkIDs
+            skippedChunkIDs: skippedChunkIDs,
+            coverageGaps: coverageGaps
         )
     }
 
@@ -1797,6 +1809,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 try await self.processMicrophoneChunk(
                     chunk,
                     track: track,
+                    requiresEchoProtection: session.mode == .onlineCall,
                     eras: eras,
                     era0AnchorRelative: era0AnchorRelative,
                     diarizer: diarizer,
@@ -1821,12 +1834,26 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
 
-        // Apply the existing text-only echo evidence before building microphone prototypes.
-        // A chunk-local label represented only by confirmed far-end echo must not become a
-        // first-class voice profile or compete in the later "You" election.
-        let profileEligibleTurns = session.selectedMicrophone.role == .personal
-            ? Self.rejectingFarField(stagedTurns, eras: eras)
+        let admittedTurns = session.mode == .onlineCall
+            ? stagedTurns.filter {
+                Self.microphoneIntervalIsAdmitted(
+                    start: $0.rawStart ?? $0.start,
+                    end: $0.rawEnd ?? $0.end,
+                    eras: eras
+                )
+            }
             : stagedTurns
+        if admittedTurns.count != stagedTurns.count {
+            DebugLogger.shared.warning(
+                "Meeting microphone admission excluded \(stagedTurns.count - admittedTurns.count) turn(s) intersecting unprotected capture eras.",
+                source: "MeetingProcessingPipeline"
+            )
+        }
+        stagedTurns = admittedTurns
+
+        // Echo evidence remains the only semantic filter before prototype construction. Relative
+        // loudness is not ownership: a quieter person on the microphone side is still legitimate.
+        let profileEligibleTurns = stagedTurns
         let preclassified = Self.classifyMicrophoneTurns(
             profileEligibleTurns,
             eras: eras,
@@ -1869,6 +1896,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func processMicrophoneChunk(
         _ chunk: MeetingAudioChunk,
         track: MeetingAudioTrack,
+        requiresEchoProtection: Bool,
         eras: [MeetingCaptureEra],
         era0AnchorRelative: TimeInterval,
         diarizer: SpeakerDiarizationService,
@@ -2005,6 +2033,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                             diarizationObservationKey: observationKey,
                             start: start,
                             end: end,
+                            rawStart: rawStart,
+                            rawEnd: chunkOffset + turn.endSeconds,
                             text: text,
                             overlapsRemote: overlapsRemote,
                             rms: turnLoudness.indices.contains(offset) ? turnLoudness[offset] : 0,
@@ -2041,6 +2071,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             languagePin: context.languagePin
         ) {
             let duration = chunkDuration
+            guard !requiresEchoProtection || Self.microphoneIntervalIsAdmitted(
+                start: chunkOffset, end: chunkOffset + duration, eras: eras
+            ) else {
+                DebugLogger.shared.warning(
+                    "Meeting microphone fallback transcript excluded because its chunk intersects an unprotected capture era.",
+                    source: "MeetingProcessingPipeline"
+                )
+                return
+            }
             let speakerID = accumulator.speaker(
                 key: "microphone-unknown",
                 displayName: "Microphone / Unknown",
@@ -2064,11 +2103,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// `captureEras[].startSeconds` is raw PTS, converted here to origin-relative; era 0 is pinned to `-infinity`.
     nonisolated static func microphoneEras(for track: MeetingAudioTrack, origin: TimeInterval) -> [MeetingCaptureEra] {
         guard let rawEras = track.captureEras, !rawEras.isEmpty else {
+            let legacyMethod = track.captureMethod ?? .avCaptureSession
             return [MeetingCaptureEra(
-                method: track.captureMethod ?? .avCaptureSession,
+                method: legacyMethod,
                 deviceUID: nil,
                 deviceName: nil,
                 roleAtElection: .unknown,
+                // A missing era array is a pre-v9 recording. Grandfather its previous eligibility
+                // while preserving that its route protection was never positively observed.
+                echoProtection: legacyMethod == .voiceProcessing ? .voiceProcessed : .legacyUnclassified,
                 startSeconds: -.infinity,
                 settledConfig: track.voiceProcessingConfig,
                 clockDrift: track.clockDrift
@@ -2091,6 +2134,48 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
     nonisolated static func eraEndRelative(afterIndex index: Int, eras: [MeetingCaptureEra]) -> TimeInterval? {
         eras.indices.contains(index + 1) ? eras[index + 1].startSeconds : nil
+    }
+
+    /// A diarized turn is indivisible at this stage. Any overlap with an unprotected era rejects
+    /// the complete turn; assigning solely from its start would leak audio across a splice.
+    nonisolated static func microphoneIntervalIsAdmitted(
+        start: TimeInterval,
+        end: TimeInterval,
+        eras: [MeetingCaptureEra]
+    ) -> Bool {
+        guard end > start, !eras.isEmpty else { return false }
+        for index in eras.indices {
+            let eraStart = eras[index].startSeconds
+            let eraEnd = Self.eraEndRelative(afterIndex: index, eras: eras) ?? .infinity
+            guard min(end, eraEnd) > max(start, eraStart) else { continue }
+            if !eras[index].echoProtection.admitsTranscript { return false }
+        }
+        return true
+    }
+
+    nonisolated static func microphoneCoverageGaps(
+        track: MeetingAudioTrack,
+        origin: TimeInterval
+    ) -> [MeetingTranscriptCoverageGap] {
+        guard let first = track.chunks.map(\.presentationStart.seconds).min(),
+              let last = track.chunks.map(\.presentationEnd.seconds).max(),
+              last > first
+        else { return [] }
+        let trackStart = first - origin
+        let trackEnd = last - origin
+        let eras = Self.microphoneEras(for: track, origin: origin)
+        return eras.indices.compactMap { index in
+            guard !eras[index].echoProtection.admitsTranscript else { return nil }
+            let start = max(trackStart, eras[index].startSeconds)
+            let end = min(trackEnd, Self.eraEndRelative(afterIndex: index, eras: eras) ?? trackEnd)
+            guard end > start else { return nil }
+            return MeetingTranscriptCoverageGap(
+                trackID: track.id,
+                start: start,
+                end: end,
+                reason: .unprotectedMicrophone
+            )
+        }
     }
 
     nonisolated static func classifyMicrophoneTurns(
@@ -2235,36 +2320,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
 
         let prototypeSpeakerIDs = accumulator.embeddingIndexByTrack[.microphone]?.speakerIDs ?? []
-        let localClusterID = session.selectedMicrophone.role == .personal
-            ? Self.selectLocalCluster(from: classifiedTurns, prototypeSpeakerIDs: prototypeSpeakerIDs)
-            : nil
-        Self.logLocalSpeakerElection(
-            turns: classifiedTurns,
-            prototypeSpeakerIDs: prototypeSpeakerIDs,
-            index: accumulator.embeddingIndexByTrack[.microphone],
-            role: session.selectedMicrophone.role,
-            elected: localClusterID,
-            captureMethod: eras.last?.method,
-            widenedIndices: widenedIndices,
-            captureEras: track.captureEras
-        )
+        _ = widenedIndices // retained as echo-classification diagnostics; no ownership election
         Self.logEchoMonitorSummary(
             turns: classifiedTurns,
             monitor: echoMonitor,
             applicationTrackHadSpeech: applicationTrackHadSpeech
         )
-        if let localClusterID,
-           let evidenceTurn = classifiedTurns.first(where: { $0.clusterID == localClusterID })
-        {
-            accumulator.addResolvedSpeaker(
-                id: localClusterID,
-                key: "local-user",
-                displayName: "You",
-                clusterID: evidenceTurn.clusterLabel,
-                trackKind: .microphone,
-                isLocalUser: true
-            )
-        }
         let unknownSpeakerID = accumulator.speaker(
             key: "microphone-unknown",
             displayName: "Microphone / Unknown",
@@ -2276,12 +2337,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // echo-demoted turns stay in the anonymous bucket (bleed must not become a "person").
         var micSpeakerOrdinalByCluster: [SessionSpeakerID: Int] = [:]
         for turn in classifiedTurns {
-            let isLocalCluster = turn.clusterID == localClusterID
-            let isCleanLocalTurn = isLocalCluster && !turn.effectiveEcho
             let speakerID: SessionSpeakerID
-            if isCleanLocalTurn {
-                speakerID = localClusterID ?? unknownSpeakerID
-            } else if !isLocalCluster, !turn.effectiveEcho, prototypeSpeakerIDs.contains(turn.clusterID) {
+            if !turn.effectiveEcho, prototypeSpeakerIDs.contains(turn.clusterID) {
                 if micSpeakerOrdinalByCluster[turn.clusterID] == nil {
                     let ordinal = micSpeakerOrdinalByCluster.count + 1
                     micSpeakerOrdinalByCluster[turn.clusterID] = ordinal
@@ -2306,7 +2363,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 end: turn.end,
                 text: turn.text,
                 overlap: turn.overlapsRemote ? .overlapsOtherTrack : .none,
-                isLikelyEcho: isLocalCluster ? false : turn.effectiveEcho
+                isLikelyEcho: turn.effectiveEcho
             ))
         }
     }

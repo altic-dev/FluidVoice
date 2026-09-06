@@ -231,6 +231,7 @@ final class AppServices: ObservableObject {
     /// Read-only meeting check that does not initialize the meeting stack.
     var hasActiveMeetingSessionActivity: Bool {
         guard let coordinator = self._meetingSessionCoordinator else { return false }
+        if coordinator.hasPendingStart { return true }
         switch coordinator.state {
         case .preparing, .recording, .recordingDegraded, .stopping, .processing:
             return true
