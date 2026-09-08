@@ -2080,6 +2080,9 @@ struct ContentView: View {
     private func captureRecordingTargetContext() {
         // Capture the focused target PID BEFORE any overlay/UI changes.
         // Used to restore focus when the user interacts with overlay dropdowns.
+        // Sampled here because the hotkey's modifiers are still held at recording start; by
+        // insertion time they have been released and cannot be observed.
+        TypingService.noteDictationHotkeyModifiers()
         let focusTarget = TypingService.captureSystemFocusTarget()
         self.recordingFocusTarget = focusTarget
         let focusedPID = focusTarget?.pid
@@ -3451,6 +3454,10 @@ struct ContentView: View {
     /// system clipboard, and unlike reprocess, it pastes the existing text verbatim (no new
     /// history entry, no reformatting). Useful when the original auto-insert dropped the tail.
     private func pasteLastDictationFromHistory() {
+        // Records this shortcut's own modifiers. Without it the insertion would decide the
+        // guest's menu state from whatever the previous dictation recorded.
+        TypingService.noteDictationHotkeyModifiers()
+
         guard let last = TranscriptionHistoryStore.shared.entries.first else {
             DebugLogger.shared.info("Actions: Paste requested but history is empty", source: "ContentView")
             return
@@ -3562,6 +3569,12 @@ struct ContentView: View {
     }
 
     private func applyHistoryTextOutput(_ text: String, saveToHistory: Bool) async {
+        // Records this insertion's own modifiers - an empty reading included. Without it the
+        // snapshot from an earlier dictation stays pending (nothing consumes it unless that
+        // dictation went to a remote session) and this insertion would decide the guest's menu
+        // state from it.
+        TypingService.noteDictationHotkeyModifiers()
+
         // Keep hotkey/recording state deterministic before applying output text.
         if self.asr.isRunning {
             DebugLogger.shared.info("Actions: stopping active recording before history action output", source: "ContentView")
@@ -3629,6 +3642,12 @@ struct ContentView: View {
     }
 
     private func reprocessDictationText(_ transcribedText: String) async {
+        // Records this insertion's own modifiers - an empty reading included. Without it the
+        // snapshot from an earlier dictation stays pending (nothing consumes it unless that
+        // dictation went to a remote session) and this insertion would decide the guest's menu
+        // state from it.
+        TypingService.noteDictationHotkeyModifiers()
+
         // If live recording is still active, stop it first so reprocess does not
         // leave ASR running in the background (which causes the next hotkey press
         // to behave like a stop instead of start).
@@ -4193,8 +4212,6 @@ struct ContentView: View {
             },
             commandModeCallback: {
                 DebugLogger.shared.info("Command mode triggered", source: "ContentView")
-                self.captureRecordingContext()
-
                 // Set flag so stopAndProcessTranscription knows to process as command
                 self.setActiveRecordingMode(.command)
 
@@ -4202,6 +4219,11 @@ struct ContentView: View {
                 self.menuBarManager.setOverlayMode(.command)
 
                 guard !self.asr.isRunningOrStarting else { return }
+
+                // Captured only once the start is going ahead. Before this guard, a rejected
+                // start overwrote the modifier snapshot belonging to the dictation already in
+                // flight, which decides whether the remote session needs its keyboard reset.
+                self.captureRecordingContext()
 
                 self.advanceOverlayLifecycle()
 

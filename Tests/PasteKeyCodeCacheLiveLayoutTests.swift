@@ -35,7 +35,7 @@ enum PasteKeyCodeCacheLiveLayoutTests {
         }
         guard TISEnableInputSource(dvorak) == noErr else { throw NSError(domain: "Enable failed", code: 2) }
         var refreshes = 0
-        let cache = PasteKeyCodeCache {
+        let cache = KeyboardLayoutSnapshotCache(initialValue: CGKeyCode(9)) {
             refreshes += 1
             return self.resolveV()
         }

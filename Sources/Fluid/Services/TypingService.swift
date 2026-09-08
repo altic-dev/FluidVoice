@@ -123,7 +123,101 @@ final class TypingService {
     private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
+
+    /// Modifier flags observed when dictation started, used to decide whether the guest may
+    /// have been left in a menu state. `nil` when nothing recorded it for this dictation.
+    private static var dictationHotkeyModifiers: CGEventFlags?
     private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+
+    /// Windows App, formerly Microsoft Remote Desktop. Both ship this bundle identifier.
+    private static let remoteDesktopBundleIdentifier = "com.microsoft.rdc.macos"
+
+    static let remoteDesktopClipboardSettleDefaultMs = 200
+    static let remoteDesktopClipboardSettleMaximumMs = 10_000
+    static let remoteDesktopClipboardSettleOverrideKey = "RemoteDesktopClipboardSettleMs"
+
+    /// Grace period between writing the pasteboard and starting the focus bounce that makes
+    /// the client re-advertise its clipboard.
+    ///
+    /// Measured against a live session: no settle length alone is sufficient. Four pastes over
+    /// 43 seconds, across four distinct pasteboard writes 8 seconds apart, all delivered the
+    /// *first* value, with plain and transient items behaving identically and a 2.5s settle
+    /// changing nothing. The focus change is the mechanism, not elapsed time - so this is only
+    /// a short grace to let the write land before focus moves.
+    ///
+    /// Clamped, because the value is multiplied into a `useconds_t` and an unclamped user
+    /// default would trap.
+    nonisolated static func remoteDesktopSettleMicros(override: NSNumber?) -> useconds_t {
+        let requested = override.map(\.intValue) ?? self.remoteDesktopClipboardSettleDefaultMs
+        let clamped = min(max(0, requested), self.remoteDesktopClipboardSettleMaximumMs)
+        return useconds_t(clamped * 1000)
+    }
+
+    static let remoteDesktopTypeDelayDefaultMs = 16
+    static let remoteDesktopTypeDelayMaximumMs = 200
+    static let remoteDesktopTypeDelayOverrideKey = "RemoteDesktopTypeDelayMs"
+    /// How often the focused *element* is re-confirmed while typing. The per-chord check
+    /// compares only the PID, which cannot tell two windows of the same client apart.
+    static let remoteDesktopElementRecheckInterval = 10
+
+    static let remoteDesktopWarmupDefaultMs = 250
+    static let remoteDesktopWarmupMaximumMs = 3000
+    static let remoteDesktopWarmupOverrideKey = "RemoteDesktopWarmupMs"
+
+    /// Pause between releasing the hotkey's modifiers and the first typed character.
+    ///
+    /// `waitForPhysicalModifiersToRelease` only observes the *local* flag state. The client
+    /// still has to forward the modifier release across the remote keyboard channel, and until
+    /// the guest processes it the guest believes the modifier is held - so the first character
+    /// arrives as a modifier chord (`Alt+a` is a menu accelerator, which inserts nothing) and is
+    /// lost. This is the dropped-leading-character behaviour reported in discussion #563.
+    ///
+    /// Overridable via the `RemoteDesktopWarmupMs` user default (no Settings UI).
+    nonisolated static func remoteDesktopWarmupMicros(override: NSNumber?) -> useconds_t {
+        let requested = override.map(\.intValue) ?? self.remoteDesktopWarmupDefaultMs
+        let clamped = min(max(0, requested), self.remoteDesktopWarmupMaximumMs)
+        return useconds_t(clamped * 1000)
+    }
+
+    private static var remoteDesktopWarmup: useconds_t {
+        self.remoteDesktopWarmupMicros(
+            override: UserDefaults.standard.object(forKey: self.remoteDesktopWarmupOverrideKey) as? NSNumber
+        )
+    }
+
+    /// Pause between the modifier releases and the Escape that exits Windows menu mode.
+    static let remoteDesktopEscapeGapMicros: useconds_t = 150_000
+
+    /// Modifier key codes explicitly released before typing into a remote session.
+    private static let remoteDesktopResyncModifierKeyCodes: [CGKeyCode] = [
+        CGKeyCode(kVK_Shift), CGKeyCode(kVK_RightShift),
+        CGKeyCode(kVK_Control), CGKeyCode(kVK_RightControl),
+        CGKeyCode(kVK_Option), CGKeyCode(kVK_RightOption),
+        CGKeyCode(kVK_Command), CGKeyCode(kVK_RightCommand),
+    ]
+
+    /// Pause after each character when typing into a remote-desktop session. The remote
+    /// keyboard channel drops characters if they arrive faster than it forwards them.
+    /// Overridable via the `RemoteDesktopTypeDelayMs` user default (no Settings UI).
+    nonisolated static func remoteDesktopTypeDelayMicros(override: NSNumber?) -> useconds_t {
+        let requested = override.map(\.intValue) ?? self.remoteDesktopTypeDelayDefaultMs
+        let clamped = min(max(0, requested), self.remoteDesktopTypeDelayMaximumMs)
+        return useconds_t(clamped * 1000)
+    }
+
+    private static var remoteDesktopTypeDelay: useconds_t {
+        self.remoteDesktopTypeDelayMicros(
+            override: UserDefaults.standard.object(forKey: self.remoteDesktopTypeDelayOverrideKey) as? NSNumber
+        )
+    }
+
+    /// Overridable via the `RemoteDesktopClipboardSettleMs` user default (no Settings UI) so a
+    /// slow link can be tuned without a rebuild.
+    private static var remoteDesktopClipboardSettleMicros: useconds_t {
+        self.remoteDesktopSettleMicros(
+            override: UserDefaults.standard.object(forKey: self.remoteDesktopClipboardSettleOverrideKey) as? NSNumber
+        )
+    }
 
     private var textInsertionMode: SettingsStore.TextInsertionMode {
         SettingsStore.shared.textInsertionMode
@@ -131,15 +225,37 @@ final class TypingService {
 
     // MARK: - Layout-aware key code lookup
 
-    private static let pasteKeyCache = PasteKeyCodeCache {
+    private static let pasteKeyCache = KeyboardLayoutSnapshotCache(initialValue: CGKeyCode(9)) {
         let key = PasteKeyCodeResolver.current()
         DebugLogger.shared.benchmark("TYPING_BENCH", message: "paste_key_cache_refresh keyCode=\(key)", source: "TypingBenchmark")
         return key
     }
 
+    /// The characters that can be typed into a remote-desktop session on the active layout.
+    ///
+    /// Snapshotted for the same reason as the paste key code, but the consequence of getting it
+    /// wrong is worse: the remote-desktop typing path runs on a background queue, and resolving
+    /// this inline there reads the input source off the main thread, which can trap inside
+    /// HIToolbox and kill the app mid-dictation.
+    ///
+    /// Starts empty so that a cache which never started declines to type rather than typing from
+    /// a layout it has not actually read.
+    private static let remoteDesktopLayoutCache = KeyboardLayoutSnapshotCache(
+        initialValue: RemoteDesktopKeyMapResolver.Snapshot()
+    ) {
+        let snapshot = RemoteDesktopKeyMapResolver.currentSnapshot()
+        DebugLogger.shared.benchmark(
+            "TYPING_BENCH",
+            message: "remote_layout_cache_refresh characters=\(snapshot.typable.count) pasteKey=\(snapshot.pasteKeyCode.map(String.init) ?? "none")",
+            source: "TypingBenchmark"
+        )
+        return snapshot
+    }
+
     /// Called during application launch, before any paste requests can arrive.
     static func startKeyboardLayoutTracking() {
         self.pasteKeyCache.start()
+        self.remoteDesktopLayoutCache.start()
     }
 
     /// The virtual key code for "v" in the current keyboard layout (used for Cmd+V paste).
@@ -159,6 +275,30 @@ final class TypingService {
 
     /// Best-effort: returns the PID owning the currently focused accessibility element.
     /// This is more reliable than NSWorkspace.frontmostApplication for floating overlays/launchers.
+    /// Records the modifiers held as dictation begins.
+    ///
+    /// Called at recording start, before any overlay or focus changes. The hotkey's own
+    /// modifiers are still down at that point, which is the only moment they can be observed -
+    /// by insertion time they have been released, and the *configured* shortcut list cannot
+    /// say which of several shortcuts actually fired, or whether a mouse shortcut was used.
+    nonisolated static func noteDictationHotkeyModifiers() {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        self.focusSnapshotQueue.sync { self.dictationHotkeyModifiers = flags }
+    }
+
+    /// Reads and clears the recorded modifiers.
+    ///
+    /// One-shot on purpose. The value describes a single dictation, and insertion paths that do
+    /// not record it - Paste Last Transcription, for one - would otherwise read whatever the
+    /// previous dictation left behind and decide the guest's menu state from stale input.
+    private static func consumeDictationHotkeyModifiers() -> CGEventFlags? {
+        self.focusSnapshotQueue.sync {
+            let flags = self.dictationHotkeyModifiers
+            self.dictationHotkeyModifiers = nil
+            return flags
+        }
+    }
+
     static func captureSystemFocusTarget() -> CapturedFocusTarget? {
         // Accessibility is required to query system-focused AX element.
         guard AXIsProcessTrusted() else {
@@ -331,6 +471,56 @@ final class TypingService {
         }
 
         return nil
+    }
+
+    private func isRemoteDesktopApplication(pid: pid_t) -> Bool {
+        guard pid > 0,
+              let app = NSRunningApplication(processIdentifier: pid)
+        else {
+            return false
+        }
+
+        return app.bundleIdentifier == Self.remoteDesktopBundleIdentifier
+    }
+
+    /// Resolution order, extracted so it can be tested without a running app.
+    ///
+    /// Unlike ``ghosttyTargetPID`` this does not fall through from a known focused PID to the
+    /// frontmost app: the chord is delivered by the window server to whatever holds key focus,
+    /// so treating a frontmost remote-desktop window as the target while something else owns
+    /// the focused element would paste into the wrong place.
+    /// `focusedPID` and `frontmostPID` are autoclosures because resolving the focused element
+    /// is a synchronous Accessibility round trip to another process. This runs on every
+    /// dictation into every app, so it must not be paid when the preferred PID already decides
+    /// the answer.
+    nonisolated static func resolveRemoteDesktopPID(
+        preferredTargetPID: pid_t?,
+        focusedPID: @autoclosure () -> pid_t?,
+        frontmostPID: @autoclosure () -> pid_t?,
+        isRemoteDesktop: (pid_t) -> Bool
+    ) -> pid_t? {
+        if let preferredTargetPID, preferredTargetPID > 0 {
+            return isRemoteDesktop(preferredTargetPID) ? preferredTargetPID : nil
+        }
+
+        if let focused = focusedPID() {
+            return isRemoteDesktop(focused) ? focused : nil
+        }
+
+        if let frontmost = frontmostPID(), isRemoteDesktop(frontmost) {
+            return frontmost
+        }
+
+        return nil
+    }
+
+    private func remoteDesktopTargetPID(preferredTargetPID: pid_t?) -> pid_t? {
+        Self.resolveRemoteDesktopPID(
+            preferredTargetPID: preferredTargetPID,
+            focusedPID: self.getSystemFocusedElementAndPID()?.pid,
+            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            isRemoteDesktop: { self.isRemoteDesktopApplication(pid: $0) }
+        )
     }
 
     /// Activation options used to restore focus to the external target app after dictation.
@@ -524,7 +714,12 @@ final class TypingService {
 
                 usleep(50_000)
                 guard Self.isExactFocusTargetActive(requiredFocusTarget),
-                      self.postReturnKey(postInsertionKey, targetPID: preferredTargetPID)
+                      self.postReturnKey(
+                          postInsertionKey,
+                          targetPID: preferredTargetPID,
+                          resetKeyboardState: hasTextToInsert == false,
+                          requiredFocusTarget: requiredFocusTarget
+                      )
                 else {
                     outcome = hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed
                     return
@@ -551,6 +746,39 @@ final class TypingService {
     private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) -> Bool {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+
+        // Remote-desktop sessions come first and apply in both insertion modes, because both
+        // of the normal paths fail there: the unicode path posts `virtualKey: 0` events that a
+        // client translating scan codes cannot forward, and the clipboard path posts Cmd+V via
+        // `postToPid`, which these clients do not act on, with no settle time for the client to
+        // ship the clipboard to the guest.
+        if let remoteDesktopPID = self.remoteDesktopTargetPID(preferredTargetPID: preferredTargetPID) {
+            self.log("[TypingService] Remote desktop target detected (PID \(remoteDesktopPID)); typing directly")
+            switch self.insertTextViaRemoteDesktopTyping(text, targetPID: remoteDesktopPID) {
+            case .typed:
+                self.log("[TypingService] SUCCESS: Remote-desktop typing path completed")
+                return true
+
+            case .unmappable:
+                // Paste is lossless but needs a focus bounce, so it is only worth the
+                // disruption when the layout genuinely cannot express the transcript.
+                self.log("[TypingService] Falling back to remote-desktop clipboard paste")
+                if self.insertTextViaRemoteDesktopPaste(text, targetPID: remoteDesktopPID) {
+                    self.log("[TypingService] SUCCESS: Remote-desktop paste path completed")
+                    return true
+                }
+
+            case .declined:
+                break
+            }
+
+            // Deliberately not falling through to the generic cascade. Those paths post via
+            // `postToPid`, which this client ignores while still reporting success, and the
+            // clipboard ones would re-activate the target and hold the user's clipboard for
+            // five seconds to no effect.
+            self.log("[TypingService] Remote-desktop insertion failed; not attempting generic fallbacks")
+            return false
+        }
 
         if self.textInsertionMode == .standard,
            let ghosttyTargetPID = self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID)
@@ -660,8 +888,60 @@ final class TypingService {
         return false
     }
 
-    private func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) -> Bool {
+    /// - Parameter resetKeyboardState: only for the action-only path, where no text was
+    ///   inserted and the typing path's reset therefore never ran. After text *has* been typed
+    ///   the guest is already out of menu mode, and an Escape there would dismiss the control
+    ///   that is about to receive Return - cancelling an autocomplete, or reverting a field.
+    private func postReturnKey(
+        _ key: SettingsStore.SpokenSendKey,
+        targetPID: pid_t,
+        resetKeyboardState: Bool,
+        requiredFocusTarget: CapturedFocusTarget?
+    ) -> Bool {
         let returnKeyCode = CGKeyCode(kVK_Return)
+
+        // Remote-desktop clients do not act on `postToPid` keyboard events, so a Spoken Send
+        // Return would otherwise be dropped while the UI reported it as sent. Build it as a
+        // real chord: assigning `key.eventFlags` would give Shift+Enter and Command+Enter no
+        // modifier scan code to forward, and a Shift+Enter that arrives as a bare Enter sends
+        // a message the user meant to add a newline to.
+        if self.isRemoteDesktopApplication(pid: targetPID) {
+            guard let chord = Self.makeRemoteDesktopChord(
+                modifierKeyCode: Self.spokenSendModifierKeyCode(for: key),
+                keyCode: returnKeyCode
+            ) else {
+                self.log("[TypingService] ERROR: Failed to create remote-desktop \(key.displayName) chord")
+                return false
+            }
+
+            if resetKeyboardState {
+                self.resyncRemoteDesktopKeyboardState()
+                // The reset sleeps for well over 150ms and posts Escape globally, so the
+                // destination has to be re-confirmed before Return - which activates whatever
+                // now holds focus - rather than trusting the check made before the reset.
+                //
+                // The PID alone is not enough here: it cannot tell one connection window or
+                // field of this client from another, and Return submits whatever it lands on.
+                // So the exact element is required, matching the check the caller makes before
+                // this and the one the typing path makes after its own reset.
+                guard self.isRemoteDesktopTargetStillFrontmost(targetPID) else {
+                    self.log("[TypingService] ERROR: Target lost focus during the keyboard reset; not sending \(key.displayName)")
+                    return false
+                }
+                guard let requiredFocusTarget else {
+                    self.log("[TypingService] ERROR: No focus target to re-confirm after the keyboard reset; not sending \(key.displayName)")
+                    return false
+                }
+                guard Self.isExactFocusTargetActive(requiredFocusTarget) else {
+                    self.log("[TypingService] ERROR: Focused element changed during the keyboard reset; not sending \(key.displayName)")
+                    return false
+                }
+            }
+            self.log("[TypingService] Spoken Send: posting \(key.displayName) chord via HID tap for remote-desktop target")
+            self.postRemoteDesktopChord(chord)
+            return true
+        }
+
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false)
         else {
@@ -939,6 +1219,452 @@ final class TypingService {
                     "totalMs=\((keyUpFinishedAt - dispatchStartedAt) * 1000)"
             )
             self.log("[TypingService] Cmd+V posted to PID \(targetPID)")
+            return true
+        }
+    }
+
+    // MARK: - Remote desktop targets (Windows App / Microsoft Remote Desktop)
+
+    /// A synthetic chord: an optional modifier held across one key press.
+    struct SyntheticChord {
+        let modifierDown: CGEvent?
+        let keyDown: CGEvent
+        let keyUp: CGEvent
+        let modifierUp: CGEvent?
+
+        var ordered: [CGEvent] {
+            [self.modifierDown, self.keyDown, self.keyUp, self.modifierUp].compactMap { $0 }
+        }
+    }
+
+    /// Builds a chord for a remote-desktop target.
+    ///
+    /// Three details matter, and all three differ from the other paste paths in this file:
+    ///
+    /// 1. The chord includes the modifier's *own* key events. A client in Scancode mode
+    ///    forwards key positions to the guest, so it has to see the modifier go down and up -
+    ///    a key event that merely carries `.maskControl` gives it nothing to forward, which
+    ///    matches the long-reported "pasting into RDP types the letter V" behaviour.
+    /// 2. The modifier events are used exactly as created. `CGEvent(keyboardEventSource:
+    ///    virtualKey:keyDown:)` already returns a `.flagsChanged` event for a modifier key
+    ///    code, carrying the modifier flag, the device-side bit identifying which physical key
+    ///    it is, and `.maskNonCoalesced`. Assigning `type` is a no-op and assigning `flags`
+    ///    discards those bits, so we do neither - the held-modifier flags are copied off the
+    ///    modifier event and *inserted* into the key events, reproducing what hardware sends
+    ///    while a modifier is held.
+    /// 3. Every event is tagged with ``synthesizedEventUserData``. FluidVoice's own event tap
+    ///    listens for `flagsChanged` (`GlobalHotkeyManager.keyboardEventMask()`) and only lets
+    ///    tagged events through untouched, so without the tag a modifier-only dictation
+    ///    shortcut would read our synthetic modifier press as its own hotkey and start a
+    ///    phantom recording on every dictation.
+    nonisolated static func makeRemoteDesktopChord(
+        modifierKeyCode: CGKeyCode?,
+        keyCode: CGKeyCode
+    ) -> SyntheticChord? {
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
+        else {
+            return nil
+        }
+
+        var modifierDown: CGEvent?
+        var modifierUp: CGEvent?
+
+        if let modifierKeyCode {
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: modifierKeyCode, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: modifierKeyCode, keyDown: false)
+            else {
+                return nil
+            }
+
+            // Copied off the modifier event rather than hard-coded: CoreGraphics has already
+            // put both the modifier flag and the correct device-side bit there, including for
+            // right-hand modifier key codes.
+            keyDown.flags.insert(down.flags)
+            keyUp.flags.insert(down.flags)
+
+            modifierDown = down
+            modifierUp = up
+        }
+
+        let chord = SyntheticChord(
+            modifierDown: modifierDown,
+            keyDown: keyDown,
+            keyUp: keyUp,
+            modifierUp: modifierUp
+        )
+        for event in chord.ordered {
+            event.setIntegerValueField(.eventSourceUserData, value: self.synthesizedEventUserData)
+        }
+        return chord
+    }
+
+    /// The modifier key code that produces `key`'s intent as a real chord in the *guest*, so a
+    /// remote-desktop client has a modifier scan code to forward. Returns nil for plain Return.
+    ///
+    /// Command is deliberately translated to Control rather than forwarded as-is. The client
+    /// forwards the Command position as the Windows key, so a literal Command+Enter arrives as
+    /// Win+Enter - which is an operating-system shortcut in Windows and never submits. Control
+    /// is the modifier that carries the same meaning in the guest, and is the mapping the client
+    /// itself applies for copy, cut and paste.
+    nonisolated static func spokenSendModifierKeyCode(for key: SettingsStore.SpokenSendKey) -> CGKeyCode? {
+        switch key {
+        case .enter: nil
+        case .shiftEnter: CGKeyCode(kVK_Shift)
+        case .commandEnter: CGKeyCode(kVK_Control)
+        }
+    }
+
+    /// Posts a chord to the HID tap. These clients do not act on `postToPid` keyboard events.
+    private func postRemoteDesktopChord(_ chord: SyntheticChord, keyGapMicros: useconds_t = 10_000) {
+        // Release the modifier no matter how we leave this scope. A stuck synthetic modifier
+        // shows up in `CGEventSource.flagsState(.combinedSessionState)` and would make the next
+        // dictation's `waitForPhysicalModifiersToRelease` time out.
+        defer { chord.modifierUp?.post(tap: .cghidEventTap) }
+
+        chord.modifierDown?.post(tap: .cghidEventTap)
+        chord.keyDown.post(tap: .cghidEventTap)
+        usleep(keyGapMicros)
+        chord.keyUp.post(tap: .cghidEventTap)
+    }
+
+    /// Why a remote-desktop typing attempt did not produce text.
+    enum RemoteDesktopTypingOutcome {
+        /// The transcript was typed in full.
+        case typed
+        /// The layout cannot express some characters; the lossless clipboard path is worth trying.
+        case unmappable
+        /// Something else prevented typing. Trying the clipboard path would not help.
+        case declined
+    }
+
+    /// Types `text` into a remote-desktop session as real key presses, never touching the
+    /// clipboard.
+    ///
+    /// This is the primary path for these targets because clipboard redirection is not usable:
+    /// the client only re-advertises its clipboard to the guest after a focus change, so a
+    /// programmatic pasteboard write followed by a paste makes the guest insert whatever it
+    /// last synced. Typing has no such dependency - the guest receives key positions directly.
+    ///
+    /// The cost is reach: the guest applies its own layout to those positions, and only
+    /// characters the local layout can produce with at most shift can be expressed at all.
+    private func insertTextViaRemoteDesktopTyping(
+        _ text: String,
+        targetPID: pid_t
+    ) -> RemoteDesktopTypingOutcome {
+        let normalized = RemoteDesktopKeyMapResolver.transliterate(text)
+        // Snapshot, never a live lookup: this runs on a background queue and reading the input
+        // source from here can trap inside HIToolbox.
+        let map = Self.remoteDesktopLayoutCache.snapshot().typable
+        if map.isEmpty {
+            self.log("[TypingService] Layout offers no directly typable characters; the paste fallback will carry this transcript")
+        }
+
+        let strokes: [RemoteDesktopKeyStroke]
+        let capsLockActive = CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift)
+        if capsLockActive {
+            self.log("[TypingService] Caps Lock is active; inverting shift for alphabetic keys")
+        }
+
+        switch RemoteDesktopKeyMapResolver.plan(for: normalized, map: map, capsLockActive: capsLockActive) {
+        case let .strokes(planned):
+            strokes = planned
+        case let .unmappable(characters):
+            let described = characters
+                .map { "U+" + String($0.unicodeScalars.first?.value ?? 0, radix: 16, uppercase: true) }
+                .joined(separator: " ")
+            self.log("[TypingService] Remote-desktop typing skipped: \(characters.count) character(s) have no key on this layout (\(described))")
+            return .unmappable
+        }
+
+        // Posting a chord while the user still physically holds a modifier merges the two, and
+        // over a whole transcript that would corrupt every character.
+        guard self.waitForPhysicalModifiersToRelease(timeout: 2) else {
+            self.log("[TypingService] ERROR: Physical modifiers still held; skipping remote-desktop typing")
+            return .declined
+        }
+
+
+        // The reset is itself a batch of global HID events, including possibly Escape, so the
+        // destination has to be confirmed before it is posted - otherwise a focus change between
+        // resolving the target and starting the run sends Escape to some other application and
+        // cancels whatever it had open. The per-chord checks below cover only the typing.
+        guard self.isRemoteDesktopTargetStillFrontmost(targetPID) else {
+            self.log("[TypingService] ERROR: Target is not frontmost; skipping remote-desktop reset and typing")
+            return .declined
+        }
+
+        // Captured *before* the reset and the warm-up below, not after. Those take up to three
+        // seconds together, and a PID cannot tell one connection window of this client from
+        // another - so a baseline taken afterwards would adopt whichever session the user had
+        // switched to during the wait, and every later check would then agree with it and send
+        // the whole transcript to the wrong remote machine.
+        //
+        // Required, not optional. Without an element there is nothing but the PID to check, and
+        // the PID cannot see a connection switch at all. Only insist on it when Accessibility is
+        // actually trusted: untrusted is a different failure that is already refused upstream,
+        // and a nil element there says nothing about the destination.
+        let focusTarget = Self.captureSystemFocusTarget()
+        if focusTarget == nil, AXIsProcessTrusted() {
+            self.log("[TypingService] ERROR: No focused element for the remote session; refusing to type blind")
+            return .declined
+        }
+
+        // The hotkey that started this dictation is very often a modifier (the default is
+        // modifier-only), and the client forwards that modifier's press and release to the guest
+        // independently. Until the guest processes the release it still believes the modifier is
+        // held, so post an explicit release for every modifier and then wait before typing.
+        // Without this the first character arrives as a modifier chord and is swallowed.
+        self.resyncRemoteDesktopKeyboardState()
+        let warmupMicros = Self.remoteDesktopWarmup
+        if warmupMicros > 0 {
+            self.log("[TypingService] Warming up remote keyboard channel for \(warmupMicros / 1000)ms")
+            usleep(warmupMicros)
+        }
+
+        // Built up front for two reasons: a creation failure aborts before anything is typed,
+        // and a nil-source CGEvent captures the combined-session modifier flags at creation, so
+        // building them all now - after the modifier wait - guarantees every event carries clean
+        // flags rather than picking up a previous synthetic shift that is still in flight.
+        var chords: [SyntheticChord] = []
+        chords.reserveCapacity(strokes.count)
+        for stroke in strokes {
+            guard let chord = Self.makeRemoteDesktopChord(
+                modifierKeyCode: stroke.needsShift ? CGKeyCode(kVK_Shift) : nil,
+                keyCode: stroke.keyCode
+            ) else {
+                self.log("[TypingService] ERROR: Failed to create remote-desktop typing events")
+                return .declined
+            }
+            chords.append(chord)
+        }
+
+        // Re-confirmed here because the baseline was taken before the reset and warm-up: this is
+        // the check that catches a connection switch made during that window.
+        if let focusTarget, Self.isExactFocusTargetActive(focusTarget) == false {
+            self.log("[TypingService] ERROR: Focused element changed during the reset or warm-up; not typing")
+            return .declined
+        }
+
+        let perCharacterDelay = Self.remoteDesktopTypeDelay
+        self.log("[TypingService] Typing \(chords.count) character(s) via HID tap at \(perCharacterDelay / 1000)ms/char")
+
+        // Checked before *every* chord, not on an interval. These events are delivered by the
+        // window server to whatever holds key focus, so any unchecked gap is a window in which
+        // transcript characters land in another application. `frontmostApplication` is a local
+        // lookup, not an Accessibility round trip, so this is cheap enough to do per character.
+        for (index, chord) in chords.enumerated() {
+            guard self.isRemoteDesktopTargetStillFrontmost(targetPID) else {
+                self.log("[TypingService] ERROR: Target lost focus after \(index) character(s); stopping")
+                return .declined
+            }
+            if let focusTarget, index > 0, index % Self.remoteDesktopElementRecheckInterval == 0,
+               Self.isExactFocusTargetActive(focusTarget) == false
+            {
+                self.log("[TypingService] ERROR: Focused window changed after \(index) character(s); stopping")
+                return .declined
+            }
+            self.postRemoteDesktopChord(chord, keyGapMicros: 1500)
+            usleep(perCharacterDelay)
+        }
+
+        self.log("[TypingService] Remote-desktop typing completed")
+        return .typed
+    }
+
+    /// Puts the guest's keyboard back into a state where plain characters insert text.
+    ///
+    /// Two things have to be undone, both caused by the dictation hotkey rather than by us:
+    ///
+    /// 1. A held modifier. The client forwards the hotkey modifier's press and release to the
+    ///    guest independently, so a lost release leaves the guest believing it is still down and
+    ///    every subsequent letter becomes a chord.
+    /// 2. Windows menu mode. This is the one that actually bites. An Option-based hotkey looks
+    ///    to the guest like a *bare Alt tap* - FluidVoice swallows the accompanying key as its
+    ///    hotkey, so the guest sees Alt down then Alt up with nothing between - and a bare Alt
+    ///    tap activates the focused window's menu bar. The transcript then navigates menus
+    ///    instead of typing: measured, `E` opens the Edit menu and the rest of the text is
+    ///    consumed. Escape exits menu mode.
+    ///
+    /// Escape rather than a second Alt tap on purpose. Both were measured to fix it, but an Alt
+    /// tap is a *toggle*: if menu mode were not active it would switch it on and cause exactly
+    /// the bug it is meant to prevent. Escape only ever exits, so it cannot create the bad
+    /// state. Waiting does not help - measured - because this is a mode, not latency.
+    ///
+    /// Escape is sent here as a deliberate reset, which is separate from the rule that Return
+    /// and Tab are never typed as transcript *content*.
+    /// Whether the configured dictation hotkey can leave the guest in a menu state.
+    ///
+    /// A bare Alt tap activates the menu bar and a bare Windows-key tap opens the Start menu, so
+    /// only Option- and Command-based hotkeys create something for Escape to dismiss. For any
+    /// other hotkey an unconditional Escape would be a gratuitous keypress into the guest, where
+    /// it can cancel a dialog or abandon an in-progress operation.
+    private var remoteDesktopHotkeyCanEnterMenuMode: Bool {
+        // Prefer what was actually held when this dictation started. Asking whether *any*
+        // configured shortcut uses Option or Command would send Escape for a dictation begun
+        // with a mouse or a plain-key shortcut, where there is no menu to dismiss.
+        // A non-empty reading is trustworthy: something was genuinely held. An *empty* one is
+        // not, because the sample is taken when capture starts rather than when the hotkey
+        // fires - and a modifier-only shortcut in toggle mode only starts recording once the
+        // modifier is released, so the flags are already gone by then. Treating empty as "no
+        // modifier" would skip Escape for exactly the default shortcut that needs it most, so
+        // it falls through to the configured-shortcut check instead.
+        // Caps Lock and the numeric-pad bit can be set without any key being held, so compare
+        // against the modifiers a shortcut can actually use rather than against an empty set.
+        let heldModifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]
+        if let observed = Self.consumeDictationHotkeyModifiers(),
+           observed.intersection(heldModifiers).isEmpty == false
+        {
+            return observed.contains(.maskAlternate) || observed.contains(.maskCommand)
+        }
+
+        // Nothing recorded, or already consumed. Fall back to the configured shortcuts, which
+        // is over-broad but errs the safer way: failing to leave menu mode means the transcript
+        // navigates menus and can act on the guest, whereas an unnecessary Escape only cancels.
+        let shortcuts = SettingsStore.shared.primaryDictationShortcuts
+        guard shortcuts.isEmpty == false else { return true }
+        return shortcuts.contains { shortcut in
+            shortcut.modifierFlags.contains(.option) || shortcut.modifierFlags.contains(.command)
+        }
+    }
+
+    private func resyncRemoteDesktopKeyboardState() {
+        for keyCode in Self.remoteDesktopResyncModifierKeyCodes {
+            guard let release = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
+                continue
+            }
+            // Created as a `flagsChanged` already; only the tag is added so FluidVoice's own
+            // event tap ignores it.
+            release.setIntegerValueField(.eventSourceUserData, value: Self.synthesizedEventUserData)
+            release.post(tap: .cghidEventTap)
+        }
+
+        guard self.remoteDesktopHotkeyCanEnterMenuMode else {
+            self.log("[TypingService] Reset remote keyboard state (modifier releases only; hotkey cannot enter menu mode)")
+            return
+        }
+
+        usleep(Self.remoteDesktopEscapeGapMicros)
+
+        if let escapeDown = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Escape), keyDown: true),
+           let escapeUp = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Escape), keyDown: false)
+        {
+            escapeDown.setIntegerValueField(.eventSourceUserData, value: Self.synthesizedEventUserData)
+            escapeUp.setIntegerValueField(.eventSourceUserData, value: Self.synthesizedEventUserData)
+            escapeDown.post(tap: .cghidEventTap)
+            usleep(10_000)
+            escapeUp.post(tap: .cghidEventTap)
+        }
+
+        self.log("[TypingService] Reset remote keyboard state (modifier releases + Escape)")
+    }
+
+    private func isRemoteDesktopTargetStillFrontmost(_ targetPID: pid_t) -> Bool {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+    }
+
+    /// Clipboard paste for a remote-desktop session.
+    ///
+    /// Differs from ``insertTextViaClipboardToPid`` in the three ways that make it work here:
+    /// the chord goes to the HID tap rather than `postToPid`, it is a complete Ctrl+V chord
+    /// rather than a flag-carrying `v`, and it waits for the client to notice the pasteboard
+    /// before firing.
+    ///
+    /// Ctrl+V rather than Cmd+V on purpose: Cmd+V depends on the client's "Use Mac shortcuts
+    /// for copy, cut, paste" setting being on, and if the chord ever lands on the client's own
+    /// local UI instead of the session canvas, Ctrl+V is a harmless no-op there whereas Cmd+V
+    /// would paste into it.
+    private func insertTextViaRemoteDesktopPaste(_ text: String, targetPID: pid_t) -> Bool {
+        self.log("[TypingService] Starting remote-desktop paste insertion to PID \(targetPID)")
+
+        // Posting a modifier chord while the user still physically holds a modifier merges the
+        // two into a different chord, so refuse rather than send something wrong.
+        guard self.waitForPhysicalModifiersToRelease(timeout: 2) else {
+            self.log("[TypingService] ERROR: Physical modifiers still held; skipping remote-desktop paste")
+            return false
+        }
+
+        // Checked before the pasteboard is written so a doomed attempt does not churn the
+        // user's clipboard.
+        guard self.isRemoteDesktopTargetStillFrontmost(targetPID) else {
+            self.log("[TypingService] ERROR: Target is not frontmost; skipping remote-desktop paste")
+            return false
+        }
+
+        guard let target = NSRunningApplication(processIdentifier: targetPID) else {
+            self.log("[TypingService] ERROR: Remote-desktop target no longer running")
+            return false
+        }
+
+        // Resolved before anything below has an effect. This used to be checked after the
+        // pasteboard had been written and focus had been bounced away for two seconds, so a
+        // layout with no usable paste position churned the user's clipboard and stole focus
+        // and then inserted nothing at all.
+        guard let pasteKeyCode = Self.remoteDesktopLayoutCache.snapshot().pasteKeyCode else {
+            self.log("[TypingService] ERROR: No trustworthy position for the paste key on this layout; refusing to press an unknown key")
+            return false
+        }
+
+        // The bounce below deliberately takes focus away for roughly two seconds. A PID alone
+        // cannot tell one window or session of the same client from another, so capture the
+        // focused element itself and require the *same* element afterwards.
+        let focusTargetBeforeBounce = Self.captureSystemFocusTarget()
+
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+            usleep(Self.remoteDesktopClipboardSettleMicros)
+
+            // These clients only re-advertise their clipboard to the guest after a focus
+            // change, so without this the guest pastes whatever it last synced. Measured: a
+            // re-activation of the already-frontmost client is not enough; focus has to
+            // actually leave and come back, and it needs over a second to settle.
+            NSRunningApplication.current.activate(options: Self.focusRestoreActivationOptions)
+            usleep(400_000)
+
+            // If focus never actually left, the client has not re-advertised anything and the
+            // chord would paste whatever the guest last synced - someone else's clipboard
+            // content, into their session. Refuse rather than paste the wrong text.
+            guard self.isRemoteDesktopTargetStillFrontmost(targetPID) == false else {
+                self.log("[TypingService] ERROR: Focus never left the target; refusing to paste possibly stale content")
+                return false
+            }
+
+            target.activate(options: Self.focusRestoreActivationOptions)
+            usleep(1_500_000)
+            self.log("[TypingService] Bounced focus to force clipboard re-advertise")
+
+            guard self.isRemoteDesktopTargetStillFrontmost(targetPID) else {
+                self.log("[TypingService] ERROR: Target not frontmost after focus bounce; skipping paste")
+                return false
+            }
+
+            // Same application is not enough: the paste is a single global chord carrying the
+            // whole transcript, so require the identical focused element we captured. If it
+            // cannot be confirmed, abort - `withTemporaryPasteboardString` restores the
+            // clipboard, and the transcript is still in History.
+            guard let focusTargetBeforeBounce else {
+                self.log("[TypingService] ERROR: No focus target was captured; refusing to paste blind")
+                return false
+            }
+            guard Self.isExactFocusTargetActive(focusTargetBeforeBounce) else {
+                self.log("[TypingService] ERROR: Focused element changed across the bounce; skipping paste")
+                return false
+            }
+
+            guard self.waitForPhysicalModifiersToRelease(timeout: 0.5) else {
+                self.log("[TypingService] ERROR: Physical modifiers held after bounce; skipping remote-desktop paste")
+                return false
+            }
+
+            guard let chord = Self.makeRemoteDesktopChord(
+                modifierKeyCode: CGKeyCode(kVK_Control),
+                keyCode: pasteKeyCode
+            ) else {
+                self.log("[TypingService] ERROR: Failed to create remote-desktop paste chord")
+                return false
+            }
+
+            self.log("[TypingService] Posting Ctrl+V chord via HID tap")
+            self.postRemoteDesktopChord(chord)
             return true
         }
     }

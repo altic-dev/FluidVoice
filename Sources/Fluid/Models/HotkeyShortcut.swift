@@ -92,7 +92,14 @@ struct HotkeyShortcut: Codable, Equatable {
     ]
 
     /// Uses the current keyboard layout to resolve a key code to its displayed character.
+    ///
+    /// Main thread only: this reads the input source, and doing that from a background queue can
+    /// trap inside HIToolbox with no frame of ours on the stack. Every caller today is
+    /// main-actor (SwiftUI bodies, `MenuBarManager`, `GlobalHotkeyManager`), but the chain runs
+    /// through the non-isolated `SettingsStore.primaryDictationShortcutDisplayString`, so
+    /// nothing in the type system enforces it. Fail here rather than in Carbon.
     static func characterForKeyCode(_ keyCode: UInt16) -> String? {
+        precondition(Thread.isMainThread)
         guard let sourceRef = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let rawPtr = TISGetInputSourceProperty(sourceRef, kTISPropertyUnicodeKeyLayoutData)
         else { return nil }

@@ -1,20 +1,31 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// One process-wide snapshot, refreshed at launch and on input-source notifications.
-/// Paste requests only read the snapshot and never dispatch to the main queue.
-final class PasteKeyCodeCache: @unchecked Sendable {
+/// One process-wide snapshot of a value derived from the active keyboard layout, refreshed
+/// at launch and on input-source notifications.
+///
+/// Carbon's Text Input Source APIs are main-thread-only. Reading one from a background queue
+/// can trap inside HIToolbox - `TISGetInputSourceProperty` validates the source against the
+/// input-source list, and rebuilding that list calls `dispatch_assert_queue`. The trap is not
+/// reliable enough to catch in testing: the same binary read the layout off the main thread
+/// successfully for weeks before an input-source change made every call fatal.
+///
+/// So the resolve closure runs on the main thread only, and readers take the snapshot and
+/// never dispatch to the main queue.
+final class KeyboardLayoutSnapshotCache<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var keyCode: CGKeyCode = 9
+    private var value: Value
     private var observer: NSObjectProtocol?
-    private let resolve: () -> CGKeyCode
+    private let resolve: () -> Value
     private let notificationName: Notification.Name
     private var refreshScheduled = false
 
     init(
+        initialValue: Value,
         notificationName: Notification.Name = Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
-        resolve: @escaping () -> CGKeyCode
+        resolve: @escaping () -> Value
     ) {
+        self.value = initialValue
         self.notificationName = notificationName
         self.resolve = resolve
     }
@@ -48,14 +59,14 @@ final class PasteKeyCodeCache: @unchecked Sendable {
         precondition(Thread.isMainThread)
         let updated = self.resolve()
         self.lock.lock()
-        self.keyCode = updated
+        self.value = updated
         self.lock.unlock()
     }
 
-    func snapshot() -> CGKeyCode {
+    func snapshot() -> Value {
         self.lock.lock()
         defer { self.lock.unlock() }
-        return self.keyCode
+        return self.value
     }
 
     deinit {

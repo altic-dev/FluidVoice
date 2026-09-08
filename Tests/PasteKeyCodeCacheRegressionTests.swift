@@ -1,7 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 
-// Standalone executable: compile with the production PasteKeyCodeCache.swift.
+// Standalone executable: compile with the production KeyboardLayoutSnapshotCache.swift.
 @main
 enum PasteKeyCodeCacheRegressionTests {
     static func main() {
@@ -9,7 +9,7 @@ enum PasteKeyCodeCacheRegressionTests {
         let name = Notification.Name("FluidVoice.PasteKeyCacheTest.\(UUID().uuidString)")
         var selectedKey: CGKeyCode = 9
         var lookups = 0
-        let cache = PasteKeyCodeCache(notificationName: name) {
+        let cache = KeyboardLayoutSnapshotCache(initialValue: CGKeyCode(9), notificationName: name) {
             precondition(Thread.isMainThread)
             lookups += 1
             return selectedKey
@@ -62,7 +62,7 @@ enum PasteKeyCodeCacheRegressionTests {
         precondition(finished.wait(timeout: .now() + 2) == .success, "Background reads must not wait for main")
         precondition(lookups == lookupsBeforeReads)
 
-        var released: PasteKeyCodeCache? = PasteKeyCodeCache(notificationName: name) { 9 }
+        var released: KeyboardLayoutSnapshotCache<CGKeyCode>? = KeyboardLayoutSnapshotCache(initialValue: CGKeyCode(9), notificationName: name) { 9 }
         released?.start()
         weak var weakCache = released
         released = nil
