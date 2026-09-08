@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
+    private let modelVerifications = ProviderModelVerificationStore()
     let settings: SettingsStore
     let menuBarManager: MenuBarManager
     let promptTest: DictationPromptTestCoordinator
@@ -104,6 +105,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     @Published var cachedProviderItems: [ProviderItemData] = []
+    @Published var cachedAddedProviderItems: [ProviderItemData] = []
     @Published var cachedVerifiedProviderItems: [ProviderItemData] = []
     @Published var cachedUnverifiedProviderItems: [ProviderItemData] = []
 
@@ -333,6 +335,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         self.cachedProviderItems = items
+        self.cachedAddedProviderItems = self.addedProviderItems(from: items)
         self.cachedVerifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) == .success }
         self.cachedUnverifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) != .success }
     }
@@ -368,6 +371,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let key = self.providerKey(for: providerID)
         guard !self.isTestingConnection else { return false }
         let currentModel = PrivateAIModelRegistry.model(id: model.id) ?? model
+        let configuredModelID = PrivateAIIntegrationService.configuredModelID
+        let fingerprint = self.privateAIFingerprint(for: currentModel.id)
+
+        // Navigation may expose another settings owner while verification is awaiting the runtime.
+        // Do not publish an old verification into a newly selected model/backend configuration.
+        func configurationIsCurrent() -> Bool {
+            PrivateAIIntegrationService.configuredModelID == configuredModelID
+                && self.privateAIFingerprint(for: currentModel.id) == fingerprint
+        }
 
         self.isTestingConnection = true
         self.updateConnectionStatus(.testing, for: providerID)
@@ -384,9 +396,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         do {
             let status = try await PrivateAIIntegrationService.shared.verifyModel(currentModel)
+            guard configurationIsCurrent() else {
+                self.updateConnectionStatus(.unknown, for: providerID)
+                return false
+            }
             switch status.state {
             case .ready:
-                let fingerprint = self.privateAIFingerprint(for: currentModel.id)
                 var fingerprints = self.settings.verifiedProviderFingerprints
                 fingerprints[key] = fingerprint
                 self.settings.verifiedProviderFingerprints = fingerprints
@@ -407,6 +422,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 return false
             }
         } catch {
+            guard configurationIsCurrent() else {
+                self.updateConnectionStatus(.unknown, for: providerID)
+                return false
+            }
             self.updateConnectionStatus(.failed, for: providerID)
             self.setConnectionError(self.privateAIErrorMessage(for: error), for: providerID)
             DebugLogger.shared.error(
@@ -795,10 +814,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         let usesResponsesAPI = self.shouldVerifyWithResponsesAPI(baseURL: baseURL, model: trimmedModel)
 
-        await MainActor.run {
-            self.isTestingConnection = true
-            self.updateConnectionStatus(.testing, for: providerID)
-        }
+        let verificationIdentity = ProviderModelVerificationStore.identity(
+            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel
+        )
+        self.isTestingConnection = true
+        self.updateConnectionStatus(.testing, for: providerID)
+        // Every validation/network exit must stop the spinner.
+        defer { self.isTestingConnection = false }
 
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -921,12 +943,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Make the request
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            // A late result must never label a different model or changed credentials.
+            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
 
             if let httpResponse = response as? HTTPURLResponse {
                 let statusCode = httpResponse.statusCode
+                let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let apiError = payload?["error"]
+                let hasAPIError = apiError != nil && !(apiError is NSNull)
 
-                if statusCode >= 200, statusCode < 300 {
+                if statusCode >= 200, statusCode < 300, !hasAPIError {
                     await MainActor.run {
+                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                        self.modelVerifications.recordSuccess(verificationIdentity)
                         self.updateConnectionStatus(.success, for: providerID)
                         self.setEditingAPIKey(false, for: providerID)
                         self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
@@ -942,31 +971,53 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         source: "AISettingsView"
                     )
                     await MainActor.run {
+                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                        self.modelVerifications.remove(verificationIdentity)
                         self.updateConnectionStatus(.failed, for: providerID)
                         self.setConnectionError(errorMessage, for: providerID)
                     }
                 }
             } else {
                 await MainActor.run {
+                    guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                    self.modelVerifications.remove(verificationIdentity)
                     self.updateConnectionStatus(.failed, for: providerID)
                     self.setConnectionError("Unexpected response type from server", for: providerID)
                 }
             }
         } catch {
+            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+            self.modelVerifications.remove(verificationIdentity)
             let errorMessage = self.interpretNetworkError(error, providerID: providerID)
             DebugLogger.shared.error(
                 "testAPIConnection network error for \(providerID): \(error.localizedDescription)",
                 source: "AISettingsView"
             )
             await MainActor.run {
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError(errorMessage, for: providerID)
             }
         }
+    }
 
-        await MainActor.run {
-            self.isTestingConnection = false
-        }
+    private func modelVerificationIdentity(for providerID: String) -> String {
+        ProviderModelVerificationStore.identity(
+            providerID: providerID,
+            baseURL: self.providerBaseURL(for: providerID),
+            apiKey: self.providerAPIKey(for: providerID),
+            model: self.selectedModel(for: providerID)
+        )
+    }
+
+    func isModelVerified(for providerID: String) -> Bool {
+        self.modelVerifications.contains(self.modelVerificationIdentity(for: providerID))
+    }
+
+    func canUseProviderWithoutVerification(_ providerID: String) -> Bool {
+        let baseURL = self.providerBaseURL(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines)
+        return !baseURL.isEmpty && !self.selectedModel(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (self.isLocalEndpoint(baseURL) || !self.providerAPIKey(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     /// Returns the provider's HTTP error body unchanged so setup errors match the real API response.
@@ -1100,6 +1151,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func deleteCurrentProvider() {
         let deletedProviderID = self.selectedProviderID
         let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
+        let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
+        UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
         self.savedProviders.removeAll { $0.id == deletedProviderID }
         self.saveSavedProviders()
         let key = self.providerKey(for: deletedProviderID)
@@ -1171,6 +1224,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModelsForCurrentProvider() async {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return }
         self.refreshingProviderID = self.selectedProviderID
         self.isFetchingModels = true
         self.fetchModelsError = nil
@@ -1262,6 +1316,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard !trimmedModel.isEmpty else { return }
 
         let key = self.providerKey(for: providerID)
+        let changed = self.selectedModelByProvider[key] != trimmedModel
         self.selectedModelByProvider[key] = trimmedModel
         self.settings.selectedModelByProvider = self.selectedModelByProvider
 
@@ -1269,6 +1324,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.availableModels = self.models(for: providerID)
             self.selectedModel = trimmedModel
             self.syncPromptSelectionForSelectedProvider()
+        }
+        if changed {
+            self.updateConnectionStatus(self.isModelVerified(for: providerID) ? .success : .unknown, for: providerID)
         }
     }
 

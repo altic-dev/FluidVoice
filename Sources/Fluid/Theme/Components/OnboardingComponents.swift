@@ -430,7 +430,7 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+    static let blue = FluidBrandColors.blue
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {
