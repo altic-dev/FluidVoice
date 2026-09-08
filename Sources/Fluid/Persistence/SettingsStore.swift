@@ -3338,7 +3338,8 @@ final class SettingsStore: ObservableObject {
             continuousDictationModeEnabled: self.continuousDictationModeEnabled,
             continuousDictationSpacingEnabled: self.continuousDictationSpacingEnabled,
             contextAwareCapitalizationEnabled: self.contextAwareCapitalizationEnabled,
-            pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
+            pauseMediaDuringTranscription: self.recordingPlaybackBehavior == .pause,
+            recordingPlaybackBehavior: self.recordingPlaybackBehavior,
             automaticDictionaryLearningEnabled: self.automaticDictionaryLearningEnabled,
             automaticDictionarySuggestionFrequency: self.automaticDictionarySuggestionFrequency,
             pronunciationMatchingEnabled: self.pronunciationMatchingEnabled,
@@ -3515,7 +3516,8 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationModeEnabled = restoredContinuousDictationModeEnabled
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
-        self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        self.recordingPlaybackBehavior = payload.recordingPlaybackBehavior
+            ?? (payload.pauseMediaDuringTranscription ? .pause : .keepPlaying)
         if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
             self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
         }
@@ -4535,14 +4537,48 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Media Playback Control
 
-    /// When enabled, automatically pauses system media playback when transcription starts.
-    /// Only resumes if FluidVoice was the one that paused it.
-    var pauseMediaDuringTranscription: Bool {
-        get { self.defaults.object(forKey: Keys.pauseMediaDuringTranscription) as? Bool ?? false }
+    /// What happens to audio already playing on the Mac while a recording runs.
+    enum RecordingPlaybackBehavior: String, Codable, CaseIterable, Identifiable {
+        /// Leave other audio untouched.
+        case keepPlaying
+        /// Ask the Now Playing app to pause, and resume it afterwards.
+        case pause
+        /// Silence the output device, and restore it afterwards.
+        case mute
+
+        var id: String { self.rawValue }
+
+        var displayName: String {
+            switch self {
+            case .keepPlaying: "Keep Playing"
+            case .pause: "Pause"
+            case .mute: "Mute"
+            }
+        }
+    }
+
+    /// Chooses between leaving playback alone, pausing it, and muting the output
+    /// device. Either intervention is reverted only when FluidVoice was the one
+    /// that made it.
+    var recordingPlaybackBehavior: RecordingPlaybackBehavior {
+        get {
+            if let stored = self.defaults.string(forKey: Keys.recordingPlaybackBehavior),
+               let behavior = RecordingPlaybackBehavior(rawValue: stored)
+            {
+                return behavior
+            }
+            return self.legacyPauseMediaDuringTranscription ? .pause : .keepPlaying
+        }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.pauseMediaDuringTranscription)
+            self.defaults.set(newValue.rawValue, forKey: Keys.recordingPlaybackBehavior)
         }
+    }
+
+    /// The boolean toggle this setting replaced. Read only, to migrate users who
+    /// had media pausing enabled before the behavior became a three-way choice.
+    private var legacyPauseMediaDuringTranscription: Bool {
+        self.defaults.object(forKey: Keys.pauseMediaDuringTranscription) as? Bool ?? false
     }
 
     // MARK: - Custom Dictionary
@@ -5558,6 +5594,8 @@ private extension SettingsStore {
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
 
         /// Media Playback Control
+        static let recordingPlaybackBehavior = "RecordingPlaybackBehavior"
+        /// Replaced by `recordingPlaybackBehavior`; still read to migrate existing users.
         static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"
 
         /// Custom Dictation Prompt

@@ -2357,12 +2357,22 @@ final class ASRService: ObservableObject {
                 "✅ Audio capture running after first PCM (session=\(captureSessionID))",
                 source: "ASRService"
             )
+
+            // Mute before the start cue so no media audio survives into the
+            // recording. Setting a CoreAudio property is synchronous and cheap,
+            // unlike the Now Playing query below, so it cannot delay the cue.
+            // Muting the output device silences the cue itself, which is
+            // inherent to the setting.
+            if SettingsStore.shared.recordingPlaybackBehavior == .mute {
+                SystemAudioMuteService.shared.muteIfAudible()
+            }
+
             onCaptureStarted?()
 
             // Pause only after capture is live so media control cannot delay the
             // first PCM packet. A quick stop while this await is in flight is
             // handled explicitly below.
-            if SettingsStore.shared.pauseMediaDuringTranscription {
+            if SettingsStore.shared.recordingPlaybackBehavior == .pause {
                 let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
                 guard self.isRunning, self.isStoppingFinalTranscription == false else {
                     if didPause {
@@ -2426,7 +2436,8 @@ final class ASRService: ObservableObject {
                 DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
             }
 
-            // Resume media if we paused it before the failure
+            // Restore audio we silenced or paused before the failure
+            SystemAudioMuteService.shared.restoreIfMuted()
             if self.didPauseMediaForThisSession {
                 await MediaPlaybackService.shared.resumeIfWePaused(true)
                 self.didPauseMediaForThisSession = false
@@ -2752,6 +2763,12 @@ final class ASRService: ObservableObject {
         // Capture media pause state before we reset it, for resuming at the end
         let shouldResumeMedia = self.didPauseMediaForThisSession
         self.didPauseMediaForThisSession = false // Reset for next session
+
+        // Unmute as capture ends rather than after transcription: there is no
+        // reason to keep the Mac silent while text is produced, and it lets the
+        // stop cue be heard. This sits ahead of every later return path, and is
+        // a no-op when this session muted nothing.
+        SystemAudioMuteService.shared.restoreIfMuted()
 
         DebugLogger.shared.debug("📍 Preparing final transcription", source: "ASRService")
 
@@ -3304,6 +3321,9 @@ final class ASRService: ObservableObject {
         // Capture media pause state before we reset it, for resuming at the end
         let shouldResumeMedia = self.didPauseMediaForThisSession
         self.didPauseMediaForThisSession = false // Reset for next session
+
+        // Covers cancellation and app termination, which both land here.
+        SystemAudioMuteService.shared.restoreIfMuted()
 
         DebugLogger.shared.info("🛑 Stopping recording - releasing audio devices", source: "ASRService")
 

@@ -108,7 +108,10 @@ struct SettingsBackupPayload: Codable, Equatable {
     let continuousDictationModeEnabled: Bool?
     let continuousDictationSpacingEnabled: Bool?
     let contextAwareCapitalizationEnabled: Bool?
+    /// Kept for backups restored by builds that predate the three-way choice.
     let pauseMediaDuringTranscription: Bool
+    // Optional so backups created before the three-way playback choice still decode.
+    let recordingPlaybackBehavior: SettingsStore.RecordingPlaybackBehavior?
     let automaticDictionaryLearningEnabled: Bool?
     let automaticDictionarySuggestionFrequency: SettingsStore.AutomaticDictionarySuggestionFrequency?
     let pronunciationMatchingEnabled: Bool?

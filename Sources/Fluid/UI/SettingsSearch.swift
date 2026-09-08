@@ -35,7 +35,7 @@ enum SettingsSearchTarget: Hashable {
     case audioHistory
     case usageStreak
     case skipSilentRecordings
-    case pauseMedia
+    case recordingPlayback
     case dictionarySuggestions
     case accessibilityPermission
     case textFormatting
@@ -93,7 +93,7 @@ enum SettingsSearchTarget: Hashable {
              .audioStorage,
              .usageStreak,
              .skipSilentRecordings,
-             .pauseMedia,
+             .recordingPlayback,
              .dictionarySuggestions,
              .accessibilityPermission,
              .textFormatting:
@@ -259,9 +259,9 @@ enum SettingsSearchIndex {
             terms: ["silence quiet speech avoid transcription"]
         ),
         .init(
-            target: .pauseMedia,
-            title: "Pause Media During Transcription",
-            terms: ["resume music audio video playback recording"]
+            target: .recordingPlayback,
+            title: "Playback When Recording",
+            terms: ["pause mute silence resume music audio video playback recording volume"]
         ),
         .init(
             target: .dictionarySuggestions,
