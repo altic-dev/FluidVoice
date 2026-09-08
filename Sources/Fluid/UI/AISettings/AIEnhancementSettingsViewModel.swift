@@ -2015,7 +2015,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let modelName = (self.selectedModelByProvider[providerKey] ?? self.selectedModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelName.isEmpty else { return providerName }
-        return "\(providerName) - \(modelName)"
+        return "\(providerName) - \(ModelDisplayName.forID(modelName))"
     }
 
     func selectPrivateAIPromptIfAvailable() {

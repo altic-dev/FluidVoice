@@ -2,6 +2,8 @@ import SwiftUI
 
 struct StatsView: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
+    @ObservedObject private var statsStore = StatsSnapshotStore.shared
+    @State private var statsOwner = UUID()
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
 
@@ -17,43 +19,54 @@ struct StatsView: View {
         return formatter
     }()
 
+    private var stats: StatsSnapshot {
+        (self.statsStore.snapshot ?? StatsSnapshot()).usingWeekdays(self.settings.weekendsDontBreakStreak)
+    }
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 16) {
-                self.todayHeaderCard
+            if self.statsStore.snapshot == nil {
+                ProgressView("Loading statistics…")
+                    .frame(maxWidth: .infinity, minHeight: 240)
+            } else {
+                VStack(spacing: 16) {
+                    self.todayHeaderCard
 
-                Divider()
-                    .opacity(0.4)
+                    Divider()
+                        .opacity(0.4)
 
-                // Header row: Time Saved + Total Words
-                HStack(spacing: 16) {
-                    self.timeSavedCard
-                    self.totalWordsCard
+                    // Header row: Time Saved + Total Words
+                    HStack(spacing: 16) {
+                        self.timeSavedCard
+                        self.totalWordsCard
+                    }
+
+                    // Second row: Streak + Transcriptions
+                    HStack(spacing: 16) {
+                        self.streakCard
+                        self.transcriptionsCard
+                    }
+
+                    // Activity Chart
+                    self.activityChartCard
+
+                    // Milestones
+                    self.milestonesCard
+
+                    // Insights
+                    self.insightsCard
+
+                    // Personal Records
+                    self.recordsCard
+
+                    // Reset Button
+                    self.resetSection
                 }
-
-                // Second row: Streak + Transcriptions
-                HStack(spacing: 16) {
-                    self.streakCard
-                    self.transcriptionsCard
-                }
-
-                // Activity Chart
-                self.activityChartCard
-
-                // Milestones
-                self.milestonesCard
-
-                // Insights
-                self.insightsCard
-
-                // Personal Records
-                self.recordsCard
-
-                // Reset Button
-                self.resetSection
+                .padding(20)
             }
-            .padding(20)
         }
+        .onAppear { self.statsStore.activate(self.statsOwner) }
+        .onDisappear { self.statsStore.deactivate(self.statsOwner) }
     }
 
     // MARK: - Today Header
@@ -63,7 +76,7 @@ struct StatsView: View {
         let wordsToday = summary.words
         let timeSavedToday = summary.formattedTimeSaved(typingWPM: self.settings.userTypingWPM)
         let sessionsToday = summary.transcriptions
-        let streak = self.historyStore.currentStreak
+        let streak = self.stats.currentStreak
 
         return ThemedCard(style: .prominent, padding: 20, hoverEffect: false) {
             VStack(alignment: .leading, spacing: 14) {
@@ -179,7 +192,7 @@ struct StatsView: View {
     private var timeSavedCard: some View {
         StatCard(title: "TIME SAVED", icon: "clock.fill") {
             VStack(alignment: .leading, spacing: 8) {
-                Text(self.historyStore.formattedTimeSaved(typingWPM: self.settings.userTypingWPM))
+                Text(self.stats.formattedTimeSaved(typingWPM: self.settings.userTypingWPM))
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
@@ -247,7 +260,7 @@ struct StatsView: View {
     private var totalWordsCard: some View {
         StatCard(title: "TOTAL WORDS", icon: "text.word.spacing") {
             VStack(alignment: .leading, spacing: 8) {
-                Text(self.formatNumber(self.historyStore.totalWords))
+                Text(self.formatNumber(self.stats.totalWords))
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
@@ -271,16 +284,16 @@ struct StatsView: View {
         StatCard(title: "CURRENT STREAK", icon: "flame.fill") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(self.historyStore.currentStreak)")
+                    Text("\(self.stats.currentStreak)")
                         .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(self.historyStore.currentStreak > 0 ? self.theme.palette.warning : .primary)
+                        .foregroundStyle(self.stats.currentStreak > 0 ? self.theme.palette.warning : .primary)
 
-                    Text(self.historyStore.currentStreak == 1 ? "day" : "days")
+                    Text(self.stats.currentStreak == 1 ? "day" : "days")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Best: \(self.historyStore.bestStreak) days")
+                Text("Best: \(self.stats.bestStreak) days")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -296,7 +309,7 @@ struct StatsView: View {
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
-                Text("Avg: \(self.historyStore.averageWordsPerTranscription) words each")
+                Text("Avg: \(self.stats.averageWordsPerTranscription) words each")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -323,7 +336,7 @@ struct StatsView: View {
                     .frame(width: 140)
                 }
 
-                let data = self.historyStore.dailyWordCounts(days: self.chartDays)
+                let data = self.stats.dailyWordCounts(days: self.chartDays)
                 let maxWords = data.map { $0.words }.max() ?? 0
 
                 if maxWords == 0 {
@@ -439,7 +452,7 @@ struct StatsView: View {
 
                     Spacer()
 
-                    Text("\(self.historyStore.totalMilestonesAchieved)/\(self.historyStore.totalMilestonesPossible)")
+                    Text("\(self.stats.totalMilestonesAchieved)/\(self.stats.totalMilestonesPossible)")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(self.theme.palette.accent)
                 }
@@ -448,19 +461,19 @@ struct StatsView: View {
                     // Word milestones
                     self.milestoneRow(
                         title: "Words",
-                        milestones: self.historyStore.wordMilestones
+                        milestones: self.stats.wordMilestones
                     )
 
                     // Transcription milestones
                     self.milestoneRow(
                         title: "Transcriptions",
-                        milestones: self.historyStore.transcriptionMilestones
+                        milestones: self.stats.transcriptionMilestones
                     )
 
                     // Streak milestones
                     self.milestoneRow(
                         title: "Streak",
-                        milestones: self.historyStore.streakMilestones
+                        milestones: self.stats.streakMilestones
                     )
                 }
             }
@@ -513,7 +526,7 @@ struct StatsView: View {
                     self.insightItem(
                         icon: "app.fill",
                         title: "Top Apps",
-                        value: self.historyStore.topAppsFormatted(limit: 3).joined(separator: ", "),
+                        value: self.stats.topAppsFormatted(limit: 3).joined(separator: ", "),
                         fallback: "No data yet"
                     )
 
@@ -521,7 +534,7 @@ struct StatsView: View {
                     self.insightItem(
                         icon: "sparkles",
                         title: "AI Enhanced",
-                        value: "\(self.historyStore.aiEnhancementRate)%",
+                        value: "\(self.stats.aiEnhancementRate)%",
                         fallback: "0%"
                     )
 
@@ -529,7 +542,7 @@ struct StatsView: View {
                     self.insightItem(
                         icon: "clock.fill",
                         title: "Peak Time",
-                        value: self.historyStore.peakHourFormatted,
+                        value: self.stats.peakHourFormatted,
                         fallback: "N/A"
                     )
 
@@ -537,7 +550,7 @@ struct StatsView: View {
                     self.insightItem(
                         icon: "ruler.fill",
                         title: "Avg Length",
-                        value: "\(self.historyStore.averageWordsPerTranscription) words",
+                        value: "\(self.stats.averageWordsPerTranscription) words",
                         fallback: "0 words"
                     )
                 }
@@ -582,17 +595,17 @@ struct StatsView: View {
                 HStack(spacing: 12) {
                     self.recordItem(
                         title: "Longest Transcription",
-                        value: "\(self.historyStore.longestTranscriptionWords) words"
+                        value: "\(self.stats.longestTranscriptionWords) words"
                     )
 
                     self.recordItem(
                         title: "Most Words in a Day",
-                        value: "\(self.formatNumber(self.historyStore.mostWordsInDay)) words"
+                        value: "\(self.formatNumber(self.stats.mostWordsInDay)) words"
                     )
 
                     self.recordItem(
                         title: "Most in a Day",
-                        value: "\(self.historyStore.mostTranscriptionsInDay) transcriptions"
+                        value: "\(self.stats.mostTranscriptionsInDay) transcriptions"
                     )
                 }
             }
@@ -654,15 +667,11 @@ struct StatsView: View {
     // MARK: - Helpers
 
     private func formatNumber(_ number: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: number)) ?? "\(number)"
+        number.formatted(.number)
     }
 
     private func dayLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
-        return formatter.string(from: date)
+        date.formatted(.dateTime.weekday(.abbreviated))
     }
 }
 

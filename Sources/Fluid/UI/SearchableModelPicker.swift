@@ -27,7 +27,7 @@ struct SearchableModelPicker: View {
         isRefreshing: Bool = false,
         refreshEnabled: Bool = true,
         selectionEnabled: Bool = true,
-        displayName: @escaping (String) -> String = { $0 },
+        displayName: @escaping (String) -> String = ModelDisplayName.forID,
         controlWidth: CGFloat = 180,
         controlHeight: CGFloat? = nil
     ) {

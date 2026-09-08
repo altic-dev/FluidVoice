@@ -1025,7 +1025,7 @@ extension AIEnhancementSettingsView {
     }
 
     private func privateAIModelDisplayName(_ modelID: String) -> String {
-        PrivateAIModelRegistry.model(id: modelID)?.displayName ?? modelID
+        ModelDisplayName.forID(modelID)
     }
 
     private func isPrivateAIModelVerified(_ model: PrivateAIRegisteredModel) -> Bool {
@@ -1315,7 +1315,7 @@ extension AIEnhancementSettingsView {
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(Color.fluidGreen)
                             .frame(maxWidth: managementLayout ? .infinity : nil, alignment: .trailing)
-                            .help("Successfully tested \(self.viewModel.selectedModel(for: item.id)) with this endpoint and API key.")
+                            .help("Successfully tested \(ModelDisplayName.forID(self.viewModel.selectedModel(for: item.id))) with this endpoint and API key.")
                     } else {
                         Button(action: {
                             Task { await self.viewModel.testAPIConnection() }
@@ -2399,7 +2399,7 @@ extension AIEnhancementSettingsView {
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 14))
                     .foregroundStyle(self.theme.palette.accent)
-                Text("Reasoning for \(self.viewModel.selectedModel)")
+                Text("Reasoning for \(ModelDisplayName.forID(self.viewModel.selectedModel))")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                 Spacer()

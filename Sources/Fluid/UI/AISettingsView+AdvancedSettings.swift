@@ -307,7 +307,7 @@ extension AIEnhancementSettingsView {
                     systemImage: "cpu",
                     text: modelPicker.selectedModel.isEmpty
                         ? (modelPicker.providerName.isEmpty ? "No model" : modelPicker.summary)
-                        : modelPicker.selectedModel,
+                        : ModelDisplayName.forID(modelPicker.selectedModel),
                     tone: tone
                 )
             }
@@ -631,7 +631,7 @@ extension AIEnhancementSettingsView {
 
         let providerName = self.viewModel.providerDisplayName(for: providerID)
         let selectedModel = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(selectedModel)"
+        let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(ModelDisplayName.forID(selectedModel))"
 
         return PromptCardModelPicker(
             summary: summary,
@@ -889,7 +889,7 @@ extension AIEnhancementSettingsView {
     ) -> PromptCardModelPicker? {
         if isPrivateAI {
             return PromptCardModelPicker(
-                summary: "fluid-1",
+                summary: ModelDisplayName.forID(PrivateAIIntegrationService.configuredModelID),
                 selectedModel: PrivateAIIntegrationService.configuredModelID,
                 models: PrivateAIModelRegistry.modelIDs(),
                 providerName: PrivateAIProviderFeature.displayName,
@@ -926,7 +926,7 @@ extension AIEnhancementSettingsView {
         let providerName = self.viewModel.providerDisplayName(for: providerID)
         let configuredModel = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedModel = configuredModel.isEmpty ? self.viewModel.selectedModel(for: providerID) : configuredModel
-        let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(selectedModel)"
+        let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(ModelDisplayName.forID(selectedModel))"
 
         return PromptCardModelPicker(
             summary: summary,
