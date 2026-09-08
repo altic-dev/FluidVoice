@@ -948,15 +948,8 @@ struct SettingsView: View {
                                     .settingsSearchTarget(.skipSilentRecordings)
                                     Divider().opacity(0.2)
 
-                                    self.optionToggleRow(
-                                        title: "Pause Media During Transcription",
-                                        description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
-                                        isOn: Binding(
-                                            get: { SettingsStore.shared.pauseMediaDuringTranscription },
-                                            set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
-                                        )
-                                    )
-                                    .settingsSearchTarget(.pauseMedia)
+                                    RecordingPlaybackSettingsRow()
+                                        .settingsSearchTarget(.recordingPlayback)
                                     Divider().opacity(0.2)
 
                                     DictionarySuggestionsSettingsRow()
@@ -2925,6 +2918,38 @@ private extension SettingsView {
                 }
                 .padding(.leading, 12)
             }
+        }
+    }
+}
+
+private struct RecordingPlaybackSettingsRow: View {
+    @Environment(\.theme) private var theme
+    @ObservedObject private var settings = SettingsStore.shared
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Playback When Recording")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text(
+                    "Choose what happens to audio already playing when a recording starts. " +
+                        "Pause asks the current media app to stop and resumes it afterwards. " +
+                        "Mute silences the output device instead, which also covers audio that cannot be paused."
+                )
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Picker("", selection: self.$settings.recordingPlaybackBehavior) {
+                ForEach(SettingsStore.RecordingPlaybackBehavior.allCases) { behavior in
+                    Text(behavior.displayName).tag(behavior)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 138)
         }
     }
 }

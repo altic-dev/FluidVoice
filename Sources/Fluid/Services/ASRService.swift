@@ -633,6 +633,17 @@ final class ASRService: ObservableObject {
         if self.isRunning {
             await self.stopWithoutTranscription()
         }
+
+        // Only once capture has ended, so terminating mid-recording cannot make
+        // playback audible while the pipeline is still running. A stop already
+        // in flight owns the buffer handoff, which makes the call above return
+        // immediately, so it is left to restore after it freezes its own capture
+        // boundary. What remains here is ownership left over from a device that
+        // was unplugged during an earlier teardown, held only in memory.
+        if self.isRunning == false, self.isStoppingFinalTranscription == false {
+            SystemAudioMuteService.shared.restoreIfMuted()
+        }
+
         let audioEngineShutdownStartedAt = Date().timeIntervalSince1970
         await self.retireAudioEngineAndWait(reason: "app_termination")
         self.benchmarkLog(
@@ -2150,6 +2161,34 @@ final class ASRService: ObservableObject {
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
+
+        // Read once and use for both interventions below. They are applied
+        // either side of the wait for first PCM, so reading the setting twice
+        // would let a change made during that wait produce a recording with
+        // both policies or neither.
+        let playbackBehavior = SettingsStore.shared.recordingPlaybackBehavior
+
+        // Hand back any device an earlier recording could not restore, whatever
+        // the current setting is. Gating this on `.mute` would leave a device
+        // silent through a whole recording after the user switched away from it.
+        SystemAudioMuteService.shared.restoreIfMuted()
+
+        // Silence the output before the pipeline retains its first packet.
+        // Muting after capture is live would let the playback this mode exists
+        // to suppress into the opening of the recording. Setting a CoreAudio
+        // property is synchronous and cheap, unlike the Now Playing query
+        // below, so it does not delay the first PCM packet. It also silences
+        // our own start cue, which is inherent to muting the output device.
+        // Every start-failure and teardown path below restores it.
+        if playbackBehavior == .mute {
+            // A cue from the previous recording can still owe the system volume
+            // a restore. Let it land before sampling, or we would record the
+            // lowered cue volume as the value to put back and the deferred write
+            // would raise the volume again mid-recording.
+            TranscriptionSoundPlayer.shared.finishPendingVolumeRestore()
+            SystemAudioMuteService.shared.muteIfAudible()
+        }
+
         self.audioCapturePipeline.setRecordingEnabled(
             true,
             sessionID: captureSessionID,
@@ -2357,12 +2396,13 @@ final class ASRService: ObservableObject {
                 "✅ Audio capture running after first PCM (session=\(captureSessionID))",
                 source: "ASRService"
             )
+
             onCaptureStarted?()
 
             // Pause only after capture is live so media control cannot delay the
             // first PCM packet. A quick stop while this await is in flight is
             // handled explicitly below.
-            if SettingsStore.shared.pauseMediaDuringTranscription {
+            if playbackBehavior == .pause {
                 let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
                 guard self.isRunning, self.isStoppingFinalTranscription == false else {
                     if didPause {
@@ -2426,7 +2466,8 @@ final class ASRService: ObservableObject {
                 DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
             }
 
-            // Resume media if we paused it before the failure
+            // Restore audio we silenced or paused before the failure
+            SystemAudioMuteService.shared.restoreIfMuted()
             if self.didPauseMediaForThisSession {
                 await MediaPlaybackService.shared.resumeIfWePaused(true)
                 self.didPauseMediaForThisSession = false
@@ -2760,6 +2801,14 @@ final class ASRService: ObservableObject {
         // final hardware packet to this host time, preserving the last phoneme
         // without appending audio from the next session.
         self.audioCapturePipeline.markRecordingEnd(atHostTime: mach_absolute_time())
+
+        // Restore audio only once that boundary is frozen, so re-enabling the
+        // speakers cannot contaminate the final packet. This must stay ahead of
+        // onCaptureStopped below: the stop cue is played there and relies on the
+        // output already being audible, which is why TranscriptionSoundPlayer
+        // suppresses only the start cue under Mute. It also sits ahead of every
+        // later return path, and is a no-op when this session silenced nothing.
+        SystemAudioMuteService.shared.restoreIfMuted()
 
         // Stop monitoring device to prevent callbacks after stop
         DebugLogger.shared.debug("👁️ Stopping device monitoring...", source: "ASRService")
@@ -3310,6 +3359,10 @@ final class ASRService: ObservableObject {
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
         self.isRunning = false
         self.audioCapturePipeline.setRecordingEnabled(false)
+
+        // Restore only once the pipeline has stopped retaining audio. Covers
+        // cancellation and app termination, which both land here.
+        SystemAudioMuteService.shared.restoreIfMuted()
 
         // Stop monitoring device
         self.stopMonitoringDevice()
@@ -4252,6 +4305,7 @@ final class ASRService: ObservableObject {
         if invalidation.reason == "audio_service_restarted" {
             self.reestablishAudioHardwareListenersAfterServiceReset()
             AppServices.shared.audioObserver.restartObservingAfterAudioServiceReset()
+            SystemAudioMuteService.shared.reestablishObserversAfterAudioServiceReset()
         }
         DebugLogger.shared.warning(
             "Direct capture generation \(invalidation.generation) invalidated by " +
