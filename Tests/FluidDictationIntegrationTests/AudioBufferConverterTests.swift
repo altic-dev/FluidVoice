@@ -144,3 +144,188 @@ final class AudioBufferConverterTests: XCTestCase {
         }
     }
 }
+
+final class LocalAPIMultipartFormDataTests: XCTestCase {
+    private struct TranscriptionEnvelope: Decodable {
+        let text: String
+    }
+
+    private struct ErrorEnvelope: Decodable {
+        struct ErrorBody: Decodable {
+            let message: String
+            let type: String
+            let param: String?
+            let code: String?
+        }
+
+        let error: ErrorBody
+    }
+
+    func testParserIgnoresBoundaryBytesInsideFilePayload() throws {
+        let boundary = "fluidvoice-test-boundary"
+        var fileBody = Data([0, 1, 2])
+        fileBody.append(contentsOf: Data("--\(boundary)".utf8))
+        fileBody.append(contentsOf: Data("\r\n--\(boundary)X".utf8))
+        fileBody.append(255)
+
+        let body = self.multipartBody(
+            boundary: boundary,
+            fileBody: fileBody,
+            responseFormat: "json"
+        )
+        let parts = try LocalAPIMultipartFormData.parse(
+            body: body,
+            contentType: "multipart/form-data; boundary=\(boundary)"
+        )
+
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0].name, "file")
+        XCTAssertEqual(parts[0].filename, "audio.wav")
+        XCTAssertEqual(parts[0].body, fileBody)
+        XCTAssertEqual(parts[1].name, "response_format")
+        XCTAssertEqual(parts[1].stringValue, "json")
+    }
+
+    func testParserRejectsBodyWithoutClosingBoundary() {
+        let boundary = "fluidvoice-test-boundary"
+        let body = Data(
+            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n\r\naudio"
+                .utf8
+        )
+
+        XCTAssertThrowsError(
+            try LocalAPIMultipartFormData.parse(
+                body: body,
+                contentType: "multipart/form-data; boundary=\(boundary)"
+            )
+        )
+    }
+
+    @MainActor
+    func testUnsupportedResponseFormatReturnsOpenAIErrorBeforeAudioDecode() async throws {
+        let boundary = "fluidvoice-test-boundary"
+        let request = LocalAPI.Request(
+            method: "POST",
+            path: "/v1/audio/transcriptions",
+            query: [:],
+            headers: ["content-type": "multipart/form-data; boundary=\(boundary)"],
+            body: self.multipartBody(
+                boundary: boundary,
+                fileBody: Data([0, 1, 2]),
+                responseFormat: "verbose_json"
+            )
+        )
+
+        let response = await OpenAITranscriptionAPIController().handle(request)
+        let error = try LocalAPI.decoder.decode(ErrorEnvelope.self, from: response.body)
+
+        XCTAssertEqual(response.status, 400)
+        XCTAssertEqual(error.error.type, "invalid_request_error")
+        XCTAssertEqual(error.error.param, "response_format")
+        XCTAssertEqual(error.error.code, "invalid_value")
+        XCTAssertTrue(error.error.message.contains("verbose_json"))
+    }
+
+    @MainActor
+    func testJSONResponseUsesOpenAIShape() async throws {
+        let controller = OpenAITranscriptionAPIController { _ in
+            LocalAPITranscriptionPayload(text: "Hello from FluidVoice", confidence: 0.9, sampleCount: 42)
+        }
+
+        let response = await controller.handle(self.transcriptionRequest(responseFormat: "json"))
+        let payload = try LocalAPI.decoder.decode(TranscriptionEnvelope.self, from: response.body)
+
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
+        XCTAssertEqual(payload.text, "Hello from FluidVoice")
+    }
+
+    @MainActor
+    func testTextResponseUsesPlainTextContentType() async {
+        let controller = OpenAITranscriptionAPIController { _ in
+            LocalAPITranscriptionPayload(text: "Plain transcript", confidence: 0.9, sampleCount: 42)
+        }
+
+        let response = await controller.handle(self.transcriptionRequest(responseFormat: "text"))
+
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(response.headers["Content-Type"], "text/plain; charset=utf-8")
+        XCTAssertEqual(String(data: response.body, encoding: .utf8), "Plain transcript")
+    }
+
+    @MainActor
+    func testUnavailableASRReturnsOpenAI503AndRemovesTemporaryFile() async throws {
+        var temporaryFileURL: URL?
+        let controller = OpenAITranscriptionAPIController { fileURL in
+            temporaryFileURL = fileURL
+            throw NSError(
+                domain: "ASRService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Transcription provider is not ready."]
+            )
+        }
+
+        let response = await controller.handle(self.transcriptionRequest(responseFormat: "json"))
+        let error = try LocalAPI.decoder.decode(ErrorEnvelope.self, from: response.body)
+        let fileURL = try XCTUnwrap(temporaryFileURL)
+
+        XCTAssertEqual(response.status, 503)
+        XCTAssertEqual(error.error.type, "server_error")
+        XCTAssertEqual(error.error.code, "service_unavailable")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    @MainActor
+    func testUnexpectedASRFailureReturnsOpenAI500() async throws {
+        let controller = OpenAITranscriptionAPIController { _ in
+            throw NSError(
+                domain: "ASRService",
+                code: -99,
+                userInfo: [NSLocalizedDescriptionKey: "Unexpected transcription failure."]
+            )
+        }
+
+        let response = await controller.handle(self.transcriptionRequest(responseFormat: "json"))
+        let error = try LocalAPI.decoder.decode(ErrorEnvelope.self, from: response.body)
+
+        XCTAssertEqual(response.status, 500)
+        XCTAssertEqual(error.error.type, "server_error")
+        XCTAssertEqual(error.error.code, "internal_error")
+    }
+
+    private func transcriptionRequest(responseFormat: String) -> LocalAPI.Request {
+        let boundary = "fluidvoice-test-boundary"
+        return LocalAPI.Request(
+            method: "POST",
+            path: "/v1/audio/transcriptions",
+            query: [:],
+            headers: ["content-type": "multipart/form-data; boundary=\(boundary)"],
+            body: self.multipartBody(
+                boundary: boundary,
+                fileBody: Data([0, 1, 2]),
+                responseFormat: responseFormat
+            )
+        )
+    }
+
+    private func multipartBody(
+        boundary: String,
+        fileBody: Data,
+        responseFormat: String
+    ) -> Data {
+        var body = Data(
+            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+                .utf8
+        )
+        body.append(fileBody)
+        body.append(contentsOf: Data("\r\n--\(boundary)\r\n".utf8))
+        body.append(
+            contentsOf: Data(
+                "Content-Disposition: form-data; name=\"response_format\"\r\n\r\n\(responseFormat)\r\n"
+                    .utf8
+            )
+        )
+        body.append(contentsOf: Data("--\(boundary)--\r\n".utf8))
+        return body
+    }
+}
