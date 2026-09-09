@@ -4,7 +4,9 @@ import Foundation
 enum ProviderModelVerificationStoreTests {
     @MainActor
     static func main() {
-        let defaults = UserDefaults(suiteName: "fluidvoice.model-verification-tests.\(UUID().uuidString)")!
+        guard let defaults = UserDefaults(suiteName: "fluidvoice.model-verification-tests.\(UUID().uuidString)") else {
+            preconditionFailure("Could not create isolated test defaults")
+        }
         defer { defaults.removeObject(forKey: ProviderModelVerificationStore.defaultsKey) }
         let store = ProviderModelVerificationStore(defaults: defaults)
         func identity(_ model: String, key: String = "secret", endpoint: String = "https://example.com/v1", provider: String = "openrouter") -> String {
@@ -28,7 +30,9 @@ enum ProviderModelVerificationStoreTests {
         for index in 0..<300 {
             store.recordSuccess(identity("model-\(index)"), now: Date(timeIntervalSince1970: Double(index)))
         }
-        let saved = defaults.dictionary(forKey: ProviderModelVerificationStore.defaultsKey)!
+        guard let saved = defaults.dictionary(forKey: ProviderModelVerificationStore.defaultsKey) else {
+            preconditionFailure("Expected persisted verifications")
+        }
         precondition(saved.count == ProviderModelVerificationStore.maximumEntries)
         precondition(saved.keys.allSatisfy { $0.count == 64 && !$0.contains("secret") })
         precondition(!store.contains(identity("model-0")) && store.contains(identity("model-299")))

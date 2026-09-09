@@ -15,21 +15,44 @@ enum PrivateAIModelRegistry {
 @main
 struct HistoryPresentationTests {
     static func main() throws {
-        let audio = DictationAudioMetadata(fileName: "saved.wav", durationMilliseconds: 10300,
-                                          byteCount: 331000, sampleRate: 16000, channels: 1, model: nil)
-        let enhanced = TranscriptionHistoryEntry(rawText: " raw words ", processedText: " final words ",
-                                                appName: "Notes", windowTitle: "", wasAIProcessed: true, processingModel: "historical-model",
-                                                transcriptionDurationMilliseconds: 57,
-                                                aiProcessingDurationMilliseconds: 104, aiTokensPerSecond: 746,
-                                                audio: audio)
+        let audio = DictationAudioMetadata(
+            fileName: "saved.wav",
+            durationMilliseconds: 10_300,
+            byteCount: 331_000,
+            sampleRate: 16_000,
+            channels: 1,
+            model: nil
+        )
+        let enhanced = TranscriptionHistoryEntry(
+            rawText: " raw words ",
+            processedText: " final words ",
+            appName: "Notes",
+            windowTitle: "",
+            wasAIProcessed: true,
+            processingModel: "historical-model",
+            transcriptionDurationMilliseconds: 57,
+            aiProcessingDurationMilliseconds: 104,
+            aiTokensPerSecond: 746,
+            audio: audio
+        )
         let before = enhanced
         precondition(enhanced.clipboardText == "final words")
         precondition(enhanced == before, "Reading copy text must not mutate an entry")
-        let raw = TranscriptionHistoryEntry(rawText: " raw words ", processedText: "  ",
-                                           appName: "Notes", windowTitle: "", wasAIProcessed: false)
+        let raw = TranscriptionHistoryEntry(
+            rawText: " raw words ",
+            processedText: "  ",
+            appName: "Notes",
+            windowTitle: "",
+            wasAIProcessed: false
+        )
         precondition(raw.clipboardText == "raw words")
-        let empty = TranscriptionHistoryEntry(rawText: " ", processedText: " ",
-                                             appName: "Notes", windowTitle: "", wasAIProcessed: false)
+        let empty = TranscriptionHistoryEntry(
+            rawText: " ",
+            processedText: " ",
+            appName: "Notes",
+            windowTitle: "",
+            wasAIProcessed: false
+        )
         precondition(empty.clipboardText == nil)
         let decoded = try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: JSONEncoder().encode(enhanced))
         precondition(decoded == enhanced, "Presentation must preserve persisted fields")
@@ -47,16 +70,20 @@ struct HistoryPresentationTests {
             ("வணக்கம் 👋🏽 café", "வணக்கம் 👋🏽 Café!"),
         ]
         for (original, final) in cases {
-            let diff = HistoryTextDiff.compare(original: original, final: final)!
+            guard let diff = HistoryTextDiff.compare(original: original, final: final) else {
+                preconditionFailure("Expected a bounded comparison")
+            }
             precondition(diff.original.map(\.text).joined() == original)
             precondition(diff.final.map(\.text).joined() == final)
             precondition(diff.hasChanges == (original != final))
         }
-        let replacement = HistoryTextDiff.compare(original: "red blue", final: "green blue")!
+        guard let replacement = HistoryTextDiff.compare(original: "red blue", final: "green blue") else {
+            preconditionFailure("Expected a replacement comparison")
+        }
         precondition(replacement.original.filter(\.changed).map(\.text).joined() == "red")
         precondition(replacement.final.filter(\.changed).map(\.text).joined() == "green")
         precondition(HistoryTextDiff.compare(original: String(repeating: "a ", count: 2000), final: "") == nil)
-        precondition(HistoryTextDiff.compare(original: String(repeating: "x", count: 24001), final: "") == nil)
+        precondition(HistoryTextDiff.compare(original: String(repeating: "x", count: 24_001), final: "") == nil)
         precondition(ModelDisplayName.forID("mini-internal") == "Fluid 1 Mini")
         precondition(ModelDisplayName.forID("legacy-mini") == "Fluid 1 Mini")
         precondition(ModelDisplayName.forID("  mini-internal  ") == "Fluid 1 Mini")

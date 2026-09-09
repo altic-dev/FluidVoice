@@ -4,16 +4,33 @@ import Foundation
 struct StatsSnapshotTests {
     static func main() async throws {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        guard let timeZone = TimeZone(identifier: "America/Los_Angeles") else {
+            preconditionFailure("Missing test time zone")
+        }
+        calendar.timeZone = timeZone
         func date(_ day: Int, month: Int = 9) -> Date {
-            calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+            guard let value = calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12)) else {
+                preconditionFailure("Invalid test date")
+            }
+            return value
         }
         func entry(_ day: Int, text: String, app: String = "Notes", ai: Bool = false, month: Int = 9) -> TranscriptionHistoryEntry {
-            TranscriptionHistoryEntry(timestamp: date(day, month: month), rawText: "raw must not count", processedText: text,
-                                      appName: app, windowTitle: "", wasAIProcessed: ai)
+            TranscriptionHistoryEntry(
+                timestamp: date(day, month: month),
+                rawText: "raw must not count",
+                processedText: text,
+                appName: app,
+                windowTitle: "",
+                wasAIProcessed: ai
+            )
         }
-        let entries = [entry(7, text: "one  two\nthree", ai: true), entry(7, text: "four", app: ""),
-                       entry(6, text: "five six"), entry(4, text: "seven"), entry(3, text: "eight")]
+        let entries = [
+            entry(7, text: "one  two\nthree", ai: true),
+            entry(7, text: "four", app: ""),
+            entry(6, text: "five six"),
+            entry(4, text: "seven"),
+            entry(3, text: "eight"),
+        ]
         let original = entries
         let snapshot = try StatsSnapshot.build(entries: entries, now: date(7), calendar: calendar)
         precondition(entries == original, "Summary must not mutate history")
@@ -24,7 +41,7 @@ struct StatsSnapshotTests {
         precondition(snapshot.currentStreak == 2, "Settings projection must not alter cached summary")
         precondition(snapshot.longestTranscriptionWords == 3 && snapshot.mostWordsInDay == 4 && snapshot.mostTranscriptionsInDay == 2)
         precondition(snapshot.dailyWordCounts(days: 7).count == 7 && snapshot.activity.count == 30)
-        precondition(snapshot.activity.last!.words == 4 && snapshot.activity.reduce(0) { $0 + $1.words } == 8)
+        precondition(snapshot.activity.last?.words == 4 && snapshot.activity.reduce(0) { $0 + $1.words } == 8)
         precondition(snapshot.topAppsFormatted(limit: 3) == ["Notes", "Unknown"])
         precondition(snapshot.formattedTimeSaved(typingWPM: 0) == "< 1m")
         precondition(snapshot.formattedTimeSaved(typingWPM: 200) == "< 1m")
@@ -40,7 +57,7 @@ struct StatsSnapshotTests {
         let large = Array(repeating: entry(7, text: String(repeating: "word ", count: 100)), count: 9000)
         let start = Date()
         let big = try StatsSnapshot.build(entries: large, now: date(7), calendar: calendar)
-        precondition(big.totalWords == 900000 && big.longestTranscriptionWords == 100 && big.activity.count == 30)
+        precondition(big.totalWords == 900_000 && big.longestTranscriptionWords == 100 && big.activity.count == 30)
         print("9,000-entry / 900,000-word summary: \(Int(Date().timeIntervalSince(start) * 1000)) ms off-main workload")
         let cancelled = Task.detached {
             try await Task.sleep(nanoseconds: 50_000_000)

@@ -11,8 +11,10 @@ enum DictationDefaultProviderTests {
     static func main() {
         func resolve(_ selection: SettingsStore.DictationPromptSelection, _ global: String, _ provider: String = "", _ model: String = "") -> String {
             DictationDefaultProvider.providerID(
-                selection: selection, configuration: .init(providerID: provider, modelName: model),
-                selectedProviderID: global, privateProviderID: "fluid-1"
+                selection: selection,
+                configuration: .init(providerID: provider, modelName: model),
+                selectedProviderID: global,
+                privateProviderID: "fluid-1"
             )
         }
         precondition(resolve(.off, "openai", "openrouter", "model") == "")
