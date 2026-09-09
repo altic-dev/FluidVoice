@@ -66,6 +66,25 @@ enum LocalAPIAudioDecoder {
         }.value
     }
 
+    static func withTemporaryAudioFile<T>(
+        fromAudioData data: Data,
+        suggestedExtension: String,
+        operation: (URL) async throws -> T
+    ) async throws -> T {
+        let fileURL = try await self.temporaryFile(
+            fromAudioData: data,
+            suggestedExtension: suggestedExtension
+        )
+        do {
+            let result = try await operation(fileURL)
+            await self.removeTemporaryFile(at: fileURL)
+            return result
+        } catch {
+            await self.removeTemporaryFile(at: fileURL)
+            throw error
+        }
+    }
+
     static func removeTemporaryFile(at fileURL: URL) async {
         await Task.detached(priority: .utility) {
             try? FileManager.default.removeItem(at: fileURL)

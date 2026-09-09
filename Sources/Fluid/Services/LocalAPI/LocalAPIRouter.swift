@@ -20,9 +20,11 @@ final class LocalAPIRouter {
         self.register(method: "GET", path: "/v1/dictionary/custom-words", handler: dictionary)
         self.register(method: "POST", path: "/v1/dictionary/custom-words", handler: dictionary)
 
+        let openAITranscription = OpenAITranscriptionAPIController()
+        self.register(method: "GET", path: "/v1/models", handler: openAITranscription)
+        self.register(method: "POST", path: "/v1/audio/transcriptions", handler: openAITranscription)
+
         let inference = InferenceAPIController()
-        self.register(method: "GET", path: "/v1/models", handler: inference)
-        self.register(method: "POST", path: "/v1/audio/transcriptions", handler: inference)
         self.register(method: "POST", path: "/v1/transcribe", handler: inference)
         self.register(method: "POST", path: "/v1/postprocess", handler: inference)
     }
