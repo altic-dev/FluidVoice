@@ -15,6 +15,22 @@ struct TranscriptionHistoryView: View {
     @State private var audioEntryID: UUID?
     @State private var copiedEntryID: UUID?
     @State private var copyFeedbackTask: Task<Void, Never>?
+    @State private var availableAudioFiles: Set<String> = []
+    @State private var audioAvailabilityRevision = UUID()
+
+    private struct AudioAvailabilityRequest: Equatable {
+        let fileNames: [String]
+        let revision: UUID
+        let selectedID: UUID?
+    }
+
+    private var audioAvailabilityRequest: AudioAvailabilityRequest {
+        AudioAvailabilityRequest(
+            fileNames: self.historyStore.entries.compactMap { $0.audio?.fileName },
+            revision: self.audioAvailabilityRevision,
+            selectedID: self.selectedEntry?.id
+        )
+    }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
         self.historyStore.search(query: self.searchQuery)
@@ -86,13 +102,29 @@ struct TranscriptionHistoryView: View {
             self.audioEntryID = nil
         }
         .onDisappear {
+            self.availableAudioFiles = []
             self.audioEntryID = nil
             self.copyFeedbackTask?.cancel()
             self.copiedEntryID = nil
         }
         .onAppear {
+            self.audioAvailabilityRevision = UUID()
             if self.selectedEntryID == nil {
                 self.selectedEntryID = self.filteredEntries.first?.id
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.audioAvailabilityRevision = UUID()
+        }
+        .task(id: self.audioAvailabilityRequest) {
+            let request = self.audioAvailabilityRequest
+            let available = await HistoryAudioAvailability.scan(fileNames: request.fileNames) {
+                DictationAudioHistoryStore.shared.audioFileExists(fileName: $0)
+            }
+            guard !Task.isCancelled, request == self.audioAvailabilityRequest else { return }
+            self.availableAudioFiles = available
+            if let entry = self.selectedEntry, !self.hasAudio(entry) {
+                self.audioEntryID = nil
             }
         }
         .alert("Clear All History", isPresented: self.$showClearConfirmation) {
@@ -551,7 +583,8 @@ struct TranscriptionHistoryView: View {
     }
 
     private func hasAudio(_ entry: TranscriptionHistoryEntry) -> Bool {
-        entry.audio != nil
+        guard let audio = entry.audio else { return false }
+        return self.availableAudioFiles.contains(audio.fileName)
     }
 
     private func audioMetadataText(for entry: TranscriptionHistoryEntry) -> String {

@@ -14,7 +14,31 @@ enum PrivateAIModelRegistry {
 
 @main
 struct HistoryPresentationTests {
-    static func main() throws {
+    static func main() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let savedFile = directory.appendingPathComponent("saved.wav")
+        try Data([0]).write(to: savedFile)
+        let exists: @Sendable (String) -> Bool = { name in
+            precondition(!Thread.isMainThread, "Availability checks must not run on the main thread")
+            return FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
+        }
+        let initial = await HistoryAudioAvailability.scan(fileNames: ["saved.wav", "missing.wav", "saved.wav"], exists: exists)
+        precondition(initial == ["saved.wav"], "Missing restored files must not appear available")
+        try FileManager.default.removeItem(at: savedFile)
+        let deleted = await HistoryAudioAvailability.scan(fileNames: ["saved.wav"], exists: exists)
+        precondition(deleted.isEmpty, "Refresh must remove externally deleted files")
+        let emptyAudio = await HistoryAudioAvailability.scan(fileNames: []) { _ in
+            preconditionFailure("No metadata must mean no file queries")
+        }
+        precondition(emptyAudio.isEmpty)
+        let cancelled = Task {
+            await HistoryAudioAvailability.scan(fileNames: ["saved.wav"], exists: exists)
+        }
+        cancelled.cancel()
+        _ = await cancelled.value
+        print("PASS: background audio availability, missing/deleted files, empty metadata and cancellation completion")
         let audio = DictationAudioMetadata(
             fileName: "saved.wav",
             durationMilliseconds: 10_300,

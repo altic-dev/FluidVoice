@@ -102,6 +102,11 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         return self.fileManager.fileExists(atPath: url.path)
     }
 
+    func audioFileExists(fileName: String) -> Bool {
+        guard let url = self.audioFileURL(fileName: fileName, createIfNeeded: false) else { return false }
+        return self.fileManager.fileExists(atPath: url.path)
+    }
+
     @discardableResult
     func deleteAudio(fileName: String) -> Int64 {
         guard let url = self.audioFileURL(fileName: fileName, createIfNeeded: false) else {
