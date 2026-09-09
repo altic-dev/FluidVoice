@@ -28,8 +28,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
     @Published var showAdvancedSpeechInfo: Bool = false
-    @Published var suppressSpeechProviderSync: Bool = false
-    @Published var skipNextSpeechModelSync: Bool = false
 
     var downloadingModel: SettingsStore.SpeechModel? {
         guard let modelID = self.asr.downloadingModelId else { return nil }
@@ -72,11 +70,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func handleSelectedSpeechModelChange(_ newValue: SettingsStore.SpeechModel) {
-        if self.skipNextSpeechModelSync {
-            self.skipNextSpeechModelSync = false
-            return
-        }
-        guard !self.suppressSpeechProviderSync else { return }
         self.previewSpeechModel = newValue
         self.setSelectedSpeechProvider(newValue.provider)
     }
@@ -170,34 +163,19 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.asr.cancelModelPreparation()
     }
 
-    func deleteSpeechModel(_ model: SettingsStore.SpeechModel) {
+    func deleteSpeechModel(_ model: SettingsStore.SpeechModel) async {
         guard !self.areSpeechModelActionsBlocked else { return }
-        let previousActive = self.settings.selectedSpeechModel
-
-        Task {
-            let shouldRestore = previousActive != model
-            await MainActor.run {
-                if shouldRestore {
-                    self.suppressSpeechProviderSync = true
-                }
-                self.settings.selectedSpeechModel = model
-                self.asr.resetTranscriptionProvider()
-            }
-
-            defer {
-                Task { @MainActor in
-                    guard shouldRestore else { return }
-                    self.skipNextSpeechModelSync = true
-                    self.settings.selectedSpeechModel = previousActive
-                    self.asr.resetTranscriptionProvider()
-                    if self.previewSpeechModel == model {
-                        self.previewSpeechModel = model
-                    }
-                    self.suppressSpeechProviderSync = false
-                }
-            }
-
-            await self.deleteModels()
+        do {
+            try await self.asr.clearModelCache(for: model)
+            // Refresh installed-model state so the model cards reflect the deletion for
+            // every model, not only the active one (clearModelCache(for:) re-checks only
+            // when deleting the selected model).
+            await self.asr.checkIfModelsExistAsync()
+        } catch {
+            DebugLogger.shared.error(
+                "Failed to delete model \(model.displayName): \(error)",
+                source: "VoiceEngineVM"
+            )
         }
     }
 
