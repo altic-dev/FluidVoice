@@ -344,6 +344,7 @@ struct OnboardingFlowView: View {
     @State private var selectedModelRouteID: String?
     @State private var hoveredLanguageID: String?
     @State private var hoveredModelRouteID: String?
+    @State private var infoPopoverRouteID: String?
     @State private var hoveredModelActionButtonID: String?
     @State private var hoveredPermissionButtonID: String?
     @State private var onboardingInputDevices: [AudioDevice.Device] = []
@@ -1876,13 +1877,28 @@ struct OnboardingFlowView: View {
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "info.circle")
-                    .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(Color.white.opacity(0.58))
-                    .frame(width: 24, height: 24)
-                    .contentShape(Circle())
-                    .help(self.onboardingModelTooltip(for: route))
-                    .accessibilityLabel(self.onboardingModelTooltip(for: route))
+                Button {
+                    self.infoPopoverRouteID = (self.infoPopoverRouteID == route.id) ? nil : route.id
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(self.theme.typography.sectionTitle)
+                        .foregroundStyle(Color.white.opacity(0.58))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(self.onboardingModelTooltip(for: route))
+                .accessibilityLabel("About \(self.onboardingModelTitle(for: model))")
+                .accessibilityHint("Shows details for this voice model")
+                .popover(
+                    isPresented: Binding(
+                        get: { self.infoPopoverRouteID == route.id },
+                        set: { isShown in self.infoPopoverRouteID = isShown ? route.id : nil }
+                    ),
+                    arrowEdge: .top
+                ) {
+                    self.onboardingModelInfoPopover(for: route)
+                }
             }
             .frame(height: 38, alignment: .top)
 
@@ -2263,6 +2279,25 @@ struct OnboardingFlowView: View {
     private func onboardingModelTooltip(for route: VoiceEngineLanguageRoute) -> String {
         let model = route.model
         return "\(self.onboardingModelSubtitle(for: model)) - \(model.downloadSize)\n\(model.cardDescription)"
+    }
+
+    private func onboardingModelInfoPopover(for route: VoiceEngineLanguageRoute) -> some View {
+        let model = route.model
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(self.onboardingModelTitle(for: model))
+                .font(self.theme.typography.bodySmallStrong)
+
+            Text("\(self.onboardingModelSubtitle(for: model)) · \(model.downloadSize)")
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.theme.palette.accent)
+
+            Text(model.cardDescription)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 300, alignment: .leading)
     }
 
     private func onboardingModelTitle(for model: SettingsStore.SpeechModel) -> String {
