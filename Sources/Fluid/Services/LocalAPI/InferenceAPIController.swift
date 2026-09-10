@@ -25,15 +25,16 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         let model: String
     }
 
-    func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
-        guard request.method == "POST" else {
-            return LocalAPI.error("Method not allowed.", status: 405)
-        }
+    private struct AudioUpload {
+        let data: Data
+        let suggestedExtension: String
+    }
 
-        switch request.path {
-        case "/v1/transcribe":
+    func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        switch (request.method, request.path) {
+        case ("POST", "/v1/transcribe"):
             return await self.transcribe(request)
-        case "/v1/postprocess":
+        case ("POST", "/v1/postprocess"):
             return await self.postprocess(request)
         default:
             return LocalAPI.error("Route not found.", status: 404)
@@ -46,14 +47,12 @@ final class InferenceAPIController: LocalAPIRouteHandler {
                 return try await self.transcribeFile(fileURL)
             }
 
-            let temporaryFileURL = try await self.decodeUploadedAudioFile(from: request)
-            do {
-                let response = try await self.transcribeFile(temporaryFileURL)
-                await LocalAPIAudioDecoder.removeTemporaryFile(at: temporaryFileURL)
-                return response
-            } catch {
-                await LocalAPIAudioDecoder.removeTemporaryFile(at: temporaryFileURL)
-                throw error
+            let upload = try self.decodeUploadedAudio(from: request)
+            return try await LocalAPIAudioDecoder.withTemporaryAudioFile(
+                fromAudioData: upload.data,
+                suggestedExtension: upload.suggestedExtension
+            ) { fileURL in
+                try await self.transcribeFile(fileURL)
             }
         } catch {
             return LocalAPI.error(error.localizedDescription, status: 400)
@@ -61,12 +60,12 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     }
 
     private func transcribeFile(_ fileURL: URL) async throws -> LocalAPI.Response {
-        let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
+        let payload = try await LocalAPITranscriptionService.transcribe(fileURL)
         return LocalAPI.json(
             TranscribeResponse(
-                text: apiResult.result.text,
-                confidence: apiResult.result.confidence,
-                sampleCount: apiResult.sampleCount,
+                text: payload.text,
+                confidence: payload.confidence,
+                sampleCount: payload.sampleCount,
                 provider: SettingsStore.shared.selectedSpeechModel.displayName
             )
         )
@@ -78,7 +77,7 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         do {
             payload = try LocalAPI.decoder.decode(TranscribeJSONRequest.self, from: request.body)
         } catch {
-            throw NSError(domain: "InferenceAPIController", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON audio payload."])
+            throw self.makeError("Invalid JSON audio payload.", code: -3)
         }
 
         guard let path = payload.path, !path.isEmpty else { return nil }
@@ -101,15 +100,16 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         }
     }
 
-    private func decodeUploadedAudioFile(from request: LocalAPI.Request) async throws -> URL {
+    private func decodeUploadedAudio(from request: LocalAPI.Request) throws -> AudioUpload {
         let data: Data
         let suggestedExtension: String
+
         if self.isJSON(request) {
             let payload: TranscribeJSONRequest
             do {
                 payload = try LocalAPI.decoder.decode(TranscribeJSONRequest.self, from: request.body)
             } catch {
-                throw NSError(domain: "InferenceAPIController", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON audio payload."])
+                throw self.makeError("Invalid JSON audio payload.", code: -3)
             }
 
             if let audioBase64 = payload.audioBase64,
@@ -118,11 +118,11 @@ final class InferenceAPIController: LocalAPIRouteHandler {
                 data = decodedData
                 suggestedExtension = payload.filename.flatMap { URL(fileURLWithPath: $0).pathExtension } ?? "wav"
             } else {
-                throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio path or audioBase64."])
+                throw self.makeError("Missing audio path or audioBase64.", code: -1)
             }
         } else {
             guard !request.body.isEmpty else {
-                throw NSError(domain: "InferenceAPIController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing audio body."])
+                throw self.makeError("Missing audio body.", code: -1)
             }
 
             data = request.body
@@ -130,10 +130,7 @@ final class InferenceAPIController: LocalAPIRouteHandler {
             suggestedExtension = URL(fileURLWithPath: filename).pathExtension
         }
 
-        return try await LocalAPIAudioDecoder.temporaryFile(
-            fromAudioData: data,
-            suggestedExtension: suggestedExtension
-        )
+        return AudioUpload(data: data, suggestedExtension: suggestedExtension)
     }
 
     private func decodeText(from request: LocalAPI.Request) throws -> String {
@@ -142,18 +139,26 @@ final class InferenceAPIController: LocalAPIRouteHandler {
             do {
                 payload = try LocalAPI.decoder.decode(TextRequest.self, from: request.body)
             } catch {
-                throw NSError(domain: "InferenceAPIController", code: -4, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON text payload."])
+                throw self.makeError("Invalid JSON text payload.", code: -4)
             }
             return payload.text
         }
 
         guard let text = String(data: request.body, encoding: .utf8) else {
-            throw NSError(domain: "InferenceAPIController", code: -2, userInfo: [NSLocalizedDescriptionKey: "Text body must be UTF-8."])
+            throw self.makeError("Text body must be UTF-8.", code: -2)
         }
         return text
     }
 
     private func isJSON(_ request: LocalAPI.Request) -> Bool {
         request.headers["content-type"]?.lowercased().contains("application/json") == true
+    }
+
+    private func makeError(_ message: String, code: Int) -> NSError {
+        NSError(
+            domain: "InferenceAPIController",
+            code: code,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 }
