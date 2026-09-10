@@ -51,6 +51,7 @@ final class AIEnhancementSettingsViewModel {
     var isTestingConnection = false
     var isFetchingModels = false
     var selectedProviderID = "openai"
+    var managedOriginalKey: String?
     var fetchedModelsProviders: Set<String> = []
     var providerAPIKeys: [String: String] = [:]
     var savedProviders: [SettingsStore.SavedProvider] = []
@@ -170,6 +171,10 @@ final class AIEnhancementSettingsViewModel {
         check(!removal.deleteCurrentProvider(), "External provider removal cannot remove private AI")
         let closing = AIEnhancementSettingsViewModel()
         closing.providerAPIKeys["openai"] = "edited-key"
+        closing.managedOriginalKey = "edited-key"
+        closing.failKeychain = true
+        check(closing.saveManagedProviderBeforeClosing("openai") && closing.keySaves == 0, "Unchanged key closes without any Keychain write, even if writes would fail")
+        closing.managedOriginalKey = "old-key"
         closing.failKeychain = true
         check(!closing.saveManagedProviderBeforeClosing("openai"), "Keychain failure keeps Manage open")
         check(closing.providerAPIKeys["openai"] == "edited-key" && closing.settings.selectedProviderID == "fluid", "Failed close preserves the draft and default")

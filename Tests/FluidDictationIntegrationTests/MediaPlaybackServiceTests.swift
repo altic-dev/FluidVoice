@@ -302,7 +302,43 @@ final class MediaPlaybackServiceTests: XCTestCase {
         let commands = await transport.commands
         let count = await transport.queryCount
         XCTAssertEqual(commands, [.pause])
-        XCTAssertEqual(count, 5)
+        XCTAssertEqual(count, 8)
+    }
+
+    func testResumeRecoversAfterFirstReadCycleIsUnavailable() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false),
+            .unavailable("temporary"), .unavailable("temporary"), .unavailable("temporary"),
+            self.state(false), self.state(true),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play])
+    }
+
+    func testExhaustedResumeReadsRetainPauseForNextSession() async {
+        let transport = FakeMediaPlaybackTransport(
+            [self.state(true), self.state(false)]
+                + Array(repeating: .unavailable("temporary"), count: 6)
+                + [self.state(false), self.state(false), self.state(true)]
+        )
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let before = await transport.commands
+        XCTAssertEqual(before, [.pause], "Unavailable metadata must never trigger blind Play")
+        service.recordingStarted(sessionID: 2, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 2)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play], "The original confirmed pause must survive the outage")
     }
 
     func testResumeRetryDoesNotPlayChangedItem() async {

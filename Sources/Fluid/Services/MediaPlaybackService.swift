@@ -157,8 +157,16 @@ final class MediaPlaybackService {
         // Retain ownership while a new recording may inherit the pause.
         for attempt in 1...2 {
             guard let before = await self.queryBeforeResume() else {
-                if self.session == nil { self.pausedTarget = nil }
-                self.log("resume_skipped reason=unknown_player")
+                guard self.session == nil else { return }
+                // Missing metadata is not evidence that our confirmed pause ended.
+                // Allow one more bounded read cycle; never issue Play without a
+                // matching paused item. Keep ownership for the next session/quit
+                // event if the outage outlasts this recovery window.
+                if !self.isShuttingDown, attempt < 2 {
+                    await self.settle()
+                    continue
+                }
+                self.log("resume_deferred reason=unknown_player ownership=retained")
                 return
             }
             guard self.session == nil else {

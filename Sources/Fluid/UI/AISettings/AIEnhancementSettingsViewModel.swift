@@ -47,6 +47,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var currentProvider: String = ""
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
     private var persistsSelectedProvider = true
+    private var managedOriginalKey: String?
     @Published var selectedProviderID: String {
         didSet {
             guard self.persistsSelectedProvider else { return }
@@ -468,6 +469,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func configureProvider(_ providerID: String) {
+        self.managedOriginalKey = self.providerAPIKey(for: providerID)
         self.persistsSelectedProvider = false
         self.selectProviderForUse(providerID)
         self.persistsSelectedProvider = true
@@ -485,8 +487,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func saveManagedProviderBeforeClosing(_ providerID: String) -> Bool {
         guard !self.isFetchingModels, !self.isTestingConnection else { return false }
         guard self.selectedProviderID == providerID else { return true }
+        if let original = self.managedOriginalKey,
+           original.trimmingCharacters(in: .whitespacesAndNewlines) == self.providerAPIKey(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines)
+        { return true }
         guard self.hasProviderAPIKeyDraft(for: providerID) else { return true }
-        return self.saveProviderAPIKeys(invalidating: providerID)
+        guard self.saveProviderAPIKeys(invalidating: providerID) else { return false }
+        self.managedOriginalKey = self.providerAPIKey(for: providerID)
+        return true
     }
 
     private func selectProviderForUse(_ providerID: String) {
@@ -506,6 +513,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 throw ProviderAPIKeySaveError.readbackMismatch
             }
             self.providerAPIKeys = persisted
+            if invalidationTarget == self.selectedProviderID, self.managedOriginalKey != nil {
+                self.managedOriginalKey = self.providerAPIKey(for: invalidationTarget)
+            }
             self.invalidateVerificationIfNeeded(for: invalidationTarget)
             return true
         } catch {
