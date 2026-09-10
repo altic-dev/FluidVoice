@@ -140,6 +140,69 @@ final class MediaPlaybackServiceTests: XCTestCase {
         XCTAssertEqual(commands, [.pause, .play])
     }
 
+    func testTransientResumeQueryFailureRetriesBeforePlaying() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), .unavailable("temporary"), self.state(false), self.state(true),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play])
+    }
+
+    func testResumeQueryFailureStopsAfterBoundedRetries() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), .unavailable("temporary"),
+            .unavailable("temporary"), .unavailable("temporary"),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        let count = await transport.queryCount
+        XCTAssertEqual(commands, [.pause])
+        XCTAssertEqual(count, 5)
+    }
+
+    func testResumeRetryDoesNotPlayChangedItem() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), .unavailable("temporary"), self.state(false, title: "Other"),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause])
+    }
+
+    func testNewRecordingDuringUnavailableResumeQueryRetainsPause() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false), self.state(true),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        await transport.holdQuery(3)
+        service.sessionFinished(sessionID: 1)
+        await transport.waitForQuery(3)
+        service.recordingStarted(sessionID: 2, enabled: true)
+        await transport.releaseQuery(.unavailable("temporary"))
+        await service.waitUntilSettled()
+        let beforeFinish = await transport.commands
+        XCTAssertEqual(beforeFinish, [.pause])
+        service.sessionFinished(sessionID: 2)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play])
+    }
+
     func testUnconfirmedPauseDoesNotResumeOrSpamCommands() async {
         let transport = FakeMediaPlaybackTransport([self.state(true), self.state(true), self.state(true)])
         let service = self.service(transport)

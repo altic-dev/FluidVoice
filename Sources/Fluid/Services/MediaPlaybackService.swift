@@ -138,7 +138,8 @@ final class MediaPlaybackService {
     private func resume(target: MediaPlaybackSnapshot) async {
         // Do not clear ownership until after the query: a new recording arriving
         // during it can inherit this verified pause without a play/pause burst.
-        guard let before = await self.query(context: "before_resume") else {
+        guard let before = await self.queryBeforeResume() else {
+            guard self.session == nil else { return }
             self.pausedTarget = nil
             self.log("resume_skipped reason=unknown_player")
             return
@@ -159,6 +160,20 @@ final class MediaPlaybackService {
         } else {
             self.backOff(context: "resume")
         }
+    }
+
+    private func queryBeforeResume() async -> MediaPlaybackSnapshot? {
+        // Retain confirmed ownership across brief metadata outages. Retry reads,
+        // never playback commands; give up after three bounded helper calls.
+        for attempt in 1...3 {
+            guard self.session == nil else { return nil }
+            if let snapshot = await self.query(context: "before_resume attempt=\(attempt)") {
+                return snapshot
+            }
+            guard self.session == nil else { return nil }
+            if attempt < 3 { await self.settle() }
+        }
+        return nil
     }
 
     private func verify(
