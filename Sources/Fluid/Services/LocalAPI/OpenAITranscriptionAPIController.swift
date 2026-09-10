@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 @MainActor
@@ -78,7 +79,7 @@ final class OpenAITranscriptionAPIController: LocalAPIRouteHandler {
 
     private func createTranscription(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         do {
-            let upload = try self.decodeUpload(from: request)
+            let upload = try await self.decodeUpload(from: request)
             return try await LocalAPIAudioDecoder.withTemporaryAudioFile(
                 fromAudioData: upload.data,
                 suggestedExtension: URL(fileURLWithPath: upload.filename).pathExtension
@@ -104,7 +105,7 @@ final class OpenAITranscriptionAPIController: LocalAPIRouteHandler {
         }
     }
 
-    private func decodeUpload(from request: LocalAPI.Request) throws -> TranscriptionUpload {
+    private func decodeUpload(from request: LocalAPI.Request) async throws -> TranscriptionUpload {
         guard let contentType = request.headers["content-type"],
               contentType.lowercased().contains("multipart/form-data")
         else {
@@ -115,9 +116,12 @@ final class OpenAITranscriptionAPIController: LocalAPIRouteHandler {
             )
         }
 
+        let body = request.body
         let parts: [LocalAPIMultipartFormData.Part]
         do {
-            parts = try LocalAPIMultipartFormData.parse(body: request.body, contentType: contentType)
+            parts = try await Task.detached(priority: .userInitiated) {
+                try LocalAPIMultipartFormData.parse(body: body, contentType: contentType)
+            }.value
         } catch {
             throw RequestError(
                 message: error.localizedDescription,
@@ -183,7 +187,10 @@ final class OpenAITranscriptionAPIController: LocalAPIRouteHandler {
                 code: "service_unavailable"
             )
         }
-        if nsError.domain == "LocalAPIAudioDecoder" || nsError.domain == NSOSStatusErrorDomain {
+        if nsError.domain == "LocalAPIAudioDecoder"
+            || nsError.domain == NSOSStatusErrorDomain
+            || nsError.domain == AVFoundationErrorDomain
+        {
             return self.error(
                 "The uploaded file could not be decoded as audio.",
                 status: 400,
