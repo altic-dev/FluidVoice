@@ -13,7 +13,13 @@ enum LocalAPIAudioDecoder {
             fileURL: URL,
             chunkDurationSeconds: Double = LocalAPIAudioDecoder.maxChunkDurationSeconds
         ) throws {
-            let audioFile = try AVAudioFile(forReading: fileURL)
+            let audioFile: AVAudioFile
+            do {
+                audioFile = try AVAudioFile(forReading: fileURL)
+            } catch {
+                throw LocalAPIAudioDecoder.audioDecodeError(underlying: error)
+            }
+
             let sourceSampleRate = audioFile.processingFormat.sampleRate
             guard sourceSampleRate > 0, chunkDurationSeconds > 0 else {
                 throw NSError(
@@ -46,11 +52,19 @@ enum LocalAPIAudioDecoder {
                 )
             }
 
-            try self.audioFile.read(into: sourceBuffer, frameCount: framesToRead)
-            return try AudioBufferConverter.monoSamples(
-                from: sourceBuffer,
-                targetSampleRate: LocalAPIAudioDecoder.sampleRate
-            )
+            do {
+                try self.audioFile.read(into: sourceBuffer, frameCount: framesToRead)
+                return try AudioBufferConverter.monoSamples(
+                    from: sourceBuffer,
+                    targetSampleRate: LocalAPIAudioDecoder.sampleRate
+                )
+            } catch {
+                let nsError = error as NSError
+                if nsError.domain == "LocalAPIAudioDecoder" {
+                    throw error
+                }
+                throw LocalAPIAudioDecoder.audioDecodeError(underlying: error)
+            }
         }
     }
 
@@ -92,12 +106,33 @@ enum LocalAPIAudioDecoder {
     }
 
     static func estimatedSampleCount(for fileURL: URL) throws -> Int {
-        let file = try AVAudioFile(forReading: fileURL)
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(forReading: fileURL)
+        } catch {
+            throw self.audioDecodeError(underlying: error)
+        }
+
         let sourceFormat = file.processingFormat
         guard sourceFormat.sampleRate > 0 else {
-            throw NSError(domain: "LocalAPIAudioDecoder", code: -6, userInfo: [NSLocalizedDescriptionKey: "Audio file has an invalid sample rate."])
+            throw NSError(
+                domain: "LocalAPIAudioDecoder",
+                code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Audio file has an invalid sample rate."]
+            )
         }
 
         return Int((Double(file.length) * self.sampleRate / sourceFormat.sampleRate).rounded())
+    }
+
+    private static func audioDecodeError(underlying error: Error) -> NSError {
+        NSError(
+            domain: "LocalAPIAudioDecoder",
+            code: -7,
+            userInfo: [
+                NSLocalizedDescriptionKey: "The uploaded file could not be decoded as audio.",
+                NSUnderlyingErrorKey: error,
+            ]
+        )
     }
 }
