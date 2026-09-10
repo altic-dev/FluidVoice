@@ -134,7 +134,7 @@ nonisolated struct MediaHelperResult: Sendable {
 
 /// Private process plumbing; never runs on the main actor.
 nonisolated enum MediaHelperProcess {
-    static func run(arguments: [String], timeout: TimeInterval = 3.5) -> MediaHelperResult {
+    static func run(arguments: [String], timeout: TimeInterval = 1.0) -> MediaHelperResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = arguments

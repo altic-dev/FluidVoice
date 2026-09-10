@@ -140,6 +140,103 @@ final class MediaPlaybackServiceTests: XCTestCase {
         XCTAssertEqual(commands, [.pause, .play])
     }
 
+    func testFailedPlayRetriesOnlyAfterConfirmingSamePausedPlayer() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false), self.state(false),
+            self.state(false), self.state(true),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play, .play])
+    }
+
+    func testFailedPlayDoesNotRetryForChangedPlayer() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false), self.state(false),
+            self.state(false, pid: 2),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play])
+    }
+
+    func testFailedPlayRetryIsBounded() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false), self.state(false),
+            self.state(false), self.state(false), self.state(false),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        service.sessionFinished(sessionID: 1)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play, .play])
+    }
+
+    func testShutdownDuringPauseUsesOneVerificationPerCommand() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false),
+        ])
+        await transport.holdCommand(1)
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await transport.waitForCommand(1)
+        service.beginShutdown()
+        service.beginShutdown()
+        service.recordingStarted(sessionID: 2, enabled: true)
+        await transport.releaseCommand(.helperCompleted)
+        await service.shutdown()
+        let commands = await transport.commands
+        let count = await transport.queryCount
+        XCTAssertEqual(commands, [.pause, .play])
+        XCTAssertEqual(count, 4)
+    }
+
+    func testNewRecordingDuringFailedPlayRetainsPause() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), self.state(false), self.state(false), self.state(false),
+            self.state(false), self.state(false), self.state(true),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        await transport.holdCommand(2)
+        service.sessionFinished(sessionID: 1)
+        await transport.waitForCommand(2)
+        service.recordingStarted(sessionID: 2, enabled: true)
+        await transport.releaseCommand(.failed("timeout"))
+        await service.waitUntilSettled()
+        let beforeFinish = await transport.commands
+        XCTAssertEqual(beforeFinish, [.pause, .play])
+        service.sessionFinished(sessionID: 2)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause, .play, .play])
+    }
+
+    func testShutdownDoesNotRetryUnavailableQuery() async {
+        let transport = FakeMediaPlaybackTransport([
+            self.state(true), self.state(false), .unavailable("temporary"),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        await service.shutdown()
+        let commands = await transport.commands
+        let count = await transport.queryCount
+        XCTAssertEqual(commands, [.pause])
+        XCTAssertEqual(count, 3)
+    }
+
     func testTransientResumeQueryFailureRetriesBeforePlaying() async {
         let transport = FakeMediaPlaybackTransport([
             self.state(true), self.state(false), .unavailable("temporary"), self.state(false), self.state(true),
@@ -348,6 +445,15 @@ final class MediaPlaybackServiceTests: XCTestCase {
         }.value
         XCTAssertNil(result.failure)
         XCTAssertEqual(result.output.count, 200_000)
+    }
+
+    func testDefaultProcessTimeoutIsOneSecond() async {
+        let started = ProcessInfo.processInfo.systemUptime
+        let result = await Task.detached {
+            MediaHelperProcess.run(arguments: ["-e", "sleep 10"])
+        }.value
+        XCTAssertEqual(result.failure, "helper_timeout")
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 2.0)
     }
 
     func testProcessTimeoutTerminatesHelper() async {

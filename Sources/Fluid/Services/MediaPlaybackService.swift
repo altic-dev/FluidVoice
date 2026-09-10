@@ -61,11 +61,16 @@ final class MediaPlaybackService {
         self.wake()
     }
 
-    func shutdown() async {
+    func beginShutdown() {
+        guard !self.isShuttingDown else { return }
         self.isShuttingDown = true
         self.session = nil
         self.revision &+= 1
         self.wake()
+    }
+
+    func shutdown() async {
+        self.beginShutdown()
         await self.waitUntilSettled()
     }
 
@@ -136,29 +141,38 @@ final class MediaPlaybackService {
     }
 
     private func resume(target: MediaPlaybackSnapshot) async {
-        // Do not clear ownership until after the query: a new recording arriving
-        // during it can inherit this verified pause without a play/pause burst.
-        guard let before = await self.queryBeforeResume() else {
+        // Retry a command only after fresh metadata confirms the same paused item.
+        // Retain ownership while a new recording may inherit the pause.
+        for attempt in 1...2 {
+            guard let before = await self.queryBeforeResume() else {
+                if self.session == nil { self.pausedTarget = nil }
+                self.log("resume_skipped reason=unknown_player")
+                return
+            }
+            guard self.session == nil else {
+                self.log("resume_skipped reason=new_recording")
+                return
+            }
+            guard target.matches(before), before.isPlaying == false else {
+                self.pausedTarget = nil
+                self.log("resume_skipped reason=player_item_or_state_changed")
+                return
+            }
+            let result = await self.transport.send(.play)
+            self.logCommand(.play, result: result, sessionID: nil)
+            if await self.verify(target: before, playing: true, context: "resume") != nil {
+                self.pausedTarget = nil
+                self.log("resume_verified")
+                return
+            }
             guard self.session == nil else { return }
-            self.pausedTarget = nil
-            self.log("resume_skipped reason=unknown_player")
-            return
-        }
-        guard self.session == nil else {
-            self.log("resume_skipped reason=new_recording")
-            return
-        }
-        self.pausedTarget = nil
-        guard target.matches(before), before.isPlaying == false else {
-            self.log("resume_skipped reason=player_item_or_state_changed")
-            return
-        }
-        let result = await self.transport.send(.play)
-        self.logCommand(.play, result: result, sessionID: nil)
-        if await self.verify(target: before, playing: true, context: "resume") != nil {
-            self.log("resume_verified")
-        } else {
-            self.backOff(context: "resume")
+            // Quit is best-effort within the app's overall termination deadline.
+            // Do not add another command cycle while shutdown is in progress.
+            if self.isShuttingDown || attempt == 2 {
+                self.pausedTarget = nil
+                self.backOff(context: "resume")
+                return
+            }
         }
     }
 
@@ -171,6 +185,7 @@ final class MediaPlaybackService {
                 return snapshot
             }
             guard self.session == nil else { return nil }
+            if self.isShuttingDown { return nil }
             if attempt < 3 { await self.settle() }
         }
         return nil
@@ -182,6 +197,7 @@ final class MediaPlaybackService {
         // Read at most twice; never retry a playback command blindly. This checks
         // reported state, not rendered video: Netflix can disagree with its UI.
         for attempt in 1...2 {
+            if attempt > 1, self.isShuttingDown { break }
             await self.settle()
             guard let observed = await self.query(context: "verify_\(context) attempt=\(attempt)") else {
                 continue

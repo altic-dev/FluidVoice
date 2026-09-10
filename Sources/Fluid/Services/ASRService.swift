@@ -623,6 +623,8 @@ final class ASRService: ObservableObject {
 
     func shutdownForTermination() async {
         self.isTerminating = true
+        // Give media restoration the same quit window as audio cleanup.
+        MediaPlaybackService.shared.beginShutdown()
         let routeRecoveryShutdownStartedAt = Date().timeIntervalSince1970
         await self.cancelAudioRouteRecoveryAndWait()
         self.benchmarkLog(
