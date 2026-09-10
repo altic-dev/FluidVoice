@@ -105,6 +105,20 @@ final class AudioBufferConverterTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testLocalAPIAudioDecoderNormalizesUnsupportedFileOpenError() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-api-invalid-audio-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        try Data("not audio".utf8).write(to: fileURL)
+
+        XCTAssertThrowsError(try LocalAPIAudioDecoder.estimatedSampleCount(for: fileURL)) { error in
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, "LocalAPIAudioDecoder")
+            XCTAssertEqual(nsError.code, -7)
+            XCTAssertNotNil(nsError.userInfo[NSUnderlyingErrorKey])
+        }
+    }
+
     private func makeFloatBuffer(
         sampleRate: Double,
         channels: AVAudioChannelCount,
