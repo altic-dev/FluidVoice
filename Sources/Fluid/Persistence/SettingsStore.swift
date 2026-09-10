@@ -1846,9 +1846,9 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Shows optional ASR and AI performance details in transcription history.
+    /// Shows ASR and AI performance details by default; users can hide them.
     var showHistoryPerformanceMetrics: Bool {
-        get { self.defaults.object(forKey: Keys.showHistoryPerformanceMetrics) as? Bool ?? false }
+        get { self.defaults.object(forKey: Keys.showHistoryPerformanceMetrics) as? Bool ?? true }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.showHistoryPerformanceMetrics)

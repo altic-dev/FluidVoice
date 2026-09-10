@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Shared product accents. Onboarding and feature surfaces use the same source of truth.
+enum FluidBrandColors {
+    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+}
+
 /// Central theme definition for the Fluid app. All colors, spacings and materials
 /// should be defined here to keep styling consistent and easy to evolve.
 struct AppTheme {

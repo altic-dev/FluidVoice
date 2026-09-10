@@ -734,6 +734,44 @@ final class DirectAudioReliabilityTests: XCTestCase {
         )
     }
 
+    func testPromptTestReusesDelayedFeedbackAndScopesAllOverlayCleanup() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("Sources/Fluid/ContentView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains(
+            "await self.processDictationPromptTest(transcribedText, lifecycleID: expectedOverlayLifecycleID)"
+        ))
+        let promptTestSection = try XCTUnwrap(
+            source.components(separatedBy: "private func processDictationPromptTest(").last?
+                .components(separatedBy: "private func makeAIProcessingFeedback(").first
+        )
+        let feedbackIndex = try XCTUnwrap(promptTestSection.range(of:
+            "let refiningStatusTask = self.makeAIProcessingFeedback(lifecycleID: lifecycleID).statusTask"
+        ))
+        let providerIndex = try XCTUnwrap(promptTestSection.range(of: "try await self.processTextWithAI("))
+        XCTAssertLessThan(feedbackIndex.lowerBound, providerIndex.lowerBound)
+
+        let cleanup = try XCTUnwrap(
+            promptTestSection.components(separatedBy: "defer {").last?
+                .components(separatedBy: "        do {").first
+        )
+        XCTAssertTrue(cleanup.contains("refiningStatusTask.cancel()"))
+        XCTAssertTrue(cleanup.contains("promptTest.isProcessing = false"))
+        // Both missing-provider and success/error cleanup must leave a newer overlay alone.
+        let scopedHide = "if self.overlayLifecycleID == lifecycleID {\n" +
+            "                self.menuBarManager.setProcessing(false)\n            }"
+        XCTAssertEqual(promptTestSection.components(separatedBy: scopedHide).count - 1, 2)
+        XCTAssertFalse(promptTestSection.contains("setProcessing(true)"), "Fast prompt tests must keep delayed feedback")
+        XCTAssertFalse(promptTestSection.contains("typeOutput"))
+        XCTAssertFalse(promptTestSection.contains("ClipboardService"))
+        XCTAssertFalse(promptTestSection.contains("TranscriptionHistoryStore"))
+    }
+
     func testDictionaryTrackingStartsAfterDeliveryCallbackReturns() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -2643,7 +2643,7 @@ struct ContentView: View {
 
         // Prompt Test Mode: reroute dictation hotkey output into the prompt editor (no typing/clipboard/history).
         if promptTest.isActive {
-            await self.processDictationPromptTest(transcribedText)
+            await self.processDictationPromptTest(transcribedText, lifecycleID: expectedOverlayLifecycleID)
             return
         }
 
@@ -2993,7 +2993,7 @@ struct ContentView: View {
         }
     }
 
-    private func processDictationPromptTest(_ transcribedText: String) async {
+    private func processDictationPromptTest(_ transcribedText: String, lifecycleID: UInt64) async {
         let promptTest = DictationPromptTestCoordinator.shared
         promptTest.lastTranscriptionText = transcribedText
         promptTest.lastOutputText = ""
@@ -3003,12 +3003,18 @@ struct ContentView: View {
             model: promptTest.draftModel
         ) else {
             promptTest.lastError = "AI post-processing is not configured. Configure a provider/model (and API key for non-local endpoints) to test prompts."
-            self.menuBarManager.setProcessing(false)
+            if self.overlayLifecycleID == lifecycleID {
+                self.menuBarManager.setProcessing(false)
+            }
             return
         }
         promptTest.isProcessing = true
+        let refiningStatusTask = self.makeAIProcessingFeedback(lifecycleID: lifecycleID).statusTask
         defer {
-            self.menuBarManager.setProcessing(false)
+            refiningStatusTask.cancel()
+            if self.overlayLifecycleID == lifecycleID {
+                self.menuBarManager.setProcessing(false)
+            }
             promptTest.isProcessing = false
         }
         do {

@@ -104,6 +104,7 @@ struct AISettingsView: View {
 
     @StateObject private var voiceViewModel: VoiceEngineSettingsViewModel
     @StateObject private var enhancementViewModel: AIEnhancementSettingsViewModel
+    @StateObject private var privateAIController: PrivateAISettingsController
     @State private var selectedEnhancementSection: AIEnhancementConfigurationSection = .providers
 
     init(appServices: AppServices, menuBarManager: MenuBarManager, theme: AppTheme) {
@@ -114,11 +115,13 @@ struct AISettingsView: View {
             settings: SettingsStore.shared,
             appServices: appServices
         ))
-        _enhancementViewModel = StateObject(wrappedValue: AIEnhancementSettingsViewModel(
+        let enhancementModel = AIEnhancementSettingsViewModel(
             settings: SettingsStore.shared,
             menuBarManager: menuBarManager,
             promptTest: DictationPromptTestCoordinator.shared
-        ))
+        )
+        _enhancementViewModel = StateObject(wrappedValue: enhancementModel)
+        _privateAIController = StateObject(wrappedValue: PrivateAISettingsController(viewModel: enhancementModel))
     }
 
     var body: some View {
@@ -131,6 +134,7 @@ struct AISettingsView: View {
                 )
                 AIEnhancementSettingsView(
                     viewModel: self.enhancementViewModel,
+                    privateAIController: self.privateAIController,
                     settings: self.enhancementViewModel.settings,
                     promptTest: self.enhancementViewModel.promptTest,
                     theme: self.theme,

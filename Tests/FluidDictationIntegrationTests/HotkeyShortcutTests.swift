@@ -296,7 +296,7 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
-    func testHistoryPerformanceDefaultsOffAndRoundTripsWithoutBreakingLegacyBackups() async throws {
+    func testHistoryPerformanceDefaultsOnAndRoundTripsWithoutBreakingLegacyBackups() async throws {
         let defaults = UserDefaults.standard
         let key = "ShowHistoryPerformanceMetrics"
         let originalValue = defaults.object(forKey: key)
@@ -309,7 +309,12 @@ final class HotkeyShortcutTests: XCTestCase {
         }
 
         defaults.removeObject(forKey: key)
-        XCTAssertFalse(SettingsStore.shared.showHistoryPerformanceMetrics)
+        XCTAssertTrue(SettingsStore.shared.showHistoryPerformanceMetrics)
+
+        SettingsStore.shared.showHistoryPerformanceMetrics = false
+        XCTAssertFalse(SettingsStore.shared.showHistoryPerformanceMetrics, "An explicit opt-out must remain respected")
+        let optedOutDocument = try await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(optedOutDocument.settings.showHistoryPerformanceMetrics, false)
 
         SettingsStore.shared.showHistoryPerformanceMetrics = true
         let document = try await BackupService.shared.makeBackupDocument()
