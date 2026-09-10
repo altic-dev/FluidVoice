@@ -1,5 +1,5 @@
 {
-  "originHash" : "c0b937cf1a9f455cc47d65c349124c6a9e9f173f41a1aa7809c1c0d65cbf4229",
+  "originHash" : "f7ad30d968aec3ed22705eb42b7b2c993f57c298942da95e0e9f00806ac08045",
   "pins" : [
     {
       "identity" : "appupdater",
@@ -152,6 +152,15 @@
       "state" : {
         "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
         "version" : "0.12.0"
+      }
+    },
+    {
+      "identity" : "zeppelin-embed",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zepdb/zeppelin-embed.git",
+      "state" : {
+        "revision" : "2d8e88003e94026523fb865df0cfbb5082c3798f",
+        "version" : "0.3.0"
       }
     }
   ],

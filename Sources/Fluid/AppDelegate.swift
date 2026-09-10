@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         SettingsStore.shared.bootstrapOnboardingState(isTrueFirstOpen: isTrueFirstOpen)
 
         AnalyticsService.shared.bootstrap()
+        SearchIndexCoordinator.shared.start()
 
         // Check for updates automatically if enabled (initial check on launch)
         self.checkForUpdatesAutomatically()
@@ -85,10 +86,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DebugLogger.shared.info("Application will terminate", source: "AppDelegate")
         self.shutdownPrivateAIRuntimeForTermination()
         self.shutdownASRRuntimeForTermination()
+        self.closeZeppelinForTermination()
         LocalAPIServer.shared.stop()
         // Clean up the update check timer
         self.updateCheckTimer?.invalidate()
         self.updateCheckTimer = nil
+    }
+
+    /// Short deadline: the index is rebuilt from its source stores, so a timeout
+    /// costs a log replay at startup and nothing else.
+    private func closeZeppelinForTermination() {
+        var didClose = false
+        Task {
+            await FluidZeppelinRoot.shared.closeAll()
+            didClose = true
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while !didClose, Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+
+        if !didClose {
+            DebugLogger.shared.warning(
+                "Timed out closing Zeppelin namespaces during termination",
+                source: "AppDelegate"
+            )
+        }
     }
 
     private func shutdownASRRuntimeForTermination() {

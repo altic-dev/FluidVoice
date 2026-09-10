@@ -170,6 +170,15 @@
         "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
         "version" : "0.12.0"
       }
+    },
+    {
+      "identity" : "zeppelin-embed",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zepdb/zeppelin-embed.git",
+      "state" : {
+        "revision" : "2d8e88003e94026523fb865df0cfbb5082c3798f",
+        "version" : "0.3.0"
+      }
     }
   ],
   "version" : 2

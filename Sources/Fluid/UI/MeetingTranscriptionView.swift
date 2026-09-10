@@ -1,6 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum MeetingTranscriptionScrollTarget: Hashable {
+    case detail(UUID)
+
+    static func selectedDetail(_ id: UUID?) -> Self? {
+        id.map(detail)
+    }
+}
+
 struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
@@ -59,6 +67,7 @@ struct MeetingTranscriptionView: View {
             .padding(.bottom, 30)
 
             // Main Content Area
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 24) {
                     // File Selection Card
@@ -92,6 +101,16 @@ struct MeetingTranscriptionView: View {
                     }
                 }
                 .padding(24)
+            }
+            // A transcript chosen by search is scrolled to its expanded detail.
+            .onAppear {
+                MeetingTranscriptionScrollTarget.selectedDetail(self.fileHistoryStore.selectedEntryID)
+                    .map { proxy.scrollTo($0) }
+            }
+            .onChange(of: self.fileHistoryStore.selectedEntryID) { _, id in
+                MeetingTranscriptionScrollTarget.selectedDetail(id)
+                    .map { proxy.scrollTo($0) }
+            }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -445,11 +464,13 @@ struct MeetingTranscriptionView: View {
             VStack(spacing: 8) {
                 ForEach(self.fileHistoryStore.entries) { entry in
                     self.recentEntryRow(entry: entry)
+                        .id(entry.id)
                 }
             }
 
             if let entry = self.fileHistoryStore.selectedEntry {
                 self.historyDetailCard(entry: entry)
+                    .id(MeetingTranscriptionScrollTarget.detail(entry.id))
             }
         }
     }

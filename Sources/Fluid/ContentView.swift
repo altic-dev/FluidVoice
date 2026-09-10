@@ -302,6 +302,12 @@ struct ContentView: View {
     @State private var settingsNavigation = SettingsNavigationState()
     @State private var settingsSearchQuery = ""
     @State private var settingsSearchScrollRequest = 0
+    /// A settings row chosen from the sidebar search, highlighted like a settings
+    /// search match until the user searches or leaves settings.
+    @State private var settingsRevealTarget: SettingsSearchTarget?
+    @ObservedObject private var appSearch = AppSearchService.shared
+    @State private var appSearchCursor: AppSearchHit.Target?
+    @State private var appSearchExpanded: Set<AppSearchKind> = []
 
     @State private var isHelpEntryHovered = false
     @State private var isSettingsEntryHovered = false
@@ -1094,6 +1100,7 @@ struct ContentView: View {
 
     private func resetSettingsSearch() {
         self.settingsSearchQuery = ""
+        self.settingsRevealTarget = nil
         self.settingsSearchScrollRequest += 1
     }
 
@@ -1304,6 +1311,46 @@ struct ContentView: View {
     }
 
     private var appSidebarView: some View {
+        VStack(spacing: 0) {
+            SidebarSearchField(
+                text: self.$appSearch.query,
+                placeholder: "Search",
+                isActive: !self.settingsNavigation.isPresented,
+                onCommand: self.handleAppSearchCommand
+            )
+            .frame(height: 24)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.top, self.theme.metrics.spacing.sm)
+            .padding(.bottom, self.theme.metrics.spacing.sm)
+
+            if self.isAppSearchActive {
+                AppSearchResultsView(
+                    service: self.appSearch,
+                    cursor: self.$appSearchCursor,
+                    expanded: self.$appSearchExpanded,
+                    open: self.open(searchHit:)
+                )
+            } else {
+                self.appSidebarSections
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                self.helpEntryButton
+                self.settingsEntryButton
+            }
+        }
+        .onChange(of: self.appSearch.groups) {
+            self.appSearchCursor = nil
+            self.appSearchExpanded = []
+        }
+    }
+
+    private var isAppSearchActive: Bool {
+        !self.appSearch.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var appSidebarSections: some View {
         List(selection: self.$selectedSidebarItem) {
             Section {
                 self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
@@ -1339,12 +1386,49 @@ struct ContentView: View {
         .listStyle(.sidebar)
         .accentColor(self.theme.palette.accent)
         .animation(nil, value: self.selectedSidebarItem)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                self.helpEntryButton
-                self.settingsEntryButton
-            }
+    }
+
+    // MARK: - App search
+
+    /// Up and Down move the cursor through the visible rows, Return opens the
+    /// cursor or the first row. Anything else is left to the field.
+    private func handleAppSearchCommand(_ selector: Selector) -> Bool {
+        let hits = AppSearchResultsView.visibleHits(self.appSearch.groups, expanded: self.appSearchExpanded)
+        guard !hits.isEmpty else { return false }
+        let position = hits.firstIndex { $0.target == self.appSearchCursor }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            self.appSearchCursor = hits[min((position ?? -1) + 1, hits.count - 1)].target
+        case #selector(NSResponder.moveUp(_:)):
+            self.appSearchCursor = hits[max((position ?? hits.count) - 1, 0)].target
+        case #selector(NSResponder.insertNewline(_:)):
+            self.open(searchHit: hits[position ?? 0])
+        default:
+            return false
         }
+        return true
+    }
+
+    private func open(searchHit hit: AppSearchHit) {
+        switch hit.target {
+        case let .history(id):
+            TranscriptionHistoryStore.shared.selectedEntryID = id
+            self.navigateToApp(.history)
+        case let .transcript(id):
+            FileTranscriptionHistoryStore.shared.selectedEntryID = id
+            self.navigateToApp(.meetingTools)
+        case let .chat(id):
+            self.commandModeService.switchToChat(id: id)
+            self.navigateToApp(.commandMode)
+        case .dictionaryEntry, .vocabulary, .punctuation:
+            self.navigateToApp(.customDictionary)
+        case .prompt:
+            self.navigateToApp(.cleanupStyles)
+        case let .settings(target):
+            self.openSettings(target.section)
+            self.settingsRevealTarget = target
+        }
+        self.appSearch.query = ""
     }
 
     private var settingsSidebarView: some View {
@@ -1377,14 +1461,18 @@ struct ContentView: View {
             .help("Back to FluidVoice")
             .accessibilityLabel("Back to FluidVoice")
 
-            SettingsSearchField(text: Binding(
-                get: { self.settingsSearchQuery },
-                set: { self.updateSettingsSearchQuery($0) }
-            ), isActive: self.settingsNavigation.isPresented)
-                .frame(height: 24)
-                .padding(.horizontal, self.theme.metrics.spacing.md)
-                .padding(.top, self.theme.metrics.spacing.xs)
-                .padding(.bottom, self.theme.metrics.spacing.sm)
+            SidebarSearchField(
+                text: Binding(
+                    get: { self.settingsSearchQuery },
+                    set: { self.updateSettingsSearchQuery($0) }
+                ),
+                placeholder: "Search Settings",
+                isActive: self.settingsNavigation.isPresented
+            )
+            .frame(height: 24)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .padding(.top, self.theme.metrics.spacing.xs)
+            .padding(.bottom, self.theme.metrics.spacing.sm)
 
             List(selection: Binding(
                 get: { self.settingsNavigation.selectedSection },
@@ -1428,7 +1516,10 @@ struct ContentView: View {
     }
 
     private var settingsSearchResults: [SettingsSearchResult] {
-        self.availableSettingsSearchResults(for: self.settingsSearchQuery)
+        if let target = self.settingsRevealTarget {
+            return [SettingsSearchResult(target: target, score: 0)]
+        }
+        return self.availableSettingsSearchResults(for: self.settingsSearchQuery)
     }
 
     private var filteredSettingsSections: [SettingsSection] {
@@ -1439,6 +1530,7 @@ struct ContentView: View {
 
     private func updateSettingsSearchQuery(_ query: String) {
         self.settingsSearchQuery = query
+        self.settingsRevealTarget = nil
         self.settingsSearchScrollRequest += 1
 
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -1450,24 +1542,16 @@ struct ContentView: View {
     }
 
     private func availableSettingsSearchResults(for query: String) -> [SettingsSearchResult] {
-        SettingsSearchIndex.results(for: query)
-            .filter { self.isSettingsSearchTargetAvailable($0.target) }
-    }
-
-    private func isSettingsSearchTargetAvailable(_ target: SettingsSearchTarget) -> Bool {
-        switch target {
-        case .microphonePermission:
-            return self.asr.micStatus != .authorized
-        case .accessibilityPermission:
-            return !self.accessibilityEnabled
-        case .audioStorage:
-            return SettingsStore.shared.saveTranscriptionHistory &&
-                SettingsStore.shared.saveAudioWithTranscriptionHistory
-        case .bottomOffset:
-            return self.settings.overlayPosition == .bottom
-        default:
-            return true
-        }
+        SettingsSearchIndex.results(
+            for: query,
+            availability: SettingsSearchAvailability(
+                microphoneAuthorized: self.asr.micStatus == .authorized,
+                accessibilityEnabled: self.accessibilityEnabled,
+                savesTranscriptionHistory: SettingsStore.shared.saveTranscriptionHistory,
+                savesAudioWithTranscriptionHistory: SettingsStore.shared.saveAudioWithTranscriptionHistory,
+                overlayAtBottom: self.settings.overlayPosition == .bottom
+            )
+        )
     }
 
     private var settingsEntryButton: some View {
@@ -2888,6 +2972,19 @@ struct ContentView: View {
             "Typing decision → frontmost: \(frontmostName), fluidFrontmost: \(isFluidFrontmost), editorFocused: \(self.isTranscriptionFocused), willTypeExternally: \(shouldTypeExternally)",
             source: "ContentView"
         )
+
+        // A sidebar search field that was already focused when recording began gets
+        // the text through its field editor, which also fires change notifications.
+        if isFluidFrontmost, shouldPersistOutputs, !sendsExistingDraft,
+           let focusTarget = self.recordingFocusTarget,
+           focusTarget.pid == ProcessInfo.processInfo.processIdentifier,
+           TypingService.isExactFocusTargetActive(focusTarget),
+           let window = NSApp.keyWindow,
+           let editor = window.firstResponder as? NSTextView,
+           SidebarSearchField.owns(editor, in: window)
+        {
+            editor.insertText(finalText, replacementRange: editor.selectedRange())
+        }
 
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID()
@@ -5192,7 +5289,7 @@ private struct SidebarChromeButtonStyle: ButtonStyle {
     }
 }
 
-private extension View {
+extension View {
     func sidebarOptionHover(isSelected: Bool, reduceMotion: Bool) -> some View {
         modifier(SidebarOptionHoverModifier(isSelected: isSelected, reduceMotion: reduceMotion))
     }

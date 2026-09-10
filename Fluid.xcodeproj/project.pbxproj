@@ -21,6 +21,9 @@
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
 		272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */; };
 		A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */; };
+		2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */; };
+		2E9B00000000000000000009 /* SearchIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B00000000000000000008 /* SearchIndexTests.swift */; };
+		2E9B0000000000000000000B /* AppSearchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9B0000000000000000000A /* AppSearchServiceTests.swift */; };
 		A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000001 /* AudioBufferConverterTests.swift */; };
 		D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */; };
 		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
@@ -68,6 +71,9 @@
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
+		2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZeppelinDataLayerTests.swift; sourceTree = "<group>"; };
+		2E9B00000000000000000008 /* SearchIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexTests.swift; sourceTree = "<group>"; };
+		2E9B0000000000000000000A /* AppSearchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSearchServiceTests.swift; sourceTree = "<group>"; };
 		A62300000000000000000001 /* AudioBufferConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferConverterTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerTurnMergingTests.swift; sourceTree = "<group>"; };
 		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
@@ -163,6 +169,9 @@
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
 				980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */,
 				A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */,
+				2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */,
+				2E9B00000000000000000008 /* SearchIndexTests.swift */,
+				2E9B0000000000000000000A /* AppSearchServiceTests.swift */,
 				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
 				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
@@ -230,6 +239,7 @@
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+				2E9B00000000000000000004 /* ZeppelinEmbed */,
 			);
 			productName = FluidVoice;
 			productReference = 7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */;
@@ -251,6 +261,7 @@
 			name = FluidDictationIntegrationTests;
 			packageProductDependencies = (
 				803000000000000000000004 /* MediaRemoteAdapter */,
+				2E9B00000000000000000005 /* ZeppelinEmbed */,
 			);
 			productName = FluidDictationIntegrationTests;
 			productReference = 7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */;
@@ -289,6 +300,7 @@
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
 				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
+				2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7C078D902E3B339200FB7CAC /* Products */;
@@ -340,6 +352,9 @@
 				86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */,
 				272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */,
 				A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */,
+				2E9B00000000000000000007 /* ZeppelinDataLayerTests.swift in Sources */,
+				2E9B00000000000000000009 /* SearchIndexTests.swift in Sources */,
+				2E9B0000000000000000000B /* AppSearchServiceTests.swift in Sources */,
 				A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */,
 				D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */,
 				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
@@ -707,6 +722,14 @@
 				kind = branch;
 			};
 		};
+		2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zepdb/zeppelin-embed.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.3.0;
+			};
+		};
 		7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/transcribe-cpp-swift.git";
@@ -750,6 +773,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */;
 			productName = AppUpdater;
+		};
+		2E9B00000000000000000004 /* ZeppelinEmbed */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */;
+			productName = ZeppelinEmbed;
+		};
+		2E9B00000000000000000005 /* ZeppelinEmbed */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */;
+			productName = ZeppelinEmbed;
 		};
 		7C9A71012F58B00000FB7CAF /* TranscribeCpp */ = {
 			isa = XCSwiftPackageProductDependency;
