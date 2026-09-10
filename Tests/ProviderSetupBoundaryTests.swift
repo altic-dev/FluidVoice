@@ -25,8 +25,19 @@ final class SettingsStore {
         let baseURL: String
         let models: [String]
     }
-    struct Configuration { let providerID: String }
+    struct Configuration: Equatable {
+        var providerID: String
+        var modelName = "model"
+        var shortcut = "keep-shortcut"
+    }
     var selectedProviderID = "fluid"
+    var selectedModel: String? = "mini"
+    var rewriteModeSelectedProviderID = ""
+    var rewriteModeSelectedModel: String?
+    var commandModeSelectedProviderID = ""
+    var commandModeSelectedModel: String?
+    var availableModelsByProvider: [String: [String]] = [:]
+    var selectedModelByProvider: [String: String] = [:]
     var dictationPromptConfigurations: [String: Configuration] = [:]
     var verifiedProviderFingerprints: [String: String] = [:]
 }
@@ -39,6 +50,8 @@ final class AIEnhancementSettingsViewModel {
     let settings = SettingsStore()
     var isTestingConnection = false
     var isFetchingModels = false
+    var selectedProviderID = "openai"
+    var fetchedModelsProviders: Set<String> = []
     var providerAPIKeys: [String: String] = [:]
     var savedProviders: [SettingsStore.SavedProvider] = []
     var availableModelsByProvider: [String: [String]] = [:]
@@ -58,6 +71,10 @@ final class AIEnhancementSettingsViewModel {
         cachedAddedProviderItems = addedProviderItems(from: items)
     }
     func saveSavedProviders() { saves += 1; refreshProviderItems() }
+    func clearEditProviderDraft() {}
+    func finishConfiguringProvider() { selectedProviderID = settings.selectedProviderID }
+    func refreshVerifiedProviders() {}
+    func selectSoleVerifiedProviderIfNeeded() {}
 }
 
 @main enum ProviderSetupBoundaryTests {
@@ -105,6 +122,44 @@ final class AIEnhancementSettingsViewModel {
         check(!manager.contains("Use for shortcut") && !manager.contains("Edit details"), "External manager has no duplicate editor or shortcut assignment action")
         check(source.contains(".onSubmit {") && source.contains("self.viewModel.addNewModel()"), "Manual model input retains Enter-to-add behavior")
         check(source.contains(".accessibilityLabel(\"Add model\")"), "Model add button remains accessible")
+        check(source.contains("if isCustom || managementLayout"), "Built-in management exposes removal")
+        let removal = AIEnhancementSettingsViewModel()
+        removal.providerAPIKeys = ["openai": "remove-key", "other": "keep-key"]
+        removal.settings.dictationPromptConfigurations = [
+            "affected": .init(providerID: "openai"),
+            "unrelated": .init(providerID: "other"),
+        ]
+        removal.settings.rewriteModeSelectedProviderID = "openai"
+        removal.settings.rewriteModeSelectedModel = "old"
+        removal.settings.commandModeSelectedProviderID = "other"
+        removal.settings.commandModeSelectedModel = "keep-model"
+        removal.availableModelsByProvider = ["openai": ["old"], "other": ["keep"]]
+        removal.selectedModelByProvider["openai"] = "old"
+        UserDefaults.standard.set(["openai", "other"], forKey: AIEnhancementSettingsViewModel.addedProviderIDsKey)
+        let before = removal.settings.dictationPromptConfigurations
+        removal.failKeychain = true
+        check(!removal.deleteCurrentProvider(), "Failed credential removal must fail the operation")
+        check(removal.providerAPIKeys["openai"] == "remove-key" && removal.saves == 0, "Failed removal restores keys without saving provider changes")
+        check(removal.settings.dictationPromptConfigurations == before, "Failed removal preserves assignments")
+        check(UserDefaults.standard.stringArray(forKey: AIEnhancementSettingsViewModel.addedProviderIDsKey) == ["openai", "other"], "Failed removal preserves explicit membership")
+        removal.failKeychain = false
+        removal.isFetchingModels = true
+        check(!removal.deleteCurrentProvider(), "Busy editor cannot remove a provider")
+        removal.isFetchingModels = false
+        check(removal.deleteCurrentProvider(), "Built-in removal succeeds")
+        check(removal.settings.selectedProviderID == "fluid" && removal.settings.selectedModel == "mini", "Removing another provider preserves the default")
+        check(removal.settings.dictationPromptConfigurations["affected"]?.providerID == "", "Removed provider cannot remain referenced")
+        check(removal.settings.dictationPromptConfigurations["affected"]?.shortcut == "keep-shortcut", "Removal preserves hotkeys")
+        check(removal.settings.dictationPromptConfigurations["unrelated"] == before["unrelated"], "Unrelated prompt assignment is unchanged")
+        check(removal.settings.rewriteModeSelectedProviderID.isEmpty && removal.settings.rewriteModeSelectedModel == nil, "Affected rewrite route is cleared")
+        check(removal.settings.commandModeSelectedProviderID == "other" && removal.settings.commandModeSelectedModel == "keep-model", "Unrelated command route is unchanged")
+        check(removal.providerAPIKeys == ["other": "keep-key"] && removal.availableModelsByProvider["other"] == ["keep"], "Unrelated provider credentials and models survive")
+        check(!removal.cachedAddedProviderItems.contains { $0.id == "openai" }, "Removed built-in disappears from added providers")
+        removal.selectedProviderID = "ollama"
+        removal.settings.selectedProviderID = "ollama"
+        check(removal.deleteCurrentProvider() && removal.settings.selectedProviderID.isEmpty && removal.settings.selectedModel == nil, "Removing the default clears its model without selecting another provider")
+        removal.selectedProviderID = "fluid"
+        check(!removal.deleteCurrentProvider(), "External provider removal cannot remove private AI")
         print("Passed \(count) provider setup assertions")
     }
 }

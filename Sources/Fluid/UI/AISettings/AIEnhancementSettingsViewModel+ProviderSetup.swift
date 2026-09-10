@@ -3,6 +3,27 @@ import Foundation
 extension AIEnhancementSettingsViewModel {
     static let addedProviderIDsKey = "AISettingsAddedProviderIDs"
 
+    /// Preserve prompt text and hotkeys; only disconnect routes using the removed provider.
+    func clearProviderAssignments(for providerID: String) {
+        var configurations = self.settings.dictationPromptConfigurations
+        for (id, var configuration) in configurations where configuration.providerID == providerID {
+            configuration.providerID = ""
+            configuration.modelName = ""
+            configurations[id] = configuration
+        }
+        if configurations != self.settings.dictationPromptConfigurations {
+            self.settings.dictationPromptConfigurations = configurations
+        }
+        if self.settings.rewriteModeSelectedProviderID == providerID {
+            self.settings.rewriteModeSelectedProviderID = ""
+            self.settings.rewriteModeSelectedModel = nil
+        }
+        if self.settings.commandModeSelectedProviderID == providerID {
+            self.settings.commandModeSelectedProviderID = ""
+            self.settings.commandModeSelectedModel = nil
+        }
+    }
+
     /// Keep legacy connections discoverable even when their verification or credentials expire.
     func addedProviderItems(from items: [ProviderItemData]) -> [ProviderItemData] {
         let explicit = Set(UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? [])

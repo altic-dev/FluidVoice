@@ -159,6 +159,18 @@ extension AIEnhancementSettingsView {
             }
         }
         .interactiveDismissDisabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+        .alert("Remove provider?", isPresented: self.$showingRemoveProviderConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                guard self.viewModel.selectedProviderID == self.managedExternalProviderID,
+                      self.viewModel.deleteCurrentProvider()
+                else { return }
+                self.expandedProviderID = nil
+                self.closeExternalProviderManager()
+            }
+        } message: {
+            Text("This removes its saved API key and model setup, and clears any default or prompt assignments using it. Your prompts and shortcuts are kept. You can add the provider again later.")
+        }
         .onChange(of: self.viewModel.cachedProviderItems.map(\.id)) { _, ids in
             if let id = self.managedExternalProviderID, !ids.contains(id) { self.closeExternalProviderManager() }
         }
@@ -1348,21 +1360,27 @@ extension AIEnhancementSettingsView {
                     .foregroundStyle(.secondary)
                 }
 
-                if isCustom {
+                if isCustom || managementLayout {
                     Divider()
                         .background(self.theme.palette.separator.opacity(0.5))
 
                     Button(role: .destructive) {
-                        self.viewModel.deleteCurrentProvider()
-                        self.expandedProviderID = nil
+                        if managementLayout {
+                            self.showingRemoveProviderConfirmation = true
+                        } else if self.viewModel.deleteCurrentProvider() {
+                            self.expandedProviderID = nil
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "trash")
-                            Text("Delete Provider")
+                            Text("Remove provider")
                         }
-                        .font(.caption)
+                        .font(self.theme.typography.bodyStrong)
                     }
-                    .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.6))
+                    .fluidGlassAction()
+                    .foregroundStyle(.red)
+                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
         })
@@ -2261,7 +2279,7 @@ extension AIEnhancementSettingsView {
 
                 if !isBuiltIn {
                     Button(role: .destructive) {
-                        self.viewModel.deleteCurrentProvider()
+                        guard self.viewModel.deleteCurrentProvider() else { return }
                         self.viewModel.clearEditProviderDraft()
                         self.expandedProviderID = nil
                     } label: {

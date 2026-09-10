@@ -1148,27 +1148,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return true
     }
 
-    func deleteCurrentProvider() {
+    @discardableResult
+    func deleteCurrentProvider() -> Bool {
+        guard !self.isFetchingModels, !self.isTestingConnection,
+              !self.selectedProviderID.isEmpty,
+              self.selectedProviderID != PrivateAIProviderFeature.shared.providerID
+        else { return false }
         let deletedProviderID = self.selectedProviderID
         let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
+        let key = self.providerKey(for: deletedProviderID)
+        let previousKeys = self.providerAPIKeys
+        self.providerAPIKeys.removeValue(forKey: key)
+        guard self.saveProviderAPIKeys(invalidating: deletedProviderID) else {
+            self.providerAPIKeys = previousKeys
+            return false
+        }
+        self.clearProviderAssignments(for: deletedProviderID)
         let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
         UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
         self.savedProviders.removeAll { $0.id == deletedProviderID }
         self.saveSavedProviders()
-        let key = self.providerKey(for: deletedProviderID)
         self.availableModelsByProvider.removeValue(forKey: key)
         self.selectedModelByProvider.removeValue(forKey: key)
-        self.providerAPIKeys.removeValue(forKey: key)
-        self.saveProviderAPIKeys()
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
         if deletedDefaultProvider {
             self.settings.selectedProviderID = ""
+            self.settings.selectedModel = nil
         }
+        self.fetchedModelsProviders.remove(key)
+        self.clearEditProviderDraft()
         self.finishConfiguringProvider()
         self.refreshVerifiedProviders()
+        self.refreshProviderItems()
         self.selectSoleVerifiedProviderIfNeeded()
+        return true
     }
 
     func saveEditedProvider() {

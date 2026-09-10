@@ -39,6 +39,7 @@ struct AIEnhancementSettingsView: View {
     @State var expandedProviderID: String? = nil
     @State var showingAddProviderSheet = false
     @State var managedExternalProviderID: String?
+    @State var showingRemoveProviderConfirmation = false
     @State var providerSearchText: String = ""
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
