@@ -38,6 +38,8 @@ final class AppServices: ObservableObject {
         guard !self.isUIReady else { return }
         DebugLogger.shared.info("🚦 UI Ready signal received - services can now initialize", source: "AppServices")
         self.isUIReady = true
+        // Cheap (one sysctl per 10 s) and needed by the overlay, so it starts with the UI.
+        SystemMemoryPressureMonitor.shared.start()
     }
 
     // MARK: - Lazy Services

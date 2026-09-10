@@ -91,6 +91,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let audioHistoryBudgetGB: Double?
     let notifyAIProcessingFailures: Bool?
     let showMicrophoneChangeAlerts: Bool?
+    let showSystemLoadAlerts: Bool?
     let weekendsDontBreakStreak: Bool
     let fillerWords: [String]
     let removeFillerWordsEnabled: Bool

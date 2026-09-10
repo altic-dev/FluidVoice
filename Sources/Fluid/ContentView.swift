@@ -2762,7 +2762,8 @@ struct ContentView: View {
             DebugLogger.shared.info(
                 "Dictation AI post-processing finished in \(postProcessingLatencyMs)ms "
                     + "provider=\(postProcessingProviderName) model=\(postProcessingModelName) "
-                    + "inputChars=\(postProcessingInputChars) fallback=\(aiFallbackReason != nil)",
+                    + "inputChars=\(postProcessingInputChars) fallback=\(aiFallbackReason != nil) "
+                    + SystemMemoryPressureMonitor.diagnosticsSummary(),
                 source: "ContentView"
             )
         } else {

@@ -43,6 +43,7 @@ enum SettingsSearchTarget: Hashable {
     case notifications
     case aiEnhancementFailures
     case microphoneChanges
+    case systemLoadAlerts
 
     case audio
     case inputDevicePriority
@@ -99,7 +100,7 @@ enum SettingsSearchTarget: Hashable {
              .textFormatting:
             return .dictation
 
-        case .notifications, .aiEnhancementFailures, .microphoneChanges:
+        case .notifications, .aiEnhancementFailures, .microphoneChanges, .systemLoadAlerts:
             return .notifications
 
         case .audio, .inputDevicePriority, .outputDevice:
@@ -292,6 +293,11 @@ enum SettingsSearchIndex {
             target: .microphoneChanges,
             title: "Microphone Changes",
             terms: ["mic device lost changed alert notification"]
+        ),
+        .init(
+            target: .systemLoadAlerts,
+            title: "Low Memory Warnings",
+            terms: ["memory pressure ram slow performance system load chip overlay"]
         ),
 
         .init(target: .audio, title: "Audio", terms: ["sound devices microphone speaker"]),

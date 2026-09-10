@@ -499,6 +499,7 @@ struct NotchExpandedView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
+    @ObservedObject private var memoryPressure = SystemMemoryPressureMonitor.shared
     @Environment(\.theme) private var theme
     @State private var isHoveringPromptChip = false
     @State private var isHoveringPromptMenu = false
@@ -1016,6 +1017,12 @@ struct NotchExpandedView: View {
             .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
 
             self.promptHoverMenuRow
+
+            if self.settings.showSystemLoadAlerts, self.memoryPressure.isConstrained {
+                SystemLoadChip(fontSize: 10)
+                    .frame(width: self.previewMaxWidth, alignment: .leading)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
 
             if self.contentState.isAIProcessingFailureVisible && !self.contentState.isProcessing {
                 HStack(spacing: 6) {

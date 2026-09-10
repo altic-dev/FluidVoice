@@ -1138,6 +1138,18 @@ struct SettingsView: View {
                                 )
                             )
                             .settingsSearchTarget(.microphoneChanges)
+
+                            Divider().opacity(0.2)
+
+                            self.optionToggleRow(
+                                title: "Low Memory Warnings",
+                                description: "Show a chip in the dictation overlay when your Mac is low on memory and cleanup may be slower.",
+                                isOn: Binding(
+                                    get: { self.settings.showSystemLoadAlerts },
+                                    set: { self.settings.showSystemLoadAlerts = $0 }
+                                )
+                            )
+                            .settingsSearchTarget(.systemLoadAlerts)
                         }
                     }
                     .padding(16)

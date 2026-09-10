@@ -3247,6 +3247,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Whether the dictation overlay shows a chip when the Mac is low on memory.
+    var showSystemLoadAlerts: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.showSystemLoadAlerts)
+            return value as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.showSystemLoadAlerts)
+        }
+    }
+
     func makeBackupPayload() -> SettingsBackupPayload {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
@@ -3324,6 +3336,7 @@ final class SettingsStore: ObservableObject {
             audioHistoryBudgetGB: self.audioHistoryBudgetGB,
             notifyAIProcessingFailures: self.notifyAIProcessingFailures,
             showMicrophoneChangeAlerts: self.showMicrophoneChangeAlerts,
+            showSystemLoadAlerts: self.showSystemLoadAlerts,
             weekendsDontBreakStreak: self.weekendsDontBreakStreak,
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
@@ -3488,6 +3501,9 @@ final class SettingsStore: ObservableObject {
         }
         if let showMicrophoneChangeAlerts = payload.showMicrophoneChangeAlerts {
             self.showMicrophoneChangeAlerts = showMicrophoneChangeAlerts
+        }
+        if let showSystemLoadAlerts = payload.showSystemLoadAlerts {
+            self.showSystemLoadAlerts = showSystemLoadAlerts
         }
         self.weekendsDontBreakStreak = payload.weekendsDontBreakStreak
         self.fillerWords = payload.fillerWords
@@ -5435,6 +5451,7 @@ private extension SettingsStore {
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
         static let showMicrophoneChangeAlerts = "ShowMicrophoneChangeAlerts"
+        static let showSystemLoadAlerts = "ShowSystemLoadAlerts"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
