@@ -59,10 +59,18 @@ final class AIEnhancementSettingsViewModel {
     var cachedAddedProviderItems: [ProviderItemData] = []
     var failKeychain = false
     var saves = 0
+    var keySaves = 0
+    var persistedKeys: [String: String] = [:]
     func providerKey(for id: String) -> String { id }
     func providerAPIKey(for id: String) -> String { providerAPIKeys[id] ?? "" }
     func updateProviderAPIKey(_ value: String, for id: String) { providerAPIKeys[id] = value }
-    func saveProviderAPIKeys(invalidating id: String) -> Bool { !failKeychain }
+    func saveProviderAPIKeys(invalidating id: String) -> Bool {
+        keySaves += 1
+        guard !failKeychain else { return false }
+        persistedKeys = providerAPIKeys
+        return true
+    }
+    func hasProviderAPIKeyDraft(for id: String) -> Bool { providerAPIKeys[id] != nil }
     func refreshProviderItems() {
         let items = [ProviderItemData(id: "openai", name: "OpenAI", isBuiltIn: true),
                      ProviderItemData(id: "ollama", name: "Ollama", isBuiltIn: true),
@@ -160,6 +168,25 @@ final class AIEnhancementSettingsViewModel {
         check(removal.deleteCurrentProvider() && removal.settings.selectedProviderID.isEmpty && removal.settings.selectedModel == nil, "Removing the default clears its model without selecting another provider")
         removal.selectedProviderID = "fluid"
         check(!removal.deleteCurrentProvider(), "External provider removal cannot remove private AI")
+        let closing = AIEnhancementSettingsViewModel()
+        closing.providerAPIKeys["openai"] = "edited-key"
+        closing.failKeychain = true
+        check(!closing.saveManagedProviderBeforeClosing("openai"), "Keychain failure keeps Manage open")
+        check(closing.providerAPIKeys["openai"] == "edited-key" && closing.settings.selectedProviderID == "fluid", "Failed close preserves the draft and default")
+        closing.failKeychain = false
+        check(closing.saveManagedProviderBeforeClosing("openai") && closing.persistedKeys["openai"] == "edited-key", "Done persists an edited key without verification or model refresh")
+        let savedCount = closing.keySaves
+        closing.selectedProviderID = "fluid"
+        check(closing.saveManagedProviderBeforeClosing("openai") && closing.keySaves == savedCount, "Removal cleanup must not save a different selected provider")
+        closing.selectedProviderID = "ollama"
+        check(closing.saveManagedProviderBeforeClosing("ollama") && closing.keySaves == savedCount, "Keyless provider close does not touch Keychain")
+        closing.isTestingConnection = true
+        check(!closing.saveManagedProviderBeforeClosing("ollama"), "Busy editor cannot dismiss")
+        check(manager.contains(".interactiveDismissDisabled()"), "Interactive dismissal cannot bypass failed persistence")
+        let historySource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
+        let audioRequest = historySource.components(separatedBy: "private struct AudioAvailabilityRequest")[1]
+            .components(separatedBy: "private var filteredEntries")[0]
+        check(!audioRequest.contains("selectedEntry") && !audioRequest.contains("selectedID"), "Row selection cannot restart audio scans")
         print("Passed \(count) provider setup assertions")
     }
 }

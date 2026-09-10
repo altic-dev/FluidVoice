@@ -21,14 +21,12 @@ struct TranscriptionHistoryView: View {
     private struct AudioAvailabilityRequest: Equatable {
         let fileNames: [String]
         let revision: UUID
-        let selectedID: UUID?
     }
 
     private var audioAvailabilityRequest: AudioAvailabilityRequest {
         AudioAvailabilityRequest(
             fileNames: self.historyStore.entries.compactMap { $0.audio?.fileName },
-            revision: self.audioAvailabilityRevision,
-            selectedID: self.selectedEntry?.id
+            revision: self.audioAvailabilityRevision
         )
     }
 

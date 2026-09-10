@@ -133,6 +133,9 @@ extension AIEnhancementSettingsView {
 
     private func closeExternalProviderManager() {
         guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
+        if let providerID = self.managedExternalProviderID,
+           !self.viewModel.saveManagedProviderBeforeClosing(providerID)
+        { return }
         self.viewModel.clearEditProviderDraft()
         self.viewModel.showingAddModel = false
         self.viewModel.newModelName = ""
@@ -158,7 +161,7 @@ extension AIEnhancementSettingsView {
                 }
             }
         }
-        .interactiveDismissDisabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+        .interactiveDismissDisabled()
         .alert("Remove provider?", isPresented: self.$showingRemoveProviderConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
@@ -1379,6 +1382,7 @@ extension AIEnhancementSettingsView {
                     }
                     .fluidGlassAction()
                     .foregroundStyle(.red)
+                    .tint(.red)
                     .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }

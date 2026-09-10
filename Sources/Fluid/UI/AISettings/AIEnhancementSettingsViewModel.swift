@@ -480,6 +480,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.persistsSelectedProvider = true
     }
 
+    /// Commit a managed provider's key before dismissing, but never save a removed provider
+    /// or the default selected by the removal cleanup in its place.
+    func saveManagedProviderBeforeClosing(_ providerID: String) -> Bool {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return false }
+        guard self.selectedProviderID == providerID else { return true }
+        guard self.hasProviderAPIKeyDraft(for: providerID) else { return true }
+        return self.saveProviderAPIKeys(invalidating: providerID)
+    }
+
     private func selectProviderForUse(_ providerID: String) {
         self.selectedProviderID = providerID
         self.handleProviderChange(providerID)
