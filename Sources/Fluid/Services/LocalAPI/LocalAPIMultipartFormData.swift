@@ -1,7 +1,7 @@
 import Foundation
 
 enum LocalAPIMultipartFormData {
-    struct Part {
+    struct Part: Sendable {
         let name: String
         let filename: String?
         let headers: [String: String]
@@ -64,7 +64,7 @@ enum LocalAPIMultipartFormData {
                     name: name,
                     filename: parameters["filename"],
                     headers: headers,
-                    body: Data(body[payloadStart..<nextBoundary.lowerBound])
+                    body: body[payloadStart..<nextBoundary.lowerBound]
                 )
             )
             cursor = nextBoundary.upperBound
@@ -94,19 +94,15 @@ enum LocalAPIMultipartFormData {
     }
 
     private static func boundary(from contentType: String) throws -> String {
-        for component in contentType.split(separator: ";", omittingEmptySubsequences: true) {
+        for component in self.parameterComponents(from: contentType) {
             let parameter = component.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let separator = parameter.firstIndex(of: "=") else { continue }
 
             let key = parameter[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
             guard key.caseInsensitiveCompare("boundary") == .orderedSame else { continue }
 
-            var value = parameter[parameter.index(after: separator)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.count >= 2, value.first == "\"", value.last == "\"" {
-                value.removeFirst()
-                value.removeLast()
-            }
+            let rawValue = parameter[parameter.index(after: separator)...]
+            let value = self.parameterValue(from: String(rawValue))
             guard !value.isEmpty else { break }
             return value
         }
@@ -135,21 +131,82 @@ enum LocalAPIMultipartFormData {
 
     private static func dispositionParameters(from disposition: String) -> [String: String] {
         var parameters: [String: String] = [:]
-        for component in disposition.split(separator: ";").dropFirst() {
+        for component in self.parameterComponents(from: disposition).dropFirst() {
             let parameter = component.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let separator = parameter.firstIndex(of: "=") else { continue }
             let key = parameter[..<separator]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
-            var value = parameter[parameter.index(after: separator)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.count >= 2, value.first == "\"", value.last == "\"" {
-                value.removeFirst()
-                value.removeLast()
-            }
-            parameters[key] = value
+            let rawValue = parameter[parameter.index(after: separator)...]
+            parameters[key] = self.parameterValue(from: String(rawValue))
         }
         return parameters
+    }
+
+    /// Splits MIME-style parameters only on semicolons outside quoted strings.
+    /// Quoted-pair escapes are preserved here and decoded by `parameterValue(from:)`.
+    private static func parameterComponents(from value: String) -> [String] {
+        var components: [String] = []
+        var current = ""
+        var isQuoted = false
+        var isEscaped = false
+
+        for character in value {
+            if isEscaped {
+                current.append(character)
+                isEscaped = false
+                continue
+            }
+
+            if character == "\\", isQuoted {
+                current.append(character)
+                isEscaped = true
+                continue
+            }
+
+            if character == "\"" {
+                current.append(character)
+                isQuoted.toggle()
+                continue
+            }
+
+            if character == ";", !isQuoted {
+                components.append(current)
+                current.removeAll(keepingCapacity: true)
+            } else {
+                current.append(character)
+            }
+        }
+
+        components.append(current)
+        return components
+    }
+
+    private static func parameterValue(from rawValue: String) -> String {
+        var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count >= 2, value.first == "\"", value.last == "\"" else {
+            return value
+        }
+
+        value.removeFirst()
+        value.removeLast()
+
+        var decoded = ""
+        var isEscaped = false
+        for character in value {
+            if isEscaped {
+                decoded.append(character)
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else {
+                decoded.append(character)
+            }
+        }
+        if isEscaped {
+            decoded.append("\\")
+        }
+        return decoded
     }
 
     private static func hasBytes(_ bytes: [UInt8], at index: Data.Index, in data: Data) -> Bool {
