@@ -186,6 +186,26 @@ final class LocalAPIMultipartFormDataTests: XCTestCase {
         XCTAssertEqual(parts[1].stringValue, "json")
     }
 
+    func testParserPreservesSemicolonsInsideQuotedParameters() throws {
+        let boundary = "fluidvoice;test-boundary"
+        let fileBody = Data([0, 1, 2, 3])
+        let body = self.multipartBody(
+            boundary: boundary,
+            fileBody: fileBody,
+            responseFormat: "json",
+            filename: "sample;one.wav"
+        )
+
+        let parts = try LocalAPIMultipartFormData.parse(
+            body: body,
+            contentType: "multipart/form-data; boundary=\"\(boundary)\""
+        )
+
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0].filename, "sample;one.wav")
+        XCTAssertEqual(parts[0].body, fileBody)
+    }
+
     func testParserRejectsBodyWithoutClosingBoundary() {
         let boundary = "fluidvoice-test-boundary"
         let body = Data(
@@ -276,6 +296,25 @@ final class LocalAPIMultipartFormDataTests: XCTestCase {
     }
 
     @MainActor
+    func testAVFoundationDecodeFailureReturnsOpenAI400() async throws {
+        let controller = OpenAITranscriptionAPIController { _ in
+            throw NSError(
+                domain: AVFoundationErrorDomain,
+                code: -11_800,
+                userInfo: [NSLocalizedDescriptionKey: "The operation could not be completed."]
+            )
+        }
+
+        let response = await controller.handle(self.transcriptionRequest(responseFormat: "json"))
+        let error = try LocalAPI.decoder.decode(ErrorEnvelope.self, from: response.body)
+
+        XCTAssertEqual(response.status, 400)
+        XCTAssertEqual(error.error.type, "invalid_request_error")
+        XCTAssertEqual(error.error.param, "file")
+        XCTAssertEqual(error.error.code, "invalid_audio")
+    }
+
+    @MainActor
     func testUnexpectedASRFailureReturnsOpenAI500() async throws {
         let controller = OpenAITranscriptionAPIController { _ in
             throw NSError(
@@ -311,10 +350,11 @@ final class LocalAPIMultipartFormDataTests: XCTestCase {
     private func multipartBody(
         boundary: String,
         fileBody: Data,
-        responseFormat: String
+        responseFormat: String,
+        filename: String = "audio.wav"
     ) -> Data {
         var body = Data(
-            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\nContent-Type: audio/wav\r\n\r\n"
                 .utf8
         )
         body.append(fileBody)
