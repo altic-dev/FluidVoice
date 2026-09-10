@@ -123,7 +123,13 @@ final class TypingService {
     private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
     private static let pasteboardRestoreQueue = DispatchQueue(label: "TypingService.PasteboardRestore", qos: .utility)
     private static var focusSnapshot: FocusSnapshot?
-    private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+
+    private static let pasteOnlyBundleIdentifiers: Set<String> = ["com.mitchellh.ghostty"]
+    private static let webKitBrowserBundleIdentifiers: Set<String> = [
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+    ]
+    private static let keypressDrivenEditorTitles = ["Google Docs", "Google Slides"]
+    private static let axMessagingTimeoutSeconds: Float = 0.25
 
     private var textInsertionMode: SettingsStore.TextInsertionMode {
         SettingsStore.shared.textInsertionMode
@@ -303,34 +309,73 @@ final class TypingService {
         return Self.isCurrentlyFocusedElement(element, expectedPID: pid)
     }
 
-    private func isGhosttyApplication(pid: pid_t) -> Bool {
-        guard pid > 0,
-              let app = NSRunningApplication(processIdentifier: pid)
-        else {
-            return false
-        }
-
-        return app.bundleIdentifier == Self.ghosttyBundleIdentifier
-    }
-
-    private func ghosttyTargetPID(preferredTargetPID: pid_t?) -> pid_t? {
+    private func pasteOnlyTarget(preferredTargetPID: pid_t?) -> (pid: pid_t, reason: String)? {
         if let preferredTargetPID, preferredTargetPID > 0 {
-            return self.isGhosttyApplication(pid: preferredTargetPID) ? preferredTargetPID : nil
+            guard let reason = self.pasteOnlyReason(forPID: preferredTargetPID) else { return nil }
+            return (preferredTargetPID, reason)
         }
 
         if let focusedPID = self.getSystemFocusedElementAndPID()?.pid,
-           self.isGhosttyApplication(pid: focusedPID)
+           let reason = self.pasteOnlyReason(forPID: focusedPID)
         {
-            return focusedPID
+            return (focusedPID, reason)
         }
 
         if let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-           self.isGhosttyApplication(pid: frontmostPID)
+           let reason = self.pasteOnlyReason(forPID: frontmostPID)
         {
-            return frontmostPID
+            return (frontmostPID, reason)
         }
 
         return nil
+    }
+
+    private func pasteOnlyReason(forPID pid: pid_t) -> String? {
+        guard pid > 0, let app = NSRunningApplication(processIdentifier: pid) else { return nil }
+        return Self.pasteOnlyReason(
+            bundleIdentifier: app.bundleIdentifier,
+            focusedWindowTitle: Self.focusedWindowTitle(forPID: pid)
+        )
+    }
+
+    /// Safari turns one synthesized unicode key event into a single `keypress` carrying only the
+    /// first character. Editors that build their text from `keypress`, which is what Google Docs and
+    /// Slides appear to do, therefore drop everything after it and need the clipboard path. The
+    /// title is looked up lazily so targets that match on bundle ID alone, and the far more common
+    /// targets that match nothing, never pay for an Accessibility round trip.
+    static func pasteOnlyReason(
+        bundleIdentifier: String?,
+        focusedWindowTitle: @autoclosure () -> String?
+    ) -> String? {
+        guard let bundleIdentifier else { return nil }
+
+        if Self.pasteOnlyBundleIdentifiers.contains(bundleIdentifier) {
+            return "bundleID=\(bundleIdentifier)"
+        }
+
+        guard Self.webKitBrowserBundleIdentifiers.contains(bundleIdentifier),
+              let title = focusedWindowTitle(),
+              let editor = Self.keypressDrivenEditorTitles.first(where: { title.hasSuffix($0) })
+        else {
+            return nil
+        }
+        return "document=\(editor)"
+    }
+
+    private static func focusedWindowTitle(forPID pid: pid_t) -> String? {
+        guard AXIsProcessTrusted(), pid > 0 else { return nil }
+
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, Self.axMessagingTimeoutSeconds)
+
+        guard let window = Self.copyAXElementAttribute(from: appElement, attribute: kAXFocusedWindowAttribute as CFString)
+            ?? Self.copyAXElementAttribute(from: appElement, attribute: kAXMainWindowAttribute as CFString)
+        else {
+            return nil
+        }
+
+        AXUIElementSetMessagingTimeout(window, Self.axMessagingTimeoutSeconds)
+        return Self.stringAXAttribute(from: window, attribute: kAXTitleAttribute as CFString)
     }
 
     /// Activation options used to restore focus to the external target app after dictation.
@@ -553,14 +598,14 @@ final class TypingService {
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         if self.textInsertionMode == .standard,
-           let ghosttyTargetPID = self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID)
+           let pasteOnlyTarget = self.pasteOnlyTarget(preferredTargetPID: preferredTargetPID)
         {
-            self.log("[TypingService] Ghostty target detected in standard mode (PID \(ghosttyTargetPID)); forcing Reliable Paste path")
-            if self.tryReliablePasteInsertion(text, preferredTargetPID: ghosttyTargetPID) {
-                self.log("[TypingService] SUCCESS: Ghostty Reliable Paste path completed")
+            self.log("[TypingService] Paste-only target detected in standard mode (PID \(pasteOnlyTarget.pid), \(pasteOnlyTarget.reason)); forcing Reliable Paste path")
+            if self.tryReliablePasteInsertion(text, preferredTargetPID: pasteOnlyTarget.pid) {
+                self.log("[TypingService] SUCCESS: Paste-only Reliable Paste path completed")
                 return true
             }
-            self.log("[TypingService] Ghostty Reliable Paste path fell through to direct-typing fallbacks")
+            self.log("[TypingService] Paste-only Reliable Paste path fell through to direct-typing fallbacks")
         }
 
         if self.textInsertionMode == .reliablePaste {
@@ -874,10 +919,14 @@ final class TypingService {
         releasesPasteboardSessionOnReturn = false
         Self.pasteboardRestoreQueue.async {
             defer { Self.pasteboardSessionSemaphore.signal() }
-            _ = self.waitForFocusedTextVerification(
+            let verificationStartedAt = ProcessInfo.processInfo.systemUptime
+            let verification = self.waitForFocusedTextVerification(
                 from: focusedTextSnapshot,
                 expectedText: text,
                 timeoutMicros: restoreDelayMicros
+            )
+            self.bench(
+                "paste_verification result=\(verification.rawValue) elapsedMs=\(Self.elapsedMs(since: verificationStartedAt)) chars=\(text.count)"
             )
             let pasteboard = NSPasteboard.general
 
@@ -910,7 +959,7 @@ final class TypingService {
         }
         self.bench("paste_target_prepared elapsedMs=\(Self.elapsedMs(since: targetStartedAt))")
 
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 1_500_000) {
             let dispatchStartedAt = ProcessInfo.processInfo.systemUptime
             let vKey = Self.pasteVirtualKeyCode
             let keyResolvedAt = ProcessInfo.processInfo.systemUptime
@@ -1035,7 +1084,7 @@ final class TypingService {
     /// More reliable but slightly slower - copies text to clipboard then pastes
     private func insertTextViaClipboard(_ text: String) -> Bool {
         self.log("[TypingService] Starting clipboard-based insertion")
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 1_500_000) {
             let dispatchStartedAt = ProcessInfo.processInfo.systemUptime
             let vKey = Self.pasteVirtualKeyCode
             let keyResolvedAt = ProcessInfo.processInfo.systemUptime
@@ -1075,7 +1124,7 @@ final class TypingService {
             return false
         }
 
-        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 5_000_000) {
+        return self.withTemporaryPasteboardString(text, restoreDelayMicros: 1_500_000) {
             let escapedAppName = appName.replacingOccurrences(of: "\"", with: "\\\"")
             let script = """
             tell application "System Events"
@@ -1348,11 +1397,10 @@ final class TypingService {
         let pollMicros: useconds_t = 50_000
         let expectedLength = max(1, (expectedText as NSString).length)
         let tolerance = max(2, expectedLength / 5)
-        var waited: useconds_t = 0
+        let deadline = ProcessInfo.processInfo.systemUptime + Double(timeoutMicros) / 1_000_000
 
-        while waited < timeoutMicros {
+        while ProcessInfo.processInfo.systemUptime < deadline {
             usleep(pollMicros)
-            waited += pollMicros
 
             guard let current = self.captureFocusedTextSnapshot(),
                   current.pid == snapshot.pid
