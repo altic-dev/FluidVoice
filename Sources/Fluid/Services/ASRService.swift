@@ -519,6 +519,7 @@ final class ASRService: ObservableObject {
     private(set) var dictionaryTrainingAudioGeneration = 0
 
     @Published private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
+    private var pendingMediaCaptureSessionID: Int?
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
@@ -622,6 +623,8 @@ final class ASRService: ObservableObject {
 
     func shutdownForTermination() async {
         self.isTerminating = true
+        // Give media restoration the same quit window as audio cleanup.
+        MediaPlaybackService.shared.beginShutdown()
         let routeRecoveryShutdownStartedAt = Date().timeIntervalSince1970
         await self.cancelAudioRouteRecoveryAndWait()
         self.benchmarkLog(
@@ -665,6 +668,7 @@ final class ASRService: ObservableObject {
         self.isAsrReady = false
         self.isLoadingModel = false
         self.isDownloadingModel = false
+        await MediaPlaybackService.shared.shutdown()
     }
 
     /// The transcription provider, selected based on the unified SpeechModel setting.
@@ -1460,10 +1464,6 @@ final class ASRService: ObservableObject {
     private var isEngineTapInstalled = false
     private var isRecoveringAudioRoute = false
 
-    /// Tracks whether we paused system media for this recording session.
-    /// Used to resume playback only if we were the ones who paused it.
-    private var didPauseMediaForThisSession: Bool = false
-
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> {
         self.audioLevelSubject.eraseToAnyPublisher()
@@ -2106,8 +2106,6 @@ final class ASRService: ObservableObject {
         // alive; startConfiguredAudioCapture reuses it for zero-stop first PCM.
         let handedOffMicrophonePreview = self.handOffMicrophonePreviewToCaptureStartIfNeeded()
 
-        // Reset media pause state for this session
-        self.didPauseMediaForThisSession = false
         self.audioEngineStandbyTask?.cancel()
         self.audioEngineStandbyTask = nil
         await self.waitForPendingAudioRouteRecoveryBeforeStart()
@@ -2139,6 +2137,15 @@ final class ASRService: ObservableObject {
         self.streamingHealthLastBufferCount = 0
         self.silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
         let captureSessionID = self.benchmarkSessionID
+        // Start media work alongside microphone startup; never await it on the
+        // capture path. Track only this start so cancelling a buffer-handoff wait
+        // cannot finish the previous session's still-running transcription.
+        self.pendingMediaCaptureSessionID = captureSessionID
+        defer { self.pendingMediaCaptureSessionID = nil }
+        MediaPlaybackService.shared.recordingStarted(
+            sessionID: captureSessionID,
+            enabled: SettingsStore.shared.pauseMediaDuringTranscription
+        )
         self.audioCaptureAttemptID &+= 1
         var readinessAttemptID = self.audioCaptureAttemptID
         self.audioCaptureReadinessGate.arm(
@@ -2359,23 +2366,6 @@ final class ASRService: ObservableObject {
             )
             onCaptureStarted?()
 
-            // Pause only after capture is live so media control cannot delay the
-            // first PCM packet. A quick stop while this await is in flight is
-            // handled explicitly below.
-            if SettingsStore.shared.pauseMediaDuringTranscription {
-                let didPause = await MediaPlaybackService.shared.pauseIfPlaying()
-                guard self.isRunning, self.isStoppingFinalTranscription == false else {
-                    if didPause {
-                        await MediaPlaybackService.shared.resumeIfWePaused(true)
-                    }
-                    return .started
-                }
-                self.didPauseMediaForThisSession = didPause
-                if didPause {
-                    DebugLogger.shared.info("🎵 Paused system media for transcription", source: "ASRService")
-                }
-            }
-
             // Direct capture already owns a required device-liveness listener
             // on its off-main lifecycle queue.
             if self.activeAudioCaptureBackend == .audioEngine,
@@ -2401,6 +2391,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
             return .started
         } catch {
+            MediaPlaybackService.shared.sessionFinished(sessionID: captureSessionID)
             await self.audioCaptureReadinessGate.cancel(
                 sessionID: captureSessionID,
                 attemptID: readinessAttemptID
@@ -2424,13 +2415,6 @@ final class ASRService: ObservableObject {
                 )
             } else {
                 DebugLogger.shared.error("Failed to start ASR session: \(error)", source: "ASRService")
-            }
-
-            // Resume media if we paused it before the failure
-            if self.didPauseMediaForThisSession {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                self.didPauseMediaForThisSession = false
-                DebugLogger.shared.info("🎵 Resumed system media after start failure", source: "ASRService")
             }
 
             guard wasCancelled == false else { return .failed }
@@ -2563,6 +2547,9 @@ final class ASRService: ObservableObject {
     func cancelPendingAudioCaptureStart(reason: String) async {
         guard self.isStarting, self.isRunning == false else { return }
         self.audioCaptureStartGeneration &+= 1
+        if let sessionID = self.pendingMediaCaptureSessionID {
+            MediaPlaybackService.shared.sessionFinished(sessionID: sessionID)
+        }
         // A start waiting for the previous session's PCM handoff must wake to
         // observe the generation change; the old stop keeps ownership of the gate.
         self.recordingBufferHandoffGate.releasePendingWaiters()
@@ -2723,6 +2710,8 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("STOP() ignored - recording buffer handoff already active", source: "ASRService")
             return ""
         }
+        MediaPlaybackService.shared.recordingStopped(sessionID: stoppingSessionID)
+        defer { MediaPlaybackService.shared.sessionFinished(sessionID: stoppingSessionID) }
         self.isStoppingFinalTranscription = true
         var completedBufferHandoff = false
         defer {
@@ -2748,10 +2737,6 @@ final class ASRService: ObservableObject {
             completedBufferHandoff = true
             return ""
         }
-
-        // Capture media pause state before we reset it, for resuming at the end
-        let shouldResumeMedia = self.didPauseMediaForThisSession
-        self.didPauseMediaForThisSession = false // Reset for next session
 
         DebugLogger.shared.debug("📍 Preparing final transcription", source: "ASRService")
 
@@ -2813,7 +2798,6 @@ final class ASRService: ObservableObject {
             self.beginStreamingDrainRecovery(sessionID: stoppingSessionID, token: bufferHandoffToken)
             completedBufferHandoff = true // Recovery owns the PCM handoff until real work ends.
             self.lastStopOutcome = .failed
-            if shouldResumeMedia { await MediaPlaybackService.shared.resumeIfWePaused(true) }
             self.benchmarkLog("stop_end result=error reason=streaming_drain_timeout")
             return ""
         }
@@ -2847,10 +2831,6 @@ final class ASRService: ObservableObject {
                 "Final ASR result | provider=\(self.transcriptionProvider.name) | samples=0 | textChars=0 | confidence=nil | reason=no_audio",
                 source: "ASRService"
             )
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after empty audio", source: "ASRService")
-            }
             self.benchmarkLog("stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=no_audio")
             return ""
         }
@@ -2878,10 +2858,6 @@ final class ASRService: ObservableObject {
                     "Final ASR result | provider=\(self.transcriptionProvider.name) | samples=\(pcm.count) | textChars=0 | confidence=nil | reason=short_silence",
                     source: "ASRService"
                 )
-                if shouldResumeMedia {
-                    await MediaPlaybackService.shared.resumeIfWePaused(true)
-                    DebugLogger.shared.info("🎵 Resumed system media after silent audio", source: "ASRService")
-                }
                 self.benchmarkLog(
                     "stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=short_silence"
                 )
@@ -2926,11 +2902,6 @@ final class ASRService: ObservableObject {
             guard provider.isReady else {
                 DebugLogger.shared.error("Transcription provider is not ready", source: "ASRService")
                 self.lastStopOutcome = .failed
-                // Resume media playback if we paused it
-                if shouldResumeMedia {
-                    await MediaPlaybackService.shared.resumeIfWePaused(true)
-                    DebugLogger.shared.info("🎵 Resumed system media after provider not ready", source: "ASRService")
-                }
                 self.benchmarkLog("stop_end result=empty totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) reason=provider_not_ready")
                 return ""
             }
@@ -3034,12 +3005,6 @@ final class ASRService: ObservableObject {
                 )
             }
 
-            // Resume media playback if we paused it
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after transcription", source: "ASRService")
-            }
-
             self.lastStopOutcome = outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? .empty
                 : .success
@@ -3067,12 +3032,6 @@ final class ASRService: ObservableObject {
             // Common errors like "audio too short" are expected during normal use
             // (e.g., accidental hotkey press) and would disrupt the user's workflow.
             // Errors are logged for debugging purposes.
-
-            // Resume media playback if we paused it
-            if shouldResumeMedia {
-                await MediaPlaybackService.shared.resumeIfWePaused(true)
-                DebugLogger.shared.info("🎵 Resumed system media after transcription failure", source: "ASRService")
-            }
 
             self.benchmarkLog("stop_end result=error totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) error=\(error.localizedDescription)")
             return ""
@@ -3285,6 +3244,8 @@ final class ASRService: ObservableObject {
         guard self.isRunning else { return }
         let stoppingSessionID = self.benchmarkSessionID
         guard let bufferHandoffToken = self.recordingBufferHandoffGate.begin() else { return }
+        MediaPlaybackService.shared.recordingStopped(sessionID: stoppingSessionID)
+        defer { MediaPlaybackService.shared.sessionFinished(sessionID: stoppingSessionID) }
         var completedBufferHandoff = false
         defer {
             if completedBufferHandoff == false {
@@ -3303,10 +3264,6 @@ final class ASRService: ObservableObject {
             completedBufferHandoff = true
             return
         }
-
-        // Capture media pause state before we reset it, for resuming at the end
-        let shouldResumeMedia = self.didPauseMediaForThisSession
-        self.didPauseMediaForThisSession = false // Reset for next session
 
         DebugLogger.shared.info("🛑 Stopping recording - releasing audio devices", source: "ASRService")
 
@@ -3330,7 +3287,6 @@ final class ASRService: ObservableObject {
         guard await self.drainActiveStreamingWork(sessionID: stoppingSessionID) else {
             self.beginStreamingDrainRecovery(sessionID: stoppingSessionID, token: bufferHandoffToken)
             completedBufferHandoff = true
-            if shouldResumeMedia { await MediaPlaybackService.shared.resumeIfWePaused(true) }
             return
         }
 
@@ -3346,12 +3302,6 @@ final class ASRService: ObservableObject {
         self.isProcessingChunk = false
         self.skipNextChunk = false
         self.refreshWordBoostStatus()
-
-        // Resume media playback if we paused it
-        if shouldResumeMedia {
-            await MediaPlaybackService.shared.resumeIfWePaused(true)
-            DebugLogger.shared.info("🎵 Resumed system media after stopping without transcription", source: "ASRService")
-        }
     }
 
     private func configureSession() throws {
