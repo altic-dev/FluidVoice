@@ -113,7 +113,7 @@ final class MediaPlaybackService {
             self.log("pause_suppressed session=\(sessionID) reason=player_backoff")
             return
         }
-        guard let before = await self.query(context: "before_pause session=\(sessionID)") else { return }
+        guard let before = await self.queryBeforePause(sessionID: sessionID) else { return }
         guard self.canPause(sessionID) else {
             self.log("pause_skipped session=\(sessionID) reason=stale_recording")
             return
@@ -138,6 +138,18 @@ final class MediaPlaybackService {
         } else {
             self.backOff(context: "pause session=\(sessionID)")
         }
+    }
+
+    private func queryBeforePause(sessionID: Int) async -> MediaPlaybackSnapshot? {
+        for attempt in 1...3 {
+            guard self.canPause(sessionID) else { return nil }
+            if let snapshot = await self.query(context: "before_pause session=\(sessionID) attempt=\(attempt)") {
+                return snapshot
+            }
+            guard self.canPause(sessionID) else { return nil }
+            if attempt < 3 { await self.settle() }
+        }
+        return nil
     }
 
     private func resume(target: MediaPlaybackSnapshot) async {

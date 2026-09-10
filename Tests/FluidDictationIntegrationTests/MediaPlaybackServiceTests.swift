@@ -31,6 +31,45 @@ final class MediaPlaybackServiceTests: XCTestCase {
         }
     }
 
+    func testInitialQueryRetriesTransientFailure() async {
+        let transport = FakeMediaPlaybackTransport([
+            .unavailable("temporary"), self.state(true), self.state(false),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        XCTAssertEqual(commands, [.pause])
+    }
+
+    func testInitialQueryRetriesAreBounded() async {
+        let transport = FakeMediaPlaybackTransport([
+            .unavailable("temporary"), .unavailable("temporary"), .unavailable("temporary"),
+        ])
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        let count = await transport.queryCount
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertEqual(count, 3)
+    }
+
+    func testReleasedRecordingDoesNotRetryUnavailableInitialQuery() async {
+        let transport = FakeMediaPlaybackTransport([])
+        await transport.holdQuery(1)
+        let service = self.service(transport)
+        service.recordingStarted(sessionID: 1, enabled: true)
+        await transport.waitForQuery(1)
+        service.recordingStopped(sessionID: 1)
+        await transport.releaseQuery(.unavailable("temporary"))
+        await service.waitUntilSettled()
+        let commands = await transport.commands
+        let count = await transport.queryCount
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertEqual(count, 1)
+    }
+
     func testDisabledSettingDoesNoMediaIO() async {
         let transport = FakeMediaPlaybackTransport([])
         let service = self.service(transport)
