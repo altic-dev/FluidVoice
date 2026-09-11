@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 
 nonisolated enum HotkeyHoldModeType: Hashable {
@@ -444,8 +445,10 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
-    private func clearAutomaticPressTracking() {
-        self.cancelPendingReleaseStops()
+    private func clearAutomaticPressTracking(cancelPendingStops: Bool = true) {
+        if cancelPendingStops {
+            self.cancelPendingReleaseStops()
+        }
         self.state.withLock {
             self.state.holdModeStartTriggeredTypes.removeAll()
             self.state.automaticPressStartTimes.removeAll()
@@ -464,6 +467,20 @@ final class GlobalHotkeyManager: NSObject {
     private var retryDelay: TimeInterval = 0.5
     private var healthCheckInterval: TimeInterval = 30.0
     private var activeShortcutLogScheduled = false
+    private var secureInputWasEnabled: Bool?
+    private lazy var registeredHotkeys: RegisteredHotkeys = {
+        let hotkeys = RegisteredHotkeys(driver: CarbonHotkeyDriver())
+        hotkeys.onEvent = { [weak self] shortcut, down in
+            self?.handleRegisteredHotkey(shortcut, down: down)
+        }
+        hotkeys.onFailure = { shortcut, status in
+            DebugLogger.shared.warning(
+                "System hotkey registration failed for \(shortcut.displayString) (OSStatus \(status)); using event tap, which may be blocked by Secure Input",
+                source: "GlobalHotkeyManager"
+            )
+        }
+        return hotkeys
+    }()
 
     init(
         asrService: ASRService,
@@ -539,6 +556,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updatePrimaryShortcuts(_ newShortcuts: [HotkeyShortcut]) {
+        self.registeredHotkeys.releaseAll()
         self.primaryShortcuts = newShortcuts
         DebugLogger.shared.info("Updated transcription hotkeys", source: "GlobalHotkeyManager")
         self.refreshMouseShortcutTapIfNeeded()
@@ -553,6 +571,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updateCommandModeShortcut(_ newShortcut: HotkeyShortcut?) {
+        self.registeredHotkeys.releaseAll()
         self.commandModeShortcut = newShortcut
         DebugLogger.shared.info("Updated command mode hotkey", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
@@ -563,12 +582,14 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updateRewriteModeShortcut(_ newShortcut: HotkeyShortcut) {
+        self.registeredHotkeys.releaseAll()
         self.rewriteModeShortcut = newShortcut
         DebugLogger.shared.info("Updated rewrite mode hotkey", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
     }
 
     func updateCommandModeShortcutEnabled(_ enabled: Bool) {
+        self.registeredHotkeys.releaseAll()
         self.commandModeShortcutEnabled = enabled
         if !enabled {
             self.isCommandModeKeyPressed = false
@@ -581,6 +602,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updateRewriteModeShortcutEnabled(_ enabled: Bool) {
+        self.registeredHotkeys.releaseAll()
         self.rewriteModeShortcutEnabled = enabled
         if !enabled {
             self.isRewriteKeyPressed = false
@@ -597,12 +619,14 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updatePromptModeShortcut(_ newShortcut: HotkeyShortcut) {
+        self.registeredHotkeys.releaseAll()
         self.promptModeShortcut = newShortcut
         DebugLogger.shared.info("Updated prompt mode hotkey", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
     }
 
     func updatePromptModeShortcutEnabled(_ enabled: Bool) {
+        self.registeredHotkeys.releaseAll()
         self.promptModeShortcutEnabled = enabled
         if !enabled {
             self.isPromptModeKeyPressed = false
@@ -615,6 +639,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func updatePromptShortcutAssignments(_ assignments: [(selection: SettingsStore.DictationPromptSelection, shortcut: HotkeyShortcut)]) {
+        self.registeredHotkeys.releaseAll()
         self.promptShortcutAssignments = assignments
         DebugLogger.shared.info("Updated prompt shortcut assignments", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
@@ -656,8 +681,10 @@ final class GlobalHotkeyManager: NSObject {
 
     @discardableResult
     private func setupGlobalHotkey() -> Bool {
+        self.refreshRegisteredHotkeys()
+        self.logSecureInputState()
         self.finishInterruptedMouseShortcutPress(reason: "hotkey tap reinitialized")
-        self.cleanupEventTap()
+        self.cleanupEventTap(preserveRegisteredPress: self.registeredHotkeys.hasPressedShortcut)
 
         if !AXIsProcessTrusted() {
             DebugLogger.shared.debug("Accessibility permissions not granted", source: "GlobalHotkeyManager")
@@ -669,11 +696,11 @@ final class GlobalHotkeyManager: NSObject {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: Self.keyboardEventMask(),
-            callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
+            callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<GlobalHotkeyManager>.fromOpaque(refcon)
                     .takeUnretainedValue()
-                return manager.handleKeyEvent(proxy: proxy, type: type, event: event)
+                return manager.handleKeyEvent(type: type, event: event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         )
@@ -704,11 +731,13 @@ final class GlobalHotkeyManager: NSObject {
         return true
     }
 
-    private nonisolated func cleanupEventTap() {
+    private nonisolated func cleanupEventTap(preserveRegisteredPress: Bool = false) {
         Self.tearDown(tap: self.eventTap, source: self.runLoopSource)
         self.eventTap = nil
         self.runLoopSource = nil
-        self.clearPrimaryShortcutPressState()
+        if !preserveRegisteredPress {
+            self.clearPrimaryShortcutPressState()
+        }
         self.cleanupMouseTaps()
     }
 
@@ -795,6 +824,7 @@ final class GlobalHotkeyManager: NSObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.activeShortcutLogScheduled = false
+            self.refreshRegisteredHotkeys()
             self.logActiveShortcuts(reason: reason)
         }
     }
@@ -1143,7 +1173,7 @@ final class GlobalHotkeyManager: NSObject {
         )
     }
 
-    private func handleKeyEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func handleKeyEvent(type: CGEventType, event: CGEvent, registered: Bool = false) -> Unmanaged<CGEvent>? {
         if let tapRecoveryResult = self.handleTapDisableEvent(type: type, event: event) {
             return tapRecoveryResult
         }
@@ -1152,13 +1182,25 @@ final class GlobalHotkeyManager: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        if self.isShortcutCaptureActiveProvider?() ?? false {
+        if self.isShortcutCaptureActiveProvider?() ?? false, !(registered && type == .keyUp) {
             self.resetModifierOnlyShortcutTracking()
             return Unmanaged.passUnretained(event)
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let eventModifiers = Self.modifierFlags(from: event.flags)
+
+        if !registered, type == .keyDown || type == .keyUp,
+           self.registeredHotkeys.shouldBypassEventTap(
+               keyCode: keyCode, modifiers: eventModifiers, down: type == .keyDown
+           )
+        {
+            if type == .keyDown {
+                self.markOtherInputDuringModifierOnly()
+            }
+            // Carbon must receive this event; consuming it here defeats registration.
+            return Unmanaged.passUnretained(event)
+        }
 
         switch type {
         case .keyDown:
@@ -1534,7 +1576,9 @@ final class GlobalHotkeyManager: NSObject {
 
         let reason = (type == .tapDisabledByTimeout) ? "timeout" : "user input"
         DebugLogger.shared.warning("Event tap disabled by \(reason) — attempting immediate re-enable", source: "GlobalHotkeyManager")
-        self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
+        if !self.registeredHotkeys.hasPressedShortcut {
+            self.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
+        }
 
         if let tap = self.eventTap {
             CGEvent.tapEnable(tap: tap, enable: true)
@@ -1608,7 +1652,7 @@ final class GlobalHotkeyManager: NSObject {
         let press = self.finishAutomaticPress(for: type)
         let duration = String(format: "%.2f", press.duration)
 
-        if press.duration < self.automaticTapThresholdSeconds {
+        if !self.registeredHotkeys.isInterruptingPress, press.duration < self.automaticTapThresholdSeconds {
             if press.wasTargetActive {
                 DebugLogger.shared.info("\(label) tap (\(duration)s) - stopping", source: "GlobalHotkeyManager")
                 self.stopRecordingIfNeeded()
@@ -1874,7 +1918,10 @@ final class GlobalHotkeyManager: NSObject {
         }
     }
 
-    func resetModifierOnlyShortcutTracking(reason: ModifierTrackingResetReason = .shortcutCapture) {
+    func resetModifierOnlyShortcutTracking(
+        reason: ModifierTrackingResetReason = .shortcutCapture,
+        preservePendingReleaseStops: Bool = false
+    ) {
         let shouldStopActiveHold = self.hotkeyMode != .toggle
             && self.asrService.isRunning
             && (self.isKeyPressed || self.isPromptModeKeyPressed || self.isCommandModeKeyPressed || self.isRewriteKeyPressed || self.isPromptAssignmentKeyPressed)
@@ -1884,7 +1931,7 @@ final class GlobalHotkeyManager: NSObject {
         self.activeModifierOnlyType = nil
         self.otherKeyPressedDuringModifier = false
         self.modifierPressStartTime = nil
-        self.clearAutomaticPressTracking()
+        self.clearAutomaticPressTracking(cancelPendingStops: !preservePendingReleaseStops)
         self.isKeyPressed = false
         self.isPromptModeKeyPressed = false
         self.isCommandModeKeyPressed = false
@@ -2368,10 +2415,11 @@ final class GlobalHotkeyManager: NSObject {
 
     func reinitialize() {
         DebugLogger.shared.info("Manual reinitialization requested", source: "GlobalHotkeyManager")
+        self.registeredHotkeys.releaseAll(interrupted: true)
 
         self.initializationTask?.cancel()
         self.healthCheckTask?.cancel()
-        self.resetModifierOnlyShortcutTracking(reason: .reinitialize)
+        self.resetModifierOnlyShortcutTracking(reason: .reinitialize, preservePendingReleaseStops: true)
         self.isInitialized = false
         self.initializeWithDelay()
     }
@@ -2391,6 +2439,7 @@ final class GlobalHotkeyManager: NSObject {
 
                 await MainActor.run { [weak self] in
                     guard let self else { return }
+                    self.logSecureInputState()
                     if !self.validateEventTapHealth() {
                         DebugLogger.shared.warning("Health check failed, attempting to recover", source: "GlobalHotkeyManager")
 
@@ -2413,5 +2462,54 @@ final class GlobalHotkeyManager: NSObject {
         initializationTask?.cancel()
         healthCheckTask?.cancel()
         cleanupEventTap()
+    }
+}
+
+/// Registration is separate from event-tap health: an enabled tap can still be
+/// unable to receive keys while another process holds Secure Event Input.
+extension GlobalHotkeyManager {
+    private func refreshRegisteredHotkeys() {
+        guard !(self.isShortcutCaptureActiveProvider?() ?? false) else {
+            self.registeredHotkeys.update(shortcuts: [])
+            return
+        }
+        var shortcuts = self.primaryShortcuts + self.promptShortcutAssignments.map(\.shortcut)
+        if self.promptModeShortcutEnabled {
+            shortcuts.append(self.promptModeShortcut)
+        }
+        if self.commandModeShortcutEnabled, let shortcut = self.commandModeShortcut {
+            shortcuts.append(shortcut)
+        }
+        if self.rewriteModeShortcutEnabled {
+            shortcuts.append(self.rewriteModeShortcut)
+        }
+        // Cancel and paste keep their context-sensitive event-tap behavior: unlike
+        // recording triggers, they must not unconditionally claim a global chord.
+        self.registeredHotkeys.update(shortcuts: shortcuts)
+    }
+
+    func shortcutCaptureDidChange() {
+        self.registeredHotkeys.releaseAll(interrupted: true)
+        self.resetModifierOnlyShortcutTracking(preservePendingReleaseStops: true)
+        self.refreshRegisteredHotkeys()
+    }
+
+    private func handleRegisteredHotkey(_ shortcut: HotkeyShortcut, down: Bool) {
+        guard !down || !Self.currentSessionIsLocked() else { return }
+        // Construct an input for the existing routing/state machine. Never post it
+        // into the system event stream or synthesize a keystroke in another app.
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: down) else { return }
+        event.flags = CGEventFlags(rawValue: UInt64(shortcut.relevantModifierFlags.rawValue))
+        _ = self.handleKeyEvent(type: down ? .keyDown : .keyUp, event: event, registered: true)
+    }
+
+    private func logSecureInputState() {
+        let enabled = IsSecureEventInputEnabled()
+        guard self.secureInputWasEnabled != enabled else { return }
+        self.secureInputWasEnabled = enabled
+        DebugLogger.shared.info(
+            "Secure Input \(enabled ? "enabled: event-tap shortcuts may be unavailable; registered hotkeys remain registered" : "disabled")",
+            source: "GlobalHotkeyManager"
+        )
     }
 }
