@@ -414,15 +414,13 @@ final class MonitorTopologyRecoveryTests: XCTestCase {
         try await waitForEvent(input, "query")
         let began = ProcessInfo.processInfo.systemUptime
         query.cancel()
-        do { _ = try await query.value; XCTFail("Cancelled discovery must fail") }
-        catch { XCTAssertTrue(error is CancellationError) }
+        do { _ = try await query.value; XCTFail("Cancelled discovery must fail") } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.2)
         input.emit()
         XCTAssertEqual(input.count("delivered"), 1)
         XCTAssertEqual(input.count("invalidate"), 0)
         XCTAssertFalse(controller.isRecoveringHardware)
-        do { _ = try await controller.readCaptureDeviceSnapshot(); XCTFail("Do not pile up blocked queries") }
-        catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
+        do { _ = try await controller.readCaptureDeviceSnapshot(); XCTFail("Do not pile up blocked queries") } catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
         XCTAssertEqual(input.count("query"), 1)
         input.release.signal()
         await controller.shutdown(reason: "test_complete")
@@ -461,8 +459,7 @@ final class MonitorTopologyRecoveryTests: XCTestCase {
         for _ in 0..<100 {
             controller.simulateAbnormalStopNotificationForTesting(generation: generation)
         }
-        do { _ = try await starting.value; XCTFail("Known failed startup must release its caller") }
-        catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
+        do { _ = try await starting.value; XCTFail("Known failed startup must release its caller") } catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
         XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.2)
         XCTAssertEqual(input.count("notification"), 1)
         XCTAssertEqual(input.count("invalidate"), 0, "Native startup still owns the resources")
@@ -612,15 +609,25 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
 
     var formatFingerprint: DirectCoreAudioFormatFingerprint {
         DirectCoreAudioFormatFingerprint(
-            deviceID: self.deviceID, streamID: self.deviceID + 1,
+            deviceID: self.deviceID,
+            streamID: self.deviceID + 1,
             virtualFormat: DirectCoreAudioStreamFormatFingerprint(AudioStreamBasicDescription(
-                mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
+                mSampleRate: 48_000,
+                mFormatID: kAudioFormatLinearPCM,
                 mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-                mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
-                mChannelsPerFrame: 1, mBitsPerChannel: 32, mReserved: 0
+                mBytesPerPacket: 4,
+                mFramesPerPacket: 1,
+                mBytesPerFrame: 4,
+                mChannelsPerFrame: 1,
+                mBitsPerChannel: 32,
+                mReserved: 0
             )),
-            physicalFormat: nil, inputBufferChannels: [1], nominalSampleRate: 48_000,
-            bufferFrameSize: 512, variableBufferFrameSizeMaximum: nil, dataSourceID: nil
+            physicalFormat: nil,
+            inputBufferChannels: [1],
+            nominalSampleRate: 48_000,
+            bufferFrameSize: 512,
+            variableBufferFrameSizeMaximum: nil,
+            dataSourceID: nil
         )
     }
 
@@ -669,7 +676,10 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
     func emit() {
         let handler = self.lock.withLock { self.handler }
         let samples = [Float](repeating: 0.5, count: 48)
-        samples.withUnsafeBufferPointer { handler?($0.baseAddress!, $0.count, 48_000, 0, 0) }
+        samples.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            handler?(baseAddress, buffer.count, 48_000, 0, 0)
+        }
     }
 }
 
@@ -1064,7 +1074,15 @@ private func withASRRecoveryFixture(
     // discovery cannot masquerade as a recovery-induced preference change.
     let query = DirectCoreAudioLifecycleController(packetHandler: { _, _, _, _, _ in }, onFormatInvalidated: { _ in })
     let liveInputs = try await query.readDeviceSnapshot().devices.filter(\.hasInput)
-    let fixture = ASRRecoveryFixture(queryDelay: queryDelay, queryFailures: queryFailures, liveInputs: liveInputs, externalStopDelay: externalStopDelay, operationTimeout: operationTimeout, firstQueryDelay: firstQueryDelay, builtInStartDelay: builtInStartDelay)
+    let fixture = ASRRecoveryFixture(
+        queryDelay: queryDelay,
+        queryFailures: queryFailures,
+        liveInputs: liveInputs,
+        externalStopDelay: externalStopDelay,
+        operationTimeout: operationTimeout,
+        firstQueryDelay: firstQueryDelay,
+        builtInStartDelay: builtInStartDelay
+    )
     defer { fixture.restoreSettings() }
     do {
         try await fixture.start()
