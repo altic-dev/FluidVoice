@@ -676,6 +676,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     // A display can change HAL topology without changing the selected input's
     // ID or format. Refresh stopped capture on the next Start, not mid-recording.
     private var hardwareTopologyRevision: UInt64 = 0 // snapshotLock
+    private var topologyRecoveryCheckPending = false // snapshotLock
     private var lastStartedTopologyRevision: UInt64 = 0 // lifecycleQueue
     private let stoppedHardwareLock = NSLock()
     private var stoppedHardwareGenerations: Set<UInt64> = []
@@ -694,6 +695,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     private let packetHandler: PacketHandler
     private let inputFactory: InputFactory
     private let deviceSnapshotReader: @Sendable (Bool) throws -> DeviceSnapshot
+    private let deviceLivenessReader: @Sendable (AudioObjectID) -> Bool?
     private let deviceResolver: @Sendable (DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device?
     private let fingerprintReader: FingerprintReader
     private let onFormatInvalidated: @Sendable (FormatInvalidation) -> Void
@@ -707,6 +709,12 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     private var isShutDown = false
     private var isPoisoned = false
     private var inputDeviceName: String?
+    private struct FailedHardware: Equatable {
+        let generation: UInt64
+        let deviceID: AudioObjectID
+    }
+
+    private var failedHardware: FailedHardware?
 
     init(
         packetHandler: @escaping PacketHandler,
@@ -719,6 +727,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         installsHardwareListeners: Bool = true,
         operationTimeout: TimeInterval? = nil,
         deviceSnapshotReader: @escaping @Sendable (Bool) throws -> DeviceSnapshot = DirectCoreAudioLifecycleController.queryDeviceSnapshot,
+        deviceLivenessReader: @escaping @Sendable (AudioObjectID) -> Bool? = DirectCoreAudioLifecycleController.readDeviceLiveness,
         deviceResolver: @escaping @Sendable (DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device? = DirectCoreAudioLifecycleController.resolveSelectedDevice,
         onFormatInvalidated: @escaping @Sendable (FormatInvalidation) -> Void
     ) {
@@ -736,6 +745,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         self.inputFactory = inputFactory
         self.fingerprintReader = fingerprintReader
         self.deviceSnapshotReader = deviceSnapshotReader
+        self.deviceLivenessReader = deviceLivenessReader
         self.deviceResolver = deviceResolver
         self.installsHardwareListeners = installsHardwareListeners
         self.onFormatInvalidated = onFormatInvalidated
@@ -805,6 +815,63 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             return self.hardwareTopologyRevision
         }
         Self.log("Direct capture topology changed revision=\(revision); next stopped start requires fresh input", level: .info)
+        self.scheduleFailedHardwareCheck()
+    }
+
+    private func scheduleFailedHardwareCheck() {
+        let enqueue = self.snapshotLock.withLock {
+            guard self.shutdownRequested == false, self.topologyRecoveryCheckPending == false else { return false }
+            self.topologyRecoveryCheckPending = true
+            return true
+        }
+        if enqueue {
+            // Queue behind native work and its cleanup. A topology callback must
+            // never clear failure while that work still owns capture resources.
+            // Coalesce bursts here; ordinary capture startup is never delayed.
+            self.lifecycleQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.checkFailedHardwareLocked() }
+        }
+    }
+
+    private func checkFailedHardwareLocked() {
+        let revision = self.snapshotLock.withLock { self.hardwareTopologyRevision }
+        guard self.isShutDown == false,
+              self.snapshotLock.withLock({ self.shutdownRequested == false }),
+              self.isPoisoned, let failedHardware = self.failedHardware
+        else {
+            self.snapshotLock.withLock { self.topologyRecoveryCheckPending = false }
+            return
+        }
+        Task { [weak self, deviceQueries, deviceLivenessReader] in
+            // Unknown, failed, or timed-out queries cannot authorize replacement.
+            // Keep HAL queries off both the notification and lifecycle queues.
+            let isAlive = try? await deviceQueries.run(recover: { true }) {
+                deviceLivenessReader(failedHardware.deviceID)
+            }
+            self?.lifecycleQueue.async { [weak self] in
+                guard let self else { return }
+                defer {
+                    // An event can arrive even while this completion is being
+                    // handled. Release ownership only after applying its result,
+                    // then recheck any newer revision instead of losing it.
+                    let changedAgain = self.snapshotLock.withLock {
+                        self.topologyRecoveryCheckPending = false
+                        return revision != self.hardwareTopologyRevision
+                    }
+                    if changedAgain { self.scheduleFailedHardwareCheck() }
+                }
+                guard self.isShutDown == false,
+                      self.snapshotLock.withLock({ self.shutdownRequested == false && revision == self.hardwareTopologyRevision }),
+                      self.failedHardware == failedHardware,
+                      self.generation == failedHardware.generation,
+                      isAlive == false
+                else { return }
+                self.recordStoppedHardwareNotification(generation: failedHardware.generation)
+                self.handleFormatInvalidationLocked(
+                    generation: failedHardware.generation,
+                    reason: "device_list_confirmed_stopped"
+                )
+            }
+        }
     }
 
     struct DeviceSnapshot: Sendable {
@@ -974,7 +1041,8 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                         input: validatedInput,
                         fingerprint: validatedInput.formatFingerprint
                     )
-                    self.lastStartedTopologyRevision = topologyRevision
+                    // Reusing preview does not refresh its native setup. Keep
+                    // the pending revision so the next stopped start rebuilds.
                     Self.log(
                         "Direct capture start reused running input generation=\(self.generation) " +
                             "device='\(deviceName)'",
@@ -1303,6 +1371,12 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                 )
             } else {
                 self.isPoisoned = true
+                if let input {
+                    self.failedHardware = FailedHardware(generation: self.generation, deviceID: input.deviceID)
+                    // Covers removal while listeners were being detached, before
+                    // cleanup had published its failure to the hardware queue.
+                    self.scheduleFailedHardwareCheck()
+                }
                 Self.log(
                     "Direct capture teardown failed generation=\(self.generation) " +
                         "status=\(status); lifecycle poisoned and callback context quarantined",
@@ -1521,6 +1595,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             if hardwareIsKnownStopped {
                 let wasPoisoned = self.isPoisoned
                 self.isPoisoned = false
+                self.failedHardware = nil
                 let clearedQueueFailure = self.hardwareOperations.clearFailureAfterSerializedRecovery()
                 if wasPoisoned || clearedQueueFailure {
                     let shuttingDown = self.isShutDown || self.snapshotLock.withLock { self.shutdownRequested }
@@ -1600,6 +1675,10 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     }
 
     #if DEBUG
+    var isTopologyRecoveryCheckPendingForTesting: Bool {
+        self.snapshotLock.withLock { self.topologyRecoveryCheckPending }
+    }
+
     func simulateAbnormalStopNotificationForTesting(generation: UInt64) {
         self.handleFormatNotification(
             generation: generation, reason: "io_stopped_abnormally", input: nil, hardwareIsKnownStopped: true

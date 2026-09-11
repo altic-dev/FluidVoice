@@ -343,6 +343,166 @@ final class AudioHardwareRecoveryTests: XCTestCase {
 }
 
 final class MonitorTopologyRecoveryTests: XCTestCase {
+    func testHealthyTopologyChangeDoesNotQueryLivenessOrInterruptCapture() async throws {
+        let input = RecoveryInput()
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, timeout: nil, deviceLivenessReader: { probe.read($0) })
+        _ = try await controller.start(deviceID: 144, deviceName: "Healthy", reason: "recording")
+        for _ in 0..<100 { controller.noteHardwareTopologyChanged() }
+        try await waitForTopologyCheck(controller)
+        input.emit()
+        XCTAssertTrue(probe.deviceIDs.isEmpty)
+        XCTAssertEqual(controller.snapshot.phase, .running)
+        XCTAssertEqual(input.count("stop"), 0)
+        XCTAssertEqual(input.count("invalidate"), 0)
+        XCTAssertEqual(input.count("delivered"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testGlobalTopologyRemovalClearsFailedCleanupAndAllowsNextRecording() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal() }
+        _ = try? await controller.start(deviceID: 144, deviceName: "Removed", reason: "failed_start")
+        input.release.signal()
+        try await waitForFailedCleanup(controller)
+        try await waitForTopologyCheck(controller)
+        XCTAssertTrue(controller.isRecoveringHardware)
+        XCTAssertEqual(probe.deviceIDs, [144])
+
+        // This is the actual entry point used by the global HAL device-list
+        // listener, after invalidate() has removed all per-device listeners.
+        probe.setAlive(false)
+        controller.noteHardwareTopologyChanged()
+        try await waitForTopologyCheck(controller)
+        XCTAssertFalse(controller.isRecoveringHardware)
+        let replacement = try await controller.start(deviceID: 144, deviceName: "Replacement", reason: "next_recording")
+        input.emit()
+        XCTAssertEqual(replacement.phase, .running)
+        XCTAssertEqual(input.count("delivered"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testUnrelatedTopologyAndUnknownLivenessKeepFailedCleanupBlocked() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal() }
+        _ = try? await controller.start(deviceID: 144, deviceName: "Still connected", reason: "failed_start")
+        input.release.signal()
+        try await waitForFailedCleanup(controller)
+        try await waitForTopologyCheck(controller)
+        for alive in [true, nil] as [Bool?] {
+            probe.setAlive(alive)
+            for _ in 0..<100 { controller.noteHardwareTopologyChanged() }
+            try await waitForTopologyCheck(controller)
+            XCTAssertTrue(controller.isRecoveringHardware)
+            XCTAssertEqual(input.count("prepare"), 1)
+            XCTAssertEqual(input.count("delivered"), 0)
+        }
+        XCTAssertTrue(probe.deviceIDs.allSatisfy { $0 == 144 })
+        XCTAssertLessThan(probe.deviceIDs.count, 10, "Coalesce event bursts instead of querying once per notification")
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testRemovalDuringBlockedNativeWorkWaitsForItsCleanup() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe(alive: false)
+        let controller = makeRecoveryController(input, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal() }
+        _ = try? await controller.start(deviceID: 144, deviceName: "Removed", reason: "failed_start")
+        for _ in 0..<100 { controller.noteHardwareTopologyChanged() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(controller.isRecoveringHardware)
+        XCTAssertTrue(probe.deviceIDs.isEmpty, "Do not check or unlock while native startup owns capture")
+        XCTAssertEqual(input.count("invalidate"), 0)
+        XCTAssertEqual(input.count("prepare"), 1)
+        input.release.signal()
+        try await waitForRecovery(controller)
+        XCTAssertEqual(input.count("invalidate"), 1)
+        XCTAssertEqual(probe.deviceIDs, [144])
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testRemovalDuringLivenessQueryRechecksTheLatestTopology() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, timeout: 1, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal(); probe.release.signal() }
+        let starting = Task { try await controller.start(deviceID: 144, deviceName: "Old", reason: "old_start") }
+        try await waitForEvent(input, "start")
+        starting.cancel()
+        _ = try? await starting.value
+        input.release.signal()
+        try await waitForFailedCleanup(controller)
+        try await waitForTopologyCheck(controller)
+        probe.blockNextRead(alive: true)
+        controller.noteHardwareTopologyChanged()
+        try await probe.waitForReadCount(2)
+        probe.setAlive(false)
+        controller.noteHardwareTopologyChanged()
+        probe.release.signal()
+        try await waitForRecovery(controller)
+        try await waitForTopologyCheck(controller)
+        XCTAssertEqual(probe.deviceIDs.count, 3, "Recheck after the in-flight query returns an older snapshot")
+        XCTAssertEqual(controller.snapshot.phase, .empty)
+        XCTAssertEqual(input.count("prepare"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testLateLivenessResultCannotClearOrStopNewCapture() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, timeout: 1, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal(); probe.release.signal() }
+        let starting = Task { try await controller.start(deviceID: 144, deviceName: "Old", reason: "old_start") }
+        try await waitForEvent(input, "start")
+        starting.cancel()
+        _ = try? await starting.value
+        input.release.signal()
+        try await waitForFailedCleanup(controller)
+        try await waitForTopologyCheck(controller)
+        let oldGeneration = controller.snapshot.generation
+        probe.blockNextRead(alive: false)
+        controller.noteHardwareTopologyChanged()
+        try await probe.waitForReadCount(2)
+        // A valid per-device signal wins the race and admits a new generation.
+        await controller.simulateStoppedHardwareNotificationForTesting(generation: oldGeneration, reason: "device_is_alive")
+        let replacement = try await controller.start(deviceID: 144, deviceName: "New", reason: "replacement")
+        probe.release.signal()
+        try await waitForTopologyCheck(controller)
+        input.emit()
+        XCTAssertGreaterThan(replacement.generation, oldGeneration)
+        XCTAssertEqual(controller.snapshot.phase, .running)
+        XCTAssertEqual(input.count("invalidate"), 1)
+        XCTAssertEqual(input.count("delivered"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testBlockedTopologyQueryDoesNotUnlockAndShutdownCannotBeReversed() async throws {
+        let input = RecoveryInput(block: "start", cleanupFails: true)
+        let probe = FailedDeviceLivenessProbe()
+        let controller = makeRecoveryController(input, deviceLivenessReader: { probe.read($0) })
+        defer { input.release.signal(); probe.release.signal() }
+        _ = try? await controller.start(deviceID: 144, deviceName: "Old", reason: "failed_start")
+        input.release.signal()
+        try await waitForFailedCleanup(controller)
+        try await waitForTopologyCheck(controller)
+        probe.blockNextRead(alive: false)
+        controller.noteHardwareTopologyChanged()
+        try await probe.waitForReadCount(2)
+        try await waitForTopologyCheck(controller)
+        XCTAssertTrue(controller.isRecoveringHardware, "Timed-out liveness is unknown, not proof of removal")
+        await controller.shutdown(reason: "test_complete")
+        probe.release.signal()
+        controller.noteHardwareTopologyChanged()
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(controller.isRecoveringHardware)
+        XCTAssertEqual(input.count("prepare"), 1)
+        XCTAssertEqual(input.count("delivered"), 0)
+    }
+
     func testDisplayTopologyChangeRefreshesUnchangedPreparedInputOnlyOnce() async throws {
         let input = RecoveryInput()
         let controller = makeDefaultRecoveryController(input)
@@ -395,6 +555,11 @@ final class MonitorTopologyRecoveryTests: XCTestCase {
         XCTAssertEqual(input.count("stop"), 0)
         XCTAssertEqual(input.count("invalidate"), 0)
         XCTAssertEqual(input.count("delivered"), 1)
+        _ = await controller.stop(retainPrepared: true, reason: "handoff_recording_stopped")
+        let next = try await controller.start(deviceID: 144, deviceName: "Test", reason: "after_handoff")
+        XCTAssertGreaterThan(next.generation, handoff.generation, "Handoff must preserve the pending topology rebuild")
+        XCTAssertEqual(input.count("invalidate"), 1)
+        XCTAssertEqual(input.count("start"), 2)
         await controller.shutdown(reason: "test_complete")
     }
 
@@ -551,7 +716,11 @@ private func makeDefaultRecoveryController(_ input: RecoveryInput) -> DirectCore
     )
 }
 
-private func makeRecoveryController(_ input: RecoveryInput, timeout: TimeInterval? = 0.08) -> DirectCoreAudioLifecycleController {
+private func makeRecoveryController(
+    _ input: RecoveryInput,
+    timeout: TimeInterval? = 0.08,
+    deviceLivenessReader: @escaping @Sendable (AudioObjectID) -> Bool? = { _ in true }
+) -> DirectCoreAudioLifecycleController {
     DirectCoreAudioLifecycleController(
         packetHandler: { _, _, _, _, _ in input.record("delivered") },
         inputFactory: { _, handler in
@@ -565,6 +734,7 @@ private func makeRecoveryController(_ input: RecoveryInput, timeout: TimeInterva
         },
         installsHardwareListeners: false,
         operationTimeout: timeout,
+        deviceLivenessReader: deviceLivenessReader,
         onFormatInvalidated: { _ in }
     )
 }
@@ -1426,4 +1596,58 @@ private final nonisolated class RecoveryFleet: @unchecked Sendable {
             onFormatInvalidated: { _ in }
         )
     }
+}
+
+private final nonisolated class FailedDeviceLivenessProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var alive: Bool?
+    private var shouldBlock = false
+    private var ids: [AudioObjectID] = []
+    let release = DispatchSemaphore(value: 0)
+
+    init(alive: Bool? = true) { self.alive = alive }
+    var deviceIDs: [AudioObjectID] { self.lock.withLock { self.ids } }
+    func setAlive(_ alive: Bool?) { self.lock.withLock { self.alive = alive } }
+    func blockNextRead(alive: Bool?) {
+        self.lock.withLock { self.alive = alive; self.shouldBlock = true }
+    }
+
+    func read(_ id: AudioObjectID) -> Bool? {
+        let state = self.lock.withLock {
+            self.ids.append(id)
+            let state = (self.alive, self.shouldBlock)
+            self.shouldBlock = false
+            return state
+        }
+        if state.1 { _ = self.release.wait(timeout: .now() + 3) }
+        return state.0
+    }
+
+    func waitForReadCount(_ count: Int) async throws {
+        for _ in 0..<1000 {
+            if self.deviceIDs.count >= count { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Failed-device liveness query did not run")
+    }
+}
+
+private func waitForTopologyCheck(_ controller: DirectCoreAudioLifecycleController) async throws {
+    for _ in 0..<1000 {
+        if controller.isTopologyRecoveryCheckPendingForTesting == false { return }
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTFail("Topology recovery did not finish within its bounded query window")
+}
+
+private func waitForFailedCleanup(_ controller: DirectCoreAudioLifecycleController) async throws {
+    for _ in 0..<1000 {
+        do {
+            _ = try await controller.prepare(deviceID: 144, deviceName: "Probe", reason: "wait_for_failed_cleanup")
+        } catch BoundedAudioHardwareQueue.Failure.cleanupFailed {
+            return
+        } catch {}
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTFail("Serialized cleanup did not publish its failed state")
 }
