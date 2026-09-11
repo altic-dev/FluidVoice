@@ -1346,10 +1346,15 @@ final class ASRService: ObservableObject {
     /// cancellation handler also covers cancellation before queue admission.
     private func startCancellableAudioCapture(
         excluding excludedInputUIDs: Set<String>,
-        forcingInputUID: String?
+        forcingInputUID: String?,
+        onInputSnapshotRead: @escaping @MainActor (Int) -> Void
     ) async throws {
         let task = Task {
-            try await self.startConfiguredAudioCapture(excluding: excludedInputUIDs, forcingInputUID: forcingInputUID)
+            try await self.startConfiguredAudioCapture(
+                excluding: excludedInputUIDs,
+                forcingInputUID: forcingInputUID,
+                onInputSnapshotRead: onInputSnapshotRead
+            )
         }
         self.pendingAudioCaptureBackendStart = task
         defer { self.pendingAudioCaptureBackendStart = nil }
@@ -1362,7 +1367,8 @@ final class ASRService: ObservableObject {
 
     private func startConfiguredAudioCapture(
         excluding excludedInputUIDs: Set<String> = [],
-        forcingInputUID: String? = nil
+        forcingInputUID: String? = nil,
+        onInputSnapshotRead: @MainActor (Int) -> Void = { _ in }
     ) async throws {
         let startGeneration = self.audioCaptureStartGeneration
         let previousAttemptIdentity = self.audioStartAttemptInputUID.map {
@@ -1393,6 +1399,7 @@ final class ASRService: ObservableObject {
                 try self.checkCaptureStartGeneration(startGeneration)
                 let allDevices = deviceSnapshot.devices
                 let availableInputs = allDevices.filter(\.hasInput)
+                onInputSnapshotRead(availableInputs.count)
                 let selectedInput: AudioDevice.Device?
                 if let forcingInputUID {
                     selectedInput = availableInputs.first { $0.uid == forcingInputUID }
@@ -2282,10 +2289,8 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
-            let maximumStartAttempts =
-                SettingsStore.shared.experimentalDirectAudioCaptureEnabled
-                    ? max(self.cachedInputDeviceIDsByUID.count, 1) + 1
-                    : 1
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
             var startAttempt = 1
             var fallbackAttempt = 1
             var failedInputUIDs = Set<String>()
@@ -2298,7 +2303,14 @@ final class ASRService: ObservableObject {
                 do {
                     try await self.startCancellableAudioCapture(
                         excluding: failedInputUIDs,
-                        forcingInputUID: forcedInputUID
+                        forcingInputUID: forcedInputUID,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            // Freeze a bounded budget from the same fresh snapshot
+                            // that selected the first input, including one retry.
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
                     )
                 } catch {
                     try self.checkCaptureStartGeneration(startGeneration)
@@ -4180,8 +4192,8 @@ final class ASRService: ObservableObject {
 
         do {
             guard hardwareAvailable else { throw BoundedAudioHardwareQueue.Failure.recovering }
-            let maximumStartAttempts = SettingsStore.shared.experimentalDirectAudioCaptureEnabled
-                ? max(self.cachedInputDeviceIDsByUID.count, 1) + 1 : 1
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
             var failedInputUIDs = Set<String>()
             var immediatelyRetriedInputUID: String?
             var completedAttempts = 0
@@ -4202,7 +4214,14 @@ final class ASRService: ObservableObject {
                 )
 
                 do {
-                    try await self.startConfiguredAudioCapture(excluding: failedInputUIDs)
+                    try await self.startConfiguredAudioCapture(
+                        excluding: failedInputUIDs,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
+                    )
                 } catch {
                     guard error is BoundedAudioHardwareQueue.Failure == false,
                           error is CancellationError == false

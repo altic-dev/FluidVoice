@@ -856,6 +856,68 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
 #if canImport(FluidVoice_Debug)
 final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     @MainActor
+    func testStartupTriesNewMicrophoneMissingFromDeviceCache() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            fixture.hardware.enableNewFallback()
+            let outcome = await fixture.service.start(forDictionaryTraining: true)
+            XCTAssertEqual(outcome, .started)
+            XCTAssertTrue(fixture.service.isRunning)
+            XCTAssertEqual(fixture.controller.snapshot.deviceID, 300)
+            XCTAssertEqual(fixture.hardware.resolutionAttempts, [100, 100, 300])
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 300), 1)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
+    func testActiveRecoveryTriesNewMicrophoneMissingFromDeviceCache() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            fixture.hardware.enableNewFallback()
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForRecoveryAttempt()
+            XCTAssertEqual(fixture.controller.snapshot.deviceID, 300)
+            XCTAssertEqual(fixture.hardware.resolutionAttempts, [100, 100, 300])
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 300), 1)
+            fixture.assertSessionPreserved()
+        }
+    }
+
+    @MainActor
+    func testFreshSnapshotBudgetStopsAfterAllStartupInputsFail() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            fixture.hardware.enableNewFallback(fails: true)
+            let outcome = await fixture.service.start(forDictionaryTraining: true)
+            XCTAssertEqual(outcome, .failed)
+            XCTAssertFalse(fixture.service.isRunning)
+            XCTAssertFalse(fixture.service.isStarting)
+            XCTAssertTrue(fixture.service.showError)
+            XCTAssertEqual(fixture.hardware.resolutionAttempts, [100, 100, 300])
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 300), 0)
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
+    func testFreshSnapshotBudgetStopsAfterAllRecoveryInputsFail() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            fixture.hardware.enableNewFallback(fails: true)
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForRecoveryAttempt()
+            XCTAssertFalse(fixture.service.isRunning)
+            XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.acceptingPCM)
+            XCTAssertTrue(fixture.service.showError)
+            XCTAssertEqual(fixture.hardware.resolutionAttempts, [100, 100, 300])
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 300), 0)
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
     func testFailedRecoveryCancelsWaitingRetryAndResumesMediaBeforeNativeCleanup() async throws {
         try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.8) { fixture in
             await fixture.service.stopWithoutTranscription()
@@ -1315,13 +1377,8 @@ private final class ASRRecoveryFixture {
             fingerprintReader: { RecoveryInput(deviceID: $0).formatFingerprint },
             installsHardwareListeners: false,
             operationTimeout: operationTimeout,
-            deviceSnapshotReader: { _ in try hardware.snapshot() },
-            deviceResolver: { selection in
-                switch selection {
-                case .systemDefault: hardware.builtIn
-                case let .preferredUID(uid): uid == hardware.builtIn.uid ? hardware.builtIn : nil
-                }
-            },
+            deviceSnapshotReader: { refreshLiveness in try hardware.snapshot(refreshLiveness: refreshLiveness) },
+            deviceResolver: { try hardware.resolve($0) },
             onFormatInvalidated: { _ in }
         )
     }
@@ -1332,6 +1389,15 @@ private final class ASRRecoveryFixture {
             controller: self.controller, devices: [self.hardware.builtIn], initialSamples: self.prefix
         )
         self.service.partialTranscription = "words already captured"
+    }
+
+    func waitForRecoveryAttempt() async throws {
+        for _ in 0..<1500 {
+            let state = self.service.audioRouteRecoveryStateForTesting
+            if state.pending == false, state.recovering == false { return }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTFail("Recovery retry budget did not finish")
     }
 
     func waitForBuiltInStartCount(_ count: Int) async throws {
@@ -1389,6 +1455,34 @@ private actor RecoveryMediaTransport: MediaPlaybackTransport {
 }
 
 private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {
+    private let newFallback = AudioDevice.Device(id: 300, uid: "recovery-test-new", name: "New microphone", hasInput: true, hasOutput: false)
+    private var newFallbackEnabled = false
+    private var newFallbackFails = false
+    private var resolutions: [AudioObjectID] = []
+
+    var resolutionAttempts: [AudioObjectID] { self.lock.withLock { self.resolutions } }
+
+    func enableNewFallback(fails: Bool = false) {
+        self.lock.withLock { self.newFallbackEnabled = true; self.newFallbackFails = fails }
+    }
+
+    func resolve(_ selection: DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device? {
+        try self.lock.withLock {
+            let device: AudioDevice.Device?
+            switch selection {
+            case .systemDefault: device = self.builtIn
+            case let .preferredUID(uid):
+                device = uid == self.builtIn.uid ? self.builtIn : (uid == self.newFallback.uid ? self.newFallback : nil)
+            }
+            guard let device else { return nil }
+            self.resolutions.append(device.id)
+            if self.newFallbackEnabled, device.id == 100 || self.newFallbackFails {
+                throw NSError(domain: "InjectedMicrophoneStartFailure", code: 1)
+            }
+            return device
+        }
+    }
+
     let builtIn = AudioDevice.Device(id: 100, uid: "recovery-test-built-in", name: "Test Built-in", hasInput: true, hasOutput: false)
     private let lock = NSLock()
     private let queryDelay: TimeInterval
@@ -1419,7 +1513,7 @@ private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {
         return input
     }
 
-    func snapshot() throws -> DirectCoreAudioLifecycleController.DeviceSnapshot {
+    func snapshot(refreshLiveness: Bool) throws -> DirectCoreAudioLifecycleController.DeviceSnapshot {
         let fail = self.lock.withLock {
             self.queries += 1
             let fail = self.queryFailures > 0
@@ -1429,7 +1523,12 @@ private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {
         let delay = self.lock.withLock { self.queries == 1 ? (self.firstQueryDelay ?? self.queryDelay) : self.queryDelay }
         Thread.sleep(forTimeInterval: delay)
         if fail { throw NSError(domain: "InjectedDeviceScan", code: 1) }
-        return .init(devices: [self.builtIn], defaultInputUID: self.builtIn.uid)
+        // The event cache/reconciliation still knows one input; the newer
+        // capture-selection snapshot already contains the connected fallback.
+        let inputs = self.lock.withLock {
+            self.newFallbackEnabled && refreshLiveness == false ? [self.builtIn, self.newFallback] : [self.builtIn]
+        }
+        return .init(devices: inputs, defaultInputUID: self.builtIn.uid)
     }
 }
 #endif
