@@ -1,6 +1,6 @@
 import Foundation
 
-/// Serializes microphone-owning workflows that share audio hardware and ASR providers.
+/// Serializes ASR workflows that cannot safely share stateful transcription providers.
 @MainActor
 final class AudioCaptureCoordinator {
     enum Owner: Hashable {
@@ -10,40 +10,33 @@ final class AudioCaptureCoordinator {
 
     static let shared = AudioCaptureCoordinator()
 
-    private var owners: Set<Owner> = []
+    private(set) var owner: Owner?
     private var releaseWaiters: [Owner: [CheckedContinuation<Void, Never>]] = [:]
-    private(set) var isCallRecording = false
 
     init() {}
 
     func reserve(for requestedOwner: Owner) -> Bool {
-        guard !self.owners.contains(requestedOwner) else { return false }
-        if requestedOwner == .dictation, self.isCallRecording, self.owners == [.call] {
-            self.owners.insert(.dictation)
-            return true
+        guard self.owner == nil else {
+            if requestedOwner == .dictation, self.owner == .call {
+                NotificationService.showCallTranscriptionInProgress()
+            }
+            return false
         }
-        guard self.owners.isEmpty else { return false }
-        self.owners.insert(requestedOwner)
+        self.owner = requestedOwner
         return true
     }
 
     func release(for releasingOwner: Owner) {
-        guard self.owners.remove(releasingOwner) != nil else { return }
-        if releasingOwner == .call {
-            self.isCallRecording = false
-        }
+        guard self.owner == releasingOwner else { return }
+        self.owner = nil
         let waiters = self.releaseWaiters.removeValue(forKey: releasingOwner) ?? []
         waiters.forEach { $0.resume() }
     }
 
-    func setCallRecording(_ isRecording: Bool) {
-        self.isCallRecording = isRecording && self.owners.contains(.call)
-    }
-
     func waitUntilReleased(_ owner: Owner) async {
-        guard self.owners.contains(owner) else { return }
+        guard self.owner == owner else { return }
         await withCheckedContinuation { continuation in
-            if self.owners.contains(owner) {
+            if self.owner == owner {
                 self.releaseWaiters[owner, default: []].append(continuation)
             } else {
                 continuation.resume()
