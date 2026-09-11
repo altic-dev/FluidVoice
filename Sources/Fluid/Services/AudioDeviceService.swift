@@ -170,7 +170,9 @@ nonisolated enum AudioDevice {
     }
 
     static func listInputDevices() -> [Device] {
-        return self.listAllDevices().filter { $0.hasInput }
+        self.listAllDevices().filter {
+            $0.hasInput && !$0.uid.hasPrefix("com.fluidvoice.call-audio.")
+        }
     }
 
     /// Refreshes the HAL liveness snapshot. Call only from an existing background

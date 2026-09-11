@@ -5,6 +5,7 @@ import SwiftUI
 
 enum MenuBarNavigationDestination: String {
     case customDictionary
+    case meetingTools
     case microphoneSettings
     case settings
 }
@@ -15,20 +16,25 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var menu: NSMenu?
     private var isSetup: Bool = false
     private var hostedWindow: NSWindow?
+    private var callRecordingDotView: NSView?
 
     // Cached menu items to avoid rebuilding entire menu
     private var statusMenuItem: NSMenuItem?
     private var copyLastTranscriptMenuItem: NSMenuItem?
+    private var callTranscriptionMenuItem: NSMenuItem?
+    private var viewLastCallTranscriptMenuItem: NSMenuItem?
     private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
     private var microphoneSubmenu: NSMenu?
 
     // References to app state
     private weak var asrService: ASRService?
+    private weak var callTranscriptionService: CallTranscriptionService?
     private var cancellables = Set<AnyCancellable>()
     private var hasDeferredStopMenuRefresh = false
     private var hasDeferredStoppedRecordingState = false
     private var configuredASRIdentifier: ObjectIdentifier?
+    private var configuredCallTranscriptionIdentifier: ObjectIdentifier?
 
     /// Overlay management (persistent, independent of window lifecycle)
     private var overlayVisible: Bool = false
@@ -89,6 +95,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         guard self.configuredASRIdentifier != identifier else { return }
         self.configuredASRIdentifier = identifier
         self.asrService = asrService
+        self.configure(callTranscriptionService: AppServices.shared.callTranscription)
         if SettingsStore.shared.overlayPosition == .bottom {
             DispatchQueue.main.async {
                 guard SettingsStore.shared.overlayPosition == .bottom else { return }
@@ -164,6 +171,26 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 }
             }
             .store(in: &self.cancellables)
+    }
+
+    private func configure(callTranscriptionService: CallTranscriptionService) {
+        let identifier = ObjectIdentifier(callTranscriptionService)
+        guard self.configuredCallTranscriptionIdentifier != identifier else { return }
+        self.configuredCallTranscriptionIdentifier = identifier
+        self.callTranscriptionService = callTranscriptionService
+
+        Publishers.CombineLatest3(
+            callTranscriptionService.$isRecording,
+            callTranscriptionService.$isTranscribing,
+            callTranscriptionService.$status
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _, _ in
+            guard let self else { return }
+            self.updateMenuBarIcon()
+            self.updateMenuItemsText()
+        }
+        .store(in: &self.cancellables)
     }
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
@@ -261,7 +288,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
             // If expanded command output is showing, don't hide it - let it stay visible
             if NotchOverlayManager.shared.isCommandOutputExpanded {
-                // Stop recording visualization in expanded notch
+                // Stop recording visualization in the expanded notch
                 NotchContentState.shared.setRecordingInExpandedMode(false)
                 self.expandedModeAudioSubscription?.cancel()
                 self.expandedModeAudioSubscription = nil
@@ -557,13 +584,42 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func updateMenuBarIcon() {
-        guard let statusItem = statusItem else { return }
+        guard let statusItem, let button = statusItem.button else { return }
 
-        // Use MenuBarIcon asset - vectorized from logo
+        // Use MenuBarIcon asset - vectorized from logo.
         if let image = NSImage(named: "MenuBarIcon") {
-            image.isTemplate = true // Adapts to light/dark mode and tints red when recording
-            statusItem.button?.image = image
+            image.isTemplate = true
+            button.image = image
         }
+
+        self.updateCallRecordingBadge(on: button)
+    }
+
+    private func updateCallRecordingBadge(on button: NSStatusBarButton) {
+        let isCallRecording = self.callTranscriptionService?.isRecording ?? false
+
+        guard isCallRecording else {
+            self.callRecordingDotView?.removeFromSuperview()
+            self.callRecordingDotView = nil
+            return
+        }
+        guard self.callRecordingDotView == nil else { return }
+
+        let dot = NSView()
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        dot.layer?.cornerRadius = 2.5
+        dot.toolTip = "FluidVoice is recording a call"
+        button.addSubview(dot)
+
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: 5),
+            dot.heightAnchor.constraint(equalToConstant: 5),
+            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -3),
+            dot.centerYAnchor.constraint(equalTo: button.centerYAnchor, constant: 6),
+        ])
+        self.callRecordingDotView = dot
     }
 
     private func buildMenuStructure() {
@@ -586,6 +642,26 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         copyLastTranscriptItem.target = self
         menu.addItem(copyLastTranscriptItem)
         self.copyLastTranscriptMenuItem = copyLastTranscriptItem
+
+        menu.addItem(.separator())
+
+        let callTranscriptionItem = NSMenuItem(
+            title: "Record Call",
+            action: #selector(toggleCallTranscription(_:)),
+            keyEquivalent: ""
+        )
+        callTranscriptionItem.target = self
+        menu.addItem(callTranscriptionItem)
+        self.callTranscriptionMenuItem = callTranscriptionItem
+
+        let viewLastCallTranscriptItem = NSMenuItem(
+            title: "Show Last Call Transcript",
+            action: #selector(viewLastCallTranscript(_:)),
+            keyEquivalent: ""
+        )
+        viewLastCallTranscriptItem.target = self
+        menu.addItem(viewLastCallTranscriptItem)
+        self.viewLastCallTranscriptMenuItem = viewLastCallTranscriptItem
 
         menu.addItem(.separator())
 
@@ -662,13 +738,36 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func updateMenuItemsText() {
-        // Update status text with hotkey info
+        let call = self.callTranscriptionService
         let hotkeyDisplay = SettingsStore.shared.primaryDictationShortcutDisplayString
         let hotkeyInfo = hotkeyDisplay.isEmpty ? "" : " (\(hotkeyDisplay))"
-        let statusTitle = self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
-        self.statusMenuItem?.title = statusTitle
+
+        if let call, call.isRecording {
+            self.statusMenuItem?.title = "Recording Call"
+            self.callTranscriptionMenuItem?.title = "Stop & Transcribe Call"
+            self.callTranscriptionMenuItem?.isEnabled = true
+        } else if let call, call.isTranscribing {
+            self.statusMenuItem?.title = call.status.isEmpty ? "Transcribing Call..." : call.status
+            self.callTranscriptionMenuItem?.title = "Transcribing Call..."
+            self.callTranscriptionMenuItem?.isEnabled = false
+        } else if self.isRecording {
+            self.statusMenuItem?.title = "Recording...\(hotkeyInfo)"
+            self.callTranscriptionMenuItem?.title = "Record Call"
+            self.callTranscriptionMenuItem?.isEnabled = false
+        } else {
+            let hasCompletedCall = self.latestCallTranscript != nil
+                && call?.status == "Call transcript complete"
+            self.statusMenuItem?.title = hasCompletedCall
+                ? "Call transcript complete"
+                : "Ready to Record\(hotkeyInfo)"
+            self.callTranscriptionMenuItem?.title = "Record Call"
+            self.callTranscriptionMenuItem?.isEnabled = call != nil
+                && self.asrService?.isRunningOrStarting != true
+        }
+
         self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
-        self.microphoneMenuItem?.isEnabled = true
+        self.viewLastCallTranscriptMenuItem?.isEnabled = self.latestCallTranscript != nil
+        self.microphoneMenuItem?.isEnabled = !(call?.isRecording ?? false)
 
         // Update rollback availability text
         self.rollbackMenuItem?.isEnabled = SimpleUpdater.shared.hasRollbackBackup()
@@ -729,6 +828,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             return
         }
 
+        let callRecording = self.callTranscriptionService?.isRecording ?? false
         let devicesByUID = Dictionary(
             inputDevices.map { ($0.uid, $0) },
             uniquingKeysWith: { current, _ in current }
@@ -751,11 +851,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             item.target = self
             item.representedObject = device
             item.state = device.uid == currentUID ? .on : .off
-            item.isEnabled = !self.isRecording
+            item.isEnabled = !self.isRecording && !callRecording
             submenu.addItem(item)
         }
 
-        if self.isRecording {
+        if self.isRecording || callRecording {
             submenu.addItem(.separator())
             let recordingItem = NSMenuItem(title: "Unavailable while recording", action: nil, keyEquivalent: "")
             recordingItem.isEnabled = false
@@ -765,6 +865,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     private var canCopyLastTranscript: Bool {
         !self.isProcessingActive && TranscriptionHistoryStore.shared.latestClipboardText != nil
+    }
+
+    private var latestCallTranscript: TranscriptionResult? {
+        FileTranscriptionHistoryStore.shared.entries
+            .first(where: { $0.kind == .call })?
+            .toTranscriptionResult()
     }
 
     @objc private func copyLastTranscript(_ sender: Any?) {
@@ -779,8 +885,36 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         DebugLogger.shared.info("Menu action: Copied latest transcription to clipboard", source: "MenuBarManager")
     }
 
+    @objc private func viewLastCallTranscript(_ sender: Any?) {
+        guard let result = self.latestCallTranscript else { return }
+        FileTranscriptionHistoryStore.shared.selectedEntryID = result.id
+        self.openNavigationDestination(.meetingTools)
+    }
+
+    @objc private func toggleCallTranscription(_ sender: Any?) {
+        guard let call = self.callTranscriptionService, !call.isTranscribing else { return }
+        guard call.isRecording || !self.isRecording else { return }
+
+        Task { @MainActor in
+            do {
+                if call.isRecording {
+                    try await call.stopAndTranscribe()
+                } else {
+                    try await call.start()
+                }
+            } catch {
+                self.updateMenuItemsText()
+                let alert = NSAlert()
+                alert.alertStyle = .critical
+                alert.messageText = "Call Transcription Failed"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
     @objc private func selectMicrophone(_ sender: NSMenuItem) {
-        guard self.isRecording == false else { return }
+        guard self.isRecording == false, self.callTranscriptionService?.isRecording != true else { return }
         guard let device = sender.representedObject as? AudioDevice.Device else { return }
 
         SettingsStore.shared.recordInputDeviceSelection(device.uid, name: device.name)
