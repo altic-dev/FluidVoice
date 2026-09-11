@@ -89,6 +89,17 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         guard self.configuredASRIdentifier != identifier else { return }
         self.configuredASRIdentifier = identifier
         self.asrService = asrService
+        asrService.audioCaptureFailurePresented
+            .sink { [weak self, weak asrService] in
+                guard let self, let asrService,
+                      self.asrService === asrService,
+                      asrService.showError, asrService.isRunning == false
+                else { return }
+                // The recording error must also be visible when the user only
+                // uses the menu bar and has closed the main window.
+                self.openMainWindow()
+            }
+            .store(in: &self.cancellables)
         if SettingsStore.shared.overlayPosition == .bottom {
             DispatchQueue.main.async {
                 guard SettingsStore.shared.overlayPosition == .bottom else { return }

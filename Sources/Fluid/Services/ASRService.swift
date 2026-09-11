@@ -528,6 +528,8 @@ final class ASRService: ObservableObject {
     private let audioCaptureReadinessGate = AudioCaptureReadinessGate()
     private let firstPCMTimeoutNanoseconds: UInt64 = 2_000_000_000
     private var audioCaptureStartGeneration: UInt64 = 0
+    private var pendingAudioCaptureBackendStart: Task<Void, Error>?
+    private var mediaPlaybackService = MediaPlaybackService.shared
     private var audioCaptureAttemptID: UInt64 = 0
     private var isTerminating = false
     private var hasCompletedFirstTranscription: Bool = false // Track if model has warmed up with first transcription
@@ -543,6 +545,86 @@ final class ASRService: ObservableObject {
     @Published var errorTitle: String = "Error"
     @Published var errorMessage: String = ""
     @Published var showError: Bool = false
+    let audioCaptureFailurePresented = PassthroughSubject<Void, Never>()
+
+    private func presentAudioCaptureFailure(title: String, message: String) {
+        self.errorTitle = title
+        self.errorMessage = message
+        self.showError = true
+        self.audioCaptureFailurePresented.send()
+    }
+
+    #if DEBUG
+    /// Exercise the real recovery coordinator with fake hardware, without
+    /// initializing a model, recording a physical microphone, or changing defaults.
+    var recoveryPacketHandlerForTesting: DirectCoreAudioPacketHandler {
+        let pipeline = self.audioCapturePipeline
+        return { samples, frames, rate, hostTime, sampleTime in
+            pipeline.handle(
+                samples: samples,
+                frameCount: frames,
+                sampleRate: rate,
+                inputHostTime: hostTime,
+                inputSampleTime: sampleTime
+            )
+        }
+    }
+
+    func configureAudioRouteRecoveryForTesting(
+        controller: DirectCoreAudioLifecycleController,
+        devices: [AudioDevice.Device],
+        initialSamples: [Float]
+    ) {
+        precondition(self.isRunning == false && self.isStarting == false)
+        self.directAudioLifecycleController = controller
+        self.cacheCurrentDeviceList(devices)
+        self.benchmarkSessionID = 987_654
+        self.audioCaptureStartGeneration &+= 1
+        self.audioCaptureAttemptID &+= 1
+        self.activeAudioCaptureBackend = .directCoreAudio
+        self.audioBuffer.append(initialSamples)
+        self.audioCapturePipeline.setRecordingEnabled(
+            true, sessionID: self.benchmarkSessionID, attemptID: self.audioCaptureAttemptID
+        )
+        self.isRunning = true
+    }
+
+    func triggerAudioRouteRecoveryForTesting() {
+        self.scheduleAudioRouteRecovery(
+            reason: "injected input change", requiresIdlePrewarm: true, reconcilesInputSelection: true
+        )
+    }
+
+    func useMediaPlaybackForTesting(_ service: MediaPlaybackService) {
+        self.mediaPlaybackService = service
+    }
+
+    func failAudioRouteRecoveryForTesting(stale: Bool = false) async {
+        await self.finishAudioRouteRecoveryFailure(AudioRouteRecoveryRequest(
+            generation: stale ? self.audioRouteRecoveryGeneration &- 1 : self.audioRouteRecoveryGeneration,
+            reason: "injected recovery failure",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: false
+        ), error: BoundedAudioHardwareQueue.Failure.recovering)
+    }
+
+    var audioRouteRecoveryStateForTesting: (pending: Bool, recovering: Bool, acceptingPCM: Bool, samples: [Float]) {
+        (
+            self.pendingAudioRouteRecovery != nil,
+            self.isRecoveringAudioRoute,
+            self.audioCapturePipeline.isRecordingEnabledForTesting,
+            self.audioBuffer.getAll()
+        )
+    }
+
+    func finishAudioRouteRecoveryTest() async {
+        await self.cancelAudioRouteRecoveryAndWait()
+        self.isRunning = false
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        await self.directAudioLifecycleController.shutdown(reason: "test_complete")
+        self.audioBuffer.clear()
+    }
+    #endif
 
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
@@ -624,15 +706,15 @@ final class ASRService: ObservableObject {
     func shutdownForTermination() async {
         self.isTerminating = true
         // Give media restoration the same quit window as audio cleanup.
-        MediaPlaybackService.shared.beginShutdown()
+        self.mediaPlaybackService.beginShutdown()
+        if self.isStarting, self.isRunning == false {
+            await self.cancelPendingAudioCaptureStart(reason: "app_termination")
+        }
         let routeRecoveryShutdownStartedAt = Date().timeIntervalSince1970
         await self.cancelAudioRouteRecoveryAndWait()
         self.benchmarkLog(
             "route_recovery_shutdown elapsedMs=\(self.elapsedMilliseconds(since: routeRecoveryShutdownStartedAt))"
         )
-        if self.isStarting, self.isRunning == false {
-            await self.cancelPendingAudioCaptureStart(reason: "app_termination")
-        }
         if self.isRunning {
             await self.stopWithoutTranscription()
         }
@@ -668,7 +750,7 @@ final class ASRService: ObservableObject {
         self.isAsrReady = false
         self.isLoadingModel = false
         self.isDownloadingModel = false
-        await MediaPlaybackService.shared.shutdown()
+        await self.mediaPlaybackService.shutdown()
     }
 
     /// The transcription provider, selected based on the unified SpeechModel setting.
@@ -1260,10 +1342,35 @@ final class ASRService: ObservableObject {
         return snapshot
     }
 
+    /// Bridge the app's Cancel action to the actual backend task. The task's
+    /// cancellation handler also covers cancellation before queue admission.
+    private func startCancellableAudioCapture(
+        excluding excludedInputUIDs: Set<String>,
+        forcingInputUID: String?,
+        onInputSnapshotRead: @escaping @MainActor (Int) -> Void
+    ) async throws {
+        let task = Task {
+            try await self.startConfiguredAudioCapture(
+                excluding: excludedInputUIDs,
+                forcingInputUID: forcingInputUID,
+                onInputSnapshotRead: onInputSnapshotRead
+            )
+        }
+        self.pendingAudioCaptureBackendStart = task
+        defer { self.pendingAudioCaptureBackendStart = nil }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     private func startConfiguredAudioCapture(
         excluding excludedInputUIDs: Set<String> = [],
-        forcingInputUID: String? = nil
+        forcingInputUID: String? = nil,
+        onInputSnapshotRead: @MainActor (Int) -> Void = { _ in }
     ) async throws {
+        let startGeneration = self.audioCaptureStartGeneration
         let previousAttemptIdentity = self.audioStartAttemptInputUID.map {
             AudioCaptureIdlePolicy.CaptureAttemptIdentity(
                 uid: $0,
@@ -1282,15 +1389,17 @@ final class ASRService: ObservableObject {
             // release.
             await self.audioEngineRetirementDrain.waitForScheduledReleases()
             do {
-                let deviceSnapshot = await Task.detached(priority: .userInitiated) {
-                    let allDevices = AudioDevice.listAllDevices()
-                    return (
-                        allDevices: allDevices,
-                        defaultInputUID: AudioDevice.getDefaultInputDevice(from: allDevices)?.uid
-                    )
-                }.value
-                let allDevices = deviceSnapshot.allDevices
+                try self.checkCaptureStartGeneration(startGeneration)
+                if self.directAudioLifecycleController.isRecoveringHardware {
+                    let available = await self.directAudioLifecycleController.waitForPendingHardwareRetirement()
+                    try self.checkCaptureStartGeneration(startGeneration)
+                    guard available else { throw BoundedAudioHardwareQueue.Failure.recovering }
+                }
+                let deviceSnapshot = try await self.directAudioLifecycleController.readCaptureDeviceSnapshot()
+                try self.checkCaptureStartGeneration(startGeneration)
+                let allDevices = deviceSnapshot.devices
                 let availableInputs = allDevices.filter(\.hasInput)
+                onInputSnapshotRead(availableInputs.count)
                 let selectedInput: AudioDevice.Device?
                 if let forcingInputUID {
                     selectedInput = availableInputs.first { $0.uid == forcingInputUID }
@@ -1330,6 +1439,7 @@ final class ASRService: ObservableObject {
                     selection: selection,
                     reason: "recording_start"
                 )
+                try self.checkCaptureStartGeneration(startGeneration)
                 self.audioStartAttemptInputUID = device.uid
                 self.audioStartAttemptInputName = device.name
                 self.audioStartAttemptIsBluetooth = device.isBluetooth
@@ -1343,7 +1453,7 @@ final class ASRService: ObservableObject {
                     deviceName: device.name,
                     reason: "recording_start"
                 )
-                try Task.checkCancellation()
+                try self.checkCaptureStartGeneration(startGeneration)
                 self.activeAudioCaptureBackend = .directCoreAudio
                 let callbackDurationMilliseconds =
                     Double(snapshot.bufferFrameSize ?? 0) /
@@ -1370,6 +1480,13 @@ final class ASRService: ObservableObject {
         try await self.startAVAudioEngineCapture()
     }
 
+    private func checkCaptureStartGeneration(_ generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard generation == self.audioCaptureStartGeneration, self.isTerminating == false else {
+            throw CancellationError()
+        }
+    }
+
     private func startAVAudioEngineCapture() async throws {
         await self.audioEngineRetirementDrain.waitForScheduledReleases()
         self.benchmarkLog("audio_backend kind=av_audio_engine reason=faster_recording_start_disabled")
@@ -1387,7 +1504,8 @@ final class ASRService: ObservableObject {
         case .directCoreAudio:
             let report = await self.directAudioLifecycleController.stop(
                 retainPrepared: retainDirectPreparedCapture,
-                reason: reason
+                reason: reason,
+                recoveringRoute: self.isRecoveringAudioRoute
             )
             if report.status != noErr {
                 DebugLogger.shared.warning(
@@ -2142,7 +2260,7 @@ final class ASRService: ObservableObject {
         // cannot finish the previous session's still-running transcription.
         self.pendingMediaCaptureSessionID = captureSessionID
         defer { self.pendingMediaCaptureSessionID = nil }
-        MediaPlaybackService.shared.recordingStarted(
+        self.mediaPlaybackService.recordingStarted(
             sessionID: captureSessionID,
             enabled: SettingsStore.shared.pauseMediaDuringTranscription
         )
@@ -2171,10 +2289,8 @@ final class ASRService: ObservableObject {
         self.isDictionaryTrainingCaptureActive = false
 
         do {
-            let maximumStartAttempts =
-                SettingsStore.shared.experimentalDirectAudioCaptureEnabled
-                    ? max(AudioDevice.listInputDevices().count, 1) + 1
-                    : 1
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
             var startAttempt = 1
             var fallbackAttempt = 1
             var failedInputUIDs = Set<String>()
@@ -2185,11 +2301,23 @@ final class ASRService: ObservableObject {
             while true {
                 let routeGenerationAtStart = self.audioRouteRecoveryGeneration
                 do {
-                    try await self.startConfiguredAudioCapture(
+                    try await self.startCancellableAudioCapture(
                         excluding: failedInputUIDs,
-                        forcingInputUID: forcedInputUID
+                        forcingInputUID: forcedInputUID,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            // Freeze a bounded budget from the same fresh snapshot
+                            // that selected the first input, including one retry.
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
                     )
                 } catch {
+                    try self.checkCaptureStartGeneration(startGeneration)
+                    guard error is BoundedAudioHardwareQueue.Failure == false,
+                          error is CancellationError == false,
+                          self.directAudioLifecycleController.isRecoveringHardware == false
+                    else { throw error }
                     guard let failedUID = self.audioStartAttemptInputUID else { throw error }
                     let now = ProcessInfo.processInfo.systemUptime
                     let retryBluetoothInput = bluetoothStabilization.shouldRetry(
@@ -2391,7 +2519,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("✅ START() completed successfully", source: "ASRService")
             return .started
         } catch {
-            MediaPlaybackService.shared.sessionFinished(sessionID: captureSessionID)
+            self.mediaPlaybackService.sessionFinished(sessionID: captureSessionID)
             await self.audioCaptureReadinessGate.cancel(
                 sessionID: captureSessionID,
                 attemptID: readinessAttemptID
@@ -2441,15 +2569,9 @@ final class ASRService: ObservableObject {
                 errorMessage = "Failed to start audio recording: \(error.localizedDescription)"
             }
 
-            self.errorTitle = noUsableMicrophone ? "Microphone Unavailable" : "Recording Error"
-            self.errorMessage = errorMessage
-            self.showError = true
-
-            // Post notification for UI to display
-            NotificationCenter.default.post(
-                name: NSNotification.Name("ASRServiceStartFailed"),
-                object: nil,
-                userInfo: ["errorMessage": errorMessage]
+            self.presentAudioCaptureFailure(
+                title: noUsableMicrophone ? "Microphone Unavailable" : "Recording Error",
+                message: errorMessage
             )
             return .failed
         }
@@ -2544,15 +2666,24 @@ final class ASRService: ObservableObject {
         )
     }
 
-    func cancelPendingAudioCaptureStart(reason: String) async {
-        guard self.isStarting, self.isRunning == false else { return }
+    /// Recovery can be awaited by startup, so it must interrupt without waiting
+    /// for startup to finish. Keep task cancellation and media release together.
+    private func interruptPendingAudioCaptureStart() {
         self.audioCaptureStartGeneration &+= 1
+        self.pendingAudioCaptureBackendStart?.cancel()
+        self.audioCapturePipeline.setRecordingEnabled(false)
+        self.directAudioLifecycleController.cancelPendingStartup()
         if let sessionID = self.pendingMediaCaptureSessionID {
-            MediaPlaybackService.shared.sessionFinished(sessionID: sessionID)
+            self.mediaPlaybackService.sessionFinished(sessionID: sessionID)
         }
         // A start waiting for the previous session's PCM handoff must wake to
         // observe the generation change; the old stop keeps ownership of the gate.
         self.recordingBufferHandoffGate.releasePendingWaiters()
+    }
+
+    func cancelPendingAudioCaptureStart(reason: String) async {
+        guard self.isStarting, self.isRunning == false else { return }
+        self.interruptPendingAudioCaptureStart()
         let cancelledSessionID = self.benchmarkSessionID
         self.benchmarkLog(
             "capture_start_cancel reason=\(reason) session=\(cancelledSessionID) " +
@@ -2710,8 +2841,8 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("STOP() ignored - recording buffer handoff already active", source: "ASRService")
             return ""
         }
-        MediaPlaybackService.shared.recordingStopped(sessionID: stoppingSessionID)
-        defer { MediaPlaybackService.shared.sessionFinished(sessionID: stoppingSessionID) }
+        self.mediaPlaybackService.recordingStopped(sessionID: stoppingSessionID)
+        defer { self.mediaPlaybackService.sessionFinished(sessionID: stoppingSessionID) }
         self.isStoppingFinalTranscription = true
         var completedBufferHandoff = false
         defer {
@@ -3238,14 +3369,18 @@ final class ASRService: ObservableObject {
     }
 
     func stopWithoutTranscription() async {
+        await self.stopWithoutTranscription(finishingRecovery: false)
+    }
+
+    private func stopWithoutTranscription(finishingRecovery: Bool) async {
         if self.isStarting, self.isRunning == false {
             await self.cancelPendingAudioCaptureStart(reason: "stop_without_transcription")
         }
         guard self.isRunning else { return }
         let stoppingSessionID = self.benchmarkSessionID
         guard let bufferHandoffToken = self.recordingBufferHandoffGate.begin() else { return }
-        MediaPlaybackService.shared.recordingStopped(sessionID: stoppingSessionID)
-        defer { MediaPlaybackService.shared.sessionFinished(sessionID: stoppingSessionID) }
+        self.mediaPlaybackService.recordingStopped(sessionID: stoppingSessionID)
+        defer { self.mediaPlaybackService.sessionFinished(sessionID: stoppingSessionID) }
         var completedBufferHandoff = false
         defer {
             if completedBufferHandoff == false {
@@ -3258,7 +3393,9 @@ final class ASRService: ObservableObject {
             self.isDictionaryTrainingCaptureActive = false
         }
 
-        await self.cancelAudioRouteRecoveryAndWait()
+        if finishingRecovery == false {
+            await self.cancelAudioRouteRecoveryAndWait()
+        }
         guard self.isRunning, self.benchmarkSessionID == stoppingSessionID else {
             self.recordingBufferHandoffGate.complete(bufferHandoffToken)
             completedBufferHandoff = true
@@ -3919,6 +4056,14 @@ final class ASRService: ObservableObject {
             self.finishAudioRouteRecovery(request)
         }
 
+        let hardwareAvailable = await self.directAudioLifecycleController.waitForHardwareAvailability()
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        guard hardwareAvailable else {
+            await self.finishAudioRouteRecoveryFailure(request, error: BoundedAudioHardwareQueue.Failure.recovering)
+            return
+        }
+
         if request.reconcilesInputSelection,
            await self.reconcileInputSelectionAfterTopologySettles(request) == false
         {
@@ -3951,16 +4096,29 @@ final class ASRService: ObservableObject {
     private func reconcileInputSelectionAfterTopologySettles(
         _ request: AudioRouteRecoveryRequest
     ) async -> Bool {
-        let snapshot = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let devices = AudioDevice.listInputDevicesRefreshingLiveness()
-                let defaultInputUID = AudioDevice.getDefaultInputDevice()?.uid
-                continuation.resume(returning: (devices, defaultInputUID))
+        var resolvedSnapshot: DirectCoreAudioLifecycleController.DeviceSnapshot?
+        var queryError: Error = BoundedAudioHardwareQueue.Failure.recovering
+        // One bounded retry covers transient HAL queries without leaving a
+        // recording paused after its recovery request has been consumed.
+        for _ in 0..<2 {
+            let available = await self.directAudioLifecycleController.waitForDeviceQueryAvailability()
+            guard request.generation == self.audioRouteRecoveryGeneration,
+                  Task.isCancelled == false, self.isTerminating == false else { return false }
+            guard available else { break }
+            do {
+                resolvedSnapshot = try await self.directAudioLifecycleController.readDeviceSnapshot(refreshLiveness: true)
+                break
+            } catch {
+                queryError = error
             }
         }
         guard request.generation == self.audioRouteRecoveryGeneration,
-              Task.isCancelled == false
-        else { return false }
+              Task.isCancelled == false, self.isTerminating == false else { return false }
+        guard let devices = resolvedSnapshot else {
+            await self.finishAudioRouteRecoveryFailure(request, error: queryError)
+            return false
+        }
+        let snapshot = (devices.devices, devices.defaultInputUID)
 
         let currentUIDs = Set(snapshot.0.map(\.uid))
         guard currentUIDs == self.cachedDeviceUIDs else {
@@ -3995,7 +4153,8 @@ final class ASRService: ObservableObject {
             reconcilesInputSelection: request.reconcilesInputSelection
         )
         await self.directAudioLifecycleController.invalidate(
-            reason: "idle_route_change:\(request.reason)"
+            reason: "idle_route_change:\(request.reason)",
+            recoveringRoute: true
         )
         await self.retireAudioEngineAndWait(reason: "idle_route_change:\(request.reason)")
 
@@ -4027,18 +4186,19 @@ final class ASRService: ObservableObject {
             reason: "active_route_recovery"
         )
         await self.retireAudioEngineAndWait(reason: "audio_route_recovery")
-
-        guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
+        let hardwareAvailable = await self.directAudioLifecycleController.waitForHardwareAvailability()
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
 
         do {
-            let maximumAttempts = SettingsStore.shared.experimentalDirectAudioCaptureEnabled
-                ? max(AudioDevice.listInputDevices().count, 1) + 1
-                : 1
+            guard hardwareAvailable else { throw BoundedAudioHardwareQueue.Failure.recovering }
+            var maximumStartAttempts = 1
+            var hasReadInputSnapshot = false
             var failedInputUIDs = Set<String>()
             var immediatelyRetriedInputUID: String?
             var completedAttempts = 0
 
-            while completedAttempts < maximumAttempts {
+            while completedAttempts < maximumStartAttempts {
                 completedAttempts += 1
                 self.audioCaptureAttemptID &+= 1
                 let readinessAttemptID = self.audioCaptureAttemptID
@@ -4054,8 +4214,18 @@ final class ASRService: ObservableObject {
                 )
 
                 do {
-                    try await self.startConfiguredAudioCapture(excluding: failedInputUIDs)
+                    try await self.startConfiguredAudioCapture(
+                        excluding: failedInputUIDs,
+                        onInputSnapshotRead: { inputCount in
+                            guard hasReadInputSnapshot == false else { return }
+                            hasReadInputSnapshot = true
+                            maximumStartAttempts = max(inputCount, 1) + 1
+                        }
+                    )
                 } catch {
+                    guard error is BoundedAudioHardwareQueue.Failure == false,
+                          error is CancellationError == false
+                    else { throw error }
                     if let failedUID = self.audioStartAttemptInputUID {
                         let retrySameInput = immediatelyRetriedInputUID == nil
                         if retrySameInput {
@@ -4065,7 +4235,7 @@ final class ASRService: ObservableObject {
                             failedInputUIDs.insert(failedUID)
                         }
                     }
-                    guard completedAttempts < maximumAttempts else { throw error }
+                    guard completedAttempts < maximumStartAttempts else { throw error }
                     self.audioCapturePipeline.setRecordingEnabled(false)
                     await self.stopActiveAudioCapture(
                         retainDirectPreparedCapture: false,
@@ -4134,7 +4304,7 @@ final class ASRService: ObservableObject {
                         failedInputUIDs.insert(failedUID)
                     }
                 }
-                guard completedAttempts < maximumAttempts else {
+                guard completedAttempts < maximumStartAttempts else {
                     throw NSError(
                         domain: "ASRService",
                         code: -3,
@@ -4156,25 +4326,39 @@ final class ASRService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No replacement microphone is available."]
             )
         } catch {
-            guard request.generation == self.audioRouteRecoveryGeneration, Task.isCancelled == false else { return }
-            self.audioCapturePipeline.setRecordingEnabled(false)
-            await self.stopActiveAudioCapture(
-                retainDirectPreparedCapture: false,
-                reason: "active_route_recovery_failed"
-            )
-            DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
-            AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+            await self.finishAudioRouteRecoveryFailure(request, error: error)
+        }
+    }
 
-            // Avoid asking stopWithoutTranscription() to await the recovery task
-            // that is currently executing this catch block.
-            self.audioRouteRecoveryTask = nil
-            await self.stopWithoutTranscription()
-            NotificationCenter.default.post(
-                name: NSNotification.Name("ASRServiceDeviceDisconnected"),
-                object: nil,
-                userInfo: ["errorMessage": "Recording stopped because the audio device changed."]
+    private func finishAudioRouteRecoveryFailure(_ request: AudioRouteRecoveryRequest, error: Error) async {
+        guard request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
+        AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+        let failedSessionID = self.benchmarkSessionID
+        var expectedStartGeneration = self.audioCaptureStartGeneration
+        let wasCapturing = self.isRunning || self.isStarting
+        if self.isRunning {
+            // This task keeps recovery ownership until its defer runs. User Stop
+            // may cancel and await it, but it must never await itself here.
+            await self.stopWithoutTranscription(finishingRecovery: true)
+        } else if self.isStarting {
+            // Startup may itself be awaiting this recovery. Invalidate it without
+            // awaiting its completion, so it can unwind after this task returns.
+            self.interruptPendingAudioCaptureStart()
+            expectedStartGeneration = self.audioCaptureStartGeneration
+            await self.audioCaptureReadinessGate.cancel(
+                sessionID: failedSessionID, attemptID: self.audioCaptureAttemptID
             )
         }
+        guard wasCapturing, self.benchmarkSessionID == failedSessionID,
+              self.audioCaptureStartGeneration == expectedStartGeneration,
+              request.generation == self.audioRouteRecoveryGeneration,
+              Task.isCancelled == false, self.isTerminating == false else { return }
+        self.presentAudioCaptureFailure(
+            title: "Recording Stopped",
+            message: "The microphone could not recover after the audio device changed. \(error.localizedDescription)"
+        )
     }
 
     private func handleDirectCaptureFormatInvalidation(
@@ -4374,6 +4558,7 @@ final class ASRService: ObservableObject {
 
     private var deviceListListenerInstalled = false
     private var deviceListListenerToken: AudioObjectPropertyListenerBlock?
+    private let deviceListListenerQueue = DispatchQueue(label: "com.fluidvoice.audio.topology-notifications", qos: .userInitiated)
     private var monitoredDeviceID: AudioObjectID?
     private var monitoredDeviceIsAliveListenerToken: AudioObjectPropertyListenerBlock?
 
@@ -4388,16 +4573,17 @@ final class ASRService: ObservableObject {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        let token: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            // Defer to next runloop pass — CoreAudio may hold an internal lock during
-            // this callback, and our handler makes synchronous CoreAudio queries that
-            // would deadlock waiting for the same lock.
+        let controller = self.directAudioLifecycleController
+        let token: AudioObjectPropertyListenerBlock = { [weak self, weak controller] _, _ in
+            // Mark freshness immediately, even if the UI is busy. This only
+            // updates an in-memory revision; HAL queries remain outside callbacks.
+            controller?.noteHardwareTopologyChanged()
             DispatchQueue.main.async { self?.handleDeviceListChanged() }
         }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &address,
-            DispatchQueue.main,
+            self.deviceListListenerQueue,
             token
         )
 
@@ -5982,6 +6168,10 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         defer { self.lock.unlock() }
         return self.levelMonitoringEnabled
     }
+
+    #if DEBUG
+    var isRecordingEnabledForTesting: Bool { self.lock.withLock { self.recordingEnabled } }
+    #endif
 
     func setLevelMonitoringEnabled(_ enabled: Bool) {
         self.lock.lock()

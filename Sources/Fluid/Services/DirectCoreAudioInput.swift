@@ -668,8 +668,20 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         qos: .userInitiated
     )
     private let snapshotLock = NSLock()
+    private let recoveryTimeout: TimeInterval
+    private let hardwareOperations: BoundedAudioHardwareQueue
+    private let deviceQueries: BoundedAudioHardwareQueue
+    private let captureDeviceQueries: BoundedAudioHardwareQueue
+    private var shutdownRequested = false
+    // A display can change HAL topology without changing the selected input's
+    // ID or format. Refresh stopped capture on the next Start, not mid-recording.
+    private var hardwareTopologyRevision: UInt64 = 0 // snapshotLock
+    private var topologyRecoveryCheckPending = false // snapshotLock
+    private var lastStartedTopologyRevision: UInt64 = 0 // lifecycleQueue
     private let stoppedHardwareLock = NSLock()
     private var stoppedHardwareGenerations: Set<UInt64> = []
+    private var lastReportedAbnormalStopGeneration: UInt64?
+    private var pendingFormatInvalidationGenerations: Set<UInt64> = []
     private var storedSnapshot = Snapshot(
         phase: .empty,
         generation: 0,
@@ -682,6 +694,9 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
 
     private let packetHandler: PacketHandler
     private let inputFactory: InputFactory
+    private let deviceSnapshotReader: @Sendable (Bool) throws -> DeviceSnapshot
+    private let deviceLivenessReader: @Sendable (AudioObjectID) -> Bool?
+    private let deviceResolver: @Sendable (DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device?
     private let fingerprintReader: FingerprintReader
     private let onFormatInvalidated: @Sendable (FormatInvalidation) -> Void
     private let installsHardwareListeners: Bool
@@ -694,6 +709,12 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     private var isShutDown = false
     private var isPoisoned = false
     private var inputDeviceName: String?
+    private struct FailedHardware: Equatable {
+        let generation: UInt64
+        let deviceID: AudioObjectID
+    }
+
+    private var failedHardware: FailedHardware?
 
     init(
         packetHandler: @escaping PacketHandler,
@@ -704,11 +725,28 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             try DirectCoreAudioFormatFingerprint.read(deviceID: $0)
         },
         installsHardwareListeners: Bool = true,
+        operationTimeout: TimeInterval? = nil,
+        deviceSnapshotReader: @escaping @Sendable (Bool) throws -> DeviceSnapshot = DirectCoreAudioLifecycleController.queryDeviceSnapshot,
+        deviceLivenessReader: @escaping @Sendable (AudioObjectID) -> Bool? = DirectCoreAudioLifecycleController.readDeviceLiveness,
+        deviceResolver: @escaping @Sendable (DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device? = DirectCoreAudioLifecycleController.resolveSelectedDevice,
         onFormatInvalidated: @escaping @Sendable (FormatInvalidation) -> Void
     ) {
+        self.recoveryTimeout = operationTimeout ?? 5
+        self.hardwareOperations = BoundedAudioHardwareQueue(queue: self.lifecycleQueue, timeout: operationTimeout)
+        self.deviceQueries = BoundedAudioHardwareQueue(
+            queue: DispatchQueue(label: "com.fluidvoice.audio.device-snapshot", qos: .userInitiated),
+            timeout: operationTimeout ?? 5
+        )
+        self.captureDeviceQueries = BoundedAudioHardwareQueue(
+            queue: DispatchQueue(label: "com.fluidvoice.audio.capture-device-snapshot", qos: .userInitiated),
+            timeout: operationTimeout
+        )
         self.packetHandler = packetHandler
         self.inputFactory = inputFactory
         self.fingerprintReader = fingerprintReader
+        self.deviceSnapshotReader = deviceSnapshotReader
+        self.deviceLivenessReader = deviceLivenessReader
+        self.deviceResolver = deviceResolver
         self.installsHardwareListeners = installsHardwareListeners
         self.onFormatInvalidated = onFormatInvalidated
     }
@@ -735,50 +773,192 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     }
 
     var snapshot: Snapshot {
-        self.snapshotLock.lock()
-        defer { self.snapshotLock.unlock() }
-        return self.storedSnapshot
+        var snapshot = self.snapshotLock.withLock { self.storedSnapshot }
+        if self.hardwareOperations.isAvailable == false {
+            snapshot = Snapshot(
+                phase: .failed,
+                generation: snapshot.generation,
+                deviceID: snapshot.deviceID,
+                deviceName: snapshot.deviceName,
+                sampleRate: snapshot.sampleRate,
+                bufferFrameSize: snapshot.bufferFrameSize,
+                fingerprint: snapshot.fingerprint
+            )
+        }
+        return snapshot
+    }
+
+    var isRecoveringHardware: Bool { self.hardwareOperations.isAvailable == false }
+
+    func waitForHardwareAvailability() async -> Bool {
+        await self.hardwareOperations.waitUntilAvailable(timeout: self.recoveryTimeout)
+    }
+
+    func waitForDeviceQueryAvailability() async -> Bool {
+        await self.deviceQueries.waitUntilAvailable(timeout: self.recoveryTimeout)
+    }
+
+    func waitForPendingHardwareRetirement() async -> Bool {
+        await self.hardwareOperations.waitUntilAvailable(timeout: self.recoveryTimeout)
+    }
+
+    func cancelPendingStartup() {
+        self.hardwareOperations.cancelPendingOperations()
+        self.captureDeviceQueries.cancelPendingOperations()
+    }
+
+    /// No HAL calls or capture mutations in the device-list notification path.
+    /// Multiple events collapse into one fresh setup at the next stopped start.
+    func noteHardwareTopologyChanged() {
+        let revision = self.snapshotLock.withLock {
+            self.hardwareTopologyRevision &+= 1
+            return self.hardwareTopologyRevision
+        }
+        Self.log("Direct capture topology changed revision=\(revision); next stopped start requires fresh input", level: .info)
+        self.scheduleFailedHardwareCheck()
+    }
+
+    private func scheduleFailedHardwareCheck() {
+        let enqueue = self.snapshotLock.withLock {
+            guard self.shutdownRequested == false, self.topologyRecoveryCheckPending == false else { return false }
+            self.topologyRecoveryCheckPending = true
+            return true
+        }
+        if enqueue {
+            // Queue behind native work and its cleanup. A topology callback must
+            // never clear failure while that work still owns capture resources.
+            // Coalesce bursts here; ordinary capture startup is never delayed.
+            self.lifecycleQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.checkFailedHardwareLocked() }
+        }
+    }
+
+    private func checkFailedHardwareLocked() {
+        let revision = self.snapshotLock.withLock { self.hardwareTopologyRevision }
+        guard self.isShutDown == false,
+              self.snapshotLock.withLock({ self.shutdownRequested == false }),
+              self.isPoisoned, let failedHardware = self.failedHardware
+        else {
+            self.snapshotLock.withLock { self.topologyRecoveryCheckPending = false }
+            return
+        }
+        Task { [weak self, deviceQueries, deviceLivenessReader] in
+            // Unknown, failed, or timed-out queries cannot authorize replacement.
+            // Keep HAL queries off both the notification and lifecycle queues.
+            let isAlive = try? await deviceQueries.run(recover: { true }) {
+                deviceLivenessReader(failedHardware.deviceID)
+            }
+            self?.lifecycleQueue.async { [weak self] in
+                guard let self else { return }
+                defer {
+                    // An event can arrive even while this completion is being
+                    // handled. Release ownership only after applying its result,
+                    // then recheck any newer revision instead of losing it.
+                    let changedAgain = self.snapshotLock.withLock {
+                        self.topologyRecoveryCheckPending = false
+                        return revision != self.hardwareTopologyRevision
+                    }
+                    if changedAgain { self.scheduleFailedHardwareCheck() }
+                }
+                guard self.isShutDown == false,
+                      self.snapshotLock.withLock({ self.shutdownRequested == false && revision == self.hardwareTopologyRevision }),
+                      self.failedHardware == failedHardware,
+                      self.generation == failedHardware.generation,
+                      isAlive == false
+                else { return }
+                self.recordStoppedHardwareNotification(generation: failedHardware.generation)
+                self.handleFormatInvalidationLocked(
+                    generation: failedHardware.generation,
+                    reason: "device_list_confirmed_stopped"
+                )
+            }
+        }
+    }
+
+    struct DeviceSnapshot: Sendable {
+        let devices: [AudioDevice.Device]
+        let defaultInputUID: String?
+    }
+
+    /// Cancellation releases the caller even if HAL discovery is blocked. This
+    /// queue is independent of recovery queries and never stops running capture.
+    func readCaptureDeviceSnapshot() async throws -> DeviceSnapshot {
+        try await self.captureDeviceQueries.run(recover: { true }) {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            Self.log("Direct capture startup device query begin", level: .debug)
+            let snapshot = try self.deviceSnapshotReader(false)
+            Self.log("Direct capture startup device query end elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))", level: .debug)
+            return snapshot
+        }
+    }
+
+    func readDeviceSnapshot(refreshLiveness: Bool = false) async throws -> DeviceSnapshot {
+        // Only route recovery uses this bounded queue. Its cancellation cannot
+        // interrupt ordinary startup discovery or an already recording input.
+        try await self.deviceQueries.run(recover: { true }) {
+            try self.deviceSnapshotReader(refreshLiveness)
+        }
+    }
+
+    private static func queryDeviceSnapshot(refreshLiveness: Bool) -> DeviceSnapshot {
+        let devices = refreshLiveness
+            ? AudioDevice.listInputDevicesRefreshingLiveness()
+            : AudioDevice.listAllDevices()
+        return DeviceSnapshot(
+            devices: devices,
+            defaultInputUID: AudioDevice.getDefaultInputDevice(from: devices)?.uid
+        )
+    }
+
+    private func performHardwareOperation<Value: Sendable>(
+        cancellable: Bool = true,
+        timeout: TimeInterval? = nil,
+        _ operation: @escaping @Sendable () throws -> Value
+    ) async throws -> Value {
+        try await self.hardwareOperations.run(cancellable: cancellable, timeout: timeout, recover: { [self] in
+            let status = self.invalidateLocked(reason: "interrupted_hardware_operation")
+            if self.snapshotLock.withLock({ self.shutdownRequested }) {
+                self.isShutDown = true
+                self.publishSnapshot(phase: .shutDown, input: nil, fingerprint: nil)
+            }
+            Self.log("Direct capture interrupted operation drained status=\(status)", level: .info)
+            return status == noErr && self.isPoisoned == false
+        }) {
+            try self.hardwareOperations.checkAvailable()
+            return try operation()
+        }
     }
 
     func resolveDevice(
         selection: DirectCoreAudioDeviceSelection,
         reason: String
     ) async throws -> AudioDevice.Device {
-        try await withCheckedThrowingContinuation { continuation in
-            self.lifecycleQueue.async {
-                let startedAt = ProcessInfo.processInfo.systemUptime
-                let device: AudioDevice.Device?
-                switch selection {
-                case .systemDefault:
-                    device = AudioDevice.getDefaultInputDevice()
-                        .flatMap { AudioDevice.isInputDeviceUsable($0) ? $0 : nil }
-                case let .preferredUID(uid):
-                    if let preferredDevice = AudioDevice.getInputDevice(byUID: uid),
-                       AudioDevice.isInputDeviceUsable(preferredDevice)
-                    {
-                        device = preferredDevice
-                    } else {
-                        // Let ASRService retry the next app-priority device. Falling back
-                        // here would silently bypass the user's order during a HAL race.
-                        device = nil
-                    }
-                }
-                guard let device else {
-                    continuation.resume(
-                        throwing: Self.error(
-                            "No input device is available for \(selection)."
-                        )
-                    )
-                    return
-                }
-                Self.log(
-                    "Direct capture device resolved off-main reason=\(reason) " +
-                        "device='\(device.name)' id=\(device.id) " +
-                        "elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))",
-                    level: .info
-                )
-                continuation.resume(returning: device)
+        try await self.performHardwareOperation {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let device = try self.deviceResolver(selection)
+            guard let device else {
+                throw Self.error("No input device is available for \(selection).")
             }
+            Self.log(
+                "Direct capture device resolved off-main reason=\(reason) " +
+                    "device='\(device.name)' id=\(device.id) " +
+                    "elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))",
+                level: .info
+            )
+            return device
+        }
+    }
+
+    private static func resolveSelectedDevice(_ selection: DirectCoreAudioDeviceSelection) -> AudioDevice.Device? {
+        switch selection {
+        case .systemDefault:
+            return AudioDevice.getDefaultInputDevice()
+                .flatMap { AudioDevice.isInputDeviceUsable($0) ? $0 : nil }
+        case let .preferredUID(uid):
+            // Keep fallback in ASRService so it always follows the app's priority.
+            guard let device = AudioDevice.getInputDevice(byUID: uid),
+                  AudioDevice.isInputDeviceUsable(device)
+            else { return nil }
+            return device
         }
     }
 
@@ -787,20 +967,8 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         deviceName: String,
         reason: String
     ) async throws -> Snapshot {
-        try await withCheckedThrowingContinuation { continuation in
-            self.lifecycleQueue.async {
-                do {
-                    try continuation.resume(
-                        returning: self.prepareLocked(
-                            deviceID: deviceID,
-                            deviceName: deviceName,
-                            reason: reason
-                        )
-                    )
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
+        try await self.performHardwareOperation {
+            try self.prepareLocked(deviceID: deviceID, deviceName: deviceName, reason: reason)
         }
     }
 
@@ -809,83 +977,62 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         deviceName: String,
         reason: String
     ) async throws -> Snapshot {
-        try await withCheckedThrowingContinuation { continuation in
-            self.lifecycleQueue.async {
-                do {
-                    guard self.isShutDown == false else {
-                        throw Self.error("Direct Core Audio lifecycle is shut down.")
+        try await self.performHardwareOperation {
+            do {
+                guard self.isShutDown == false,
+                      self.snapshotLock.withLock({ self.shutdownRequested == false })
+                else {
+                    throw Self.error("Direct Core Audio lifecycle is shut down.")
+                }
+                let topologyRevision = self.snapshotLock.withLock { self.hardwareTopologyRevision }
+                if let input = self.input, input.isRunning == false,
+                   topologyRevision != self.lastStartedTopologyRevision
+                {
+                    // A prewarm made during device churn can still have a stale
+                    // IOProc despite an unchanged fingerprint. Rebuild once on
+                    // actual demand, after the user has finished connecting it.
+                    let status = self.invalidateLocked(reason: "topology_changed_before_start")
+                    guard status == noErr, self.isPoisoned == false else {
+                        throw BoundedAudioHardwareQueue.Failure.cleanupFailed
                     }
-                    var prepared = try self.prepareLocked(
+                }
+                var prepared = try self.prepareLocked(
+                    deviceID: deviceID,
+                    deviceName: deviceName,
+                    reason: reason
+                )
+                guard let input = self.input else {
+                    throw Self.error("Direct Core Audio input was not prepared.")
+                }
+
+                let validationStartedAt = ProcessInfo.processInfo.systemUptime
+                let currentFingerprint = try self.fingerprintReader(deviceID)
+                if currentFingerprint != input.formatFingerprint {
+                    Self.log(
+                        "Direct capture fingerprint changed before start; rebuilding " +
+                            "generation=\(prepared.generation) old={\(input.formatFingerprint.logDescription)} " +
+                            "new={\(currentFingerprint.logDescription)}",
+                        level: .warning
+                    )
+                    self.invalidateLocked(reason: "pre_start_fingerprint_changed")
+                    prepared = try self.prepareLocked(
                         deviceID: deviceID,
                         deviceName: deviceName,
-                        reason: reason
+                        reason: "pre_start_fingerprint_changed"
                     )
-                    guard let input = self.input else {
-                        throw Self.error("Direct Core Audio input was not prepared.")
-                    }
+                }
 
-                    let validationStartedAt = ProcessInfo.processInfo.systemUptime
-                    let currentFingerprint = try self.fingerprintReader(deviceID)
-                    if currentFingerprint != input.formatFingerprint {
-                        Self.log(
-                            "Direct capture fingerprint changed before start; rebuilding " +
-                                "generation=\(prepared.generation) old={\(input.formatFingerprint.logDescription)} " +
-                                "new={\(currentFingerprint.logDescription)}",
-                            level: .warning
-                        )
-                        self.invalidateLocked(reason: "pre_start_fingerprint_changed")
-                        prepared = try self.prepareLocked(
-                            deviceID: deviceID,
-                            deviceName: deviceName,
-                            reason: "pre_start_fingerprint_changed"
-                        )
-                    }
-
-                    guard let validatedInput = self.input else {
-                        throw Self.error("Direct Core Audio input disappeared before start.")
-                    }
-                    if validatedInput.isRunning {
-                        let runningFingerprint = try self.fingerprintReader(deviceID)
-                        guard runningFingerprint == validatedInput.formatFingerprint,
-                              validatedInput.openPacketGateIfClean()
-                        else {
-                            throw Self.error(
-                                "Direct Core Audio format changed while reusing running input generation " +
-                                    "\(self.generation)."
-                            )
-                        }
-                        self.publishSnapshot(
-                            phase: .running,
-                            input: validatedInput,
-                            fingerprint: validatedInput.formatFingerprint
-                        )
-                        Self.log(
-                            "Direct capture start reused running input generation=\(self.generation) " +
-                                "device='\(deviceName)'",
-                            level: .debug
-                        )
-                        continuation.resume(returning: self.snapshot)
-                        return
-                    }
-                    self.publishSnapshot(
-                        phase: .starting,
-                        input: validatedInput,
-                        fingerprint: validatedInput.formatFingerprint
-                    )
-                    let startStartedAt = ProcessInfo.processInfo.systemUptime
-                    Self.log(
-                        "Direct capture start begin generation=\(self.generation) " +
-                            "device='\(deviceName)' validationMs=" +
-                            "\(Self.elapsedMilliseconds(since: validationStartedAt))",
-                        level: .info
-                    )
-                    try validatedInput.start()
-                    let fingerprintAfterStart = try self.fingerprintReader(deviceID)
-                    guard fingerprintAfterStart == validatedInput.formatFingerprint,
+                guard let validatedInput = self.input else {
+                    throw Self.error("Direct Core Audio input disappeared before start.")
+                }
+                if validatedInput.isRunning {
+                    let runningFingerprint = try self.fingerprintReader(deviceID)
+                    try self.hardwareOperations.checkAvailable()
+                    guard runningFingerprint == validatedInput.formatFingerprint,
                           validatedInput.openPacketGateIfClean()
                     else {
                         throw Self.error(
-                            "Direct Core Audio format changed while starting generation " +
+                            "Direct Core Audio format changed while reusing running input generation " +
                                 "\(self.generation)."
                         )
                     }
@@ -894,38 +1041,81 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                         input: validatedInput,
                         fingerprint: validatedInput.formatFingerprint
                     )
+                    // Reusing preview does not refresh its native setup. Keep
+                    // the pending revision so the next stopped start rebuilds.
                     Self.log(
-                        "Direct capture start end generation=\(self.generation) " +
-                            "elapsedMs=\(Self.elapsedMilliseconds(since: startStartedAt)) " +
-                            "fingerprint={\(validatedInput.formatFingerprint.logDescription)}",
-                        level: .info
+                        "Direct capture start reused running input generation=\(self.generation) " +
+                            "device='\(deviceName)'",
+                        level: .debug
                     )
-                    continuation.resume(returning: self.snapshot)
-                } catch {
-                    self.publishSnapshot(
-                        phase: .failed,
-                        input: self.input,
-                        fingerprint: self.input?.formatFingerprint
-                    )
-                    self.invalidateLocked(reason: "start_failed")
-                    continuation.resume(throwing: error)
+                    return self.snapshot
                 }
+                guard topologyRevision == self.snapshotLock.withLock({ self.hardwareTopologyRevision }) else {
+                    throw Self.error("Audio hardware changed while preparing the microphone. Retry with fresh capture state.")
+                }
+                self.publishSnapshot(
+                    phase: .starting,
+                    input: validatedInput,
+                    fingerprint: validatedInput.formatFingerprint
+                )
+                let startStartedAt = ProcessInfo.processInfo.systemUptime
+                Self.log(
+                    "Direct capture start begin generation=\(self.generation) " +
+                        "device='\(deviceName)' validationMs=" +
+                        "\(Self.elapsedMilliseconds(since: validationStartedAt))",
+                    level: .info
+                )
+                try self.hardwareOperations.checkAvailable()
+                Self.log("Direct capture native start enter generation=\(self.generation) device=\(deviceID)", level: .info)
+                try validatedInput.start()
+                Self.log("Direct capture native start return generation=\(self.generation) elapsedMs=\(Self.elapsedMilliseconds(since: startStartedAt))", level: .info)
+                try self.hardwareOperations.checkAvailable()
+                Self.log("Direct capture post-start validation begin generation=\(self.generation)", level: .debug)
+                let fingerprintAfterStart = try self.fingerprintReader(deviceID)
+                Self.log("Direct capture post-start validation end generation=\(self.generation)", level: .debug)
+                try self.hardwareOperations.checkAvailable()
+                guard fingerprintAfterStart == validatedInput.formatFingerprint,
+                      validatedInput.openPacketGateIfClean()
+                else {
+                    throw Self.error(
+                        "Direct Core Audio format changed while starting generation " +
+                            "\(self.generation)."
+                    )
+                }
+                self.publishSnapshot(
+                    phase: .running,
+                    input: validatedInput,
+                    fingerprint: validatedInput.formatFingerprint
+                )
+                self.lastStartedTopologyRevision = topologyRevision
+                Self.log(
+                    "Direct capture start end generation=\(self.generation) " +
+                        "elapsedMs=\(Self.elapsedMilliseconds(since: startStartedAt)) " +
+                        "fingerprint={\(validatedInput.formatFingerprint.logDescription)}",
+                    level: .info
+                )
+                return self.snapshot
+            } catch {
+                self.publishSnapshot(
+                    phase: .failed,
+                    input: self.input,
+                    fingerprint: self.input?.formatFingerprint
+                )
+                self.invalidateLocked(reason: "start_failed")
+                throw error
             }
         }
     }
 
-    func stop(retainPrepared: Bool, reason: String) async -> StopReport {
-        await withCheckedContinuation { continuation in
-            self.lifecycleQueue.async {
+    func stop(retainPrepared: Bool, reason: String, recoveringRoute: Bool = false) async -> StopReport {
+        do {
+            return try await self.performHardwareOperation(cancellable: false, timeout: recoveringRoute ? self.recoveryTimeout : nil) {
                 guard let input = self.input else {
-                    continuation.resume(
-                        returning: StopReport(
-                            status: noErr,
-                            droppedPackets: 0,
-                            retainedPreparedCapture: false
-                        )
+                    return StopReport(
+                        status: noErr,
+                        droppedPackets: 0,
+                        retainedPreparedCapture: false
                     )
-                    return
                 }
 
                 let startedAt = ProcessInfo.processInfo.systemUptime
@@ -965,38 +1155,31 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                         "retained=\(retainPrepared && self.input != nil)",
                     level: .info
                 )
-                continuation.resume(
-                    returning: StopReport(
-                        status: status,
-                        droppedPackets: droppedPackets,
-                        retainedPreparedCapture: retainPrepared && self.input != nil
-                    )
+                return StopReport(
+                    status: status,
+                    droppedPackets: droppedPackets,
+                    retainedPreparedCapture: retainPrepared && self.input != nil
                 )
             }
+        } catch {
+            Self.log("Direct capture stop interrupted reason=\(reason): \(error.localizedDescription)", level: .warning)
+            return StopReport(status: kAudioHardwareUnspecifiedError, droppedPackets: 0, retainedPreparedCapture: false)
         }
     }
 
-    func invalidate(reason: String) async {
-        await withCheckedContinuation { continuation in
-            self.lifecycleQueue.async {
-                _ = self.invalidateLocked(reason: reason)
-                continuation.resume()
-            }
+    func invalidate(reason: String, recoveringRoute: Bool = false) async {
+        _ = try? await self.performHardwareOperation(cancellable: false, timeout: recoveringRoute ? self.recoveryTimeout : nil) {
+            self.invalidateLocked(reason: reason)
         }
     }
 
     func shutdown(reason: String) async {
-        await withCheckedContinuation { continuation in
-            self.lifecycleQueue.async {
-                guard self.isShutDown == false else {
-                    continuation.resume()
-                    return
-                }
-                self.isShutDown = true
-                _ = self.invalidateLocked(reason: reason)
-                self.publishSnapshot(phase: .shutDown, input: nil, fingerprint: nil)
-                continuation.resume()
-            }
+        self.snapshotLock.withLock { self.shutdownRequested = true }
+        _ = try? await self.performHardwareOperation(cancellable: false, timeout: self.recoveryTimeout) {
+            guard self.isShutDown == false else { return }
+            self.isShutDown = true
+            _ = self.invalidateLocked(reason: reason)
+            self.publishSnapshot(phase: .shutDown, input: nil, fingerprint: nil)
         }
     }
 
@@ -1005,7 +1188,10 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         deviceName: String,
         reason: String
     ) throws -> Snapshot {
-        guard self.isShutDown == false else {
+        try self.hardwareOperations.checkAvailable()
+        guard self.isShutDown == false,
+              self.snapshotLock.withLock({ self.shutdownRequested == false })
+        else {
             throw Self.error("Direct Core Audio lifecycle is shut down.")
         }
         guard self.isPoisoned == false else {
@@ -1015,6 +1201,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         }
 
         let currentFingerprint = try self.fingerprintReader(deviceID)
+        try self.hardwareOperations.checkAvailable()
         if let input = self.input,
            input.deviceID == deviceID,
            input.formatFingerprint == currentFingerprint
@@ -1064,9 +1251,11 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
 
         let gate = DirectCoreAudioPacketGate()
         let downstreamHandler = self.packetHandler
+        let hardwareOperations = self.hardwareOperations
         let input: any DirectCoreAudioInputControlling
         do {
             input = try self.inputFactory(deviceID) { samples, frameCount, sampleRate, inputHostTime, inputSampleTime in
+                guard hardwareOperations.isAvailable else { return }
                 gate.withAcceptedPacket {
                     downstreamHandler(
                         samples,
@@ -1093,6 +1282,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         self.input = input
         self.packetGate = gate
         do {
+            try self.hardwareOperations.checkAvailable()
             if self.installsHardwareListeners {
                 try self.installFormatListenersLocked(
                     fingerprint: input.formatFingerprint,
@@ -1101,6 +1291,7 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                 )
             }
             let fingerprintAfterListeners = try self.fingerprintReader(deviceID)
+            try self.hardwareOperations.checkAvailable()
             guard fingerprintAfterListeners == input.formatFingerprint else {
                 throw Self.error(
                     "Direct Core Audio format changed while installing listeners."
@@ -1180,6 +1371,12 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
                 )
             } else {
                 self.isPoisoned = true
+                if let input {
+                    self.failedHardware = FailedHardware(generation: self.generation, deviceID: input.deviceID)
+                    // Covers removal while listeners were being detached, before
+                    // cleanup had published its failure to the hardware queue.
+                    self.scheduleFailedHardwareCheck()
+                }
                 Self.log(
                     "Direct capture teardown failed generation=\(self.generation) " +
                         "status=\(status); lifecycle poisoned and callback context quarantined",
@@ -1291,43 +1488,29 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             return
         }
 
-        let invalidationHandler = self.onFormatInvalidated
-        let block: AudioObjectPropertyListenerBlock = { [weak self, weak input] listenerObjectID, _ in
+        let block = Self.makeDevicePropertyListener(objectID: objectID) { [weak self, weak input] objectID in
             let deviceIsAlive =
                 name == "device_is_alive"
-                    ? Self.readDeviceLiveness(objectID: listenerObjectID)
+                    ? Self.readDeviceLiveness(objectID: objectID)
                     : nil
-            let hardwareIsKnownStopped =
-                name == "audio_service_restarted" ||
-                name == "io_stopped_abnormally" ||
-                (name == "device_is_alive" && deviceIsAlive != true)
-            if hardwareIsKnownStopped {
-                self?.recordStoppedHardwareNotification(generation: generation)
-            }
+            let hardwareIsKnownStopped = Self.hardwareIsKnownStopped(
+                reason: name, deviceIsAlive: deviceIsAlive
+            )
             if name == "device_is_alive" {
                 Self.log(
                     "Direct capture liveness notification generation=\(generation) " +
-                        "device=\(listenerObjectID) " +
+                        "device=\(objectID) " +
                         "alive=\(deviceIsAlive.map(String.init) ?? "unreadable") " +
                         "knownStopped=\(hardwareIsKnownStopped)",
                     level: hardwareIsKnownStopped ? .warning : .info
                 )
             }
-            input?.markFormatDirty()
-            invalidationHandler(
-                FormatInvalidation(
-                    generation: generation,
-                    deviceID: input?.deviceID ?? kAudioObjectUnknown,
-                    reason: name,
-                    wasRunning: input?.isRunning ?? false
-                )
+            self?.handleFormatNotification(
+                generation: generation,
+                reason: name,
+                input: input,
+                hardwareIsKnownStopped: hardwareIsKnownStopped
             )
-            self?.lifecycleQueue.async { [weak self] in
-                self?.handleFormatInvalidationLocked(
-                    generation: generation,
-                    reason: name
-                )
-            }
         }
         let status = AudioObjectAddPropertyListenerBlock(
             objectID,
@@ -1354,6 +1537,52 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         )
     }
 
+    private func handleFormatNotification(
+        generation: UInt64,
+        reason: String,
+        input: (any DirectCoreAudioInputControlling)?,
+        hardwareIsKnownStopped: Bool
+    ) {
+        let snapshot = self.snapshotLock.withLock { self.storedSnapshot }
+        guard generation == snapshot.generation else { return }
+        let action = self.stoppedHardwareLock.withLock {
+            if hardwareIsKnownStopped { self.stoppedHardwareGenerations.insert(generation) }
+            let report = reason != "io_stopped_abnormally" || self.lastReportedAbnormalStopGeneration != generation
+            if reason == "io_stopped_abnormally" { self.lastReportedAbnormalStopGeneration = generation }
+            let enqueue = self.pendingFormatInvalidationGenerations.insert(generation).inserted
+            return (report, enqueue)
+        }
+        input?.markFormatDirty()
+        if hardwareIsKnownStopped {
+            self.snapshotLock.withLock {
+                // Recheck under the publication lock: a late callback must not
+                // interrupt a replacement generation admitted in the meantime.
+                if self.storedSnapshot.generation == generation,
+                   self.storedSnapshot.phase == .starting || self.storedSnapshot.phase == .preparing
+                {
+                    self.hardwareOperations.failPendingOperationsAfterDeviceStopped()
+                }
+            }
+        }
+        if action.0 {
+            self.onFormatInvalidated(FormatInvalidation(
+                generation: generation,
+                deviceID: input?.deviceID ?? snapshot.deviceID ?? kAudioObjectUnknown,
+                reason: reason,
+                wasRunning: input?.isRunning ?? false
+            ))
+        }
+        if action.1 {
+            self.lifecycleQueue.async { [weak self] in
+                guard let self else { return }
+                self.handleFormatInvalidationLocked(generation: generation, reason: reason)
+                self.stoppedHardwareLock.withLock {
+                    _ = self.pendingFormatInvalidationGenerations.remove(generation)
+                }
+            }
+        }
+    }
+
     private func handleFormatInvalidationLocked(generation: UInt64, reason: String) {
         guard generation == self.generation else {
             _ = self.consumeStoppedHardwareNotification(generation: generation)
@@ -1363,14 +1592,20 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         let hardwareIsKnownStopped =
             self.consumeStoppedHardwareNotification(generation: generation)
         guard let input = self.input else {
-            if hardwareIsKnownStopped, self.isPoisoned {
+            if hardwareIsKnownStopped {
+                let wasPoisoned = self.isPoisoned
                 self.isPoisoned = false
-                self.publishSnapshot(phase: .empty, input: nil, fingerprint: nil)
-                Self.log(
-                    "Direct capture cleared teardown poison generation=\(generation) " +
-                        "after delayed \(reason) notification",
-                    level: .warning
-                )
+                self.failedHardware = nil
+                let clearedQueueFailure = self.hardwareOperations.clearFailureAfterSerializedRecovery()
+                if wasPoisoned || clearedQueueFailure {
+                    let shuttingDown = self.isShutDown || self.snapshotLock.withLock { self.shutdownRequested }
+                    self.publishSnapshot(phase: shuttingDown ? .shutDown : .empty, input: nil, fingerprint: nil)
+                    Self.log(
+                        "Direct capture cleared teardown failure generation=\(generation) " +
+                            "after delayed \(reason) notification queueRecovered=\(clearedQueueFailure)",
+                        level: .warning
+                    )
+                }
             }
             return
         }
@@ -1386,6 +1621,20 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             reason: "format_listener:\(reason)",
             allowStoppedHardwareReplacement: hardwareIsKnownStopped
         )
+    }
+
+    /// The block API supplies an address count, unlike the C proc API which
+    /// also supplies an object ID. Always use the ID from registration.
+    static func makeDevicePropertyListener(
+        objectID: AudioObjectID,
+        handler: @escaping @Sendable (AudioObjectID) -> Void
+    ) -> AudioObjectPropertyListenerBlock {
+        { _, _ in handler(objectID) }
+    }
+
+    static func hardwareIsKnownStopped(reason: String, deviceIsAlive: Bool?) -> Bool {
+        reason == "audio_service_restarted" || reason == "io_stopped_abnormally" ||
+            (reason == "device_is_alive" && deviceIsAlive == false)
     }
 
     private func recordStoppedHardwareNotification(generation: UInt64) {
@@ -1416,6 +1665,9 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
             &size,
             &isAlive
         )
+        // An object removed from HAL is gone; other unreadable results are
+        // unknown and must not authorize replacement after failed teardown.
+        if status == kAudioHardwareBadDeviceError || status == kAudioHardwareBadObjectError { return false }
         guard status == noErr, size == UInt32(MemoryLayout<UInt32>.size) else {
             return nil
         }
@@ -1423,6 +1675,16 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
     }
 
     #if DEBUG
+    var isTopologyRecoveryCheckPendingForTesting: Bool {
+        self.snapshotLock.withLock { self.topologyRecoveryCheckPending }
+    }
+
+    func simulateAbnormalStopNotificationForTesting(generation: UInt64) {
+        self.handleFormatNotification(
+            generation: generation, reason: "io_stopped_abnormally", input: nil, hardwareIsKnownStopped: true
+        )
+    }
+
     func simulateStoppedHardwareNotificationForTesting(
         generation: UInt64,
         reason: String

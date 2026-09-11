@@ -1173,6 +1173,7 @@ final class DirectAudioReliabilityTests: XCTestCase {
             inputFactory: { _, _ in input },
             fingerprintReader: { _ in fingerprint },
             installsHardwareListeners: false,
+            deviceLivenessReader: { _ in true },
             onFormatInvalidated: { _ in }
         )
         _ = try await controller.start(
@@ -1222,6 +1223,7 @@ final class DirectAudioReliabilityTests: XCTestCase {
                 try fingerprintReader.read()
             },
             installsHardwareListeners: false,
+            deviceLivenessReader: { _ in true },
             onFormatInvalidated: { _ in }
         )
 
