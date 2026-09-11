@@ -117,8 +117,18 @@ final class CallCaptureSession: @unchecked Sendable {
                         microphoneWriter.record(error: error)
                     }
                 },
-                installsHardwareListeners: false,
-                onFormatInvalidated: { _ in }
+                installsHardwareListeners: true,
+                onFormatInvalidated: { invalidation in
+                    // Stream activity can change as part of a normal capture stop.
+                    guard invalidation.reason != "stream_is_active" else { return }
+                    microphoneWriter.record(error: CallTranscriptionError.audioWriterFailed(
+                        "Microphone audio changed or became unavailable during the call."
+                    ))
+                    DebugLogger.shared.warning(
+                        "Call microphone capture invalidated: \(invalidation.reason)",
+                        source: "CallCaptureSession"
+                    )
+                }
             )
             self.microphoneCapture = microphoneCapture
             _ = try await microphoneCapture.start(

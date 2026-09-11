@@ -427,8 +427,19 @@ final class MeetingTranscriptionService: ObservableObject {
         options requestedOptions: FileTranscriptionOptions? = nil
     ) async throws -> TranscriptionResult {
         let options = requestedOptions ?? .userSettings
-        self.isTranscribing = true
         self.error = nil
+
+        let coordinator = AudioCaptureCoordinator.shared
+        guard coordinator.reserve(for: .file) else {
+            let error = TranscriptionError.transcriptionFailed(
+                "Another transcription is already using the speech recognition model."
+            )
+            self.error = error.localizedDescription
+            throw error
+        }
+        defer { coordinator.release(for: .file) }
+
+        self.isTranscribing = true
         self.fallbackNotice = nil
         self.progress = 0.0
 

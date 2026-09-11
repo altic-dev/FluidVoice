@@ -6,6 +6,7 @@ final class AudioCaptureCoordinator {
     enum Owner: Hashable {
         case call
         case dictation
+        case file
     }
 
     static let shared = AudioCaptureCoordinator()
