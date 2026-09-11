@@ -438,11 +438,11 @@ final class MeetingTranscriptionService: ObservableObject {
         }
 
         do {
-            let result = try await self.performTranscription(fileURL, options: options)
             AnalyticsService.shared.recordUsage(
                 mode: .meeting,
                 transcriptionModel: SettingsStore.shared.selectedSpeechModel.analyticsDescriptor
             )
+            let result = try await self.transcribeSourceFile(fileURL, options: options)
             self.result = result
             self.fallbackNotice = result.speakerLabelingNotice
             FileTranscriptionHistoryStore.shared.addEntry(result)
@@ -459,13 +459,6 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// Reusable transcription without meeting analytics, history, or result state.
     func transcribeSourceFile(
-        _ fileURL: URL,
-        options: FileTranscriptionOptions
-    ) async throws -> TranscriptionResult {
-        try await self.performTranscription(fileURL, options: options)
-    }
-
-    private func performTranscription(
         _ fileURL: URL,
         options: FileTranscriptionOptions
     ) async throws -> TranscriptionResult {
@@ -646,8 +639,8 @@ final class MeetingTranscriptionService: ObservableObject {
 
                 // Update progress
                 let progressPercent = Double(currentFrame) / Double(audioFile.length)
-                self.progress = 0.3 + (progressPercent * 0.6) // Progress from 30% to 90%
                 self.currentStatus = "Transcribing... \(Int(progressPercent * 100))%"
+                self.progress = 0.3 + (progressPercent * 0.6)
             }
 
             if allTranscriptions.isEmpty {
