@@ -159,9 +159,13 @@ final class CallPCMTrackWriter: @unchecked Sendable {
         let missingSeconds = hostDeltaSeconds - expectedDeltaSeconds
         let toleranceSeconds = max(0.001, expectedDeltaSeconds * 0.25)
         guard missingSeconds > toleranceSeconds else { return }
+        guard missingSeconds <= Self.maximumInsertedSilenceSeconds else {
+            throw CallTranscriptionError.audioWriterFailed(
+                "Captured audio was interrupted during the call."
+            )
+        }
 
-        let insertedSilenceSeconds = min(missingSeconds, Self.maximumInsertedSilenceSeconds)
-        var missingFrames = Int((insertedSilenceSeconds * sampleRate).rounded())
+        var missingFrames = Int((missingSeconds * sampleRate).rounded())
         while missingFrames > 0 {
             let frameCount = min(missingFrames, Int(buffer.frameCapacity))
             buffer.frameLength = AVAudioFrameCount(frameCount)
