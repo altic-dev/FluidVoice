@@ -530,7 +530,7 @@ struct ContentView: View {
                 SettingsStore.shared.selectedProviderID = newValue
             }
             .onChange(of: self.activeShortcutRecordingTarget) { _, _ in
-                self.hotkeyManager?.resetModifierOnlyShortcutTracking()
+                self.hotkeyManager?.shortcutCaptureDidChange()
             }
             .onChange(of: self.commandModeHotkeyShortcut) { _, newValue in
                 SettingsStore.shared.commandModeHotkeyShortcut = newValue
