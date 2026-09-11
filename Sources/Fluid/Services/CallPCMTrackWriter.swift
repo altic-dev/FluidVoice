@@ -5,6 +5,7 @@ import Foundation
 /// Writes packets produced by the repository's realtime-safe direct-capture ring.
 final class CallPCMTrackWriter: @unchecked Sendable {
     private static let maximumFramesPerPacket: AVAudioFrameCount = 8192
+    private static let maximumInsertedSilenceSeconds: Double = 1
 
     private let source: CallAudioSource
     private let url: URL
@@ -159,7 +160,8 @@ final class CallPCMTrackWriter: @unchecked Sendable {
         let toleranceSeconds = max(0.001, expectedDeltaSeconds * 0.25)
         guard missingSeconds > toleranceSeconds else { return }
 
-        var missingFrames = Int((missingSeconds * sampleRate).rounded())
+        let insertedSilenceSeconds = min(missingSeconds, Self.maximumInsertedSilenceSeconds)
+        var missingFrames = Int((insertedSilenceSeconds * sampleRate).rounded())
         while missingFrames > 0 {
             let frameCount = min(missingFrames, Int(buffer.frameCapacity))
             buffer.frameLength = AVAudioFrameCount(frameCount)
