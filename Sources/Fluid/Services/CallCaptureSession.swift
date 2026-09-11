@@ -119,8 +119,7 @@ final class CallCaptureSession: @unchecked Sendable {
                 },
                 installsHardwareListeners: true,
                 onFormatInvalidated: { invalidation in
-                    // Stream activity can change as part of a normal capture stop.
-                    guard invalidation.reason != "stream_is_active" else { return }
+                    guard invalidation.wasRunning else { return }
                     microphoneWriter.record(error: CallTranscriptionError.audioWriterFailed(
                         "Microphone audio changed or became unavailable during the call."
                     ))
