@@ -194,7 +194,9 @@ final class FileTranscriptionHistoryStore: ObservableObject {
 
         if self.entries.count > self.maxEntries {
             let removed = self.entries.removeLast()
-            CallRecordingStore.shared.deleteIfOwned(path: removed.sourceFilePath)
+            if removed.kind == .call {
+                CallRecordingStore.shared.deleteIfOwned(path: removed.sourceFilePath)
+            }
         }
 
         self.selectedEntryID = entry.id
@@ -209,7 +211,9 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     func deleteEntry(id: UUID) {
         let removed = self.entries.first(where: { $0.id == id })
         self.entries.removeAll { $0.id == id }
-        CallRecordingStore.shared.deleteIfOwned(path: removed?.sourceFilePath)
+        if removed?.kind == .call {
+            CallRecordingStore.shared.deleteIfOwned(path: removed?.sourceFilePath)
+        }
         if self.selectedEntryID == id {
             self.selectedEntryID = self.entries.first?.id
         }
@@ -219,7 +223,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     func clearAll() {
         let removedEntries = self.entries
         self.entries.removeAll()
-        for entry in removedEntries {
+        for entry in removedEntries where entry.kind == .call {
             CallRecordingStore.shared.deleteIfOwned(path: entry.sourceFilePath)
         }
         self.selectedEntryID = nil
