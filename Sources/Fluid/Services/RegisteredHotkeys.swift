@@ -136,6 +136,8 @@ final class CarbonHotkeyDriver: RegisteredHotkeyDriver {
 @MainActor
 final class RegisteredHotkeys {
     private let driver: RegisteredHotkeyDriver
+    private let notificationCenter: NotificationCenter
+    private nonisolated(unsafe) var sessionObservers: [NSObjectProtocol] = []
     private var registrations: [RegisteredHotkeyChord: UInt32] = [:]
     private var pressed: Set<UInt32> = []
     private var bypassedKeyCodes: Set<UInt16> = []
@@ -144,9 +146,31 @@ final class RegisteredHotkeys {
     var onEvent: ((HotkeyShortcut, Bool) -> Void)?
     var onFailure: ((HotkeyShortcut, OSStatus) -> Void)?
 
-    init(driver: RegisteredHotkeyDriver) {
+    init(driver: RegisteredHotkeyDriver, notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter) {
         self.driver = driver
+        self.notificationCenter = notificationCenter
         driver.onEvent = { [weak self] id, down in self?.receive(id: id, down: down) }
+        // Key-up can be lost across sleep or fast user switching. Finish held
+        // actions both before leaving and on return, without rebuilding healthy
+        // registrations or treating the interruption as an Automatic-mode tap.
+        for name in [
+            NSWorkspace.willSleepNotification,
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.sessionDidResignActiveNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification,
+        ] {
+            self.sessionObservers.append(notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.releaseAll(interrupted: true)
+                }
+            })
+        }
+    }
+
+    deinit {
+        for observer in sessionObservers {
+            notificationCenter.removeObserver(observer)
+        }
     }
 
     func update(shortcuts: [HotkeyShortcut]) {

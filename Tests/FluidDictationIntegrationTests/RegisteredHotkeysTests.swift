@@ -204,6 +204,45 @@ final class RegisteredHotkeysTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionTransitionsRecoverLostReleaseWithoutReplacingRegistration() throws {
+        let transitions = [
+            NSWorkspace.willSleepNotification,
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.sessionDidResignActiveNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification,
+        ]
+        for transition in transitions {
+            let center = NotificationCenter()
+            let driver = FakeHotkeyDriver()
+            let hotkeys = RegisteredHotkeys(driver: driver, notificationCenter: center)
+            hotkeys.update(shortcuts: [HotkeyShortcut(keyCode: 49, modifierFlags: .option)])
+            let id = try XCTUnwrap(driver.registered.keys.first)
+            var edges: [Bool] = []
+            var interruptions: [Bool] = []
+            hotkeys.onEvent = { _, down in
+                edges.append(down)
+                if !down {
+                    interruptions.append(hotkeys.isInterruptingPress)
+                }
+            }
+            defer { hotkeys.onEvent = nil }
+            XCTAssertTrue(hotkeys.shouldBypassEventTap(keyCode: 49, modifiers: .option, down: true))
+            driver.onEvent?(id, true)
+            // The physical release is lost during sleep/session switching.
+            center.post(name: transition, object: nil)
+            XCTAssertFalse(hotkeys.hasPressedShortcut, transition.rawValue)
+            XCTAssertFalse(hotkeys.shouldBypassEventTap(keyCode: 49, modifiers: [], down: false))
+            driver.onEvent?(id, false) // late release after interruption
+            center.post(name: transition, object: nil) // repeated recovery is harmless
+            XCTAssertEqual(Array(driver.registered.keys), [id])
+            driver.onEvent?(id, true)
+            driver.onEvent?(id, false)
+            XCTAssertEqual(edges, [true, false, true, false], transition.rawValue)
+            XCTAssertEqual(interruptions, [true, false], transition.rawValue)
+        }
+    }
+
+    @MainActor
     func testReleaseAllBalancesEveryPressAndRejectsLateRelease() {
         let driver = FakeHotkeyDriver()
         let hotkeys = RegisteredHotkeys(driver: driver)
