@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FluidVoice C2 Diagnostic Stimulus — READY</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+  body { max-width: 46rem; margin: 5rem auto; padding: 0 2rem; background: #11151b; color: #e9eef6; }
+  button { font: inherit; font-weight: 650; padding: .8rem 1.1rem; border: 0; border-radius: .65rem;
+           color: #07111f; background: #7cc4ff; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  code { color: #9bd3ff; }
+  #status { margin-top: 1.25rem; min-height: 1.5rem; }
+</style>
+<h1>FluidVoice C2 diagnostic stimulus</h1>
+<p>
+  A deterministic 12-second, low-level sweep and speech-like tone for the selected-application
+  ScreenCaptureKit probe. No microphone or user data is read by this page.
+</p>
+<p>Browser master gain: <code>0.08</code>. FluidVoice still performs its own route checks.</p>
+<button id="start" type="button">Start 12-second diagnostic</button>
+<div id="status" role="status">Ready.</div>
+<script>
+  const button = document.querySelector('#start');
+  const status = document.querySelector('#status');
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    // Trial A uses the window title as a cross-process readiness handshake. The title is
+    // intentionally PLAYING only after this user gesture has resumed the AudioContext.
+    const context = new AudioContext({ sampleRate: 48000 });
+    await context.resume();
+    document.title = 'FluidVoice C2 Diagnostic Stimulus — PLAYING';
+    const t0 = context.currentTime + 0.20;
+    const master = context.createGain();
+    master.gain.setValueAtTime(0.08, t0);
+    master.connect(context.destination);
+
+    const sweep = context.createOscillator();
+    const sweepGain = context.createGain();
+    sweep.type = 'sine';
+    sweep.frequency.setValueAtTime(180, t0 + 0.50);
+    sweep.frequency.exponentialRampToValueAtTime(7800, t0 + 3.50);
+    sweepGain.gain.setValueAtTime(0, t0);
+    sweepGain.gain.setValueAtTime(0, t0 + 0.50);
+    sweepGain.gain.linearRampToValueAtTime(0.45, t0 + 0.55);
+    sweepGain.gain.setValueAtTime(0.45, t0 + 3.45);
+    sweepGain.gain.linearRampToValueAtTime(0, t0 + 3.50);
+    sweep.connect(sweepGain).connect(master);
+    sweep.start(t0);
+    sweep.stop(t0 + 3.55);
+
+    const voiced = context.createOscillator();
+    const voicedGain = context.createGain();
+    voiced.type = 'sawtooth';
+    voiced.frequency.setValueAtTime(115, t0 + 4.00);
+    voiced.frequency.linearRampToValueAtTime(145, t0 + 10.50);
+    voicedGain.gain.setValueAtTime(0, t0);
+    voicedGain.gain.setValueAtTime(0, t0 + 4.00);
+    for (let i = 0; i < 26; i++) {
+      const start = t0 + 4.00 + i * 0.25;
+      voicedGain.gain.linearRampToValueAtTime(0.28, start + 0.04);
+      voicedGain.gain.linearRampToValueAtTime(0.10, start + 0.19);
+      voicedGain.gain.linearRampToValueAtTime(0, start + 0.24);
+    }
+    voiced.connect(voicedGain).connect(master);
+    voiced.start(t0);
+    voiced.stop(t0 + 10.55);
+
+    const ticks = [];
+    for (let remaining = 12; remaining >= 1; remaining--) {
+      ticks.push(setTimeout(() => { status.textContent = `Playing: ${remaining}s remaining`; },
+                            (12 - remaining) * 1000));
+    }
+    setTimeout(async () => {
+      status.textContent = 'Complete.';
+      document.title = 'FluidVoice C2 Diagnostic Stimulus — COMPLETE';
+      await context.close();
+      button.disabled = false;
+    }, 12000);
+  });
+</script>

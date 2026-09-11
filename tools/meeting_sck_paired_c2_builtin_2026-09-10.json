@@ -1,0 +1,15 @@
+{
+  "captureDurationSeconds": 0,
+  "captureStarted": false,
+  "displayCount": 0,
+  "exitStatus": 1,
+  "microphoneAuthorizationPassed": true,
+  "rawPCMRetained": false,
+  "reason": "no display is available",
+  "schemaVersion": 1,
+  "screenRecordingPreflightPassed": true,
+  "status": "invalid",
+  "transcriptRetained": false,
+  "trial": "C2",
+  "valid": false
+}

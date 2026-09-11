@@ -8,8 +8,15 @@ nonisolated struct DelayEstimate: Equatable, Sendable {
 
 nonisolated enum TurnEchoVerdict: Equatable, Sendable {
     case echo
-    case containsLocalSpeech
+    /// Low playback explanation; not positive evidence of near-end speech.
+    case residualNotExplained
     case unknown
+
+    /// Stage A compatibility only: preserve the old truth table, including its unsafe rescue.
+    /// Never consult shadow admission here. Changing this rule requires calibrated enforcement.
+    func legacyEffectiveEcho(textEcho: Bool) -> Bool {
+        (textEcho || self == .echo) && self != .residualNotExplained
+    }
 }
 
 nonisolated struct EchoFrameScores: Equatable, Sendable {
@@ -17,8 +24,8 @@ nonisolated struct EchoFrameScores: Equatable, Sendable {
     let hopSeconds: Double
 }
 
-/// Separates far-end echo from local speech by correlating the mic against what the meeting app
-/// played. Calibrated on one 3.2-minute Zoom recording: pure echo scored median 0.62-0.82 with
+/// Measures how well playback explains microphone audio; cannot establish near-end speech.
+/// Historical calibration on one 3.2-minute Zoom recording: pure echo scored median 0.62-0.82 with
 /// low-runs of 0.24-0.59 s, local speech median 0.00-0.38 with low-runs of 0.96-10.27 s. Since the
 /// statistic is `1 - residual/mic`, additive double talk only rescues a turn when local speech
 /// carries ~1.86x the echo energy - true near the talker, false for a quiet interjection.
@@ -26,18 +33,18 @@ nonisolated enum MeetingEchoSignalScorer {
     static let frameLength = 1024
     static let hopLength = 256
     static let blockSeconds = 2.0
-    static let localSpeechFractionThreshold = 0.35
+    static let lowExplanationFractionThreshold = 0.35
     /// Calibrated against frame-*start* span, which undercounts coverage by 48 ms.
-    static let minimumLocalSpeechRunSeconds = 0.75
+    static let minimumLowExplanationRunSeconds = 0.75
     static let echoMedianThreshold = 0.5
-    /// The rescue's `minimumLocalSpeechRunSeconds` is absolute, so on a long turn it fires on a few
+    /// The rescue's `minimumLowExplanationRunSeconds` is absolute, so on a long turn it fires on a few
     /// percent of the span: measured 0.75s inside a 22.4s turn at median 0.91 — indistinguishable
     /// from a 21.5s turn at median 0.86 whose run happened to stop at 0.48s. A turn is only denied
     /// the rescue when it is BOTH overwhelmingly explained by the far end AND the low run is a
     /// trivial share of it; genuine double talk clears the share test (a 1.0s burst in a 3.0s turn
     /// is 33%), and calibrated mixed turns sit near median 0.38, far under the median test.
     static let overwhelminglyExplainedMedian = 0.8
-    static let minimumLocalSpeechRunFraction = 0.15
+    static let minimumLowExplanationRunFraction = 0.15
     static let minimumDelayConfidence = 8.0
     static let minimumSignalRMS: Float = 1e-4
     static let minimumScoreableFraction = 0.5
@@ -249,20 +256,20 @@ nonisolated enum MeetingEchoSignalScorer {
         let hopSeconds = scores.hopSeconds
         guard !explainedFractions.isEmpty else { return .unknown }
 
-        // Hiding real speech is the costly failure, so the rescue runs before the coverage gate;
-        // only the echo verdict requires enough scoreable frames.
+        // Stage A preserves historical ordering: low-explanation evidence precedes the coverage
+        // gate. The legacy display mapping rescues it, but it does not establish local speech.
         var longestLowRun = 0
         var currentRun = 0
         var gapRun = 0
         for value in explainedFractions {
-            if !value.isNaN, value < self.localSpeechFractionThreshold {
+            if !value.isNaN, value < self.lowExplanationFractionThreshold {
                 currentRun += 1
                 gapRun = 0
                 longestLowRun = max(longestLowRun, currentRun)
             } else if value.isNaN {
                 gapRun += 1
                 // A gap long enough to itself be a run means the thread is lost.
-                if Double(gapRun) * hopSeconds >= self.minimumLocalSpeechRunSeconds {
+                if Double(gapRun) * hopSeconds >= self.minimumLowExplanationRunSeconds {
                     currentRun = 0
                 }
             } else {
@@ -280,10 +287,10 @@ nonisolated enum MeetingEchoSignalScorer {
         let isTrivialRunInExplainedTurn = !median.isNaN
             && scoreableFraction >= requiredScoreableFraction
             && median >= self.overwhelminglyExplainedMedian
-            && lowRunFraction < self.minimumLocalSpeechRunFraction
+            && lowRunFraction < self.minimumLowExplanationRunFraction
 
-        if !isTrivialRunInExplainedTurn, lowRunSeconds >= self.minimumLocalSpeechRunSeconds {
-            return .containsLocalSpeech
+        if !isTrivialRunInExplainedTurn, lowRunSeconds >= self.minimumLowExplanationRunSeconds {
+            return .residualNotExplained
         }
 
         guard scoreableFraction >= requiredScoreableFraction else { return .unknown }

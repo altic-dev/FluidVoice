@@ -146,7 +146,7 @@ final class MeetingEchoSignalScorerTests: XCTestCase {
             mic: mic, reference: reference, sampleRate: self.sampleRate, delaySeconds: 0
         )
         let verdict = MeetingEchoSignalScorer.verdict(scores)
-        XCTAssertEqual(verdict, .containsLocalSpeech)
+        XCTAssertEqual(verdict, .residualNotExplained)
     }
 
     func testDoubleTalkBurstRescuesTurnAsLocalSpeech() {
@@ -171,7 +171,7 @@ final class MeetingEchoSignalScorerTests: XCTestCase {
             mic: mic, reference: reference, sampleRate: self.sampleRate, delaySeconds: Double(delaySamples) / self.sampleRate
         )
         let verdict = MeetingEchoSignalScorer.verdict(scores)
-        XCTAssertEqual(verdict, .containsLocalSpeech)
+        XCTAssertEqual(verdict, .residualNotExplained)
     }
 
     /// A long turn of pure bleed picks up a brief low-scoring run from estimation noise. Measured on
@@ -220,7 +220,7 @@ final class MeetingEchoSignalScorerTests: XCTestCase {
         let scores = MeetingEchoSignalScorer.explainedFractions(
             mic: mic, reference: reference, sampleRate: self.sampleRate, delaySeconds: Double(delaySamples) / self.sampleRate
         )
-        XCTAssertEqual(MeetingEchoSignalScorer.verdict(scores), .containsLocalSpeech)
+        XCTAssertEqual(MeetingEchoSignalScorer.verdict(scores), .residualNotExplained)
     }
 
     func testQuietAdditiveInterjectionDoesNotRescueTurn() {
@@ -294,7 +294,7 @@ final class MeetingEchoSignalScorerTests: XCTestCase {
         }
         let scores = EchoFrameScores(fractions: fractions, hopSeconds: self.hopSeconds)
         let verdict = MeetingEchoSignalScorer.verdict(scores)
-        XCTAssertEqual(verdict, .containsLocalSpeech)
+        XCTAssertEqual(verdict, .residualNotExplained)
     }
 
     func testExplainedFractionsAreClampedToUnitRange() {

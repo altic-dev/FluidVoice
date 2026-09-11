@@ -24,7 +24,13 @@ final nonisolated class FileLogger: @unchecked Sendable {
     private static let sigUnknownLine = Array("[CRASH] Fatal signal UNKNOWN\n".utf8)
 
     private init() {
+        #if FLUID_ASR_BASELINE
+        // Baseline runs log to an isolated per-process temp root, never user Library.
+        let baseDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("FluidASRBaseline-\(UUID().uuidString)", isDirectory: true)
+        #else
         let baseDirectory = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        #endif
         self.logDirectory = baseDirectory.appendingPathComponent("Logs/Fluid", isDirectory: true)
         self.logFileURL = self.logDirectory.appendingPathComponent("Fluid.log", isDirectory: false)
         self.backupLogURL = self.logDirectory.appendingPathComponent("Fluid.log.1", isDirectory: false)

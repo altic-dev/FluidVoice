@@ -1,6 +1,6 @@
 # Meeting Audio Freeze — Phase 0 Evidence Runbook
 
-This runbook classifies the meeting-start freeze before any production behavior is changed. Diagnostics are DEBUG-only and opt-in. They record numeric Core Audio topology events; they do not record audio, device names, meeting titles, window titles, URLs, or transcripts.
+This runbook classifies meeting audio freezes before any production behavior is changed, including the post-meeting stop/processing transition. Diagnostics are DEBUG-only and opt-in. They record numeric Core Audio topology events; they do not record audio, device names, meeting titles, window titles, URLs, or transcripts.
 
 ## Acceptance rule
 
@@ -40,6 +40,18 @@ tools/capture_audio_topology_stall.sh /tmp/fluidvoice-audio-evidence
 ```
 
 The script reads the newest marker, validates its PID, and immediately runs Apple's `sample` tool. If `sample` cannot attach, run it from an administrator terminal. For an unresolved kernel/daemon interaction, capture a sysdiagnose immediately afterward with Control-Option-Command-Shift-Period and note its timestamp. Do not attach sysdiagnose archives to the repository; they may contain unrelated private system data.
+
+## Meeting-end reproduction
+
+1. Launch the installed signed Debug app with diagnostics enabled as above.
+2. Start a meeting capture, keep both application and microphone audio active, then stop it normally.
+3. Leave the app untouched while capture finalization and transcription finish. If the UI stalls, do not force quit.
+4. Immediately run `tools/capture_audio_topology_stall.sh /tmp/fluidvoice-audio-evidence`.
+5. Preserve the trace, stall snapshot, process sample, selected input/output transport classes, meeting mode, OS/build identifiers, and exact commit.
+
+Interpret the final unmatched pair using its complete key: event category, owner, object ID, selector, scope, element, phase, and generation. `is_main_thread` reports the actual execution thread for each event; `queue_role` describes the intended delivery/control role. A callback begin without its matching end identifies an in-flight delivery. A main-hop begin without its end identifies work scheduled by a delivery that entered the main actor. Runtime, writer, output-listener release, AV capture stop, ScreenCaptureKit stop, processing, and activity-lease phases locate the owning meeting-end boundary. Always correlate this with the process sample; the trace alone does not prove the other side of a circular wait.
+
+The ring retains 8,192 events. If a device storm overwrites an unmatched begin before the watchdog snapshot, classification may be incomplete; record the observed sequence span and do not interpret absence of an open pair as proof that no operation was blocked.
 
 ## Controlled condition matrix
 

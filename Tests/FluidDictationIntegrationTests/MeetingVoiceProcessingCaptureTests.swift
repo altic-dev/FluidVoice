@@ -32,6 +32,36 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(decision, .voiceProcessing)
     }
 
+#if DEBUG
+    func testExplicitC2GateCanForcePairedScreenCaptureKitWithoutChangingDefault() {
+        let defaultDecision = MeetingCapturePathDecider.decide(
+            mode: .onlineCall, microphone: self.mic(), outputRoute: self.viableRoute()
+        )
+        let forcedDecision = MeetingCapturePathDecider.decide(
+            mode: .onlineCall, microphone: self.mic(), outputRoute: self.viableRoute(),
+            forcePairedScreenCaptureKit: true
+        )
+        XCTAssertEqual(defaultDecision, .voiceProcessing)
+        XCTAssertEqual(
+            forcedDecision,
+            .screenCaptureKit(reason: MeetingCapturePathDecider.diagnosticForceScreenCaptureKitReason)
+        )
+        guard case let .screenCaptureKit(reason) = forcedDecision else { return }
+        XCTAssertTrue(reason.contains("C2 diagnostic"))
+        XCTAssertTrue(reason.contains("not a production fallback"))
+    }
+
+    func testC2GateIsOnlyEnabledByExplicitEnvironmentValue() {
+        XCTAssertFalse(MeetingSCKPairedDiagnosticGate.enabled(environment: [:]))
+        XCTAssertFalse(MeetingSCKPairedDiagnosticGate.enabled(environment: [
+            MeetingSCKPairedDiagnosticGate.environmentKey: "true"
+        ]))
+        XCTAssertTrue(MeetingSCKPairedDiagnosticGate.enabled(environment: [
+            MeetingSCKPairedDiagnosticGate.environmentKey: "1"
+        ]))
+    }
+#endif
+
     func testDecisionDeclinesForInRoomMode() {
         let decision = MeetingCapturePathDecider.decide(mode: .inRoom, microphone: self.mic(), outputRoute: self.viableRoute())
         guard case .screenCaptureKit = decision else { return XCTFail("expected decline") }
@@ -66,6 +96,19 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
 
     func testDecisionDeclinesForHeadphonesDataSource() {
         let route = MeetingOutputRouteSnapshot(deviceExists: true, isBluetooth: false, isBuiltIn: true, isHeadphonesDataSource: true)
+        let decision = MeetingCapturePathDecider.decide(mode: .onlineCall, microphone: self.mic(), outputRoute: route)
+        guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
+        XCTAssertTrue(reason.contains("headphones"))
+    }
+
+    func testDecisionDeclinesForHeadphoneTerminalEvenWhenDataSourceIsUnknown() {
+        let route = MeetingOutputRouteSnapshot(
+            deviceExists: true,
+            isBluetooth: false,
+            isBuiltIn: true,
+            isHeadphonesDataSource: false,
+            terminalTypes: [kAudioStreamTerminalTypeHeadphones]
+        )
         let decision = MeetingCapturePathDecider.decide(mode: .onlineCall, microphone: self.mic(), outputRoute: route)
         guard case let .screenCaptureKit(reason) = decision else { return XCTFail("expected decline") }
         XCTAssertTrue(reason.contains("headphones"))

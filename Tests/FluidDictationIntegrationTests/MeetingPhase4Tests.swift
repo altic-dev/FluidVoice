@@ -82,12 +82,12 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
 
     func testContainsLocalSpeechRescueStillWinsUnderVoiceProcessing() {
         var vpioTurn = self.turn(start: 0, end: 3, text: "some text", overlapsRemote: false)
-        vpioTurn.signalVerdict = .containsLocalSpeech
+        vpioTurn.signalVerdict = .residualNotExplained
         vpioTurn.isLikelyEcho = true
         let (classified, _) = MeetingProcessingPipeline.classifyMicrophoneTurns(
             [vpioTurn], eras: self.singleEra(.voiceProcessing), applicationTrackID: nil, segments: [], fallbackSpeakerID: nil
         )
-        XCTAssertFalse(classified[0].effectiveEcho, "the rescue rule is untouched: containsLocalSpeech always wins")
+        XCTAssertFalse(classified[0].effectiveEcho, "the rescue rule is untouched: residualNotExplained always wins")
     }
 
     // MARK: - 3. Two-voice election via localSpeakerEvidence + selectLocalCluster (VPIO turns, all scored)

@@ -25,9 +25,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+            // Trial A and C2 autoruns must return before Core Audio observers, logging, AppServices, and UI
+            // startup. The autorun owns its bounded SCK stream and exits after one report.
+            if MeetingExternalReferenceTrialAAutorun.startIfRequested() {
+                return
+            }
+            if MeetingSCKPairedAutorun.startIfRequested() {
+                return
+            }
             // Must precede every Core Audio observer. Disabled unless explicitly
             // requested through the Phase 0 diagnostics environment.
             AudioTopologyDiagnostics.shared.startIfRequested()
+            // App-hosted XCTest otherwise starts the normal UI/audio services alongside the
+            // exclusive VPIO hardware probe. Keep that opt-in diagnostic launch isolated.
+            if ProcessInfo.processInfo.environment["FLUIDVOICE_MIC_PHASE1"] != nil
+                || ProcessInfo.processInfo.environment["FLUIDVOICE_VPIO_ACOUSTIC"] == "1"
+            {
+                return
+            }
         #endif
         // Bring up file logging + crash handlers immediately during launch.
         _ = FileLogger.shared

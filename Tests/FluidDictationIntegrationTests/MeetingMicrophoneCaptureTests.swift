@@ -60,6 +60,25 @@ final class MeetingMicrophoneCaptureTests: XCTestCase {
         [phase1] chunks=\(result.writerRotationCount) discontinuities=\(result.writerDiscontinuities) \
         backpressure=\(result.writerBackpressureEvents) health=\(result.finalHealthStatus) liveCopyNils=\(result.liveCopyNilCount)
         """)
+        if let readback = result.voiceProcessingReadback {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let json = String(decoding: try encoder.encode(readback), as: UTF8.self)
+            print("[phase1] voice-processing-readback=\n\(json)")
+        } else {
+            XCTFail("running VPIO capture did not produce a read-back snapshot")
+        }
+#if DEBUG
+        if let acoustic = result.acousticTrialB {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let json = String(decoding: try encoder.encode(acoustic), as: UTF8.self)
+            print("[phase0-trial-b] numeric-sidecar=\n\(json)")
+            XCTAssertEqual(acoustic.schemaVersion, MeetingVPIOAcousticTrialBReport.currentSchemaVersion)
+            XCTAssertFalse(acoustic.runs.isEmpty)
+            XCTAssertTrue(acoustic.stimulus.withinSafetyBounds)
+        }
+#endif
         XCTAssertGreaterThanOrEqual(validRate, 0.99)
         XCTAssertEqual(result.writerDiscontinuities, 0)
         XCTAssertEqual(result.writerBackpressureEvents, 0)
@@ -753,12 +772,19 @@ extension MeetingMicrophoneCaptureTests {
         MeetingMicrophoneIdentity(captureDeviceID: id, coreAudioUID: uid, displayName: name, role: role)
     }
 
-    func testElectionRoleTransfersOnlyWhenElectedDeviceEqualsOriginal() {
+    func testElectionSameDevicePreservesIdentityAndNeutralizesRole() {
         let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: .personal)
         let catalog = [original]
         let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: catalog, defaultInputUID: "uid-1")
+        var expected = original
+        expected.role = .unknown
+        XCTAssertEqual(elected.identity, expected)
         XCTAssertEqual(elected.identity.captureDeviceID, "dev-1")
-        XCTAssertEqual(elected.role, .personal)
+        XCTAssertEqual(elected.identity.coreAudioUID, "uid-1")
+        XCTAssertEqual(elected.identity.role, .unknown)
+        XCTAssertEqual(elected.role, .unknown)
+        XCTAssertNotEqual(elected.role, .personal)
+        XCTAssertNotEqual(elected.role, .shared)
     }
 
     func testElectionDifferentDeviceReturnsUnknown() {
@@ -770,11 +796,56 @@ extension MeetingMicrophoneCaptureTests {
         XCTAssertEqual(elected.role, .unknown)
     }
 
-    func testElectionFallsBackToOriginalWhenNoSystemDefault() {
+    func testElectionFallsBackToOriginalIdentityWithUnknownRoleWhenNoSystemDefault() {
         let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: .personal)
         let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: [original], defaultInputUID: nil)
-        XCTAssertEqual(elected.identity, original)
-        XCTAssertEqual(elected.role, .personal)
+        var expected = original
+        expected.role = .unknown
+        XCTAssertEqual(elected.identity, expected)
+        XCTAssertEqual(elected.identity.captureDeviceID, "dev-1")
+        XCTAssertEqual(elected.identity.coreAudioUID, "uid-1")
+        XCTAssertEqual(elected.identity.role, .unknown)
+        XCTAssertEqual(elected.role, .unknown)
+        XCTAssertNotEqual(elected.role, .personal)
+        XCTAssertNotEqual(elected.role, .shared)
+    }
+
+    func testElectionAndPreselectionNeverEmitLegacyPersonalOrSharedRoles() {
+        for legacyRole in [MeetingMicrophoneRole.personal, .shared] {
+            let original = self.micIdentity(id: "dev-1", uid: "uid-1", name: "MacBook Mic", role: legacyRole)
+            let sameDevice = MeetingCaptureDeviceElection.decide(
+                original: original, catalog: [original], defaultInputUID: "uid-1"
+            )
+            XCTAssertEqual(sameDevice.identity.captureDeviceID, "dev-1")
+            XCTAssertEqual(sameDevice.identity.coreAudioUID, "uid-1")
+            XCTAssertEqual(sameDevice.identity.role, .unknown)
+            XCTAssertEqual(sameDevice.role, .unknown)
+            XCTAssertNotEqual(sameDevice.role, .personal)
+            XCTAssertNotEqual(sameDevice.role, .shared)
+
+            let unmatchedDefault = MeetingCaptureDeviceElection.decide(
+                original: original, catalog: [original], defaultInputUID: "missing-uid"
+            )
+            var expectedFallback = original
+            expectedFallback.role = .unknown
+            XCTAssertEqual(unmatchedDefault.identity, expectedFallback)
+            XCTAssertEqual(unmatchedDefault.identity.captureDeviceID, "dev-1")
+            XCTAssertEqual(unmatchedDefault.identity.coreAudioUID, "uid-1")
+            XCTAssertEqual(unmatchedDefault.role, .unknown)
+
+            let selection = MeetingMicrophonePreselection.select(
+                identities: [original],
+                savedDeviceID: "dev-1",
+                savedRole: legacyRole,
+                systemDefaultUID: "uid-1",
+                preferredInputUID: nil,
+                systemDefaultCaptureID: nil
+            )
+            XCTAssertEqual(selection.deviceID, "dev-1")
+            XCTAssertEqual(selection.role, .unknown)
+            XCTAssertNotEqual(selection.role, .personal)
+            XCTAssertNotEqual(selection.role, .shared)
+        }
     }
 
     // MARK: Codable: captureEras
@@ -926,21 +997,29 @@ extension MeetingMicrophoneCaptureTests {
 
     // MARK: - Not covered here: phase-machine transitions (file-private, hardware-driven —
     // needs the Phase1 probe) and writer finalizationSlots saturation (no test seam exposed).
-    func testPreselectionBuiltInMicDefaultsToPersonalRole() {
+    func testPreselectionBuiltInMicDefaultsToUnknownRole() {
         let builtIn = MeetingMicrophoneIdentity(captureDeviceID: "built-in", coreAudioUID: "BuiltInMicrophoneDevice", displayName: "MacBook Pro Microphone")
         let selection = MeetingMicrophonePreselection.select(
             identities: [builtIn], savedDeviceID: "other-device", savedRole: .personal,
             systemDefaultUID: "BuiltInMicrophoneDevice", preferredInputUID: nil, systemDefaultCaptureID: nil
         )
         XCTAssertEqual(selection.deviceID, "built-in")
-        XCTAssertEqual(selection.role, .personal)
+        XCTAssertEqual(selection.role, .unknown)
+        XCTAssertNotEqual(selection.role, .personal)
+        XCTAssertNotEqual(selection.role, .shared)
     }
 
-    func testElectionBuiltInMicDefaultsToPersonalRole() {
+    func testElectionBuiltInMicDefaultsToUnknownRole() {
         let original = MeetingMicrophoneIdentity(captureDeviceID: "airpods", coreAudioUID: "EC:input", displayName: "AirPods", role: .personal)
         let builtIn = MeetingMicrophoneIdentity(captureDeviceID: "built-in", coreAudioUID: "BuiltInMicrophoneDevice", displayName: "MacBook Pro Microphone")
         let elected = MeetingCaptureDeviceElection.decide(original: original, catalog: [builtIn], defaultInputUID: "BuiltInMicrophoneDevice")
-        XCTAssertEqual(elected.role, .personal)
+        XCTAssertEqual(elected.identity.captureDeviceID, "built-in")
+        XCTAssertEqual(elected.identity.coreAudioUID, "BuiltInMicrophoneDevice")
+        XCTAssertEqual(elected.identity.displayName, "MacBook Pro Microphone")
+        XCTAssertEqual(elected.identity.role, .unknown)
+        XCTAssertEqual(elected.role, .unknown)
+        XCTAssertNotEqual(elected.role, .personal)
+        XCTAssertNotEqual(elected.role, .shared)
     }
 
 }

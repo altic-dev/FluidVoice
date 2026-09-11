@@ -52,6 +52,15 @@
 		803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803000000000000000000001 /* MediaPlaybackServiceTests.swift */; };
 		0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */; };
 		CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */; };
+		CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */; };
+		CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */; };
+		CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */; };
+		CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */; };
+		E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */; };
+		E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */; };
+		E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */; };
 		803000000000000000000003 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 803000000000000000000004 /* MediaRemoteAdapter */; };
 		B51800000000000000000002 /* SpokenSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51800000000000000000001 /* SpokenSendTests.swift */; };
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
@@ -60,6 +69,15 @@
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
+		A5B00000000000000000000B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B00000000000000000000C /* main.swift */; };
+		A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */; };
+		A5B000000000000000000013 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
+		A5B000000000000000000014 /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
+		A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		A5B000000000000000000016 /* TranscribeCpp in Frameworks */ = {isa = PBXBuildFile; productRef = 7C9A71012F58B00000FB7CAF /* TranscribeCpp */; };
+		A5B000000000000000000017 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
+		A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A5B000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +87,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 7C078D8E2E3B339200FB7CAC;
 			remoteInfo = fluid;
+		};
+		A5B000000000000000000021 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5B000000000000000000001;
+			remoteInfo = FluidASRBaselineHost;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -80,6 +105,17 @@
 			dstSubfolderSpec = 10;
 			files = (
 				7C5AF14C2F15041600DE21B0 /* MediaRemoteAdapter in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000008 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -131,15 +167,48 @@
 		803000000000000000000001 /* MediaPlaybackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackServiceTests.swift; sourceTree = "<group>"; };
 		0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFileExtensionsTests.swift; sourceTree = "<group>"; };
 		CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingOverlayModelsTests.swift; sourceTree = "<group>"; };
+		CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingConfigurationTests.swift; sourceTree = "<group>"; };
+		CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProviderOptionsTests.swift; sourceTree = "<group>"; };
+		CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingASRPreparationOwnerTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerTests.swift; sourceTree = "<group>"; };
+		CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceAttributionContractsTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedDiagnosticsTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedHardwareTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		A5B000000000000000000005 /* FluidASRBaselineHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluidASRBaselineHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B00000000000000000000C /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerReplayCLI.swift; sourceTree = "<group>"; };
+		A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluidASRBaselineHost.entitlements; sourceTree = "<group>"; };
+		A5B00000000000000000000E /* stage-inputs.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "stage-inputs.sh"; sourceTree = "<group>"; };
+		A5B00000000000000000000F /* placeholder.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = placeholder.json; sourceTree = "<group>"; };
+		A5B00000000000000000001D /* FluidASRBaselineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidASRBaselineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				fluidApp.swift,
+			);
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7C078D912E3B339200FB7CAC /* Sources/Fluid */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = Sources/Fluid;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000020 /* FluidASRBaselineTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FluidASRBaselineTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -166,6 +235,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
+				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
+				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
+				A5B000000000000000000017 /* AppUpdater in Frameworks */,
+				A5B000000000000000000013 /* FluidAudio in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B000000000000000000023 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -183,6 +272,8 @@
 			children = (
 				7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */,
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
+				A5B000000000000000000005 /* FluidASRBaselineHost.app */,
+				A5B00000000000000000001D /* FluidASRBaselineTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -191,6 +282,8 @@
 			isa = PBXGroup;
 			children = (
 				7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000010 /* FluidASRBaselineHost */,
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -242,6 +335,14 @@
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
 				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
+				CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */,
+				CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */,
+				CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */,
+				D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */,
+				CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */,
+				E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */,
+				E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */,
+				E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -268,6 +369,26 @@
 				7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000010 /* FluidASRBaselineHost */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000C /* main.swift */,
+				A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */,
+				A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */,
+				A5B00000000000000000000E /* stage-inputs.sh */,
+				A5B000000000000000000011 /* Inputs */,
+			);
+			path = FluidASRBaselineHost;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000011 /* Inputs */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000F /* placeholder.json */,
+			);
+			path = Inputs;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -322,6 +443,57 @@
 			productReference = 7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		A5B000000000000000000001 /* FluidASRBaselineHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */;
+			buildPhases = (
+				A5B000000000000000000006 /* Sources */,
+				A5B000000000000000000007 /* Frameworks */,
+				A5B000000000000000000008 /* Embed Frameworks */,
+				A5B000000000000000000009 /* Resources */,
+				A5B00000000000000000000A /* Stage ASR Baseline Inputs */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+			);
+			name = FluidASRBaselineHost;
+			packageProductDependencies = (
+				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
+				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
+				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
+				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+			);
+			productName = FluidASRBaselineHost;
+			productReference = A5B000000000000000000005 /* FluidASRBaselineHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A5B000000000000000000019 /* FluidASRBaselineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */;
+			buildPhases = (
+				A5B00000000000000000001E /* Sources */,
+				A5B00000000000000000001F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A5B000000000000000000022 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
+			);
+			name = FluidASRBaselineTests;
+			packageProductDependencies = (
+			);
+			productName = FluidASRBaselineTests;
+			productReference = A5B00000000000000000001D /* FluidASRBaselineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -336,6 +508,12 @@
 						CreatedOnToolsVersion = 26.0;
 					};
 					7CDB0A1F2F3C4D5600FB7CAD = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A5B000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A5B000000000000000000019 = {
 						CreatedOnToolsVersion = 26.0;
 					};
 				};
@@ -363,6 +541,8 @@
 			targets = (
 				7C078D8E2E3B339200FB7CAC /* fluid */,
 				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000001 /* FluidASRBaselineHost */,
+				A5B000000000000000000019 /* FluidASRBaselineTests */,
 			);
 		};
 /* End PBXProject section */
@@ -383,7 +563,38 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A5B00000000000000000000A /* Stage ASR Baseline Inputs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(FLUID_ASR_BASELINE_INPUTS)",
+				"$(SRCROOT)/Tests/FluidASRBaselineHost/stage-inputs.sh",
+			);
+			name = "Stage ASR Baseline Inputs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ASRBaselineInputs",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Tests/FluidASRBaselineHost/stage-inputs.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7C078D8B2E3B339200FB7CAC /* Sources */ = {
@@ -440,6 +651,31 @@
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
 				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
+				CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */,
+				CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */,
+				CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */,
+				D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */,
+				CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */,
+				E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */,
+				E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */,
+				E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B00000000000000000000B /* main.swift in Sources */,
+				A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -450,6 +686,11 @@
 			isa = PBXTargetDependency;
 			target = 7C078D8E2E3B339200FB7CAC /* fluid */;
 			targetProxy = 7CDB0A322F3C4D5600FB7CAD /* PBXContainerItemProxy */;
+		};
+		A5B000000000000000000022 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+			targetProxy = A5B000000000000000000021 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -738,6 +979,138 @@
 			};
 			name = Release;
 		};
+		A5B000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		A5B000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
+		A5B00000000000000000001B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Debug;
+		};
+		A5B00000000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -764,6 +1137,24 @@
 			buildConfigurations = (
 				7CDB0A342F3C4D5600FB7CAD /* Debug */,
 				7CDB0A352F3C4D5600FB7CAD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B000000000000000000003 /* Debug */,
+				A5B000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B00000000000000000001B /* Debug */,
+				A5B00000000000000000001C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

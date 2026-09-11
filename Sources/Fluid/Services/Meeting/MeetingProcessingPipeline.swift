@@ -913,13 +913,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         /// What the UI and exporter hide. Text and signal each get to say "echo", because they fail
         /// independently: ASR garbles bleed differently from the far end's own transcript, defeating
         /// text matching, while the signal reads it plainly (measured median 0.91 explained). Either
-        /// one is then vetoed by evidence of genuine local speech in the same turn.
+        /// one is then vetoed by a low-explanation run under the historical compatibility rule.
+        /// That run does not prove genuine local speech. Stage A preserves this behavior;
+        /// the separately calibrated shadow policy must not influence it.
         ///
         /// `isLikelyEcho` stays text-only and remains the sole input to the local-speaker election —
         /// signal evidence must never reach it, or a misclassification could elect the far-end
         /// cluster as "You" through the 1.75x winner rule.
         var effectiveEcho: Bool {
-            (self.isLikelyEcho || self.signalVerdict == .echo) && self.signalVerdict != .containsLocalSpeech
+            self.signalVerdict.legacyEffectiveEcho(textEcho: self.isLikelyEcho)
         }
     }
 
@@ -1084,7 +1086,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         var longestLowRun = 0
         var currentRun = 0
         for value in scores.fractions {
-            if !value.isNaN, value < MeetingEchoSignalScorer.localSpeechFractionThreshold {
+            if !value.isNaN, value < MeetingEchoSignalScorer.lowExplanationFractionThreshold {
                 currentRun += 1
                 longestLowRun = max(longestLowRun, currentRun)
             } else if !value.isNaN {
@@ -2237,7 +2239,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             entry.seconds += max(0, turn.end - turn.start)
             breakdown[turn.signalVerdict] = entry
         }
-        let verdictDescription = [TurnEchoVerdict.echo, .containsLocalSpeech, .unknown].map { verdict -> String in
+        let verdictDescription = [TurnEchoVerdict.echo, .residualNotExplained, .unknown].map { verdict -> String in
             let entry = breakdown[verdict] ?? (0, 0)
             return String(format: "%@=%d/%.1fs", String(describing: verdict), entry.count, entry.seconds)
         }.joined(separator: " ")

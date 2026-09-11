@@ -218,10 +218,10 @@ final class MeetingEchoVetoTests: XCTestCase {
                 isLikelyEcho: isLikelyEcho, echoScored: true, signalVerdict: signalVerdict
             )
         }
-        XCTAssertFalse(turn(isLikelyEcho: true, signalVerdict: .containsLocalSpeech).effectiveEcho)
+        XCTAssertFalse(turn(isLikelyEcho: true, signalVerdict: .residualNotExplained).effectiveEcho)
         XCTAssertTrue(turn(isLikelyEcho: true, signalVerdict: .echo).effectiveEcho)
         XCTAssertTrue(turn(isLikelyEcho: true, signalVerdict: .unknown).effectiveEcho)
-        XCTAssertFalse(turn(isLikelyEcho: false, signalVerdict: .containsLocalSpeech).effectiveEcho)
+        XCTAssertFalse(turn(isLikelyEcho: false, signalVerdict: .residualNotExplained).effectiveEcho)
         // Signal-only echo: ASR garbles bleed differently from the far end's own transcript, so
         // text matching misses it while the signal reads it plainly (measured median 0.91).
         XCTAssertTrue(turn(isLikelyEcho: false, signalVerdict: .echo).effectiveEcho)
@@ -270,7 +270,7 @@ final class MeetingEchoVetoTests: XCTestCase {
             from: turns(signalVerdict: .unknown), prototypeSpeakerIDs: prototypeSpeakerIDs
         )
         let localSpeechResult = MeetingProcessingPipeline.selectLocalCluster(
-            from: turns(signalVerdict: .containsLocalSpeech), prototypeSpeakerIDs: prototypeSpeakerIDs
+            from: turns(signalVerdict: .residualNotExplained), prototypeSpeakerIDs: prototypeSpeakerIDs
         )
         let echoResult = MeetingProcessingPipeline.selectLocalCluster(
             from: turns(signalVerdict: .echo), prototypeSpeakerIDs: prototypeSpeakerIDs

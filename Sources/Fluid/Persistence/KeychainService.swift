@@ -26,7 +26,13 @@ final class KeychainService {
     private let service = "com.fluidvoice.provider-api-keys"
     private let account = "fluidApiKeys"
 
-    private init() {}
+    private init() {
+        // The ASR baseline host must never touch credentials; any transitive
+        // `SettingsStore.shared` initialization reaches this stored-property singleton.
+        #if FLUID_ASR_BASELINE
+        fatalError("KeychainService is unavailable in the ASR baseline host")
+        #endif
+    }
 
     // MARK: - Public API
 

@@ -76,18 +76,34 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             else { throw MeetingCaptureError.applicationNotSelected }
 
             let outputRoute = Self.currentOutputRouteSnapshot()
+#if DEBUG
+            let forcePairedScreenCaptureKit = MeetingSCKPairedDiagnosticGate.enabled()
+#else
+            let forcePairedScreenCaptureKit = false
+#endif
             let decision = MeetingCapturePathDecider.decide(
                 mode: configuration.mode,
                 microphone: configuration.microphone,
-                outputRoute: outputRoute
+                outputRoute: outputRoute,
+                forcePairedScreenCaptureKit: forcePairedScreenCaptureKit
             )
             switch decision {
             case let .screenCaptureKit(reason):
                 let protection = MeetingRawMicrophoneProtection.classify(outputRoute)
+#if DEBUG
+                let captureDecisionMessage = reason == MeetingCapturePathDecider.diagnosticForceScreenCaptureKitReason
+                    ? "C2 diagnostic forced paired ScreenCaptureKit; this is not a production fallback."
+                    : "Meeting voice-processing capture declined: \(reason)"
+                DebugLogger.shared.log(
+                    captureDecisionMessage,
+                    source: "MeetingCaptureEngine"
+                )
+#else
                 DebugLogger.shared.log(
                     "Meeting voice-processing capture declined: \(reason)",
                     source: "MeetingCaptureEngine"
                 )
+#endif
                 eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
                 try await microphoneWriter.updateTrackMetadata { track in
                     track.captureEras = [MeetingCaptureEra(
@@ -459,6 +475,11 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+#if DEBUG
+    private let pairedDiagnosticCollector: MeetingSCKPairedDiagnosticCollector
+    private var pairedDiagnosticProvenanceFailureReported = false
+    private var pairedDiagnosticReportEmitted = false
+#endif
     private let stateLock = NSLock()
     private var stream: SCStream
     private var scope: MeetingCaptureScope
@@ -500,6 +521,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
+#if DEBUG
+        self.pairedDiagnosticCollector = MeetingSCKPairedDiagnosticCollector()
+#endif
         super.init()
     }
 
@@ -687,6 +711,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     func stop() async throws {
+#if DEBUG
+        defer { self.emitPairedDiagnosticReportIfNeeded() }
+#endif
         #if DEBUG
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop)
         defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .screenCapture, queueRole: .actorControl, phase: .screenCaptureStop) }
@@ -732,9 +759,15 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         guard shouldAccept else { return }
         switch outputType {
         case .audio:
+#if DEBUG
+            self.recordPairedDiagnostic(sampleBuffer, output: .applicationAudio)
+#endif
             self.applicationWriter.enqueue(sampleBuffer)
             self.liveAudioHandler?(.applicationAudio, sampleBuffer)
         case .microphone:
+#if DEBUG
+            self.recordPairedDiagnostic(sampleBuffer, output: .microphone)
+#endif
             self.microphoneWriter.enqueue(sampleBuffer)
             if self.microphoneTranscriptGate.observeAndAdmit(sampleBuffer) {
                 self.liveAudioHandler?(.microphone, sampleBuffer)
@@ -745,6 +778,64 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             break
         }
     }
+
+#if DEBUG
+    /// Captures only callback-boundary numeric metadata. The selected-app scope assertion is
+    /// reconstructed from the active SCK filter; no application identity enters the diagnostic.
+    private func recordPairedDiagnostic(_ sampleBuffer: CMSampleBuffer, output: MeetingSCKPairedOutput) {
+        guard self.pairedDiagnosticCollector.enabled else { return }
+        let scope = self.stateLock.withLock { self.scope }
+        let diagnosticScope: MeetingSCKPairedDiagnosticScope
+        switch scope {
+        case .window: diagnosticScope = .selectedApplicationWindow
+        case .display: diagnosticScope = .selectedApplicationDisplay
+        }
+        let provenance = MeetingSCKPairedDiagnosticProvenance(
+            scope: diagnosticScope,
+            applicationSelectionConfirmed: true
+        )
+        let accepted = self.pairedDiagnosticCollector.record(
+            sampleBuffer: sampleBuffer,
+            output: output,
+            provenance: provenance
+        )
+        guard !accepted else { return }
+        let shouldReport = self.stateLock.withLock { () -> Bool in
+            guard !self.pairedDiagnosticProvenanceFailureReported else { return false }
+            self.pairedDiagnosticProvenanceFailureReported = true
+            return true
+        }
+        if shouldReport {
+            let message = "SCK paired diagnostic callback rejected due to scope/provenance change."
+            Task { @MainActor in
+                DebugLogger.shared.warning(message, source: "MeetingSCKPairedDiagnostics")
+            }
+        }
+    }
+
+    private func emitPairedDiagnosticReportIfNeeded() {
+        guard self.pairedDiagnosticCollector.enabled else { return }
+        let shouldEmit = self.stateLock.withLock { () -> Bool in
+            guard !self.pairedDiagnosticReportEmitted else { return false }
+            self.pairedDiagnosticReportEmitted = true
+            return true
+        }
+        guard shouldEmit else { return }
+        do {
+            let data = try self.pairedDiagnosticCollector.report().jsonData()
+            let json = String(decoding: data, as: UTF8.self)
+            let message = "SCK paired diagnostic report " + json
+            Task { @MainActor in
+                DebugLogger.shared.log(message, source: "MeetingSCKPairedDiagnostics")
+            }
+        } catch {
+            let message = "SCK paired diagnostic report serialization failed."
+            Task { @MainActor in
+                DebugLogger.shared.warning(message, source: "MeetingSCKPairedDiagnostics")
+            }
+        }
+    }
+#endif
 
     /// A raw ScreenCaptureKit microphone has no producer handoff. Close live admission at the
     /// observation boundary and persist a new unprotected era from that point forward. Historical
@@ -2102,10 +2193,14 @@ final nonisolated class MeetingAsyncTaskChain: @unchecked Sendable {
 
 /// Pure decision table. Capture safety is independent of semantic speaker ownership.
 nonisolated enum MeetingCapturePathDecider {
+    static let diagnosticForceScreenCaptureKitReason =
+        "DEBUG C2 diagnostic forced paired ScreenCaptureKit; not a production fallback."
+
     static func decide(
         mode: MeetingCaptureMode,
         microphone: MeetingMicrophoneIdentity,
-        outputRoute: MeetingOutputRouteSnapshot
+        outputRoute: MeetingOutputRouteSnapshot,
+        forcePairedScreenCaptureKit: Bool = false
     ) -> MeetingCapturePathDecision {
         guard mode == .onlineCall else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
@@ -2116,6 +2211,11 @@ nonisolated enum MeetingCapturePathDecider {
         if let reason = Self.outputRouteDeclineReason(outputRoute) {
             return .screenCaptureKit(reason: reason)
         }
+#if DEBUG
+        if forcePairedScreenCaptureKit {
+            return .screenCaptureKit(reason: Self.diagnosticForceScreenCaptureKitReason)
+        }
+#endif
         return .voiceProcessing
     }
 
@@ -2125,6 +2225,9 @@ nonisolated enum MeetingCapturePathDecider {
         guard !outputRoute.isBluetooth else { return "The output device is Bluetooth." }
         guard outputRoute.isBuiltIn else { return "The output device is not the built-in speakers." }
         guard !outputRoute.isHeadphonesDataSource else { return "The output route is headphones." }
+        guard !outputRoute.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones) else {
+            return "The output stream terminal is headphones."
+        }
         return nil
     }
 }
