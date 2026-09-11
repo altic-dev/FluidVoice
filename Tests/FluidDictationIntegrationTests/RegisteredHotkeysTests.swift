@@ -44,6 +44,61 @@ final class RegisteredHotkeysTests: XCTestCase {
     }
 
     @MainActor
+    func testRequestsExclusiveOwnershipAndFallsBackWhenDenied() {
+        var attempted = false
+        let driver = CarbonHotkeyDriver { _, _, _, _, options, _ in
+            attempted = true
+            XCTAssertEqual(options, OptionBits(kEventHotKeyExclusive))
+            return OSStatus(eventHotKeyExistsErr)
+        }
+        let hotkeys = RegisteredHotkeys(driver: driver)
+        hotkeys.update(shortcuts: [HotkeyShortcut(keyCode: 49, modifierFlags: .option)])
+        XCTAssertTrue(attempted)
+        XCTAssertFalse(hotkeys.shouldBypassEventTap(keyCode: 49, modifiers: .option, down: true))
+    }
+
+    @MainActor
+    func testNativeConflictRetainsEventTapFallbackUntilOwnerReleases() throws {
+        let shortcut = HotkeyShortcut(keyCode: 80, modifierFlags: [.control, .option])
+        let chord = try XCTUnwrap(RegisteredHotkeyChord(shortcut))
+        let owner = CarbonHotkeyDriver()
+        let status = owner.register(chord, id: 1)
+        guard status == noErr else { throw XCTSkip("Native registration unavailable: \(status)") }
+        defer { owner.unregister(id: 1) }
+        let hotkeys = RegisteredHotkeys(driver: CarbonHotkeyDriver())
+        var failures: [OSStatus] = []
+        hotkeys.onFailure = { _, status in failures.append(status) }
+        hotkeys.update(shortcuts: [shortcut])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertFalse(hotkeys.shouldBypassEventTap(keyCode: 80, modifiers: [.control, .option], down: true))
+        owner.unregister(id: 1)
+        hotkeys.update(shortcuts: [shortcut])
+        XCTAssertTrue(hotkeys.shouldBypassEventTap(keyCode: 80, modifiers: [.control, .option], down: true))
+    }
+
+    @MainActor
+    func testInterruptionIsVisibleDuringReleaseAndDoesNotLeakToNextPress() throws {
+        let driver = FakeHotkeyDriver()
+        let hotkeys = RegisteredHotkeys(driver: driver)
+        hotkeys.update(shortcuts: [HotkeyShortcut(keyCode: 49, modifierFlags: .option)])
+        let id = try XCTUnwrap(driver.registered.keys.first)
+        var interruptions: [Bool] = []
+        hotkeys.onEvent = { _, down in
+            if !down {
+                interruptions.append(hotkeys.isInterruptingPress)
+            }
+        }
+        defer { hotkeys.onEvent = nil }
+        driver.onEvent?(id, true)
+        hotkeys.releaseAll(interrupted: true)
+        driver.onEvent?(id, false) // stale physical release must not finish twice
+        XCTAssertFalse(hotkeys.isInterruptingPress)
+        driver.onEvent?(id, true)
+        driver.onEvent?(id, false)
+        XCTAssertEqual(interruptions, [true, false])
+    }
+
+    @MainActor
     func testChordEligibilityPreservesPlainKeysAndModifierOnlyShortcuts() {
         let optionSpace = HotkeyShortcut(keyCode: 49, modifierFlags: .option)
         XCTAssertEqual(RegisteredHotkeyChord(optionSpace)?.shortcut, optionSpace)

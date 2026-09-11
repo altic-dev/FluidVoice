@@ -1652,7 +1652,7 @@ final class GlobalHotkeyManager: NSObject {
         let press = self.finishAutomaticPress(for: type)
         let duration = String(format: "%.2f", press.duration)
 
-        if press.duration < self.automaticTapThresholdSeconds {
+        if !self.registeredHotkeys.isInterruptingPress, press.duration < self.automaticTapThresholdSeconds {
             if press.wasTargetActive {
                 DebugLogger.shared.info("\(label) tap (\(duration)s) - stopping", source: "GlobalHotkeyManager")
                 self.stopRecordingIfNeeded()
@@ -2415,7 +2415,7 @@ final class GlobalHotkeyManager: NSObject {
 
     func reinitialize() {
         DebugLogger.shared.info("Manual reinitialization requested", source: "GlobalHotkeyManager")
-        self.registeredHotkeys.releaseAll()
+        self.registeredHotkeys.releaseAll(interrupted: true)
 
         self.initializationTask?.cancel()
         self.healthCheckTask?.cancel()
@@ -2489,7 +2489,7 @@ extension GlobalHotkeyManager {
     }
 
     func shortcutCaptureDidChange() {
-        self.registeredHotkeys.releaseAll()
+        self.registeredHotkeys.releaseAll(interrupted: true)
         self.resetModifierOnlyShortcutTracking(preservePendingReleaseStops: true)
         self.refreshRegisteredHotkeys()
     }

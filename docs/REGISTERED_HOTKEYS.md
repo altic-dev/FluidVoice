@@ -5,10 +5,10 @@ Recording chords such as Option + Space use Carbon's `RegisterEventHotKey` rathe
 ## Routing
 
 - `RegisteredHotkeyChord` selects keyboard shortcuts with ordinary modifiers. Plain keys, modifier-only combinations, Fn combinations, and mouse buttons remain on the existing event-tap path.
-- `CarbonHotkeyDriver` owns native registrations and the pressed/released event handler. Its lifetime releases both. Registration failures are logged with the OSStatus and retain the event-tap fallback.
+- `CarbonHotkeyDriver` owns exclusive native registrations and the pressed/released event handler. Exclusive registration makes competing owners report a failure instead of silently accepting an undeliverable registration. Its lifetime releases both. Registration failures are logged with the OSStatus and retain the event-tap fallback.
 - `RegisteredHotkeys` deduplicates identical registrations and repeated pressed events, balances releases, and remembers which physical key events should pass through the event tap to Carbon. Release ownership does not depend on the modifier still being held.
 - `GlobalHotkeyManager` sends registered events directly into its existing keyboard routing. The constructed CGEvent is never posted into the system event stream. Toggle, hold, automatic, and mode-selection logic stay shared.
-- Editing shortcuts temporarily unregisters chords so the recorder can receive them. Configuration changes complete active registered presses before changing their meaning. Event-tap recovery preserves a held registered shortcut.
+- Editing shortcuts temporarily unregisters chords so the recorder can receive them. Configuration changes complete active registered presses before changing their meaning. Shortcut capture and manual reinitialization mark their releases as interruptions so Automatic mode stops even a short press instead of treating it as a tap to continue recording. Event-tap recovery preserves a held registered shortcut.
 - Cancel and paste-last remain context-sensitive event-tap actions. They are not newly claimed as unconditional global registrations.
 
 The manager logs Secure Input transitions separately from event-tap health. It does not disable Secure Input in another application or claim that restarting an event tap overrides that protection. Failed/unsupported registrations remain susceptible to Secure Input.

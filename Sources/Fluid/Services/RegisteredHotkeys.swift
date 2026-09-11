@@ -49,6 +49,14 @@ protocol RegisteredHotkeyDriver: AnyObject {
 /// Event Input prevents general keyboard observation. All calls run on the main loop.
 @MainActor
 final class CarbonHotkeyDriver: RegisteredHotkeyDriver {
+    typealias RegisterHotkey = (UInt32, UInt32, EventHotKeyID, EventTargetRef?, OptionBits, UnsafeMutablePointer<EventHotKeyRef?>?) -> OSStatus
+
+    private let registerHotkey: RegisterHotkey
+
+    init(registerHotkey: @escaping RegisterHotkey = RegisterEventHotKey) {
+        self.registerHotkey = registerHotkey
+    }
+
     private let signature: OSType = UInt32.random(in: 1...UInt32.max)
     var onEvent: ((UInt32, Bool) -> Void)?
     private nonisolated(unsafe) var handler: EventHandlerRef?
@@ -93,12 +101,12 @@ final class CarbonHotkeyDriver: RegisteredHotkeyDriver {
             guard status == noErr else { return status }
         }
         var reference: EventHotKeyRef?
-        let status = RegisterEventHotKey(
+        let status = self.registerHotkey(
             UInt32(chord.keyCode),
             chord.modifiers,
             EventHotKeyID(signature: self.signature, id: id),
             GetApplicationEventTarget(),
-            0,
+            OptionBits(kEventHotKeyExclusive),
             &reference
         )
         if status == noErr, let reference {
@@ -132,6 +140,7 @@ final class RegisteredHotkeys {
     private var pressed: Set<UInt32> = []
     private var bypassedKeyCodes: Set<UInt16> = []
     private var nextID: UInt32 = 1
+    private(set) var isInterruptingPress = false
     var onEvent: ((HotkeyShortcut, Bool) -> Void)?
     var onFailure: ((HotkeyShortcut, OSStatus) -> Void)?
 
@@ -187,7 +196,12 @@ final class RegisteredHotkeys {
         !self.pressed.isEmpty
     }
 
-    func releaseAll() {
+    func releaseAll(interrupted: Bool = false) {
+        // The callback runs synchronously, so recording logic can distinguish an
+        // interruption from a physical release without losing the held state.
+        let previous = self.isInterruptingPress
+        self.isInterruptingPress = interrupted
+        defer { self.isInterruptingPress = previous }
         for id in self.pressed {
             self.receive(id: id, down: false)
         }
