@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -515,6 +516,15 @@ struct MeetingTranscriptionView: View {
                 }
                 Spacer()
                 HStack(spacing: 8) {
+                    if let sourceFileURL = self.sourceFileURL(for: entry) {
+                        Button(action: {
+                            NSWorkspace.shared.activateFileViewerSelecting([sourceFileURL])
+                        }) {
+                            Image(systemName: "folder")
+                        }
+                        .disabled(!FileManager.default.fileExists(atPath: sourceFileURL.path))
+                        .help("Show original file")
+                    }
                     Button(action: { self.copyToClipboard(entry.text) }) {
                         Image(systemName: "doc.on.doc")
                     }
@@ -663,6 +673,10 @@ struct MeetingTranscriptionView: View {
         } catch {
             DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
         }
+    }
+
+    private func sourceFileURL(for entry: FileTranscriptionEntry) -> URL? {
+        entry.sourceFilePath.map { URL(fileURLWithPath: $0) }
     }
 
     private func formatFileSize(fileURL: URL) -> String {

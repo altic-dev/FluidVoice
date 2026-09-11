@@ -392,6 +392,7 @@ enum ASRStopOutcome: Equatable {
 final class ASRService: ObservableObject {
     private static let finalTranscriptionStatusDelayNanoseconds: UInt64 = 100_000_000
     private static let streamingDrainTimeoutNanoseconds: UInt64 = 30_000_000_000
+    private let audioCaptureCoordinator = AudioCaptureCoordinator.shared
 
     nonisolated static func shouldAssessShortAudioSilence(
         isEnabled: Bool,
@@ -522,6 +523,12 @@ final class ASRService: ObservableObject {
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
+    }
+
+    var isMicrophonePreviewRunningOrStarting: Bool {
+        self.isMicrophonePreviewRequested
+            || self.isMicrophonePreviewActive
+            || self.audioCapturePipeline.isLevelMonitoringEnabled
     }
 
     private let audioCaptureReadinessGate = AudioCaptureReadinessGate()
@@ -776,10 +783,41 @@ final class ASRService: ObservableObject {
         SettingsStore.shared.selectedSpeechModel.displayName
     }
 
-    /// Exposes the transcription provider for file transcription (MeetingTranscriptionService)
-    /// This allows file transcription to work with any provider (Parakeet, Whisper, etc.)
-    var fileTranscriptionProvider: TranscriptionProvider {
-        self.transcriptionProvider
+    struct FileTranscriptionProviderContext {
+        fileprivate let provider: TranscriptionProvider
+        let isReady: Bool
+        let prefersNativeFileTranscription: Bool
+        let name: String
+    }
+
+    var fileTranscriptionProviderContext: FileTranscriptionProviderContext {
+        let provider = self.transcriptionProvider
+        return FileTranscriptionProviderContext(
+            provider: provider,
+            isReady: provider.isReady,
+            prefersNativeFileTranscription: provider.prefersNativeFileTranscription,
+            name: provider.name
+        )
+    }
+
+    func transcribeFile(
+        _ fileURL: URL,
+        using context: FileTranscriptionProviderContext
+    ) async throws -> ASRTranscriptionResult {
+        let provider = context.provider
+        return try await self.transcriptionExecutor.run { [provider] in
+            try await provider.transcribeFile(at: fileURL)
+        }
+    }
+
+    func transcribe(
+        _ samples: [Float],
+        using context: FileTranscriptionProviderContext
+    ) async throws -> ASRTranscriptionResult {
+        let provider = context.provider
+        return try await self.transcriptionExecutor.run { [provider] in
+            try await provider.transcribe(samples)
+        }
     }
 
     private func currentTranscriptionAnalyticsDimensions() -> (provider: String, model: String) {
@@ -1134,6 +1172,10 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.debug("Audio capture prewarm skipped - app is terminating", source: "ASRService")
             return
         }
+        guard self.audioCaptureCoordinator.owner != .call else {
+            DebugLogger.shared.debug("Audio capture prewarm skipped - call capture active", source: "ASRService")
+            return
+        }
         guard self.micStatus == .authorized else {
             DebugLogger.shared.debug("Audio engine prewarm skipped - mic not authorized", source: "ASRService")
             return
@@ -1175,6 +1217,7 @@ final class ASRService: ObservableObject {
         guard self.isTerminating == false,
               self.isRunning == false,
               self.isStarting == false || allowDuringRouteRecovery,
+              self.audioCaptureCoordinator.owner != .call,
               self.hasPreparedAudioCapture == false
         else {
             DebugLogger.shared.debug(
@@ -1868,6 +1911,7 @@ final class ASRService: ObservableObject {
         guard self.micStatus == .authorized,
               self.isRunning == false,
               self.isStarting == false,
+              self.audioCaptureCoordinator.owner != .call,
               self.isTerminating == false
         else { return }
 
@@ -2074,6 +2118,13 @@ final class ASRService: ObservableObject {
         }
         guard self.isTerminating == false else {
             DebugLogger.shared.warning("START() blocked - app is terminating", source: "ASRService")
+            return .failed
+        }
+        guard self.audioCaptureCoordinator.reserve(for: .dictation) else {
+            DebugLogger.shared.warning(
+                "START() blocked - another audio capture workflow is active",
+                source: "ASRService"
+            )
             return .failed
         }
         self.audioCaptureStartGeneration &+= 1
@@ -2580,6 +2631,9 @@ final class ASRService: ObservableObject {
 
     private func finishAudioCaptureStart() {
         self.isStarting = false
+        if self.isRunning == false {
+            self.audioCaptureCoordinator.release(for: .dictation)
+        }
         let deferredRecovery = self.deferredBluetoothStartupRouteRecovery.take()
         self.audioCaptureStateDidSettle.send()
         let waiters = self.audioCaptureStartWaiters
@@ -2730,6 +2784,7 @@ final class ASRService: ObservableObject {
                 self.recordingBufferHandoffGate.complete(bufferHandoffToken)
             }
             self.publishStoppedState(for: stoppingSessionID)
+            self.audioCaptureCoordinator.release(for: .dictation)
             self.finishDeferredStopUIInvalidation()
             if self.benchmarkSessionID == stoppingSessionID {
                 self.isStoppingFinalTranscription = false
@@ -3112,7 +3167,6 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("🚫 Publishing isRunning = false...", source: "ASRService")
         self.beginDeferredStopUIInvalidation()
         self.isRunning = false
-        self.isStoppingFinalTranscription = false
         DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
         Task { @MainActor [weak self] in
             await Task.yield()
@@ -3309,6 +3363,7 @@ final class ASRService: ObservableObject {
 
         // CRITICAL: Set isRunning to false FIRST to signal any in-flight chunks to abort early
         self.isRunning = false
+        defer { self.audioCaptureCoordinator.release(for: .dictation) }
         self.audioCapturePipeline.setRecordingEnabled(false)
 
         // Stop monitoring device

@@ -1055,6 +1055,8 @@ struct ContentView: View {
         switch destination {
         case .customDictionary:
             self.navigateToApp(.customDictionary)
+        case .meetingTools:
+            self.navigateToApp(.meetingTools)
         case .microphoneSettings:
             self.openSettings(.audio)
         case .settings:
