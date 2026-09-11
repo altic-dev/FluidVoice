@@ -1,12 +1,11 @@
 import Foundation
 
-/// Serializes ASR workflows that cannot safely share stateful transcription providers.
+/// Coordinates call and dictation workflow ownership.
 @MainActor
 final class AudioCaptureCoordinator {
     enum Owner: Hashable {
         case call
         case dictation
-        case file
     }
 
     static let shared = AudioCaptureCoordinator()

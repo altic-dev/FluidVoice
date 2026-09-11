@@ -783,10 +783,41 @@ final class ASRService: ObservableObject {
         SettingsStore.shared.selectedSpeechModel.displayName
     }
 
-    /// Exposes the transcription provider for file transcription (MeetingTranscriptionService)
-    /// This allows file transcription to work with any provider (Parakeet, Whisper, etc.)
-    var fileTranscriptionProvider: TranscriptionProvider {
-        self.transcriptionProvider
+    struct FileTranscriptionProviderContext {
+        fileprivate let provider: TranscriptionProvider
+        let isReady: Bool
+        let prefersNativeFileTranscription: Bool
+        let name: String
+    }
+
+    var fileTranscriptionProviderContext: FileTranscriptionProviderContext {
+        let provider = self.transcriptionProvider
+        return FileTranscriptionProviderContext(
+            provider: provider,
+            isReady: provider.isReady,
+            prefersNativeFileTranscription: provider.prefersNativeFileTranscription,
+            name: provider.name
+        )
+    }
+
+    func transcribeFile(
+        _ fileURL: URL,
+        using context: FileTranscriptionProviderContext
+    ) async throws -> ASRTranscriptionResult {
+        let provider = context.provider
+        return try await self.transcriptionExecutor.run { [provider] in
+            try await provider.transcribeFile(at: fileURL)
+        }
+    }
+
+    func transcribe(
+        _ samples: [Float],
+        using context: FileTranscriptionProviderContext
+    ) async throws -> ASRTranscriptionResult {
+        let provider = context.provider
+        return try await self.transcriptionExecutor.run { [provider] in
+            try await provider.transcribe(samples)
+        }
     }
 
     private func currentTranscriptionAnalyticsDimensions() -> (provider: String, model: String) {

@@ -429,16 +429,6 @@ final class MeetingTranscriptionService: ObservableObject {
         let options = requestedOptions ?? .userSettings
         self.error = nil
 
-        let coordinator = AudioCaptureCoordinator.shared
-        guard coordinator.reserve(for: .file) else {
-            let error = TranscriptionError.transcriptionFailed(
-                "Another transcription is already using the speech recognition model."
-            )
-            self.error = error.localizedDescription
-            throw error
-        }
-        defer { coordinator.release(for: .file) }
-
         self.isTranscribing = true
         self.fallbackNotice = nil
         self.progress = 0.0
@@ -480,7 +470,7 @@ final class MeetingTranscriptionService: ObservableObject {
             try await self.ensureModelsReady()
 
             // Get the current transcription provider (works for both Parakeet and Whisper)
-            let provider = self.asrService.fileTranscriptionProvider
+            let provider = self.asrService.fileTranscriptionProviderContext
             guard provider.isReady else {
                 throw TranscriptionError.modelLoadFailed("Transcription provider not ready")
             }
@@ -548,7 +538,7 @@ final class MeetingTranscriptionService: ObservableObject {
                     source: "MeetingTranscriptionService"
                 )
 
-                let nativeResult = try await provider.transcribeFile(at: fileURL)
+                let nativeResult = try await self.asrService.transcribeFile(fileURL, using: provider)
                 let processingTime = Date().timeIntervalSince(startTime)
                 let result = TranscriptionResult(
                     text: nativeResult.text,
@@ -638,7 +628,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 }
 
                 // Transcribe this chunk using the provider (works for both Parakeet and Whisper)
-                let chunkResult = try await provider.transcribe(samples)
+                let chunkResult = try await self.asrService.transcribe(samples, using: provider)
 
                 if !chunkResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     allTranscriptions.append(chunkResult.text)
@@ -735,7 +725,7 @@ final class MeetingTranscriptionService: ObservableObject {
     /// full-file transcription path instead.
     private func transcribeFileWithSpeakerLabels(
         _ fileURL: URL,
-        provider: TranscriptionProvider,
+        provider: ASRService.FileTranscriptionProviderContext,
         duration: Double,
         startTime: Date,
         expectedSpeakerCount: Int?
@@ -850,7 +840,7 @@ final class MeetingTranscriptionService: ObservableObject {
     private func transcribeSpeakerTurn(
         _ turn: SpeakerDiarizationService.SpeakerTurn,
         from audioFile: AVAudioFile,
-        provider: TranscriptionProvider
+        provider: ASRService.FileTranscriptionProviderContext
     ) async throws -> SpeakerTurnTranscription {
         // Bound memory for unusually long single-speaker stretches. Providers remain free to
         // apply their own model-specific, energy-aware chunking within each request.
@@ -877,7 +867,7 @@ final class MeetingTranscriptionService: ObservableObject {
             )
             guard samples.count >= 16_000 else { return nil }
 
-            let chunkResult = try await provider.transcribe(samples)
+            let chunkResult = try await self.asrService.transcribe(samples, using: provider)
             return SpeakerChunkTranscription(
                 text: chunkResult.text,
                 confidence: chunkResult.confidence

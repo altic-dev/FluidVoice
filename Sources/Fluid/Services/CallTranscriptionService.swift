@@ -82,11 +82,7 @@ final class CallTranscriptionService: ObservableObject {
         }
         self.isWaitingForDictation = true
         while !self.audioCaptureCoordinator.reserve(for: .call) {
-            guard let owner = self.audioCaptureCoordinator.owner else { continue }
-            if owner == .file {
-                self.status = "Waiting for file transcription to finish..."
-            }
-            await self.audioCaptureCoordinator.waitUntilReleased(owner)
+            await self.audioCaptureCoordinator.waitUntilReleased(.dictation)
             guard !self.isTerminating else {
                 self.isWaitingForDictation = false
                 return
