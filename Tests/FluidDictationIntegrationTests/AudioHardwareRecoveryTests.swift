@@ -342,6 +342,146 @@ final class AudioHardwareRecoveryTests: XCTestCase {
     }
 }
 
+final class MonitorTopologyRecoveryTests: XCTestCase {
+    func testDisplayTopologyChangeRefreshesUnchangedPreparedInputOnlyOnce() async throws {
+        let input = RecoveryInput()
+        let controller = makeDefaultRecoveryController(input)
+        let old = try await controller.prepare(deviceID: 144, deviceName: "Test", reason: "before_display")
+        for _ in 0..<100 {
+            controller.noteHardwareTopologyChanged()
+        }
+        // Even a prewarm during topology churn is refreshed at actual demand.
+        _ = try await controller.prepare(deviceID: 144, deviceName: "Test", reason: "idle_prewarm")
+        XCTAssertEqual(input.count("invalidate"), 0)
+        let fresh = try await controller.start(deviceID: 144, deviceName: "Test", reason: "after_display")
+        XCTAssertGreaterThan(fresh.generation, old.generation)
+        XCTAssertEqual(input.count("prepare"), 2)
+        XCTAssertEqual(input.count("invalidate"), 1)
+        input.emit()
+        XCTAssertEqual(input.count("delivered"), 1)
+        _ = await controller.stop(retainPrepared: true, reason: "stop")
+        let reused = try await controller.start(deviceID: 144, deviceName: "Test", reason: "ordinary_next_start")
+        XCTAssertEqual(reused.generation, fresh.generation)
+        XCTAssertEqual(input.count("prepare"), 2)
+        XCTAssertEqual(input.count("invalidate"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testDisplayChangeDoesNotInterruptRunningAudioButRefreshesAfterStop() async throws {
+        let input = RecoveryInput()
+        let controller = makeDefaultRecoveryController(input)
+        let running = try await controller.start(deviceID: 144, deviceName: "Test", reason: "running")
+        controller.noteHardwareTopologyChanged()
+        input.emit()
+        XCTAssertEqual(input.count("delivered"), 1)
+        XCTAssertEqual(input.count("stop"), 0)
+        XCTAssertEqual(input.count("invalidate"), 0)
+        XCTAssertEqual(controller.snapshot.phase, .running)
+        _ = await controller.stop(retainPrepared: true, reason: "user_stop")
+        let fresh = try await controller.start(deviceID: 144, deviceName: "Test", reason: "next_start")
+        XCTAssertGreaterThan(fresh.generation, running.generation)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testRunningPreviewHandoffDoesNotDiscardOpeningAudioAfterDisplayChange() async throws {
+        let input = RecoveryInput()
+        let controller = makeDefaultRecoveryController(input)
+        let preview = try await controller.start(deviceID: 144, deviceName: "Test", reason: "preview")
+        controller.noteHardwareTopologyChanged()
+        let handoff = try await controller.start(deviceID: 144, deviceName: "Test", reason: "handoff")
+        input.emit()
+        XCTAssertEqual(handoff.generation, preview.generation)
+        XCTAssertEqual(input.count("start"), 1)
+        XCTAssertEqual(input.count("stop"), 0)
+        XCTAssertEqual(input.count("invalidate"), 0)
+        XCTAssertEqual(input.count("delivered"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testCancelledStartupDiscoveryReturnsWhileHALIsBlockedAndLeavesCaptureAlone() async throws {
+        let input = RecoveryInput(block: "query")
+        defer { input.release.signal() }
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in input.record("delivered") },
+            inputFactory: { _, handler in input.setHandler(handler); return input },
+            fingerprintReader: { _ in input.formatFingerprint },
+            installsHardwareListeners: false,
+            deviceSnapshotReader: { _ in input.perform("query"); return .init(devices: [], defaultInputUID: nil) },
+            onFormatInvalidated: { _ in }
+        )
+        _ = try await controller.start(deviceID: 144, deviceName: "Test", reason: "existing_capture")
+        let query = Task { try await controller.readCaptureDeviceSnapshot() }
+        try await waitForEvent(input, "query")
+        let began = ProcessInfo.processInfo.systemUptime
+        query.cancel()
+        do { _ = try await query.value; XCTFail("Cancelled discovery must fail") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.2)
+        input.emit()
+        XCTAssertEqual(input.count("delivered"), 1)
+        XCTAssertEqual(input.count("invalidate"), 0)
+        XCTAssertFalse(controller.isRecoveringHardware)
+        do { _ = try await controller.readCaptureDeviceSnapshot(); XCTFail("Do not pile up blocked queries") }
+        catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
+        XCTAssertEqual(input.count("query"), 1)
+        input.release.signal()
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testFailedHardwareRetirementWaitHasDeadlineWithoutStartingReplacement() async throws {
+        let input = RecoveryInput(block: "start")
+        defer { input.release.signal() }
+        let controller = makeRecoveryController(input, timeout: 0.08)
+        _ = try? await controller.start(deviceID: 144, deviceName: "Test", reason: "blocked")
+        let began = ProcessInfo.processInfo.systemUptime
+        let available = await controller.waitForPendingHardwareRetirement()
+        XCTAssertFalse(available)
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.5)
+        XCTAssertEqual(input.count("start"), 1)
+        XCTAssertEqual(input.count("invalidate"), 0)
+        input.release.signal()
+        try await waitForRecovery(controller)
+        await controller.shutdown(reason: "test_complete")
+    }
+
+    func testAbnormalStopReleasesBlockedStartOnceAndRejectsLateGenerationEvents() async throws {
+        let input = RecoveryInput(block: "start")
+        defer { input.release.signal() }
+        let controller = DirectCoreAudioLifecycleController(
+            packetHandler: { _, _, _, _, _ in input.record("delivered") },
+            inputFactory: { _, handler in input.setHandler(handler); return input },
+            fingerprintReader: { _ in input.formatFingerprint },
+            installsHardwareListeners: false,
+            onFormatInvalidated: { _ in input.record("notification") }
+        )
+        let starting = Task { try await controller.start(deviceID: 144, deviceName: "Test", reason: "blocked") }
+        try await waitForEvent(input, "start")
+        let generation = controller.snapshot.generation
+        let began = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<100 {
+            controller.simulateAbnormalStopNotificationForTesting(generation: generation)
+        }
+        do { _ = try await starting.value; XCTFail("Known failed startup must release its caller") }
+        catch { XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure) }
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 0.2)
+        XCTAssertEqual(input.count("notification"), 1)
+        XCTAssertEqual(input.count("invalidate"), 0, "Native startup still owns the resources")
+        XCTAssertEqual(input.count("open"), 0)
+        _ = try? await controller.start(deviceID: 144, deviceName: "Test", reason: "unsafe_retry")
+        XCTAssertEqual(input.count("start"), 1)
+        input.release.signal()
+        try await waitForRecovery(controller)
+        let fresh = try await controller.start(deviceID: 144, deviceName: "Test", reason: "safe_retry")
+        XCTAssertGreaterThan(fresh.generation, generation)
+        controller.simulateAbnormalStopNotificationForTesting(generation: generation)
+        XCTAssertEqual(input.count("notification"), 1)
+        XCTAssertEqual(controller.snapshot.phase, .running)
+        input.emit()
+        XCTAssertEqual(input.count("delivered"), 1)
+        await controller.shutdown(reason: "test_complete")
+    }
+}
+
 /// This same class is also run against the original controller for comparison.
 final class NormalAudioCaptureCompatibilityTests: XCTestCase {
     func testHealthySlowNativeStartsAtFiveAndTenSecondsSucceed() async throws {
@@ -535,6 +675,123 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
 
 #if canImport(FluidVoice_Debug)
 final class AudioRouteRecoveryIntegrationTests: XCTestCase {
+    @MainActor
+    func testFailedRecoveryCancelsWaitingRetryAndResumesMediaBeforeNativeCleanup() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.8) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let first = Task { await fixture.service.start(forDictionaryTraining: true) }
+            try await fixture.waitForBuiltInStartCount(1)
+            await fixture.service.cancelPendingAudioCaptureStart(reason: "injected_user_cancel")
+            let firstOutcome = await first.value
+            XCTAssertEqual(firstOutcome, .failed)
+            XCTAssertTrue(fixture.controller.isRecoveringHardware)
+
+            let transport = RecoveryMediaTransport()
+            let media = MediaPlaybackService(transport: transport, settle: {})
+            fixture.service.useMediaPlaybackForTesting(media)
+            SettingsStore.shared.pauseMediaDuringTranscription = true
+            let retry = Task { await fixture.service.start(forDictionaryTraining: true) }
+            for _ in 0..<200 {
+                if await transport.commands == [.pause] { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            await media.waitUntilSettled()
+            let paused = await transport.commands
+            XCTAssertEqual(paused, [.pause])
+            XCTAssertTrue(fixture.service.isStarting)
+            var failurePresentations = 0
+            let observation = fixture.service.audioCaptureFailurePresented.sink {
+                failurePresentations += 1
+                XCTAssertTrue(fixture.service.showError)
+                XCTAssertEqual(fixture.service.errorTitle, "Recording Stopped")
+            }
+            defer { observation.cancel() }
+            let began = ProcessInfo.processInfo.systemUptime
+            await fixture.service.failAudioRouteRecoveryForTesting()
+            let retryOutcome = await retry.value
+            await media.waitUntilSettled()
+            let elapsed = ProcessInfo.processInfo.systemUptime - began
+            print("MONITOR_RECOVERY_TEST failed_recovery_release_ms=\(elapsed * 1000)")
+            XCTAssertLessThan(elapsed, 0.2)
+            XCTAssertEqual(retryOutcome, .failed)
+            XCTAssertFalse(fixture.service.isStarting)
+            XCTAssertFalse(fixture.service.isRunning)
+            XCTAssertTrue(fixture.service.showError)
+            XCTAssertEqual(failurePresentations, 1)
+            XCTAssertTrue(fixture.controller.isRecoveringHardware)
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 1)
+            let resumed = await transport.commands
+            XCTAssertEqual(resumed, [.pause, .play])
+            try await waitForRecovery(fixture.controller)
+            let afterDrain = await transport.commands
+            XCTAssertEqual(afterDrain, [.pause, .play], "Late cleanup must not change playback or restart recording")
+            XCTAssertFalse(fixture.service.isRunning)
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
+    func testStaleRecoveryFailureCannotStopNewRecordingOrResumeItsMedia() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let transport = RecoveryMediaTransport()
+            let media = MediaPlaybackService(transport: transport, settle: {})
+            fixture.service.useMediaPlaybackForTesting(media)
+            SettingsStore.shared.pauseMediaDuringTranscription = true
+            let outcome = await fixture.service.start(forDictionaryTraining: true)
+            XCTAssertEqual(outcome, .started)
+            await media.waitUntilSettled()
+            var failurePresentations = 0
+            let observation = fixture.service.audioCaptureFailurePresented.sink { failurePresentations += 1 }
+            defer { observation.cancel() }
+            await fixture.service.failAudioRouteRecoveryForTesting(stale: true)
+            await media.waitUntilSettled()
+            XCTAssertTrue(fixture.service.isRunning)
+            XCTAssertFalse(fixture.service.showError)
+            XCTAssertEqual(failurePresentations, 0)
+            let commands = await transport.commands
+            XCTAssertEqual(commands, [.pause])
+            await fixture.service.stopWithoutTranscription()
+            await media.waitUntilSettled()
+            let stopped = await transport.commands
+            XCTAssertEqual(stopped, [.pause, .play])
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
+    func testCancelDuringSlowStartupDiscoveryKeepsMainThreadResponsive() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0.6) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            var failurePresentations = 0
+            let observation = fixture.service.audioCaptureFailurePresented.sink { failurePresentations += 1 }
+            defer { observation.cancel() }
+            let starting = Task { await fixture.service.start(forDictionaryTraining: true) }
+            for _ in 0..<200 {
+                if fixture.hardware.queryCount > 0 { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(fixture.hardware.queryCount, 1)
+            let began = ProcessInfo.processInfo.systemUptime
+            await fixture.service.cancelPendingAudioCaptureStart(reason: "cancel_during_device_query")
+            let outcome = await starting.value
+            let elapsed = ProcessInfo.processInfo.systemUptime - began
+            print("MONITOR_RECOVERY_TEST cancelled_discovery_release_ms=\(elapsed * 1000)")
+            XCTAssertLessThan(elapsed, 0.2)
+            XCTAssertEqual(outcome, .failed)
+            XCTAssertFalse(fixture.service.isStarting)
+            XCTAssertFalse(fixture.service.isRunning)
+            XCTAssertFalse(fixture.service.showError)
+            XCTAssertEqual(failurePresentations, 0)
+            try await Task.sleep(nanoseconds: 650_000_000)
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 0)
+            fixture.assertSettingsPreserved()
+        }
+    }
+
     @MainActor
     func testCancellingCallerTaskCancelsNativeStartupAndStaysQuiet() async throws {
         try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.15) { fixture in
@@ -926,6 +1183,21 @@ private final class ASRRecoveryFixture {
     }
 
     func restoreSettings() { self.restore() }
+}
+
+private actor RecoveryMediaTransport: MediaPlaybackTransport {
+    private var playing = true
+    private(set) var commands: [MediaPlaybackCommand] = []
+
+    func query() async -> MediaPlaybackQueryResult {
+        .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
+    }
+
+    func send(_ command: MediaPlaybackCommand) async -> MediaPlaybackCommandResult {
+        self.commands.append(command)
+        self.playing = command == .play
+        return .helperCompleted
+    }
 }
 
 private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {

@@ -10,10 +10,11 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
         case timedOut
         case recovering
         case cleanupFailed
+        case deviceStopped
 
         var errorDescription: String? {
             switch self {
-            case .timedOut, .recovering:
+            case .timedOut, .recovering, .deviceStopped:
                 "The microphone is not responding. Try again shortly. If it remains unavailable, quit and reopen FluidVoice."
             case .cleanupFailed:
                 "The microphone could not be reset safely. Quit and reopen FluidVoice before recording again."
@@ -189,6 +190,12 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
     /// No work is created when startup has already finished.
     func cancelPendingOperations() {
         self.interrupt(requestID: nil, error: CancellationError())
+    }
+
+    /// A device notification can establish failure before a native call returns.
+    /// The caller is released, but cleanup still waits behind the native owner.
+    func failPendingOperationsAfterDeviceStopped() {
+        self.interrupt(requestID: nil, error: Failure.deviceStopped)
     }
 
     private func interrupt(requestID: UUID?, error: Error) {
