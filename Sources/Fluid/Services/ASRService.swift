@@ -2753,6 +2753,7 @@ final class ASRService: ObservableObject {
                 self.recordingBufferHandoffGate.complete(bufferHandoffToken)
             }
             self.publishStoppedState(for: stoppingSessionID)
+            self.audioCaptureCoordinator.release(for: .dictation)
             self.finishDeferredStopUIInvalidation()
             if self.benchmarkSessionID == stoppingSessionID {
                 self.isStoppingFinalTranscription = false
@@ -3135,8 +3136,6 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("🚫 Publishing isRunning = false...", source: "ASRService")
         self.beginDeferredStopUIInvalidation()
         self.isRunning = false
-        self.isStoppingFinalTranscription = false
-        self.audioCaptureCoordinator.release(for: .dictation)
         DebugLogger.shared.debug("✅ isRunning disabled", source: "ASRService")
         Task { @MainActor [weak self] in
             await Task.yield()
