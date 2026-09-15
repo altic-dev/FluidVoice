@@ -2239,6 +2239,19 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Records a position the overlay controller has already applied to the window, with
+    /// the display arrangement it was chosen on.
+    ///
+    /// Deliberately does not post `OverlayCustomOriginChanged`: that notification exists to
+    /// tell the controller a position was changed from somewhere else — Reset Position, a
+    /// restored backup — and the overlay is by definition already sitting at this one.
+    /// Settings still observes the change, so the Reset Position row appears on first drag.
+    func storeDraggedOverlayOrigin(_ origin: CGPoint, screenFrames: [CGRect]) {
+        objectWillChange.send()
+        self.overlayCustomOriginScreenFrames = screenFrames
+        self.defaults.set([origin.x, origin.y], forKey: Keys.overlayCustomOrigin)
+    }
+
     /// Sends the overlay back to its default anchored position.
     /// This is the way back when the overlay has been dragged off screen.
     func resetOverlayCustomOrigin() {

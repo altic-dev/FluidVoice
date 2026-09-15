@@ -62,10 +62,6 @@ final class BottomOverlayWindowController {
     /// would otherwise read the pre-drag origin and snap the overlay out from under the
     /// pointer.
     private var liveCustomOrigin: NSPoint?
-    /// Origin-changed notifications this controller is about to post itself. The observer
-    /// consumes one per coalesced write, so it can tell its own write from an external one
-    /// without inspecting state a drag may already have moved on from.
-    private var selfPostedOriginChanges = 0
     private var isApplyingProgrammaticFrame = false
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
@@ -90,19 +86,14 @@ final class BottomOverlayWindowController {
             // debounce window run first and write the dragged origin back over a reset.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if self.selfPostedOriginChanges > 0 {
-                    // This controller's own coalesced write. Memory already holds what was
-                    // just stored, and the pointer may have moved on and queued a newer
-                    // save in the meantime, which must not be cancelled.
-                    self.selfPostedOriginChanges -= 1
-                } else {
-                    // Reset Position, or a restored backup. A save still queued from a drag
-                    // would otherwise land afterwards and undo it, and a live origin left
-                    // in place would outrank the new one for the rest of the process.
-                    self.pendingOriginSave?.cancel()
-                    self.pendingOriginSave = nil
-                    self.liveCustomOrigin = SettingsStore.shared.overlayCustomOrigin
-                }
+                // Only ever an external change — Reset Position, or a restored backup — as
+                // this controller's own writes go through `storeDraggedOverlayOrigin` and
+                // post nothing. A save still queued from a drag would otherwise land
+                // afterwards and undo it, and a live origin left in place would outrank
+                // the new one for the rest of the process.
+                self.pendingOriginSave?.cancel()
+                self.pendingOriginSave = nil
+                self.liveCustomOrigin = SettingsStore.shared.overlayCustomOrigin
                 self.positionWindow()
             }
         }
@@ -535,14 +526,9 @@ final class BottomOverlayWindowController {
                 let screens = Self.currentScreenFrames()
                 self.liveCustomOrigin = origin
                 self.pendingOriginSave?.cancel()
-                let save = DispatchWorkItem { [weak self] in
+                let save = DispatchWorkItem {
                     MainActor.assumeIsolated {
-                        guard let self else { return }
-                        // Setting the origin posts exactly one change notification; claim
-                        // it before it is posted. Storing the arrangement posts none.
-                        self.selfPostedOriginChanges += 1
-                        SettingsStore.shared.overlayCustomOriginScreenFrames = screens
-                        SettingsStore.shared.overlayCustomOrigin = origin
+                        SettingsStore.shared.storeDraggedOverlayOrigin(origin, screenFrames: screens)
                     }
                 }
                 self.pendingOriginSave = save
