@@ -2200,8 +2200,33 @@ final class SettingsStore: ObservableObject {
                 self.defaults.set([newValue.x, newValue.y], forKey: Keys.overlayCustomOrigin)
             } else {
                 self.defaults.removeObject(forKey: Keys.overlayCustomOrigin)
+                self.defaults.removeObject(forKey: Keys.overlayCustomOriginDesktopFrame)
             }
             NotificationCenter.default.post(name: NSNotification.Name("OverlayCustomOriginChanged"), object: nil)
+        }
+    }
+
+    /// The desktop area (the union of all screen frames) as it was when the overlay
+    /// position was chosen. Used to tell a position the user deliberately dragged
+    /// past a screen edge from one stranded by a display that is no longer attached.
+    var overlayCustomOriginDesktopFrame: CGRect? {
+        get {
+            guard let values = self.defaults.array(forKey: Keys.overlayCustomOriginDesktopFrame) as? [Double],
+                  values.count == 4
+            else {
+                return nil
+            }
+            return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        }
+        set {
+            if let newValue {
+                self.defaults.set(
+                    [newValue.origin.x, newValue.origin.y, newValue.size.width, newValue.size.height],
+                    forKey: Keys.overlayCustomOriginDesktopFrame
+                )
+            } else {
+                self.defaults.removeObject(forKey: Keys.overlayCustomOriginDesktopFrame)
+            }
         }
     }
 
@@ -5580,6 +5605,7 @@ private extension SettingsStore {
         // Overlay Position
         static let overlayPosition = "OverlayPosition"
         static let overlayCustomOrigin = "OverlayCustomOrigin"
+        static let overlayCustomOriginDesktopFrame = "OverlayCustomOriginDesktopFrame"
         static let notchPresentationMode = "NotchPresentationMode"
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"

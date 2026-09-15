@@ -1475,7 +1475,7 @@ struct SettingsView: View {
                                         Text("Bottom Offset")
                                             .font(self.theme.typography.bodyStrong)
                                             .foregroundStyle(self.settingsTitleText)
-                                        Text("Distance from bottom of screen")
+                                        Text("Distance from bottom of screen. Drag the overlay itself to place it anywhere.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
                                     }

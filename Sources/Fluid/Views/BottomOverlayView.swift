@@ -506,6 +506,7 @@ final class BottomOverlayWindowController {
                 self.pendingOriginSave?.cancel()
                 let save = DispatchWorkItem {
                     MainActor.assumeIsolated {
+                        SettingsStore.shared.overlayCustomOriginDesktopFrame = Self.currentDesktopFrame()
                         SettingsStore.shared.overlayCustomOrigin = origin
                     }
                 }
@@ -513,6 +514,38 @@ final class BottomOverlayWindowController {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: save)
             }
         }
+    }
+
+    /// The whole desktop area, i.e. the union of every attached screen's frame.
+    private static func currentDesktopFrame() -> CGRect {
+        NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+    }
+
+    private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 1
+            && abs(lhs.minY - rhs.minY) < 1
+            && abs(lhs.width - rhs.width) < 1
+            && abs(lhs.height - rhs.height) < 1
+    }
+
+    /// Whether a stored position should still be used.
+    ///
+    /// On the same display arrangement the position is honoured exactly, so an
+    /// overlay deliberately dragged past a screen edge stays there. Once the
+    /// arrangement changes it is only reused while the overlay would remain
+    /// reachable; otherwise a position chosen on a display that has since been
+    /// unplugged would leave the overlay invisible, with nothing to grab.
+    private static func storedOriginIsUsable(_ origin: NSPoint, size: NSSize) -> Bool {
+        let desktop = self.currentDesktopFrame()
+        guard !desktop.isNull else { return false }
+
+        if let saved = SettingsStore.shared.overlayCustomOriginDesktopFrame,
+           self.framesMatch(saved, desktop)
+        {
+            return true
+        }
+
+        return desktop.intersects(NSRect(origin: origin, size: size))
     }
 
     /// Moves the panel without the move being mistaken for a user drag.
@@ -590,7 +623,9 @@ final class BottomOverlayWindowController {
 
         // A position the user dragged to wins over the anchored default, including
         // positions past a screen edge. Settings offers "Reset Position" to undo it.
-        if let customOrigin = SettingsStore.shared.overlayCustomOrigin {
+        if let customOrigin = SettingsStore.shared.overlayCustomOrigin,
+           Self.storedOriginIsUsable(customOrigin, size: window.frame.size)
+        {
             self.setFrameOriginProgrammatically(customOrigin)
             return
         }
