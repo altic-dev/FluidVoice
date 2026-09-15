@@ -85,7 +85,10 @@ final class BottomOverlayWindowController {
             }
         }
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayCustomOriginChanged"), object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            // Handled on the run loop turn that posted it, as the drag observer is.
+            // Deferring into a Task would let a save scheduled for the tail of the
+            // debounce window run first and write the dragged origin back over a reset.
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.selfPostedOriginChanges > 0 {
                     // This controller's own coalesced write. Memory already holds what was
