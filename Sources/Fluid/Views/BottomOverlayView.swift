@@ -83,13 +83,13 @@ final class BottomOverlayWindowController {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayCustomOriginChanged"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if SettingsStore.shared.overlayCustomOrigin == nil {
-                    // Reset Position. A save still queued from a drag would otherwise
-                    // land afterwards and put the overlay back where it was dragged.
-                    self.pendingOriginSave?.cancel()
-                    self.pendingOriginSave = nil
-                    self.liveCustomOrigin = nil
-                }
+                // Settings changed from somewhere other than a drag in flight — Reset
+                // Position, or a restored backup. A save still queued from a drag would
+                // otherwise land afterwards and undo it, and a live origin left in place
+                // would outrank the new one for the rest of the process.
+                self.pendingOriginSave?.cancel()
+                self.pendingOriginSave = nil
+                self.liveCustomOrigin = SettingsStore.shared.overlayCustomOrigin
                 self.positionWindow()
             }
         }
@@ -516,11 +516,15 @@ final class BottomOverlayWindowController {
                 // didMove fires on every step of a drag; only the write is coalesced,
                 // so that the position in memory is never behind the pointer.
                 let origin = window.frame.origin
+                // Sampled now rather than when the write runs: a display unplugged inside
+                // the debounce window would otherwise pair this origin with an arrangement
+                // it was never chosen on, which reads as a match and strands the overlay.
+                let screens = Self.currentScreenFrames()
                 self.liveCustomOrigin = origin
                 self.pendingOriginSave?.cancel()
                 let save = DispatchWorkItem {
                     MainActor.assumeIsolated {
-                        SettingsStore.shared.overlayCustomOriginScreenFrames = Self.currentScreenFrames()
+                        SettingsStore.shared.overlayCustomOriginScreenFrames = screens
                         SettingsStore.shared.overlayCustomOrigin = origin
                     }
                 }
