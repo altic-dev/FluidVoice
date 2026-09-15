@@ -2183,6 +2183,34 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Origin the user dragged the recording overlay to, in screen coordinates.
+    /// `nil` means the overlay uses its default anchored placement.
+    var overlayCustomOrigin: CGPoint? {
+        get {
+            guard let values = self.defaults.array(forKey: Keys.overlayCustomOrigin) as? [Double],
+                  values.count == 2
+            else {
+                return nil
+            }
+            return CGPoint(x: values[0], y: values[1])
+        }
+        set {
+            objectWillChange.send()
+            if let newValue {
+                self.defaults.set([newValue.x, newValue.y], forKey: Keys.overlayCustomOrigin)
+            } else {
+                self.defaults.removeObject(forKey: Keys.overlayCustomOrigin)
+            }
+            NotificationCenter.default.post(name: NSNotification.Name("OverlayCustomOriginChanged"), object: nil)
+        }
+    }
+
+    /// Sends the overlay back to its default anchored position.
+    /// This is the way back when the overlay has been dragged off screen.
+    func resetOverlayCustomOrigin() {
+        self.overlayCustomOrigin = nil
+    }
+
     /// The size of the recording overlay (default: medium)
     var overlaySize: OverlaySize {
         get {
@@ -5551,6 +5579,7 @@ private extension SettingsStore {
 
         // Overlay Position
         static let overlayPosition = "OverlayPosition"
+        static let overlayCustomOrigin = "OverlayCustomOrigin"
         static let notchPresentationMode = "NotchPresentationMode"
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"

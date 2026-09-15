@@ -31,8 +31,14 @@ enum RecordingOverlayHideOutcome: Equatable {
 private final class BottomOverlayPanel: NSPanel {
     var allowsOffscreenParking = false
 
+    /// Users drag the overlay off a screen edge to get it out of the way, so AppKit's
+    /// default "keep the window on screen" clamping must be bypassed for user moves too.
+    var allowsUserDragging = false
+
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
-        self.allowsOffscreenParking ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+        self.allowsOffscreenParking || self.allowsUserDragging
+            ? frameRect
+            : super.constrainFrameRect(frameRect, to: screen)
     }
 }
 
@@ -49,6 +55,9 @@ final class BottomOverlayWindowController {
     private var localMouseDownMonitor: Any?
     private var globalMouseDownMonitor: Any?
     private var targetScreen: NSScreen?
+    private var userDragObserver: Any?
+    private var pendingOriginSave: DispatchWorkItem?
+    private var isApplyingProgrammaticFrame = false
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
     private var presentationGeneration: UInt64 = 0
@@ -62,6 +71,11 @@ final class BottomOverlayWindowController {
 
     private init() {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayOffsetChanged"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.positionWindow()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayCustomOriginChanged"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.positionWindow()
             }
@@ -443,7 +457,8 @@ final class BottomOverlayWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false // SwiftUI handles shadow
-        panel.isMovableByWindowBackground = false
+        panel.isMovableByWindowBackground = true
+        panel.allowsUserDragging = true
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
@@ -464,6 +479,48 @@ final class BottomOverlayWindowController {
         hostingView.display()
 
         self.window = panel
+        self.observeUserDrags(of: panel)
+    }
+
+    /// Remembers where the user dragged the overlay so the choice survives the next
+    /// presentation and the next launch. Programmatic moves must not be recorded,
+    /// otherwise the anchored default would immediately overwrite itself.
+    private func observeUserDrags(of panel: NSPanel) {
+        if let observer = self.userDragObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        self.userDragObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self,
+                      !self.isApplyingProgrammaticFrame,
+                      NotchContentState.shared.isBottomOverlayPresented,
+                      let window = self.window
+                else { return }
+                // didMove fires on every step of a drag; coalesce so only the
+                // resting position is written.
+                let origin = window.frame.origin
+                self.pendingOriginSave?.cancel()
+                let save = DispatchWorkItem {
+                    MainActor.assumeIsolated {
+                        SettingsStore.shared.overlayCustomOrigin = origin
+                    }
+                }
+                self.pendingOriginSave = save
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: save)
+            }
+        }
+    }
+
+    /// Moves the panel without the move being mistaken for a user drag.
+    private func setFrameOriginProgrammatically(_ origin: NSPoint) {
+        guard let window = self.window else { return }
+        self.isApplyingProgrammaticFrame = true
+        window.setFrameOrigin(origin)
+        self.isApplyingProgrammaticFrame = false
     }
 
     private var isReleaseTransitionActive: Bool {
@@ -531,6 +588,13 @@ final class BottomOverlayWindowController {
         }
         (window as? BottomOverlayPanel)?.allowsOffscreenParking = false
 
+        // A position the user dragged to wins over the anchored default, including
+        // positions past a screen edge. Settings offers "Reset Position" to undo it.
+        if let customOrigin = SettingsStore.shared.overlayCustomOrigin {
+            self.setFrameOriginProgrammatically(customOrigin)
+            return
+        }
+
         let screen = self.targetScreen ?? window.screen ?? OverlayScreenResolver.screenForCurrentPointer()
         guard let screen = screen else { return }
 
@@ -556,7 +620,7 @@ final class BottomOverlayWindowController {
         y = max(min(y, maxY), minY)
 
         // Apply position directly to avoid implicit frame animations during hover-driven resizes.
-        window.setFrameOrigin(NSPoint(x: x, y: y))
+        self.setFrameOriginProgrammatically(NSPoint(x: x, y: y))
     }
 
     private func parkWindowOffscreen() {
@@ -571,7 +635,7 @@ final class BottomOverlayWindowController {
             x: desktopFrame.maxX + window.frame.width + 1024,
             y: desktopFrame.maxY + window.frame.height + 1024
         )
-        window.setFrameOrigin(edge)
+        self.setFrameOriginProgrammatically(edge)
     }
 }
 
