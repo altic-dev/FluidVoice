@@ -57,11 +57,18 @@ final class BottomOverlayWindowController {
     private var targetScreen: NSScreen?
     private var userDragObserver: Any?
     private var pendingOriginSave: DispatchWorkItem?
+    /// A custom origin and the display arrangement it was chosen on.
+    private struct PlacedOrigin {
+        let point: NSPoint
+        let screenFrames: [CGRect]
+    }
+
     /// The dragged origin as of the last pointer movement, ahead of the coalesced write
     /// to settings. A reposition triggered mid-drag — the preview text growing, say —
     /// would otherwise read the pre-drag origin and snap the overlay out from under the
-    /// pointer.
-    private var liveCustomOrigin: NSPoint?
+    /// pointer. It carries its own arrangement because settings still holds the previous
+    /// one until the write lands.
+    private var liveCustomOrigin: PlacedOrigin?
     private var isApplyingProgrammaticFrame = false
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
@@ -93,7 +100,7 @@ final class BottomOverlayWindowController {
                 // the new one for the rest of the process.
                 self.pendingOriginSave?.cancel()
                 self.pendingOriginSave = nil
-                self.liveCustomOrigin = SettingsStore.shared.overlayCustomOrigin
+                self.liveCustomOrigin = Self.storedPlacedOrigin()
                 self.positionWindow()
             }
         }
@@ -524,7 +531,7 @@ final class BottomOverlayWindowController {
                 // the debounce window would otherwise pair this origin with an arrangement
                 // it was never chosen on, which reads as a match and strands the overlay.
                 let screens = Self.currentScreenFrames()
-                self.liveCustomOrigin = origin
+                self.liveCustomOrigin = PlacedOrigin(point: origin, screenFrames: screens)
                 self.pendingOriginSave?.cancel()
                 let save = DispatchWorkItem {
                     MainActor.assumeIsolated {
@@ -574,18 +581,27 @@ final class BottomOverlayWindowController {
     /// The test is per screen rather than against their union, so the overlay is not
     /// restored into a gap between displays in an irregular arrangement, where the union
     /// covers desktop that no display draws.
-    private static func storedOriginIsUsable(_ origin: NSPoint, size: NSSize) -> Bool {
+    private static func originIsUsable(_ placed: PlacedOrigin, size: NSSize) -> Bool {
         let screens = self.currentScreenFrames()
         guard !screens.isEmpty else { return false }
 
-        // An empty stored arrangement — no position yet, or one saved by a build that did
-        // not record it — never matches, since `screens` is known to be non-empty here.
-        if self.arrangementsMatch(SettingsStore.shared.overlayCustomOriginScreenFrames, screens) {
+        // The arrangement is the one this origin was chosen on, never whatever settings
+        // happens to hold: mid-drag the write is still queued, so reading settings here
+        // would judge a fresh position against the arrangement before it. An empty one —
+        // no position yet, or one saved by a build that did not record it — never
+        // matches, since `screens` is known to be non-empty here.
+        if self.arrangementsMatch(placed.screenFrames, screens) {
             return true
         }
 
-        let overlay = NSRect(origin: origin, size: size)
+        let overlay = NSRect(origin: placed.point, size: size)
         return screens.contains { $0.intersects(overlay) }
+    }
+
+    /// The persisted origin paired with the arrangement it was stored on.
+    private static func storedPlacedOrigin() -> PlacedOrigin? {
+        guard let origin = SettingsStore.shared.overlayCustomOrigin else { return nil }
+        return PlacedOrigin(point: origin, screenFrames: SettingsStore.shared.overlayCustomOriginScreenFrames)
     }
 
     /// Moves the panel without the move being mistaken for a user drag.
@@ -664,10 +680,10 @@ final class BottomOverlayWindowController {
         // A position the user dragged to wins over the anchored default, including
         // positions past a screen edge. Settings offers "Reset Position" to undo it.
         // The in-memory origin comes first: during a drag it is ahead of settings.
-        if let customOrigin = self.liveCustomOrigin ?? SettingsStore.shared.overlayCustomOrigin,
-           Self.storedOriginIsUsable(customOrigin, size: window.frame.size)
+        if let customOrigin = self.liveCustomOrigin ?? Self.storedPlacedOrigin(),
+           Self.originIsUsable(customOrigin, size: window.frame.size)
         {
-            self.setFrameOriginProgrammatically(customOrigin)
+            self.setFrameOriginProgrammatically(customOrigin.point)
             return
         }
 
