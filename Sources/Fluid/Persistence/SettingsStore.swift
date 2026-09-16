@@ -2183,6 +2183,81 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Origin the user dragged the recording overlay to, in screen coordinates.
+    /// `nil` means the overlay uses its default anchored placement.
+    var overlayCustomOrigin: CGPoint? {
+        get {
+            guard let values = self.defaults.array(forKey: Keys.overlayCustomOrigin) as? [Double],
+                  values.count == 2
+            else {
+                return nil
+            }
+            return CGPoint(x: values[0], y: values[1])
+        }
+        set {
+            objectWillChange.send()
+            if let newValue {
+                self.defaults.set([newValue.x, newValue.y], forKey: Keys.overlayCustomOrigin)
+            } else {
+                self.defaults.removeObject(forKey: Keys.overlayCustomOrigin)
+                self.defaults.removeObject(forKey: Keys.overlayCustomOriginScreenFrames)
+            }
+            NotificationCenter.default.post(name: NSNotification.Name("OverlayCustomOriginChanged"), object: nil)
+        }
+    }
+
+    /// The frame of every screen attached when the overlay position was chosen. Used to
+    /// tell a position the user deliberately dragged past a screen edge from one stranded
+    /// by a display that is no longer attached.
+    ///
+    /// Stored per screen rather than as their union: unplugging a display that sat inside
+    /// the bounding rectangle of the others leaves that union unchanged, and the union of
+    /// an irregular arrangement covers gaps where no display is.
+    ///
+    /// Empty when no position has been chosen, or when it was chosen by a build that did
+    /// not record the arrangement.
+    var overlayCustomOriginScreenFrames: [CGRect] {
+        get {
+            guard let values = self.defaults.array(forKey: Keys.overlayCustomOriginScreenFrames) as? [Double],
+                  values.count % 4 == 0
+            else {
+                return []
+            }
+            return stride(from: 0, to: values.count, by: 4).map {
+                CGRect(x: values[$0], y: values[$0 + 1], width: values[$0 + 2], height: values[$0 + 3])
+            }
+        }
+        set {
+            if newValue.isEmpty {
+                self.defaults.removeObject(forKey: Keys.overlayCustomOriginScreenFrames)
+            } else {
+                self.defaults.set(
+                    newValue.flatMap { [$0.origin.x, $0.origin.y, $0.size.width, $0.size.height] },
+                    forKey: Keys.overlayCustomOriginScreenFrames
+                )
+            }
+        }
+    }
+
+    /// Records a position the overlay controller has already applied to the window, with
+    /// the display arrangement it was chosen on.
+    ///
+    /// Deliberately does not post `OverlayCustomOriginChanged`: that notification exists to
+    /// tell the controller a position was changed from somewhere else — Reset Position, a
+    /// restored backup — and the overlay is by definition already sitting at this one.
+    /// Settings still observes the change, so the Reset Position row appears on first drag.
+    func storeDraggedOverlayOrigin(_ origin: CGPoint, screenFrames: [CGRect]) {
+        objectWillChange.send()
+        self.overlayCustomOriginScreenFrames = screenFrames
+        self.defaults.set([origin.x, origin.y], forKey: Keys.overlayCustomOrigin)
+    }
+
+    /// Sends the overlay back to its default anchored position.
+    /// This is the way back when the overlay has been dragged off screen.
+    func resetOverlayCustomOrigin() {
+        self.overlayCustomOrigin = nil
+    }
+
     /// The size of the recording overlay (default: medium)
     var overlaySize: OverlaySize {
         get {
@@ -3317,6 +3392,11 @@ final class SettingsStore: ObservableObject {
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
             overlaySize: self.overlaySize,
+            overlayCustomOrigin: self.overlayCustomOrigin.map { [$0.x, $0.y] },
+            overlayCustomOriginScreenFrames: self.overlayCustomOriginScreenFrames.isEmpty
+                ? nil
+                : self.overlayCustomOriginScreenFrames
+                .flatMap { [$0.origin.x, $0.origin.y, $0.size.width, $0.size.height] },
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
             saveTranscriptionHistory: self.saveTranscriptionHistory,
@@ -3474,6 +3554,22 @@ final class SettingsStore: ObservableObject {
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
         self.overlaySize = payload.overlaySize
+        // The arrangement is restored first: clearing the origin also clears it, so the
+        // two can never disagree, and a backup without an origin leaves nothing behind.
+        let restoredScreenFrames = payload.overlayCustomOriginScreenFrames ?? []
+        self.overlayCustomOriginScreenFrames = restoredScreenFrames.count % 4 == 0
+            ? stride(from: 0, to: restoredScreenFrames.count, by: 4).map {
+                CGRect(
+                    x: restoredScreenFrames[$0],
+                    y: restoredScreenFrames[$0 + 1],
+                    width: restoredScreenFrames[$0 + 2],
+                    height: restoredScreenFrames[$0 + 3]
+                )
+            }
+            : []
+        self.overlayCustomOrigin = payload.overlayCustomOrigin.flatMap { values in
+            values.count == 2 ? CGPoint(x: values[0], y: values[1]) : nil
+        }
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
         self.saveTranscriptionHistory = payload.saveTranscriptionHistory
@@ -5551,6 +5647,8 @@ private extension SettingsStore {
 
         // Overlay Position
         static let overlayPosition = "OverlayPosition"
+        static let overlayCustomOrigin = "OverlayCustomOrigin"
+        static let overlayCustomOriginScreenFrames = "OverlayCustomOriginScreenFrames"
         static let notchPresentationMode = "NotchPresentationMode"
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"

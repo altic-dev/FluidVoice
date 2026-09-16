@@ -84,6 +84,11 @@ struct SettingsBackupPayload: Codable, Equatable {
     let overlayPosition: SettingsStore.OverlayPosition
     let overlayBottomOffset: Double
     let overlaySize: SettingsStore.OverlaySize
+    // Optional so backups created before the overlay could be dragged still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let overlayCustomOrigin: [Double]?
+    // swiftlint:disable:next discouraged_optional_collection
+    let overlayCustomOriginScreenFrames: [Double]?
     let transcriptionPreviewCharLimit: Int
     let userTypingWPM: Int
     let saveTranscriptionHistory: Bool
