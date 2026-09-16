@@ -53,6 +53,10 @@ final class BottomOverlayWindowController {
     private var deferredResizePending = false
     private var presentationGeneration: UInt64 = 0
     private let dismissalDuration: TimeInterval = 0.02
+    /// Bounded dwell that lets the completion check land before the panel is
+    /// parked. Text delivery has already finished when this runs, so it can
+    /// never delay dictation, the paste or the next recording.
+    private static let completionFlashDuration: TimeInterval = 0.30
     private var isHideInProgress = false
     private var activeHideGeneration: UInt64?
     private var hideWaiters: [CheckedContinuation<RecordingOverlayHideOutcome, Never>] = []
@@ -126,6 +130,7 @@ final class BottomOverlayWindowController {
         // offscreen. Revealing the neutral shell first causes a visible flash
         // that reads as the overlay appearing twice.
         NotchContentState.shared.setBottomOverlayPresented(true)
+        NotchContentState.shared.clearDeliveryCompletion()
         NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
         NotchContentState.shared.mode = mode
         switch mode {
@@ -284,7 +289,15 @@ final class BottomOverlayWindowController {
         }
         self.clearPresentationResources()
 
-        try? await Task.sleep(nanoseconds: UInt64(self.dismissalDuration * 1_000_000_000))
+        if self.isCompletionFlashPending {
+            // Success path only: let the check land, then run the normal
+            // dismissal. Bounded, and superseded instantly by a new recording.
+            NotchContentState.shared.clearDeliveryCompletion()
+            self.startDismissalVisual()
+            try? await Task.sleep(nanoseconds: UInt64(Self.completionFlashDuration * 1_000_000_000))
+        } else {
+            try? await Task.sleep(nanoseconds: UInt64(self.dismissalDuration * 1_000_000_000))
+        }
 
         guard self.presentationGeneration == currentGeneration else {
             Self.overlayBench("bottom_hide_return reason=stale_generation")
@@ -307,10 +320,28 @@ final class BottomOverlayWindowController {
               NotchContentState.shared.isBottomOverlayPresented
         else { return }
 
+        // The completion flash owns the visuals until its bounded dwell expires,
+        // so the dismissal animation is started by performHideAndWait instead.
+        guard !self.isCompletionFlashPending else {
+            Self.overlayBench("bottom_hide_visual_deferred reason=completion_flash")
+            return
+        }
+
+        self.startDismissalVisual()
+    }
+
+    private func startDismissalVisual() {
         NotchContentState.shared.setBottomOverlayReleaseTransitioning(true)
         NotchContentState.shared.setBottomOverlayDismissOffsetY(8)
         NotchContentState.shared.setBottomOverlayDismissing(true)
         Self.overlayBench("bottom_hide_visual_requested")
+    }
+
+    /// True while a confirmed delivery should flash before the panel is parked.
+    /// Reduce Motion skips the flash entirely and hides immediately.
+    private var isCompletionFlashPending: Bool {
+        NotchContentState.shared.didCompleteDelivery
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     private func clearPresentationResources() {
@@ -534,29 +565,21 @@ final class BottomOverlayWindowController {
         let screen = self.targetScreen ?? window.screen ?? OverlayScreenResolver.screenForCurrentPointer()
         guard let screen = screen else { return }
 
-        let fullFrame = screen.frame
-        let visibleFrame = screen.visibleFrame
-        let windowSize = window.frame.size
-
-        // Horizontal centering
-        let x = fullFrame.midX - windowSize.width / 2
-
-        // Vertical positioning with safety clamping
-        let offset = SettingsStore.shared.overlayBottomOffset
-
-        // Calculate raw position
-        var y = visibleFrame.minY + CGFloat(offset)
-
-        // Safety Clamping:
-        // 1. Min: Ensure it's at least visibleFrame.minY (not below the dock/visible area)
-        // 2. Max: Ensure it doesn't cross the top of the visible frame minus its own height
-        let minY = visibleFrame.minY + 10 // Small buffer from absolute bottom
-        let maxY = visibleFrame.maxY - windowSize.height - 40 // Buffer from top
-
-        y = max(min(y, maxY), minY)
+        let size = SettingsStore.shared.overlaySize
+        let origin = SettingsStore.shared.overlayPosition.windowOrigin(
+            windowSize: window.frame.size,
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            bottomOffset: CGFloat(SettingsStore.shared.overlayBottomOffset),
+            // Must mirror BottomOverlayView.usesCanvasPadding exactly.
+            canvasPadding: (SettingsStore.shared.overlayVisualStyle != .companion
+                && (size == .pill || size == .round))
+                ? SettingsStore.OverlayPosition.pillCanvasPadding * CGFloat(SettingsStore.shared.overlayScale)
+                : 0
+        )
 
         // Apply position directly to avoid implicit frame animations during hover-driven resizes.
-        window.setFrameOrigin(NSPoint(x: x, y: y))
+        window.setFrameOrigin(origin)
     }
 
     private func parkWindowOffscreen() {
@@ -2104,6 +2127,14 @@ private enum PillShadowMetrics {
 
 private final class BottomOverlayHostingView: NSHostingView<BottomOverlayView> {
     override func hitTest(_ point: NSPoint) -> NSView? {
+        // Chromeless format: there is nothing to click, and the graphic covers
+        // only part of its window, so the whole window must stay click-through
+        // instead of swallowing clicks aimed at whatever is behind it.
+        if SettingsStore.shared.overlaySize == .svg
+            || SettingsStore.shared.overlayVisualStyle == .companion
+        {
+            return nil
+        }
         if SettingsStore.shared.overlaySize == .pill {
             let visibleOverlayBounds = self.bounds.insetBy(
                 dx: PillShadowMetrics.hitTestInset,
@@ -2135,7 +2166,9 @@ struct BottomOverlayView: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var isHoveringModeChip = false
     @State private var isHoveringPromptChip = false
     @State private var isHoveringActionsChip = false
@@ -2152,7 +2185,9 @@ struct BottomOverlayView: View {
     @State private var processingStatusVisible = false
     @State private var processingStatusCycleID = 0
     @State private var lastResolvedAppIcon: NSImage?
-    @State private var borderAnimationStartedAt: Date?
+    /// 0...1 entrance progress for the pill. Kept at 0 while the panel is parked
+    /// offscreen so a presentation can never flash at full opacity first.
+    @State private var entryProgress: CGFloat = 0
 
     struct LayoutConstants {
         let hPadding: CGFloat
@@ -2180,23 +2215,25 @@ struct BottomOverlayView: View {
         static func get(for size: SettingsStore.OverlaySize) -> LayoutConstants {
             switch size {
             case .pill:
+                // Premium pill: 38 pt tall, ~108 pt wide, capsule radius, with the
+                // app icon at the 20 pt optical size used across macOS.
                 return LayoutConstants(
                     hPadding: 12,
-                    vPadding: 8,
-                    waveformWidth: 46,
-                    waveformHeight: 30,
-                    iconSize: 18,
+                    vPadding: 6,
+                    waveformWidth: 52,
+                    waveformHeight: 26,
+                    iconSize: 20,
                     transFontSize: 10,
                     modeFontSize: 9,
-                    cornerRadius: 23,
+                    cornerRadius: 19,
                     barCount: 8,
                     barWidth: 3.0,
                     barSpacing: 2.5,
-                    minBarHeight: 4,
-                    maxBarHeight: 28,
-                    containerWidth: 100,
-                    overlayWidth: 100,
-                    overlayHeight: 46,
+                    minBarHeight: 3,
+                    maxBarHeight: 24,
+                    containerWidth: 108,
+                    overlayWidth: 108,
+                    overlayHeight: 38,
                     previewBoxHeight: 0,
                     usesFixedCanvas: false,
                     showsTopControls: false,
@@ -2204,23 +2241,29 @@ struct BottomOverlayView: View {
                     showsModeLabel: false
                 )
             case .small:
+                // Compact object: the app icon plus the animation, nothing else.
+                // The surface is an *ecrin* for the light, so it hugs the row
+                // instead of reserving a wide empty capsule, and the visualizer is
+                // given that width back. No mode label is drawn for this format
+                // (see `showsTextModeLabel`): the word "Dictate" spent exactly the
+                // space the animation was meant to fill.
                 return LayoutConstants(
                     hPadding: 10,
                     vPadding: 6,
-                    waveformWidth: 90,
-                    waveformHeight: 20,
+                    waveformWidth: 108,
+                    waveformHeight: 24,
                     iconSize: 16,
                     transFontSize: 11,
                     modeFontSize: 10,
                     cornerRadius: 14,
-                    barCount: 7,
+                    barCount: 11,
                     barWidth: 3.0,
-                    barSpacing: 3.5,
+                    barSpacing: 3.4,
                     minBarHeight: 5,
-                    maxBarHeight: 16,
-                    containerWidth: 200,
-                    overlayWidth: 300,
-                    overlayHeight: 124,
+                    maxBarHeight: 18,
+                    containerWidth: 152,
+                    overlayWidth: 152,
+                    overlayHeight: 44,
                     previewBoxHeight: 0,
                     usesFixedCanvas: false,
                     showsTopControls: false,
@@ -2251,6 +2294,65 @@ struct BottomOverlayView: View {
                     showsPreview: true,
                     showsModeLabel: true
                 )
+            case .svg:
+                // The animation alone.
+                //
+                // Nothing is reserved for a surface, a border or a shadow: the
+                // canvas *is* the graphic, so the visualizer gets every point of
+                // it and no canvas padding is applied around the window.
+                return LayoutConstants(
+                    hPadding: 0,
+                    vPadding: 0,
+                    waveformWidth: 104,
+                    waveformHeight: 52,
+                    iconSize: 0,
+                    transFontSize: 10,
+                    modeFontSize: 9,
+                    cornerRadius: 0,
+                    barCount: 14,
+                    barWidth: 3.5,
+                    barSpacing: 3.0,
+                    minBarHeight: 3,
+                    maxBarHeight: 30,
+                    containerWidth: 104,
+                    overlayWidth: 104,
+                    overlayHeight: 52,
+                    // Denser than the pill: the chromeless canvas is twice as
+                    // wide, and the bar count has to follow the container or the
+                    // Wave style would read as a small lonely row next to Aurora.
+                    previewBoxHeight: 0,
+                    usesFixedCanvas: false,
+                    showsTopControls: false,
+                    showsPreview: false,
+                    showsModeLabel: false
+                )
+            case .round:
+                // Square canvas at 46 pt. The corner radius is half the side, so
+                // the shared rounded-rectangle surface and rim resolve to a circle
+                // without any format-specific drawing code.
+                return LayoutConstants(
+                    hPadding: 6,
+                    vPadding: 6,
+                    waveformWidth: 34,
+                    waveformHeight: 34,
+                    iconSize: 0,
+                    transFontSize: 10,
+                    modeFontSize: 9,
+                    cornerRadius: 23,
+                    barCount: 6,
+                    barWidth: 2.5,
+                    barSpacing: 2.5,
+                    minBarHeight: 3,
+                    maxBarHeight: 22,
+                    containerWidth: 46,
+                    overlayWidth: 46,
+                    overlayHeight: 46,
+                    previewBoxHeight: 0,
+                    usesFixedCanvas: false,
+                    showsTopControls: false,
+                    showsPreview: false,
+                    showsModeLabel: false
+                )
             case .large:
                 return LayoutConstants(
                     hPadding: 18,
@@ -2277,14 +2379,64 @@ struct BottomOverlayView: View {
                 )
             }
         }
+
+        /// The same layout with every visual dimension multiplied by `scale`.
+        ///
+        /// Counts and behaviour flags are deliberately untouched: the scale
+        /// changes how large the overlay is, not what it draws. One multiplier
+        /// here keeps Pill / Small / Medium on exactly the same design language
+        /// instead of growing into a separate, unrelated layout.
+        func scaled(by scale: CGFloat) -> LayoutConstants {
+            guard scale != 1 else { return self }
+            return LayoutConstants(
+                hPadding: self.hPadding * scale,
+                vPadding: self.vPadding * scale,
+                waveformWidth: self.waveformWidth * scale,
+                waveformHeight: self.waveformHeight * scale,
+                iconSize: self.iconSize * scale,
+                transFontSize: self.transFontSize * scale,
+                modeFontSize: self.modeFontSize * scale,
+                cornerRadius: self.cornerRadius * scale,
+                barCount: self.barCount,
+                barWidth: self.barWidth * scale,
+                barSpacing: self.barSpacing * scale,
+                minBarHeight: self.minBarHeight * scale,
+                maxBarHeight: self.maxBarHeight * scale,
+                containerWidth: self.containerWidth * scale,
+                overlayWidth: self.overlayWidth * scale,
+                overlayHeight: self.overlayHeight * scale,
+                previewBoxHeight: self.previewBoxHeight * scale,
+                usesFixedCanvas: self.usesFixedCanvas,
+                showsTopControls: self.showsTopControls,
+                showsPreview: self.showsPreview,
+                showsModeLabel: self.showsModeLabel
+            )
+        }
     }
 
     private var layout: LayoutConstants {
         LayoutConstants.get(for: self.settings.overlaySize)
+            .scaled(by: CGFloat(self.settings.overlayScale))
+    }
+
+    /// Canvas padding that keeps the drawn shadow inside the window. It has to
+    /// follow the user scale, otherwise a large pill would clip its own shadow.
+    private var scaledCanvasPadding: CGFloat {
+        SettingsStore.OverlayPosition.pillCanvasPadding * CGFloat(self.settings.overlayScale)
     }
 
     private var isCompactControls: Bool {
         self.settings.overlaySize == .medium
+    }
+
+    /// Whether the compact row draws the text mode label.
+    ///
+    /// Small keeps the app icon and the visualizer only: the word "Dictate" spent
+    /// exactly the width the animation should occupy. The underlying layout flag
+    /// stays true so the icon slot and the model-loading indicator keep their
+    /// existing behaviour.
+    private var showsTextModeLabel: Bool {
+        self.layout.showsModeLabel && self.settings.overlaySize != .small
     }
 
     private var waveformHorizontalOffset: CGFloat {
@@ -2293,6 +2445,145 @@ struct BottomOverlayView: View {
 
     private var isPillSize: Bool {
         self.settings.overlaySize == .pill
+    }
+
+    /// The Companion is a style, but a *chromeless* one: the character is the
+    /// whole overlay. It therefore gets its own square canvas instead of the
+    /// format capsule, and the window stays fully click-through.
+    private var isCompanionStyle: Bool {
+        self.settings.overlayVisualStyle == .companion
+    }
+
+    /// Side of the Companion canvas: the base size, the global overlay scale and
+    /// the Companion's own size control.
+    private var companionSide: CGFloat {
+        CompanionMetrics.baseSide
+            * CGFloat(self.settings.overlayScale)
+            * CGFloat(self.settings.companionScale)
+    }
+
+    private var isRoundSize: Bool {
+        self.settings.overlaySize == .round
+    }
+
+    /// Chromeless format: the visualizer is the entire overlay.
+    private var isSVGSize: Bool {
+        self.settings.overlaySize == .svg
+    }
+
+
+
+    /// Formats drawn as a self-contained floating capsule or orb, which reserve
+    /// canvas padding for the drawn shadow.
+    private var usesCanvasPadding: Bool {
+        // The Companion draws its own canvas, so it never reserves the format's
+        // shadow padding even when that format is Pill or Round.
+        !self.isCompanionStyle && (self.isPillSize || self.isRoundSize)
+    }
+
+    /// Resolved overlay appearance. Cheap: palettes are cached per theme.
+    private var overlayAppearance: OverlayAppearance {
+        OverlayAppearance(
+            style: self.settings.overlayVisualStyle,
+            theme: self.settings.overlayColorTheme,
+            glow: self.settings.overlayGlowIntensity,
+            showsTargetAppIcon: self.settings.showTargetAppIcon,
+            surface: self.settings.overlaySurfaceAppearance
+        )
+    }
+
+    private var overlayPalette: OverlayPalette {
+        self.overlayAppearance.palette
+    }
+
+    /// Lifecycle phase derived only from signals the dictation pipeline already publishes.
+    private var overlayLifecycleState: OverlayLifecycleState {
+        OverlayLifecycleState.resolve(
+            isPresented: self.contentState.isBottomOverlayPresented,
+            isReleaseTransitioning: self.contentState.isBottomOverlayReleaseTransitioning,
+            isProcessing: self.contentState.isProcessing,
+            hasProcessingFailure: self.contentState.isAIProcessingFailureVisible,
+            isDeliveryCompleted: self.contentState.didCompleteDelivery
+        )
+    }
+
+    /// True while the pill is on screen and not on its way out. Gates every
+    /// continuous animation in the premium overlay.
+    private var isPillAnimationActive: Bool {
+        self.contentState.isBottomOverlayPresented && !self.contentState.isBottomOverlayDismissing
+    }
+
+    private var visualizerThreshold: CGFloat {
+        CGFloat(self.settings.visualizerNoiseThreshold)
+    }
+
+    private var isModelLoadingForIcon: Bool {
+        self.layout.showsModeLabel && !self.appServices.asr.isAsrReady &&
+            (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
+    }
+
+    /// Width reserved for the live preview that grows the pill while dictating.
+    private var pillPreviewWidth: CGFloat {
+        guard self.isPillSize, self.settings.enableStreamingPreview else { return 0 }
+        return PillPreviewSizing.width(
+            for: self.transcriptionPreviewText,
+            fontSize: self.layout.transFontSize,
+            characterLimit: self.settings.transcriptionPreviewCharLimit
+        )
+    }
+
+    /// Width reclaimed when the user hides the target app icon in the pill.
+    private var hiddenIconWidth: CGFloat {
+        guard self.isPillSize, !self.settings.showTargetAppIcon, !self.isModelLoadingForIcon else { return 0 }
+        return self.layout.iconSize + 4
+    }
+
+    /// Total canvas width, including any live preview growth.
+    private var overlayCanvasWidth: CGFloat {
+        if self.isCompanionStyle {
+            return self.companionSide
+        }
+        if self.layout.usesFixedCanvas {
+            return self.layout.overlayWidth
+        }
+        // The orb is exactly as wide as it is tall.
+        if self.isRoundSize {
+            return self.layout.containerWidth
+        }
+        return max(self.layout.containerWidth + self.pillPreviewWidth - self.hiddenIconWidth, 72)
+    }
+
+    private var pillVisualizerWidth: CGFloat {
+        self.showsSpokenSendIndicator ? 32 : self.layout.waveformWidth
+    }
+
+    /// Resolved surface weights for the current system appearance.
+    private var overlaySurface: OverlaySurfaceStyle {
+        self.overlayAppearance.surfaceStyle(systemIsDark: self.colorScheme == .dark)
+    }
+
+    /// Pill surface. Stays opaque under Reduce Transparency.
+    private var overlaySurfaceFill: Color {
+        let surface = self.overlaySurface.fill
+        guard self.usesCanvasPadding, !self.reduceTransparency else { return surface }
+        return surface.opacity(0.94)
+    }
+
+    /// Single-line live preview that grows the pill instead of resizing abruptly.
+    private var pillPreviewView: some View {
+        Text(self.transcriptionPreviewText)
+            .font(.system(size: self.layout.transFontSize, weight: .medium))
+            .foregroundStyle(self.overlaySurface.primaryText)
+            .lineLimit(1)
+            .truncationMode(.head)
+            .frame(
+                width: max(self.pillPreviewWidth - PillPreviewSizing.horizontalPadding, 1),
+                alignment: .leading
+            )
+            .animation(
+                self.reduceMotion ? nil : .easeOut(duration: 0.18),
+                value: self.pillPreviewWidth
+            )
     }
 
     private var modeColor: Color {
@@ -2508,6 +2799,9 @@ struct BottomOverlayView: View {
     }
 
     private var overlayFrameHeight: CGFloat? {
+        if self.isCompanionStyle {
+            return self.companionSide
+        }
         guard self.layout.usesFixedCanvas else { return nil }
         return self.shouldReservePreviewArea ? self.layout.overlayHeight : nil
     }
@@ -2517,7 +2811,10 @@ struct BottomOverlayView: View {
             return self.layout.waveformWidth * 2.2
         }
 
-        return max(self.layout.waveformWidth * 2.2, self.layout.containerWidth - self.layout.hPadding * 2)
+        // Dynamic formats size their pill to `containerWidth`, so the preview has
+        // to fit inside it. The old "2.2 x visualizer" floor could exceed a narrow
+        // Small capsule and let the preview overflow past the surface.
+        return max(self.layout.containerWidth - self.layout.hPadding * 2, self.layout.waveformWidth)
     }
 
     private var dynamicPreviewBaseMinHeight: CGFloat {
@@ -2581,6 +2878,18 @@ struct BottomOverlayView: View {
         let estimatedWrappedLines = max(1, (trimmed.count + characterCapacity - 1) / characterCapacity)
         let maxVisibleLines = max(Int((self.previewMaxHeight / max(self.estimatedPreviewLineHeight, 1)).rounded(.down)), 1)
         return min(max(estimatedWrappedLines + newlineCount, 1), maxVisibleLines)
+    }
+
+    /// Entrance transition: opacity plus a very light scale over 150 ms, no bounce.
+    ///
+    /// The panel is revealed only after this state has already been reset, so the
+    /// first composited frame can never flash at full opacity.
+    private func beginEntryAnimation() {
+        DispatchQueue.main.async {
+            withAnimation(.timingCurve(0.22, 0.0, 0.2, 1.0, duration: 0.15)) {
+                self.entryProgress = 1
+            }
+        }
     }
 
     private func refreshDynamicPreviewSizeIfNeeded(for previewText: String) {
@@ -2647,11 +2956,17 @@ struct BottomOverlayView: View {
     }
 
     private var overlayAnimatedScale: CGFloat {
-        self.contentState.isBottomOverlayDismissing ? 0.985 : 1.0
+        var scale: CGFloat = self.contentState.isBottomOverlayDismissing ? 0.985 : 1.0
+        // Small contraction as the completion check lands.
+        if self.contentState.didCompleteDelivery {
+            scale *= 0.972
+        }
+        guard !self.reduceMotion else { return scale }
+        return scale * (0.972 + 0.028 * self.entryProgress)
     }
 
     private var overlayAnimatedOpacity: Double {
-        1.0
+        Double(self.entryProgress)
     }
 
     private func chipBackground(isHovered: Bool, disabled: Bool) -> some View {
@@ -3067,27 +3382,28 @@ struct BottomOverlayView: View {
 
     private var targetAppIconView: some View {
         let appIcon = self.displayedAppIcon
-        let showModelLoading = self.layout.showsModeLabel && !self.appServices.asr.isAsrReady &&
-            (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
+        let showModelLoading = self.isModelLoadingForIcon
+        let showsAppIcon = self.settings.showTargetAppIcon && appIcon != nil
+        let showsPlaceholder = self.settings.showTargetAppIcon && !self.layout.showsModeLabel
         return VStack(spacing: 2) {
             if showModelLoading {
                 ProgressView()
                     .controlSize(.mini)
             }
-            if let appIcon = appIcon {
+            if showsAppIcon, let appIcon = appIcon {
                 Image(nsImage: appIcon)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: self.layout.iconSize, height: self.layout.iconSize)
                     .clipShape(RoundedRectangle(cornerRadius: self.layout.iconSize / 4))
-            } else if !self.layout.showsModeLabel {
+            } else if showsPlaceholder {
                 Circle()
                     .fill(self.modeColor.opacity(0.9))
                     .frame(width: max(self.layout.iconSize * 0.45, 7), height: max(self.layout.iconSize * 0.45, 7))
             }
         }
         .frame(width: self.layout.iconSize, height: self.layout.iconSize)
-        .opacity((appIcon != nil || showModelLoading || !self.layout.showsModeLabel) ? 1 : 0)
+        .opacity((showsAppIcon || showModelLoading || showsPlaceholder) ? 1 : 0)
     }
 
     private var leadingAppContextView: some View {
@@ -3102,7 +3418,9 @@ struct BottomOverlayView: View {
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
 
-            self.targetAppIconView
+            if self.settings.showTargetAppIcon || self.isModelLoadingForIcon {
+                self.targetAppIconView
+            }
         }
         .animation(
             self.reduceMotion ? nil : .easeOut(duration: 0.14),
@@ -3154,6 +3472,125 @@ struct BottomOverlayView: View {
     }
 
     var body: some View {
+        if self.isCompanionStyle {
+            self.companionStyleBody
+        } else if self.isSVGSize {
+            self.svgBody
+        } else if self.isRoundSize {
+            self.roundBody
+        } else {
+            self.standardBody
+        }
+    }
+
+    /// The Companion as a chromeless overlay: the character alone, no surface,
+    /// no rim, no shadow. Its expression comes from the phases the pipeline
+    /// already publishes.
+    private var companionStyleBody: some View {
+        CompanionVisualizer(
+            state: OverlayVisualizerView.companionState(
+                for: self.overlayLifecycleState,
+                hasTranscription: self.hasTranscription
+            ),
+            variant: self.settings.companionVariant,
+            themePalette: self.overlayPalette,
+            glow: self.overlayAppearance.glow,
+            accessories: self.settings.companionAccessories,
+            level: self.contentState.bottomOverlayAudioLevel,
+            isActive: self.isPillAnimationActive,
+            reduceMotion: self.reduceMotion,
+            motion: self.settings.overlayMotionIntensity
+        )
+        .frame(width: self.companionSide, height: self.companionSide)
+    }
+
+    /// The animation on its own.
+    ///
+    /// No surface, no hairline rim, no shadow - the desktop is the background.
+    /// That also means the window reserves no canvas padding, so there is no
+    /// invisible frame catching clicks around the graphic.
+    private var svgBody: some View {
+        OverlayVisualizerView(
+            style: self.overlayAppearance.style,
+            palette: self.overlayPalette,
+            glow: self.overlayAppearance.glow,
+            level: self.contentState.bottomOverlayAudioLevel,
+            lifecycle: self.overlayLifecycleState,
+            isActive: self.isPillAnimationActive,
+            reduceMotion: self.reduceMotion,
+            noiseThreshold: self.visualizerThreshold,
+            barCount: self.layout.barCount,
+            barWidth: self.layout.barWidth,
+            barSpacing: self.layout.barSpacing,
+            canvasSize: CGSize(
+                width: self.layout.waveformWidth,
+                height: self.layout.waveformHeight
+            ),
+            surface: .chromeless,
+            motion: self.settings.overlayMotionIntensity,
+            companionVariant: self.settings.companionVariant,
+            companionAccessories: self.settings.companionAccessories,
+            hasTranscription: self.hasTranscription
+        )
+        .frame(width: self.layout.containerWidth, height: self.layout.overlayHeight)
+    }
+
+    /// Circular voice object: a very small orb that keeps the chosen style.
+    ///
+    /// Deliberately minimal - the orb exists to be glanced at, so it carries the
+    /// visualizer and nothing else: no preview, no mode label, no controls.
+    private var roundBody: some View {
+        OverlayVisualizerView(
+            style: self.overlayAppearance.style,
+            palette: self.overlayPalette,
+            glow: self.overlayAppearance.glow,
+            level: self.contentState.bottomOverlayAudioLevel,
+            lifecycle: self.overlayLifecycleState,
+            isActive: self.isPillAnimationActive,
+            reduceMotion: self.reduceMotion,
+            noiseThreshold: self.visualizerThreshold,
+            barCount: self.layout.barCount,
+            barWidth: self.layout.barWidth,
+            barSpacing: self.layout.barSpacing,
+            canvasSize: CGSize(
+                width: self.layout.waveformWidth,
+                height: self.layout.waveformHeight
+            ),
+            surface: self.overlaySurface,
+            motion: self.settings.overlayMotionIntensity,
+            companionVariant: self.settings.companionVariant,
+            companionAccessories: self.settings.companionAccessories,
+            hasTranscription: self.hasTranscription
+        )
+        .frame(width: self.layout.containerWidth, height: self.layout.overlayHeight)
+        .background(
+            ZStack {
+                Circle()
+                    .fill(self.overlaySurfaceFill)
+                    .shadow(
+                        color: Color.black.opacity(self.overlaySurface.shadowOpacity),
+                        radius: PillShadowMetrics.radius,
+                        x: 0,
+                        y: PillShadowMetrics.yOffset
+                    )
+
+                // Hairline themed rim, brightest under the thumb of the voice.
+                OrbitalGlow(
+                    cornerRadius: self.layout.cornerRadius,
+                    palette: self.overlayPalette,
+                    glow: self.overlayAppearance.glow,
+                    level: self.contentState.bottomOverlayAudioLevel,
+                    isActive: self.isPillAnimationActive,
+                    reduceMotion: self.reduceMotion,
+                    isMonochrome: self.overlayAppearance.style == .minimal,
+                    isCompleting: self.contentState.didCompleteDelivery
+                )
+            }
+        )
+        .padding(self.scaledCanvasPadding)
+    }
+
+    var standardBody: some View {
         VStack(spacing: max(4, self.layout.vPadding / 2)) {
             if self.layout.showsTopControls, !self.isCompactControls {
                 HStack {
@@ -3240,7 +3677,7 @@ struct BottomOverlayView: View {
                                     if self.settings.overlaySize == .small {
                                         Text(previewText)
                                             .font(.system(size: self.layout.transFontSize, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.9))
+                                            .foregroundStyle(self.overlaySurface.primaryText)
                                             .multilineTextAlignment(.leading)
                                             .lineLimit(1)
                                             .truncationMode(.head)
@@ -3249,7 +3686,7 @@ struct BottomOverlayView: View {
                                     } else {
                                         Text(previewText)
                                             .font(.system(size: self.layout.transFontSize, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.9))
+                                            .foregroundStyle(self.overlaySurface.primaryText)
                                             .multilineTextAlignment(.leading)
                                             .lineLimit(Int(self.previewMaxHeight / max(self.estimatedPreviewLineHeight, 1)))
                                             .truncationMode(.head)
@@ -3293,21 +3730,41 @@ struct BottomOverlayView: View {
                         self.leadingAppContextView
                     }
 
-                    // Waveform visualization
-                    BottomWaveformView(
-                        color: self.modeColor,
-                        layout: self.layout,
-                        visibleBarCount: self.isPillSize && self.showsSpokenSendIndicator ? 6 : nil
-                    )
-                    .frame(
-                        width: self.isPillSize && self.showsSpokenSendIndicator
-                            ? 32
-                            : self.layout.waveformWidth,
-                        height: self.layout.waveformHeight
+                    // Every format draws the same premium styles. Only the canvas
+                    // handed to the visualizer changes, so Small and Medium keep
+                    // Aurora / Wave / Pulse / Minimal instead of falling back to a
+                    // generic waveform that ignores the chosen style.
+                    // The component only reads the level and the lifecycle the
+                    // dictation pipeline already publishes.
+                    OverlayVisualizerView(
+                        style: self.overlayAppearance.style,
+                        palette: self.overlayPalette,
+                        glow: self.overlayAppearance.glow,
+                        level: self.contentState.bottomOverlayAudioLevel,
+                        lifecycle: self.overlayLifecycleState,
+                        isActive: self.isPillAnimationActive,
+                        reduceMotion: self.reduceMotion,
+                        noiseThreshold: self.visualizerThreshold,
+                        barCount: self.layout.barCount,
+                        barWidth: self.layout.barWidth,
+                        barSpacing: self.layout.barSpacing,
+                        canvasSize: CGSize(
+                            width: self.isPillSize ? self.pillVisualizerWidth : self.layout.waveformWidth,
+                            height: self.layout.waveformHeight
+                        ),
+                        surface: self.overlaySurface,
+                        motion: self.settings.overlayMotionIntensity,
+                        companionVariant: self.settings.companionVariant,
+                        companionAccessories: self.settings.companionAccessories,
+                        hasTranscription: self.hasTranscription
                     )
 
+                    if self.isPillSize, self.pillPreviewWidth > 0 {
+                        self.pillPreviewView
+                    }
+
                     // Compact overlays still need a visible mode because they have no selector.
-                    if self.layout.showsModeLabel, !self.layout.showsTopControls {
+                    if self.showsTextModeLabel, !self.layout.showsTopControls {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(self.modeLabel)
                                 .font(.system(size: self.layout.modeFontSize, weight: .semibold))
@@ -3352,70 +3809,56 @@ struct BottomOverlayView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .background(
                 ZStack {
-                    // Solid pitch black background, with a soft drop shadow so the pill lifts
+                    // Near-black surface, with a soft drop shadow so the pill lifts
                     // off whatever is behind it (pill size only; outer padding reserves room).
                     RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                        .fill(Color.black)
+                        .fill(self.overlaySurfaceFill)
                         .shadow(
-                            color: Color.black.opacity(self.isPillSize ? 0.32 : 0),
+                            color: Color.black.opacity(self.isPillSize ? self.overlaySurface.shadowOpacity : 0),
                             radius: self.isPillSize ? PillShadowMetrics.radius : 0,
                             x: 0,
                             y: self.isPillSize ? PillShadowMetrics.yOffset : 0
                         )
 
                     if self.isPillSize {
-                        // Glossy border: a bright highlight that slowly rotates around the edge.
-                        // Paused under reduce-motion to avoid continuous redraws on low-resource Macs.
-                        if self.reduceMotion || !self.contentState.isBottomOverlayPresented {
-                            RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                                .strokeBorder(
-                                    AngularGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .white.opacity(0.06), location: 0.00),
-                                            .init(color: .white.opacity(0.55), location: 0.13),
-                                            .init(color: .white.opacity(0.10), location: 0.30),
-                                            .init(color: .white.opacity(0.03), location: 0.55),
-                                            .init(color: .white.opacity(0.22), location: 0.80),
-                                            .init(color: .white.opacity(0.06), location: 1.00),
-                                        ]),
-                                        center: .center,
-                                        angle: .degrees(0)
-                                    ),
-                                    lineWidth: 1.2
-                                )
-                        } else {
-                            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                                let seconds = max(
-                                    0,
-                                    timeline.date.timeIntervalSince(self.borderAnimationStartedAt ?? timeline.date)
-                                )
-                                let angle = (seconds.truncatingRemainder(dividingBy: 6.0) / 6.0) * 360.0
-                                RoundedRectangle(cornerRadius: self.layout.cornerRadius)
-                                    .strokeBorder(
-                                        AngularGradient(
-                                            gradient: Gradient(stops: [
-                                                .init(color: .white.opacity(0.06), location: 0.00),
-                                                .init(color: .white.opacity(0.55), location: 0.13),
-                                                .init(color: .white.opacity(0.10), location: 0.30),
-                                                .init(color: .white.opacity(0.03), location: 0.55),
-                                                .init(color: .white.opacity(0.22), location: 0.80),
-                                                .init(color: .white.opacity(0.06), location: 1.00),
-                                            ]),
-                                            center: .center,
-                                            angle: .degrees(angle)
+                        // Barely visible top sheen: enough to give the capsule
+                        // depth without turning it into a glossy surface.
+                        RoundedRectangle(cornerRadius: self.layout.cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(
+                                            color: Color.white.opacity(self.reduceTransparency ? 0.02 : self.overlaySurface.sheenOpacity),
+                                            location: 0.00
                                         ),
-                                        lineWidth: 1.2
-                                    )
-                            }
-                        }
+                                        .init(color: Color.white.opacity(0.0), location: 0.55),
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .allowsHitTesting(false)
+
+                        // Hairline themed border with one slow highlight travelling
+                        // around the capsule. Stops completely while the pill is hidden.
+                        OrbitalGlow(
+                            cornerRadius: self.layout.cornerRadius,
+                            palette: self.overlayPalette,
+                            glow: self.overlayAppearance.glow,
+                            level: self.contentState.bottomOverlayAudioLevel,
+                            isActive: self.isPillAnimationActive,
+                            reduceMotion: self.reduceMotion,
+                            isMonochrome: self.overlayAppearance.style == .minimal,
+                            isCompleting: self.contentState.didCompleteDelivery
+                        )
                     } else {
                         // Inner border
                         RoundedRectangle(cornerRadius: self.layout.cornerRadius)
                             .strokeBorder(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(self.overlayBorderTopOpacity),
-                                        Color.white.opacity(self.overlayBorderBottomOpacity),
+                                        self.overlayPalette.secondary.opacity(self.overlayBorderTopOpacity),
+                                        self.overlayPalette.secondary.opacity(self.overlayBorderBottomOpacity),
                                     ],
                                     startPoint: .top,
                                     endPoint: .bottom
@@ -3433,12 +3876,13 @@ struct BottomOverlayView: View {
             }
         }
         .frame(
-            width: self.layout.usesFixedCanvas ? self.layout.overlayWidth : self.layout.containerWidth,
+            width: self.overlayCanvasWidth,
             height: self.overlayFrameHeight,
             alignment: .top
         )
-        // Reserve space around the pill so its drop shadow isn't clipped by the (content-sized) window.
-        .padding(self.isPillSize ? 26 : 0)
+        // Reserve space around the pill so its drop shadow and aura are not clipped
+        // by the content-sized window. Keep in sync with OverlayAnchorGeometry.
+        .padding(self.usesCanvasPadding ? self.scaledCanvasPadding : 0)
         .frame(maxHeight: .infinity, alignment: .top)
         .scaleEffect(self.overlayAnimatedScale, anchor: .center)
         .offset(y: self.overlayAnimatedOffsetY)
@@ -3450,7 +3894,14 @@ struct BottomOverlayView: View {
             BottomOverlayWindowController.shared.refreshSizeForContent()
         }
         .onChange(of: self.contentState.isBottomOverlayPresented) { _, presented in
-            self.borderAnimationStartedAt = presented ? Date() : nil
+            if presented {
+                self.beginEntryAnimation()
+            } else {
+                // The panel is already parked offscreen here, so resetting the
+                // entrance progress cannot be seen. It guarantees the next
+                // presentation starts from a fully transparent frame.
+                self.entryProgress = 0
+            }
         }
         .onChange(of: self.settings.enableStreamingPreview) { _, _ in
             self.dynamicPreviewResizeBucket = self.previewResizeBucket(for: self.currentPreviewSizingText)

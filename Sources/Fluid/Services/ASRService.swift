@@ -2129,6 +2129,7 @@ final class ASRService: ObservableObject {
         self.audioBuffer.clear(keepingCapacity: true) // specific optimization for restart
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
+        LiveTypingController.shared.reset()
         self.lastBoostHitTerm = nil
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
@@ -3338,6 +3339,7 @@ final class ASRService: ObservableObject {
         completedBufferHandoff = true
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
+        LiveTypingController.shared.reset()
         self.lastBoostHitTerm = nil
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
@@ -5456,6 +5458,10 @@ final class ASRService: ObservableObject {
                 self.partialTranscription = updatedText
                 self.previousFullTranscription = newText
 
+                // Experimental Live Typing: streams the revised partial into the
+                // target field when the user opted in. Does nothing otherwise.
+                LiveTypingController.shared.observePartial(updatedText)
+
                 DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
             }
             let rtf = duration / (Double(currentSampleCount) / 16_000.0)
@@ -5538,6 +5544,11 @@ final class ASRService: ObservableObject {
         tracksDictionaryCorrections: Bool = false,
         completion: (@MainActor (TypingService.DeliveryOutcome) -> Void)? = nil
     ) {
+        // Live Typing may already own the text in the field. When it does, the
+        // normal insertion must not run again.
+        if LiveTypingController.shared.consumeFinalDelivery(plainText: plan.plainText) {
+            return
+        }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
         let text = plan.plainText
@@ -5572,6 +5583,11 @@ final class ASRService: ObservableObject {
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil
     ) async -> TypingService.DeliveryOutcome {
+        // Same hand-off as the fire-and-forget path: Live Typing owns the text,
+        // so report the insertion as already done.
+        if LiveTypingController.shared.consumeFinalDelivery(plainText: plan.plainText) {
+            return .inserted
+        }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
         let text = plan.plainText
@@ -5918,6 +5934,7 @@ private extension ASRService {
             self.streamingWorkState.endSession(sessionID)
             self.partialTranscription = ""
             self.previousFullTranscription = ""
+            LiveTypingController.shared.reset()
             self.isProcessingChunk = false
             self.skipNextChunk = false
         }

@@ -84,6 +84,27 @@ struct SettingsBackupPayload: Codable, Equatable {
     let overlayPosition: SettingsStore.OverlayPosition
     let overlayBottomOffset: Double
     let overlaySize: SettingsStore.OverlaySize
+    // Optional so backups created before the premium overlay still decode.
+    let overlayVisualStyle: OverlayVisualStyle?
+    let overlayColorTheme: OverlayColorTheme?
+    let overlayGlowIntensity: OverlayGlowIntensity?
+    let showTargetAppIcon: Bool?
+    /// Optional so backups written before the user scale still decode.
+    let overlayScale: Double?
+    /// Optional so backups written before the surface options still decode.
+    let overlaySurfaceAppearance: OverlaySurfaceAppearance?
+    let overlayCustomThemeHex: String?
+    /// Optional so backups written before the advanced glow tuning still decode.
+    let overlayGlowStrength: Double?
+    /// Optional so backups written before the Companion still decode.
+    let companionScale: Double?
+    let companionVariant: CompanionVariant?
+    // Optional so backups written before accessories still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let companionAccessories: [String]?
+    let overlayMotionIntensity: MotionIntensity?
+    /// Optional so backups written before Live Typing still decode.
+    let liveTypingExperimental: Bool?
     let transcriptionPreviewCharLimit: Int
     let userTypingWPM: Int
     let saveTranscriptionHistory: Bool

@@ -1252,7 +1252,20 @@ struct SettingsView: View {
 
                 // Overlay Settings Card
                 ThemedCard(style: .standard) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        self.overlayStylePicker
+                        Divider().opacity(0.25)
+                        self.overlayThemePicker
+                        Divider().opacity(0.25)
+                        self.overlaySurfacePicker
+                        Divider().opacity(0.25)
+                        self.overlayGlowPicker
+                        Divider().opacity(0.25)
+                        self.overlayAnchorPicker
+                        Divider().opacity(0.25)
+                        self.overlayTargetAppIconToggle
+                        Divider().opacity(0.25)
+
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -1294,31 +1307,6 @@ struct SettingsView: View {
                                     .foregroundStyle(self.settingsTertiaryText)
                                     .frame(width: 36)
                             }
-
-                            Divider().padding(.vertical, 8)
-
-                            // Overlay Position
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Overlay Position")
-                                        .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.settingsTitleText)
-                                    Text("Where the recording indicator appears on screen")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.settingsSecondaryText)
-                                }
-
-                                Spacer()
-
-                                Picker("", selection: self.$settings.overlayPosition) {
-                                    ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
-                                        Text(position.displayName).tag(position)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 170, alignment: .trailing)
-                            }
-                            .settingsSearchTarget(.overlayPosition)
 
                             Divider().padding(.vertical, 8)
 
@@ -1368,13 +1356,13 @@ struct SettingsView: View {
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(self.settings.overlayPosition == .bottom ? "Overlay Size" : "Notch Style")
+                                    Text(self.settings.overlayPosition.usesNotchPresentation ? "Notch Style" : "Overlay Size")
                                         .font(self.theme.typography.bodyStrong)
                                         .foregroundStyle(self.settingsTitleText)
                                     Text(
-                                        self.settings.overlayPosition == .bottom
-                                            ? "How large the recording indicator appears"
-                                            : "Choose the regular notch or the compact layout"
+                                        self.settings.overlayPosition.usesNotchPresentation
+                                            ? "Choose the regular notch or the compact layout"
+                                            : "How large the recording indicator appears"
                                     )
                                     .font(self.theme.typography.bodySmall)
                                     .foregroundStyle(self.settingsSecondaryText)
@@ -1382,9 +1370,9 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                if self.settings.overlayPosition == .bottom {
+                                if self.settings.overlayPosition.usesFloatingOverlay {
                                     Picker("", selection: self.$settings.overlaySize) {
-                                        ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
+                                        ForEach(SettingsStore.OverlaySize.selectable, id: \.self) { size in
                                             Text(size.displayName).tag(size)
                                         }
                                     }
@@ -1401,6 +1389,55 @@ struct SettingsView: View {
                                 }
                             }
                             .settingsSearchTarget(.overlayStyle)
+
+                            // Scale only affects the floating pill: the notch
+                            // presentation is docked to the hardware cutout.
+                            if self.settings.overlayPosition.usesFloatingOverlay {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Scale")
+                                            .font(self.theme.typography.bodyStrong)
+                                            .foregroundStyle(self.settingsTitleText)
+                                        Text("Grow or shrink the overlay around the chosen format")
+                                            .font(self.theme.typography.bodySmall)
+                                            .foregroundStyle(self.settingsSecondaryText)
+                                    }
+
+                                    Spacer()
+
+                                    Text("\(Int((self.settings.overlayScale * 100).rounded()))%")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(self.settingsSecondaryText)
+
+                                    Button("Reset") {
+                                        self.settings.overlayScale = SettingsStore.overlayScaleDefault
+                                    }
+                                    .buttonStyle(.link)
+                                    .disabled(abs(self.settings.overlayScale - SettingsStore.overlayScaleDefault) < 0.0001)
+                                }
+
+                                HStack(spacing: 10) {
+                                    Text("50%")
+                                        .font(.caption)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                        .frame(width: 36, alignment: .trailing)
+
+                                    Slider(
+                                        value: Binding(
+                                            get: { self.settings.overlayScale },
+                                            set: { self.settings.overlayScale = $0 }
+                                        ),
+                                        in: SettingsStore.overlayScaleRange,
+                                        step: 0.05
+                                    )
+                                    .controlSize(.regular)
+
+                                    Text("200%")
+                                        .font(.caption)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                        .frame(width: 36, alignment: .leading)
+                                }
+                            }
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -1422,8 +1459,38 @@ struct SettingsView: View {
                             }
                             .settingsSearchTarget(.livePreview)
 
-                            // Bottom overlay specific settings (only show when bottom is selected)
-                            if self.settings.overlayPosition == .bottom {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Live Typing (Experimental)")
+                                            .font(self.theme.typography.bodyStrong)
+                                            .foregroundStyle(self.settingsTitleText)
+                                        Text("Write the transcription into the field while you speak, then revise it")
+                                            .font(self.theme.typography.bodySmall)
+                                            .foregroundStyle(self.settingsSecondaryText)
+                                    }
+
+                                    Spacer()
+
+                                    Toggle("", isOn: Binding(
+                                        get: { self.settings.liveTypingExperimental },
+                                        set: { self.settings.liveTypingExperimental = $0 }
+                                    ))
+                                    .labelsHidden()
+                                }
+
+                                Text("Off by default. FluidVoice only writes while it can read the field back and prove it owns the range it wrote; otherwise it falls back to the normal final paste. Not certified against any specific application yet.")
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.settingsSecondaryText)
+
+                                if self.settings.liveTypingExperimental {
+                                    LiveTypingStatusRow()
+                                }
+                            }
+                            .settingsSearchTarget(.liveTyping)
+
+                            // Bottom-anchored overlays only.
+                            if self.settings.overlayPosition.isBottomAnchored {
                                 Divider().padding(.vertical, 4)
 
                                 // Bottom Offset
@@ -1831,6 +1898,30 @@ struct SettingsView: View {
     }
 
     // MARK: - Helper Views
+
+    private func companionPickerRow<T: Hashable & Identifiable>(
+        _ title: String,
+        selection: Binding<T>,
+        cases: [T],
+        label: @escaping (T) -> String
+    ) -> some View {
+        HStack {
+            Text(title)
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.settingsTitleText)
+
+            Spacer()
+
+            Picker("", selection: selection) {
+                ForEach(cases) { value in
+                    Text(label(value)).tag(value)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 190, alignment: .trailing)
+        }
+    }
 
     private func settingsToggleRow(
         title: String,
@@ -2297,6 +2388,290 @@ private extension SettingsView {
             primaryTarget: primaryTarget,
             scrollCoordinator: self.searchScrollCoordinator
         )
+    }
+
+    // MARK: - Overlay Appearance Rows
+
+    func overlaySettingHeader(_ title: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.settingsTitleText)
+            Text(subtitle)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+        }
+    }
+
+    var overlayStylePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.overlaySettingHeader(
+                "Overlay Style",
+                "How the live audio level is drawn while you dictate"
+            )
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
+                spacing: 10
+            ) {
+                ForEach(OverlayVisualStyle.allCases, id: \.self) { style in
+                    OverlayStyleCard(
+                        style: style,
+                        theme: self.settings.overlayColorTheme,
+                        glow: self.settings.overlayGlowIntensity,
+                        surface: self.settings.overlaySurfaceAppearance,
+                        isSelected: self.settings.overlayVisualStyle == style
+                    ) {
+                        self.settings.overlayVisualStyle = style
+                    }
+                }
+            }
+
+            if self.settings.overlayVisualStyle == .companion {
+                Divider().padding(.vertical, 4)
+                self.companionStyleOptions
+            }
+        }
+        .settingsSearchTarget(.overlayVisualStyle)
+    }
+
+    /// Companion-only options, inside the Style section because the Companion is
+    /// a *style*: the element changes its material and its palette, the
+    /// accessories change its silhouette. Colours come from the shared theme.
+    var companionStyleOptions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.companionPickerRow(
+                "Element",
+                selection: self.$settings.companionVariant,
+                cases: CompanionVariant.allCases,
+                label: { $0.displayName }
+            )
+
+            Text(self.settings.companionVariant.summary)
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Size")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Spacer()
+                    Text("\(Int((self.settings.companionScale * 100).rounded()))%")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(self.settingsSecondaryText)
+                    Button("Reset") {
+                        self.settings.companionScale = SettingsStore.companionScaleDefault
+                    }
+                    .buttonStyle(.link)
+                    .disabled(abs(self.settings.companionScale - SettingsStore.companionScaleDefault) < 0.0001)
+                }
+                Slider(
+                    value: Binding(
+                        get: { self.settings.companionScale },
+                        set: { self.settings.companionScale = $0 }
+                    ),
+                    in: SettingsStore.companionScaleRange,
+                    step: 0.05
+                )
+                .controlSize(.regular)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(CompanionAccessory.allCases, id: \.self) { accessory in
+                    Toggle(accessory.displayName, isOn: Binding(
+                        get: { self.settings.companionAccessories.contains(accessory) },
+                        set: { isOn in
+                            var selection = self.settings.companionAccessories
+                            if isOn {
+                                selection.insert(accessory)
+                            } else {
+                                selection.remove(accessory)
+                            }
+                            self.settings.companionAccessories = selection
+                        }
+                    ))
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .settingsSearchTarget(.companion)
+    }
+
+    var overlayThemePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.overlaySettingHeader(
+                "Color Theme",
+                "Shared by the visualizer and the orbital aura"
+            )
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                ],
+                spacing: 8
+            ) {
+                ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                    OverlayThemeChip(
+                        theme: theme,
+                        isSelected: self.settings.overlayColorTheme == theme
+                    ) {
+                        self.settings.overlayColorTheme = theme
+                    }
+                }
+            }
+
+            // One primary colour is enough: the rest of the palette is derived.
+            if self.settings.overlayColorTheme == .custom {
+                HStack(spacing: 10) {
+                    ColorPicker(
+                        "",
+                        selection: Binding(
+                            get: { Color(hex: self.settings.overlayCustomThemeHex) ?? .purple },
+                            set: { self.settings.overlayCustomThemeHex = $0.overlayHexString }
+                        ),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+
+                    Text("Primary color")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+
+                    Spacer()
+
+                    Button("Reset") {
+                        self.settings.overlayCustomThemeHex = OverlayCustomTheme.defaultHex
+                    }
+                    .buttonStyle(.link)
+                    .disabled(self.settings.overlayCustomThemeHex.uppercased() == OverlayCustomTheme.defaultHex.uppercased())
+                }
+            }
+        }
+        .settingsSearchTarget(.overlayColorTheme)
+    }
+
+    var overlaySurfacePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.overlaySettingHeader(
+                "Surface",
+                "Dark keeps the near-black pill; Light follows macOS Light Mode"
+            )
+
+            Picker("", selection: self.$settings.overlaySurfaceAppearance) {
+                ForEach(OverlaySurfaceAppearance.allCases, id: \.self) { appearance in
+                    Text(appearance.displayName).tag(appearance)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .settingsSearchTarget(.overlayColorTheme)
+    }
+
+    var overlayGlowPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.overlaySettingHeader(
+                "Glow Intensity",
+                "Strength of the border, aura and visualizer glow"
+            )
+
+            OverlayGlowPicker(selection: self.$settings.overlayGlowIntensity)
+
+            // Secondary control: the preset above sets the base, this corrects it.
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Text("50%")
+                            .font(.caption)
+                            .foregroundStyle(self.settingsSecondaryText)
+                            .frame(width: 36, alignment: .trailing)
+
+                        Slider(
+                            value: Binding(
+                                get: { self.settings.overlayGlowStrength },
+                                set: { self.settings.overlayGlowStrength = $0 }
+                            ),
+                            in: OverlayGlowTuning.range,
+                            step: 0.05
+                        )
+                        .controlSize(.regular)
+
+                        Text("150%")
+                            .font(.caption)
+                            .foregroundStyle(self.settingsSecondaryText)
+                            .frame(width: 36, alignment: .leading)
+
+                        Text("\(Int((self.settings.overlayGlowStrength * 100).rounded()))%")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(self.settingsSecondaryText)
+                            .frame(width: 44, alignment: .trailing)
+                    }
+
+                    Text("Fine tuning applied on top of the preset.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+
+                    Divider().padding(.vertical, 2)
+
+                    Text("Motion Intensity")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.settingsTitleText)
+                    Picker("", selection: self.$settings.overlayMotionIntensity) {
+                        ForEach(MotionIntensity.allCases, id: \.self) { intensity in
+                            Text(intensity.displayName).tag(intensity)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Text("Modulates how far Aurora and the Companion travel.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.settingsSecondaryText)
+                }
+                .padding(.top, 6)
+            } label: {
+                Text("Advanced")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.settingsTitleText)
+            }
+        }
+        .settingsSearchTarget(.overlayGlowIntensity)
+    }
+
+    var overlayAnchorPicker: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Position")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.settingsTitleText)
+                Text(
+                    self.settings.overlayPosition.usesNotchPresentation
+                        ? "Top Center keeps the notch presentation. Any other anchor uses the floating pill."
+                        : "Where the floating recording pill appears on the active screen"
+                )
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            OverlayAnchorGrid(selection: self.$settings.overlayPosition)
+                .frame(width: 190)
+        }
+        .settingsSearchTarget(.overlayPosition)
+    }
+
+    var overlayTargetAppIconToggle: some View {
+        self.settingsToggleRow(
+            title: "Show Target App Icon",
+            description: "Show the icon of the app that will receive the dictation.",
+            isOn: self.$settings.showTargetAppIcon
+        )
+        .settingsSearchTarget(.showTargetAppIcon)
     }
 
     var settingsTitleText: Color {

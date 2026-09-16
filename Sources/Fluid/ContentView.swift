@@ -1464,7 +1464,7 @@ struct ContentView: View {
             return SettingsStore.shared.saveTranscriptionHistory &&
                 SettingsStore.shared.saveAudioWithTranscriptionHistory
         case .bottomOffset:
-            return self.settings.overlayPosition == .bottom
+            return self.settings.overlayPosition.isBottomAnchored
         default:
             return true
         }
