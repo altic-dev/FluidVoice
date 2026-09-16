@@ -33,10 +33,28 @@ final class LiveTypingController: ObservableObject {
 
     private var session: LiveTypingSession?
     private var target: LiveTypingAXTarget?
+    /// The exact field that was focused when the recording started. Live Typing
+    /// never resolves "whatever is focused now" on its own: a partial may only
+    /// be written into the field the user began dictating into.
+    private var recordingTarget: LiveTypingAXTarget?
     /// Highest level the current session is still allowed to use.
     private(set) var effectiveLevel: LiveTypingLevel = .finalOnly
 
     private init() {}
+
+    /// Records the field the recording started in. Called once per dictation,
+    /// before any partial can arrive.
+    func bindRecordingFocus(_ focusTarget: TypingService.CapturedFocusTarget?) {
+        guard let focusTarget else {
+            self.recordingTarget = nil
+            return
+        }
+        self.recordingTarget = LiveTypingAXTarget(
+            pid: focusTarget.pid,
+            element: focusTarget.element,
+            bundleIdentifier: NSRunningApplication(processIdentifier: focusTarget.pid)?.bundleIdentifier
+        )
+    }
 
     var isStreaming: Bool {
         self.session?.hasWritten == true
@@ -56,6 +74,24 @@ final class LiveTypingController: ObservableObject {
             self.beginSession()
         }
         guard var session = self.session, let target = self.target else { return }
+        // A session that already wrote text and then lost ownership leaves a
+        // tombstone: the partial is still in the field, so nothing may start a
+        // second session on top of it.
+        guard !session.abortedAfterWrite else { return }
+
+        // The field the recording started in must still be the focused one.
+        // Otherwise this partial would be written into whatever the user moved
+        // to, so the session stops and the final paste is suppressed instead.
+        guard target.isStillFocused() else {
+            session.markAborted()
+            self.session = session
+            DebugLogger.shared.info(
+                "Live typing stopped: focus moved to another field",
+                source: "LiveTyping"
+            )
+            return
+        }
+
         guard let value = target.value() else {
             self.downgrade(&session)
             self.session = session
@@ -92,29 +128,43 @@ final class LiveTypingController: ObservableObject {
                 "Live typing stopped: \(reason.rawValue)",
                 source: "LiveTyping"
             )
-            self.reset()
+            // Keep the session as a tombstone when it already wrote text, so a
+            // later partial can not restart it and the final transcript is not
+            // pasted a second time.
+            session.markAborted()
+            self.session = session
         }
     }
 
     /// Called just before the normal insertion. Returns true when Live Typing
     /// already owns the text and the caller must not insert it again.
     func consumeFinalDelivery(plainText: String) -> Bool {
-        guard var session = self.session, let target = self.target else {
+        guard var session = self.session else {
             self.reset()
             return false
         }
         defer { self.reset() }
 
+        // A session that wrote text and then had to stop still owns the outcome:
+        // its partial is in the field, so running the normal paste here would
+        // insert the transcript a second time.
+        if session.abortedAfterWrite {
+            DebugLogger.shared.info(
+                "Live typing stopped after writing; keeping the transcript off the field",
+                source: "LiveTyping"
+            )
+            self.preserveToPasteboard(plainText)
+            return true
+        }
+
+        guard let target = self.target else { return false }
         guard session.hasWritten else { return false }
 
         // Focus must still be exactly where the session opened. Writing the final
         // text into a background field (or a different field of the same app)
         // would surprise the user, so the transcript goes to the pasteboard
         // instead of being inserted somewhere they are not looking.
-        guard let focused = LiveTypingAXTarget.capture(preferredPID: nil),
-              focused.pid == target.pid,
-              CFEqual(focused.element, target.element)
-        else {
+        guard target.isStillFocused() else {
             DebugLogger.shared.info(
                 "Live typing focus moved; keeping the transcript on the pasteboard",
                 source: "LiveTyping"
@@ -169,11 +219,15 @@ final class LiveTypingController: ObservableObject {
     // MARK: - Private
 
     private func beginSession() {
-        guard let target = LiveTypingAXTarget.capture(preferredPID: nil) else {
-            // No readable field: stay at Level 3, which is the behaviour the app
-            // has always had.
+        // Only ever the field the recording started in, and only while it is
+        // still the focused one.
+        guard let target = self.recordingTarget, target.isStillFocused() else {
+            // No captured target, or the user already moved on: stay at Level 3,
+            // which is the behaviour the app has always had.
             self.effectiveLevel = .finalOnly
-            self.lastReport = "No focused text field (or Accessibility not granted). Level 3 (final paste)."
+            self.lastReport =
+                "Live Typing only writes into the field that was focused when recording started. "
+                + "Level 3 (final paste)."
             return
         }
         let capabilities = target.capabilities()
@@ -222,9 +276,53 @@ final class LiveTypingController: ObservableObject {
         ) == text
     }
 
+    /// A restorative copy of the user's clipboard.
+    private struct PasteboardSnapshot {
+        let items: [[NSPasteboard.PasteboardType: Data]]
+    }
+
+    private static func capturePasteboard(_ pasteboard: NSPasteboard) -> PasteboardSnapshot {
+        let items = pasteboard.pasteboardItems?.map { item -> [NSPasteboard.PasteboardType: Data] in
+            var data: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let value = item.data(forType: type) { data[type] = value }
+            }
+            return data
+        } ?? []
+        return PasteboardSnapshot(items: items)
+    }
+
+    private static func restorePasteboard(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        guard !snapshot.items.isEmpty else { return }
+        let restored = snapshot.items.map { entry -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in entry { item.setData(data, forType: type) }
+            return item
+        }
+        _ = pasteboard.writeObjects(restored)
+    }
+
+    /// Makes the final transcript available without destroying what the user had
+    /// copied: it is written as a transient, auto-generated item (so clipboard
+    /// managers stay out of it) and the previous contents are put back a moment
+    /// later unless the user moved on. The transcript is also in the dictation
+    /// history, so nothing is lost either way.
     private func preserveToPasteboard(_ text: String) {
         let pasteboard = NSPasteboard.general
+        let snapshot = Self.capturePasteboard(pasteboard)
+
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard pasteboard.writeObjects([TypingService.makeTransientPasteboardItem(text)]) else {
+            Self.restorePasteboard(snapshot, to: pasteboard)
+            return
+        }
+        let ourChangeCount = pasteboard.changeCount
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            // Only restore when the clipboard is still exactly what we wrote, so
+            // a copy the user made in the meantime is never clobbered.
+            guard pasteboard.changeCount == ourChangeCount else { return }
+            Self.restorePasteboard(snapshot, to: pasteboard)
+        }
     }
 }

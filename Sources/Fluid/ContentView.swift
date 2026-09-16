@@ -2082,6 +2082,9 @@ struct ContentView: View {
         // Used to restore focus when the user interacts with overlay dropdowns.
         let focusTarget = TypingService.captureSystemFocusTarget()
         self.recordingFocusTarget = focusTarget
+        // Live Typing may only ever write into this exact field, so it is bound
+        // here rather than resolved again when the first partial arrives.
+        LiveTypingController.shared.bindRecordingFocus(focusTarget)
         let focusedPID = focusTarget?.pid
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         NotchContentState.shared.recordingTargetPID = focusedPID

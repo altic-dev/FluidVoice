@@ -91,6 +91,10 @@ nonisolated struct LiveTypingSession: Equatable {
     private(set) var level: LiveTypingLevel
     /// True once at least one write reached the field.
     private(set) var hasWritten: Bool
+    /// True once the session stopped rewriting *after* writing. The field still
+    /// holds our text, so the normal paste must stay suppressed for the rest of
+    /// this dictation - nothing may start a second session on top of it.
+    private(set) var abortedAfterWrite: Bool
 
     init(
         sessionID: UUID = UUID(),
@@ -110,6 +114,7 @@ nonisolated struct LiveTypingSession: Equatable {
         self.lastKnownValue = initialValue
         self.level = level
         self.hasWritten = false
+        self.abortedAfterWrite = false
     }
 
     /// The exact range FluidVoice owns, in UTF-16 units.
@@ -181,6 +186,15 @@ nonisolated struct LiveTypingSession: Equatable {
     /// Records a field value FluidVoice observed without writing to it.
     mutating func noteObservedValue(_ value: String) {
         self.lastKnownValue = value
+    }
+
+    /// Marks the session as stopped. A session that never wrote anything is
+    /// simply over - the normal paste still runs - but one that did write leaves
+    /// a tombstone so its text is reconciled instead of duplicated.
+    mutating func markAborted() {
+        if self.hasWritten {
+            self.abortedAfterWrite = true
+        }
     }
 
     /// Level 2 to 3 never loses text: the session simply stops rewriting and the

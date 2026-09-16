@@ -1417,7 +1417,7 @@ struct SettingsView: View {
                                 }
 
                                 HStack(spacing: 10) {
-                                    Text("50%")
+                                    Text("25%")
                                         .font(.caption)
                                         .foregroundStyle(self.settingsSecondaryText)
                                         .frame(width: 36, alignment: .trailing)
@@ -1432,7 +1432,7 @@ struct SettingsView: View {
                                     )
                                     .controlSize(.regular)
 
-                                    Text("200%")
+                                    Text("300%")
                                         .font(.caption)
                                         .foregroundStyle(self.settingsSecondaryText)
                                         .frame(width: 36, alignment: .leading)

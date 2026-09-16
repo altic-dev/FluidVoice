@@ -69,32 +69,19 @@ struct LiveTypingAXTarget {
     let element: AXUIElement
     let bundleIdentifier: String?
 
-    /// Resolves the focused element, reusing the same system-wide lookup the
-    /// typing service uses. Returns nil when Accessibility is not granted or when
-    /// the focused element is not a text field.
-    static func capture(preferredPID: pid_t?) -> LiveTypingAXTarget? {
-        guard AXIsProcessTrusted() else { return nil }
-
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        )
-        guard result == .success, let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else { return nil }
-
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        guard pid > 0 else { return nil }
-        // A session may only continue in the process it started in.
-        if let preferredPID, preferredPID > 0, pid != preferredPID { return nil }
-
-        let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-        return LiveTypingAXTarget(pid: pid, element: element, bundleIdentifier: bundle)
+    /// Whether a subrole identifies a field that must never be streamed into.
+    ///
+    /// A subrole we cannot read is *not* proof that the field is safe, so an
+    /// unknown or absent value is treated as secure. The caller then falls back
+    /// to the final-only paste it has always used. Pure and nonisolated so the
+    /// conservative rule is testable without a live Accessibility element.
+    nonisolated static func isSecureSubrole(_ subrole: String?) -> Bool {
+        // An absent *or empty* subrole is just as unreadable as a failed lookup.
+        guard let subrole,
+              !subrole.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return true }
+        return subrole == (kAXSecureTextFieldSubrole as String)
+            || subrole.localizedCaseInsensitiveContains("secure")
     }
 
     /// Secure fields must never be streamed into.
@@ -109,8 +96,18 @@ struct LiveTypingAXTarget {
             // field. The caller falls back to final-only delivery.
             return true
         }
-        return subrole == (kAXSecureTextFieldSubrole as String)
-            || subrole.localizedCaseInsensitiveContains("secure")
+        return Self.isSecureSubrole(subrole)
+    }
+
+    /// True when this exact element is still the system-wide focused element.
+    ///
+    /// Live Typing re-checks this before every write, so a revised partial can
+    /// never land in a field the user moved to after recording started. Reuses
+    /// the same exact-element comparison the final delivery path already uses.
+    func isStillFocused() -> Bool {
+        TypingService.isExactFocusTargetActive(
+            TypingService.CapturedFocusTarget(pid: self.pid, window: nil, element: self.element)
+        )
     }
 
     func value() -> String? {
@@ -212,8 +209,9 @@ struct LiveTypingAXTarget {
     func capabilities() -> LiveTypingCapabilities {
         let role = self.stringAttribute(kAXRoleAttribute as CFString)
         let subrole = self.stringAttribute(kAXSubroleAttribute as CFString)
-        let isSecure = subrole == (kAXSecureTextFieldSubrole as String)
-            || (subrole ?? "").localizedCaseInsensitiveContains("secure")
+        // Same conservative rule as isSecure(): an unreadable subrole is not
+        // proof that the field is safe, so it must not be streamed into.
+        let isSecure = Self.isSecureSubrole(subrole)
         return LiveTypingCapabilities(
             role: role,
             subrole: subrole,

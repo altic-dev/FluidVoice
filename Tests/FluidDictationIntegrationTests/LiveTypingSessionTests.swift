@@ -154,6 +154,69 @@ final class LiveTypingSessionTests: XCTestCase {
         XCTAssertEqual(session.partial("Bonjour tout le monde", currentValue: "Bonjour"), .none)
     }
 
+    // MARK: - Abort tombstone
+
+    /// Once a session has written text and then stopped, the field still holds
+    /// that text: the final delivery must keep being suppressed instead of
+    /// pasting the transcript a second time.
+    func testAbortAfterAWriteLeavesATombstone() {
+        var session = self.session()
+        session.noteWrite("Je pense que")
+        session.markAborted()
+        XCTAssertTrue(session.hasWritten)
+        XCTAssertTrue(session.abortedAfterWrite)
+        // The tombstone survives further bookkeeping, so a later partial can
+        // never start a fresh session over the same field.
+        session.noteObservedValue("Je pense que demain")
+        XCTAssertTrue(session.abortedAfterWrite)
+    }
+
+    /// A session that never wrote anything is simply over: the normal paste
+    /// still has to run, so no tombstone is left behind.
+    func testAbortWithoutAWriteLeavesNoTombstone() {
+        var session = self.session()
+        session.markAborted()
+        XCTAssertFalse(session.abortedAfterWrite)
+        XCTAssertEqual(session.final("Bonjour", currentValue: ""), .fallbackToDelivery)
+    }
+
+    func testFreshSessionHasNoTombstone() {
+        XCTAssertFalse(self.session().abortedAfterWrite)
+    }
+
+    // MARK: - Secure fields
+
+    /// An unreadable subrole is not proof that a field is safe, so it must be
+    /// treated exactly like a secure one.
+    func testUnknownSubroleIsTreatedAsSecure() {
+        XCTAssertTrue(LiveTypingAXTarget.isSecureSubrole(nil))
+        XCTAssertTrue(LiveTypingAXTarget.isSecureSubrole(""))
+        XCTAssertTrue(LiveTypingAXTarget.isSecureSubrole("AXSecureTextField"))
+        XCTAssertTrue(LiveTypingAXTarget.isSecureSubrole("AXSecureTextArea"))
+        XCTAssertTrue(LiveTypingAXTarget.isSecureSubrole("AXSecureTextFieldSubrole"))
+    }
+
+    func testOrdinarySubrolesAreNotSecure() {
+        XCTAssertFalse(LiveTypingAXTarget.isSecureSubrole("AXTextField"))
+        XCTAssertFalse(LiveTypingAXTarget.isSecureSubrole("AXTextArea"))
+        XCTAssertFalse(LiveTypingAXTarget.isSecureSubrole("AXSearchField"))
+    }
+
+    /// A nil subrole is reported as secure by the probe, so the predicted level
+    /// can never be Level 1.
+    func testCapabilitiesWithAnUnreadableSubroleStayFinalOnly() {
+        let unknown = LiveTypingCapabilities(
+            role: "AXTextField",
+            subrole: nil,
+            canReadValue: true,
+            canReadSelection: true,
+            valueIsSettable: true,
+            selectedTextIsSettable: true,
+            isSecure: LiveTypingAXTarget.isSecureSubrole(nil)
+        )
+        XCTAssertEqual(unknown.predictedLevel, .finalOnly)
+    }
+
     // MARK: - Levels
 
     func testDowngradeOnlyMovesDownwards() {

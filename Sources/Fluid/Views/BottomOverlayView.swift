@@ -290,9 +290,9 @@ final class BottomOverlayWindowController {
         self.clearPresentationResources()
 
         if self.isCompletionFlashPending {
-            // Success path only: let the check land, then run the normal
-            // dismissal. Bounded, and superseded instantly by a new recording.
-            NotchContentState.shared.clearDeliveryCompletion()
+            // Success path only: the completion visual owns this bounded dwell,
+            // then the normal dismissal runs. Superseded instantly by a new
+            // recording; text delivery has already finished either way.
             self.startDismissalVisual()
             try? await Task.sleep(nanoseconds: UInt64(Self.completionFlashDuration * 1_000_000_000))
         } else {
@@ -304,6 +304,9 @@ final class BottomOverlayWindowController {
             return .superseded
         }
 
+        // Cleared only after the dwell: clearing it first left the overlay
+        // dismissing without ever showing the completion it was flashing.
+        NotchContentState.shared.clearDeliveryCompletion()
         self.parkWindowOffscreen()
         window.alphaValue = 1
         NotchContentState.shared.setBottomOverlayPresented(false)

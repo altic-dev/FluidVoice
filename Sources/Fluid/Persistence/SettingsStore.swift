@@ -1828,10 +1828,10 @@ final class SettingsStore: ObservableObject {
     var enableStreamingPreview: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableStreamingPreview)
-            // Off unless the user turned it on: the compact pill is the product
-            // default, and an explicit choice is still preserved because the key
-            // is only absent when it was never written.
-            return value as? Bool ?? false
+            // Unchanged upstream default: an install that never wrote the key
+            // keeps the live preview it already had. Only an explicit choice is
+            // read here, so upgrading never silently disables it.
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
@@ -2309,6 +2309,10 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.overlayVisualStyle)
+            // The styles do not share a footprint (Companion is chromeless and
+            // bigger), so a visible panel must re-measure instead of keeping the
+            // previous frame until an unrelated update arrives.
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
         }
     }
 
@@ -2422,6 +2426,7 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(clamped, forKey: Keys.companionScale)
             Self.postCompanionSettingsChanged()
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
         }
     }
 
