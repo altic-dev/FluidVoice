@@ -39,6 +39,12 @@ final class NotchOverlayManager {
         let allowsCommandExpansion: Bool
         let allowsCommandActions: Bool
         let allowsExpandedCommandOutput: Bool
+        /// Ambient Glow hides the app icon so the animation owns the cutout.
+        let showsAppIcon: Bool
+        /// Canvas handed to the premium style. Ambient Glow gives it much more
+        /// room than the compact row does.
+        let visualizerWidth: CGFloat
+        let visualizerHeight: CGFloat
     }
 
     private var notch: RecordingNotch?
@@ -185,8 +191,8 @@ final class NotchOverlayManager {
         ActiveAppMonitor.shared.startMonitoring()
         let targetScreen = OverlayScreenResolver.screenForCurrentPointer()
 
-        // Route to bottom overlay if user preference is set
-        if SettingsStore.shared.overlayPosition == .bottom {
+        // The floating panel owns every anchor except the legacy top-notch one.
+        if SettingsStore.shared.overlayPosition.usesFloatingOverlay {
             Self.overlayBench("show_internal_route target=bottom")
             self.showBottomOverlay(audioLevelPublisher: audioLevelPublisher, mode: mode)
             return
@@ -722,7 +728,7 @@ final class NotchOverlayManager {
 
     var shouldShowOrTrackLivePreviewText: Bool {
         guard SettingsStore.shared.enableStreamingPreview else { return false }
-        if SettingsStore.shared.overlayPosition == .bottom {
+        if SettingsStore.shared.overlayPosition.usesFloatingOverlay {
             return true
         }
 
@@ -731,7 +737,7 @@ final class NotchOverlayManager {
     }
 
     var shouldSyncCommandConversationToNotch: Bool {
-        if SettingsStore.shared.overlayPosition == .bottom {
+        if SettingsStore.shared.overlayPosition.usesFloatingOverlay {
             return true
         }
 
@@ -743,7 +749,7 @@ final class NotchOverlayManager {
     }
 
     private var enableNotchFeatures: Bool {
-        SettingsStore.shared.overlayPosition == .top || self.supportsCommandNotchUI
+        SettingsStore.shared.overlayPosition.usesNotchPresentation || self.supportsCommandNotchUI
     }
 
     /// Check if any notch (regular or expanded) is visible
@@ -781,7 +787,7 @@ final class NotchOverlayManager {
     }
 }
 
-private extension NotchOverlayManager.NotchPresentationPolicy {
+extension NotchOverlayManager.NotchPresentationPolicy {
     static let standard = Self(
         usesCompactPresentation: false,
         showsPromptSelector: true,
@@ -789,7 +795,10 @@ private extension NotchOverlayManager.NotchPresentationPolicy {
         showsModeLabel: true,
         allowsCommandExpansion: true,
         allowsCommandActions: true,
-        allowsExpandedCommandOutput: true
+        allowsExpandedCommandOutput: true,
+        showsAppIcon: true,
+        visualizerWidth: 48,
+        visualizerHeight: 18
     )
 
     static let minimal = Self(
@@ -799,7 +808,24 @@ private extension NotchOverlayManager.NotchPresentationPolicy {
         showsModeLabel: true,
         allowsCommandExpansion: false,
         allowsCommandActions: false,
-        allowsExpandedCommandOutput: false
+        allowsExpandedCommandOutput: false,
+        showsAppIcon: true,
+        visualizerWidth: 48,
+        visualizerHeight: 18
+    )
+
+    /// The reference look: a fine band of light living under the cutout.
+    static let ambient = Self(
+        usesCompactPresentation: false,
+        showsPromptSelector: false,
+        showsStreamingPreview: false,
+        showsModeLabel: false,
+        allowsCommandExpansion: false,
+        allowsCommandActions: false,
+        allowsExpandedCommandOutput: false,
+        showsAppIcon: false,
+        visualizerWidth: 88,
+        visualizerHeight: 24
     )
 
     static func forMode(_ mode: SettingsStore.NotchPresentationMode, supportsCompactPresentation: Bool) -> Self {
@@ -808,6 +834,8 @@ private extension NotchOverlayManager.NotchPresentationPolicy {
             return .standard
         case .minimal:
             return supportsCompactPresentation ? .minimal : .standard
+        case .ambient:
+            return .ambient
         }
     }
 }

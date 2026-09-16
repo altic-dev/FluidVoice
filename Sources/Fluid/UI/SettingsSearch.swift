@@ -50,11 +50,17 @@ enum SettingsSearchTarget: Hashable {
 
     case overlay
     case overlaySensitivity
+    case overlayVisualStyle
+    case overlayColorTheme
+    case overlayGlowIntensity
+    case showTargetAppIcon
     case overlayPosition
     case transcriptionPreviewLength
     case overlayStyle
     case livePreview
     case bottomOffset
+    case companion
+    case liveTyping
 
     case dataAndDiagnostics
     case backupAndRestore
@@ -107,11 +113,17 @@ enum SettingsSearchTarget: Hashable {
 
         case .overlay,
              .overlaySensitivity,
+             .overlayVisualStyle,
+             .overlayColorTheme,
+             .overlayGlowIntensity,
+             .showTargetAppIcon,
              .overlayPosition,
              .transcriptionPreviewLength,
              .overlayStyle,
              .livePreview,
-             .bottomOffset:
+             .bottomOffset,
+             .companion,
+             .liveTyping:
             return .overlay
 
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
@@ -308,6 +320,26 @@ enum SettingsSearchIndex {
 
         .init(target: .overlay, title: "Overlay", terms: ["recording indicator notch pill visualizer"]),
         .init(
+            target: .overlayVisualStyle,
+            title: "Overlay Style",
+            terms: ["minimal aurora wave pulse visualizer animation look ribbon"]
+        ),
+        .init(
+            target: .overlayColorTheme,
+            title: "Color Theme",
+            terms: ["aurora blue purple green orange palette gradient tint color"]
+        ),
+        .init(
+            target: .overlayGlowIntensity,
+            title: "Glow Intensity",
+            terms: ["subtle normal vivid brightness glow aura border shine"]
+        ),
+        .init(
+            target: .showTargetAppIcon,
+            title: "Show Target App Icon",
+            terms: ["app icon target application logo hide avatar"]
+        ),
+        .init(
             target: .overlaySensitivity,
             title: "Sensitivity",
             terms: ["audio visualizer sound input more less threshold"]
@@ -333,6 +365,19 @@ enum SettingsSearchIndex {
             terms: ["streaming transcription text while speak overlay"]
         ),
         .init(target: .bottomOffset, title: "Bottom Offset", terms: ["distance from bottom screen pixels position"]),
+        .init(
+            target: .liveTyping,
+            title: "Live Typing",
+            terms: ["experimental write while speaking field streaming partial accessibility"]
+        ),
+        .init(
+            target: .companion,
+            title: "Companion",
+            terms: [
+                "mascot presence corner character elemental variant accessory",
+                "hat glasses scarf halo fire water wind earth aurora gothic motion intensity",
+            ]
+        ),
 
         .init(
             target: .dataAndDiagnostics,

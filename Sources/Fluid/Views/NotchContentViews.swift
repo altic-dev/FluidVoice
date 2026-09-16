@@ -302,6 +302,23 @@ class NotchContentState: ObservableObject {
         self.bottomOverlayDismissOffsetY = normalizedOffset
     }
 
+    // MARK: - Completion Flash
+
+    /// True between a confirmed text delivery and the end of the completion
+    /// flash. Only ever set from the success path of the dictation pipeline, so
+    /// the overlay can never claim a delivery that did not happen.
+    @Published private(set) var didCompleteDelivery: Bool = false
+
+    func markDeliveryCompleted() {
+        guard !self.didCompleteDelivery else { return }
+        self.didCompleteDelivery = true
+    }
+
+    func clearDeliveryCompletion() {
+        guard self.didCompleteDelivery else { return }
+        self.didCompleteDelivery = false
+    }
+
     // MARK: - Command Output Methods
 
     /// Show expanded output view with content
@@ -991,13 +1008,26 @@ struct NotchExpandedView: View {
     private var notchBodyContent: some View {
         VStack(alignment: .center, spacing: 6) {
             HStack(spacing: 4) {
-                self.appIconView
+                if self.presentationPolicy.showsAppIcon {
+                    self.appIconView
+                }
 
-                CompactNotchWaveformView(
+                // Same premium styles as the floating pill: the notch already
+                // publishes notch-presence, so Top Center on a notched Mac shows
+                // Aurora / Wave / Pulse / Minimal / Companion instead of a
+                // generic waveform. Ambient Glow gives the animation the whole
+                // cutout and drops the icon.
+                NotchStyleVisualizer(
                     audioPublisher: self.audioPublisher,
-                    color: self.modeColor
+                    canvasSize: CGSize(
+                        width: self.presentationPolicy.visualizerWidth,
+                        height: self.presentationPolicy.visualizerHeight
+                    )
                 )
-                .frame(width: 48, height: 18)
+                .frame(
+                    width: self.presentationPolicy.visualizerWidth,
+                    height: self.presentationPolicy.visualizerHeight
+                )
 
                 self.promptSelectorControl
 
@@ -1012,7 +1042,7 @@ struct NotchExpandedView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .offset(x: 4, y: 0)
+            .offset(x: self.presentationPolicy.showsAppIcon ? 4 : 0, y: 0)
             .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
 
             self.promptHoverMenuRow

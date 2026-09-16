@@ -1828,7 +1828,10 @@ final class SettingsStore: ObservableObject {
     var enableStreamingPreview: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableStreamingPreview)
-            return value as? Bool ?? true // Default to true (enabled)
+            // Unchanged upstream default: an install that never wrote the key
+            // keeps the live preview it already had. Only an explicit choice is
+            // read here, so upgrading never silently disables it.
+            return value as? Bool ?? true
         }
         set {
             objectWillChange.send()
@@ -2091,27 +2094,81 @@ final class SettingsStore: ObservableObject {
         case pill
         case small
         case medium
+        /// Very small circular voice orb.
+        case round
+        /// The animation alone: no surface, no border, no shadow.
+        case svg
         case large
+
+        /// The formats offered in Settings.
+        ///
+        /// `.large` stays in the enum - and therefore in persisted preferences -
+        /// so an install that already selected it keeps working, but the modern
+        /// formats are Pill / Small / Medium and Large is no longer offered.
+        static let selectable: [OverlaySize] = [.pill, .small, .medium, .round, .svg]
+
+        /// True for the retired extended format. Its layout is still built, it is
+        /// simply no longer reachable from the picker.
+        var isLegacy: Bool { self == .large }
 
         var displayName: String {
             switch self {
             case .pill: return "Pill"
             case .small: return "Small"
             case .medium: return "Medium"
+            case .round: return "Round"
+            case .svg: return "SVG"
             case .large: return "Large"
             }
         }
     }
 
-    /// Position options for the recording overlay
+    /// Position options for the recording overlay.
+    ///
+    /// The raw values for `topCenter` and `bottomCenter` deliberately keep the
+    /// historical "top" and "bottom" spellings, so preferences written by older
+    /// builds keep decoding with no migration step. `topCenter` also keeps the
+    /// legacy top-notch presentation; every other anchor uses the floating pill.
     enum OverlayPosition: String, CaseIterable, Codable {
-        case top // Top of screen (notch area or floating)
-        case bottom // Bottom of screen
+        case topCenter = "top"
+        case bottomCenter = "bottom"
+        case topLeft = "topLeft"
+        case topRight = "topRight"
+        case bottomLeft = "bottomLeft"
+        case bottomRight = "bottomRight"
 
         var displayName: String {
             switch self {
-            case .top: return "Top of Screen"
-            case .bottom: return "Bottom of Screen"
+            case .topCenter: return "Top Center"
+            case .bottomCenter: return "Bottom Center"
+            case .topLeft: return "Top Left"
+            case .topRight: return "Top Right"
+            case .bottomLeft: return "Bottom Left"
+            case .bottomRight: return "Bottom Right"
+            }
+        }
+
+        /// The legacy top-notch presentation, preserved for existing preferences.
+        var usesNotchPresentation: Bool {
+            self == .topCenter
+        }
+
+        /// True when the floating pill panel owns this anchor.
+        var usesFloatingOverlay: Bool {
+            !self.usesNotchPresentation
+        }
+
+        var isBottomAnchored: Bool {
+            switch self {
+            case .bottomCenter, .bottomLeft, .bottomRight: return true
+            case .topCenter, .topLeft, .topRight: return false
+            }
+        }
+
+        var isSideAnchored: Bool {
+            switch self {
+            case .topLeft, .topRight, .bottomLeft, .bottomRight: return true
+            case .topCenter, .bottomCenter: return false
             }
         }
     }
@@ -2121,6 +2178,9 @@ final class SettingsStore: ObservableObject {
     enum NotchPresentationMode: String, CaseIterable, Codable {
         case standard
         case minimal
+        /// The light lives under the cutout: no icon, no text, no controls, just
+        /// the premium style animation at a larger size inside the halo.
+        case ambient
 
         var displayName: String {
             switch self {
@@ -2128,6 +2188,8 @@ final class SettingsStore: ObservableObject {
                 return "Standard Notch"
             case .minimal:
                 return "Compact"
+            case .ambient:
+                return "Ambient Glow (Beta)"
             }
         }
     }
@@ -2138,7 +2200,7 @@ final class SettingsStore: ObservableObject {
             guard let raw = self.defaults.string(forKey: Keys.overlayPosition),
                   let position = OverlayPosition(rawValue: raw)
             else {
-                return .bottom // Default to bottom (menu overlay)
+                return .bottomCenter // Default to the floating bottom pill
             }
             return position
         }
@@ -2199,6 +2261,250 @@ final class SettingsStore: ObservableObject {
 
             // Post notification for live update if overlay is visible
             NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
+    }
+
+    /// Supported band and neutral value for `overlayScale`.
+    ///
+    /// The band runs from quarter size to triple size, so a format can be a
+    /// glanceable sliver or a real object on screen.
+    static let overlayScaleRange: ClosedRange<Double> = 0.25...3.0
+    static let overlayScaleDefault: Double = 1.0
+
+    /// User scale applied on top of the chosen overlay format.
+    ///
+    /// Persisted as a Double. Reads are clamped, so a hand-edited or corrupt
+    /// preference can never produce an unusable overlay.
+    var overlayScale: Double {
+        get {
+            guard let value = self.defaults.object(forKey: Keys.overlayScale) as? Double else {
+                return Self.overlayScaleDefault
+            }
+            return min(max(value, Self.overlayScaleRange.lowerBound), Self.overlayScaleRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, Self.overlayScaleRange.lowerBound), Self.overlayScaleRange.upperBound)
+            objectWillChange.send()
+            self.defaults.set(clamped, forKey: Keys.overlayScale)
+
+            // Reuse the existing live-resize notification so a visible overlay
+            // re-measures and re-anchors instead of only updating next launch.
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
+    }
+
+    /// Visual style used to draw the live audio level inside the overlay.
+    ///
+    /// Defaults to Aurora, the premium style, without touching any preference an
+    /// existing install already wrote.
+    var overlayVisualStyle: OverlayVisualStyle {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlayVisualStyle),
+                  let style = OverlayVisualStyle(rawValue: raw)
+            else {
+                return .fallback
+            }
+            return style
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlayVisualStyle)
+            // The styles do not share a footprint (Companion is chromeless and
+            // bigger), so a visible panel must re-measure instead of keeping the
+            // previous frame until an unrelated update arrives.
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
+    }
+
+    /// Color theme shared by the visualizer and the orbital aura.
+    var overlayColorTheme: OverlayColorTheme {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlayColorTheme),
+                  let theme = OverlayColorTheme(rawValue: raw)
+            else {
+                return .fallback
+            }
+            return theme
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlayColorTheme)
+        }
+    }
+
+    /// Strength of the border, aura and visualizer glow.
+    var overlayGlowIntensity: OverlayGlowIntensity {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlayGlowIntensity),
+                  let intensity = OverlayGlowIntensity(rawValue: raw)
+            else {
+                return .fallback
+            }
+            return intensity
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlayGlowIntensity)
+        }
+    }
+
+    /// Whether the overlay shows the icon of the app receiving the dictation.
+    /// Defaults to true, which matches the behaviour of existing installs.
+    /// Advanced fine tuning applied on top of the glow preset.
+    ///
+    /// The getter republishes the value into `OverlayGlowTuning` so the overlay
+    /// components resolve the same strength without seeing the settings store.
+    var overlayGlowStrength: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.overlayGlowStrength) as? Double
+                ?? OverlayGlowTuning.neutral
+            OverlayGlowTuning.strength = stored
+            return min(max(stored, OverlayGlowTuning.range.lowerBound), OverlayGlowTuning.range.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, OverlayGlowTuning.range.lowerBound), OverlayGlowTuning.range.upperBound)
+            objectWillChange.send()
+            self.defaults.set(clamped, forKey: Keys.overlayGlowStrength)
+            OverlayGlowTuning.strength = clamped
+        }
+    }
+
+    /// Surface the overlay is drawn on. Automatic follows the system.
+    var overlaySurfaceAppearance: OverlaySurfaceAppearance {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlaySurfaceAppearance),
+                  let value = OverlaySurfaceAppearance(rawValue: raw)
+            else {
+                return .fallback
+            }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlaySurfaceAppearance)
+        }
+    }
+
+    /// Primary colour of the Custom theme.
+    ///
+    /// The getter republishes the value into `OverlayCustomTheme` so the overlay
+    /// components, which do not see the settings store, resolve the same palette.
+    var overlayCustomThemeHex: String {
+        get {
+            let stored = self.defaults.string(forKey: Keys.overlayCustomThemeHex) ?? OverlayCustomTheme.defaultHex
+            OverlayCustomTheme.hex = stored
+            return stored
+        }
+        set {
+            let resolved = newValue.isEmpty ? OverlayCustomTheme.defaultHex : newValue
+            objectWillChange.send()
+            self.defaults.set(resolved, forKey: Keys.overlayCustomThemeHex)
+            OverlayCustomTheme.hex = resolved
+        }
+    }
+
+    // MARK: - Companion style options
+
+    /// Supported band and neutral value for the Companion's own size.
+    ///
+    /// 100% is the Companion's reference size; the band lets it shrink back to
+    /// the old footprint or grow well past the reference.
+    static let companionScaleRange: ClosedRange<Double> = 0.5...3.0
+    static let companionScaleDefault: Double = 1.0
+
+    /// Size multiplier for the Companion style. Reads are clamped, so a
+    /// hand-edited preference can never make the character absurd.
+    var companionScale: Double {
+        get {
+            guard let value = self.defaults.object(forKey: Keys.companionScale) as? Double else {
+                return Self.companionScaleDefault
+            }
+            return min(max(value, Self.companionScaleRange.lowerBound), Self.companionScaleRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, Self.companionScaleRange.lowerBound), Self.companionScaleRange.upperBound)
+            objectWillChange.send()
+            self.defaults.set(clamped, forKey: Keys.companionScale)
+            Self.postCompanionSettingsChanged()
+            NotificationCenter.default.post(name: NSNotification.Name("OverlaySizeChanged"), object: nil)
+        }
+    }
+
+    var companionVariant: CompanionVariant {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.companionVariant),
+                  let value = CompanionVariant(rawValue: raw) else { return CompanionVariant.fallback }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.companionVariant)
+            Self.postCompanionSettingsChanged()
+        }
+    }
+
+    /// Accessories are stored as raw strings. An unknown value from a future
+    /// build is simply ignored rather than failing the read.
+    var companionAccessories: Set<CompanionAccessory> {
+        get {
+            guard let raw = self.defaults.array(forKey: Keys.companionAccessories) as? [String] else {
+                return CompanionAccessory.fallback
+            }
+            return Set(raw.compactMap(CompanionAccessory.init(rawValue:)))
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.map(\.rawValue).sorted(), forKey: Keys.companionAccessories)
+            Self.postCompanionSettingsChanged()
+        }
+    }
+
+    /// One global movement budget shared by Aurora and the Companion.
+    var overlayMotionIntensity: MotionIntensity {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.overlayMotionIntensity),
+                  let value = MotionIntensity(rawValue: raw) else { return MotionIntensity.fallback }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.overlayMotionIntensity)
+            Self.postCompanionSettingsChanged()
+        }
+    }
+
+    private static func postCompanionSettingsChanged() {
+        NotificationCenter.default.post(name: NSNotification.Name("CompanionSettingsChanged"), object: nil)
+    }
+
+    /// Experimental Live Typing. Off by default.
+    ///
+    /// When on, FluidVoice streams the revised partial into the focused text
+    /// field while the user is still speaking - but only while it can read the
+    /// field back and prove it still owns the exact range it wrote. Any doubt
+    /// downgrades to the normal final paste.
+    var liveTypingExperimental: Bool {
+        get {
+            guard self.defaults.object(forKey: Keys.liveTypingExperimental) != nil else { return false }
+            return self.defaults.bool(forKey: Keys.liveTypingExperimental)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.liveTypingExperimental)
+            if !newValue {
+                LiveTypingController.shared.reset()
+            }
+        }
+    }
+
+    var showTargetAppIcon: Bool {
+        get {
+            guard self.defaults.object(forKey: Keys.showTargetAppIcon) != nil else { return true }
+            return self.defaults.bool(forKey: Keys.showTargetAppIcon)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.showTargetAppIcon)
         }
     }
 
@@ -3317,6 +3623,19 @@ final class SettingsStore: ObservableObject {
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
             overlaySize: self.overlaySize,
+            overlayVisualStyle: self.overlayVisualStyle,
+            overlayColorTheme: self.overlayColorTheme,
+            overlayGlowIntensity: self.overlayGlowIntensity,
+            showTargetAppIcon: self.showTargetAppIcon,
+            overlayScale: self.overlayScale,
+            overlaySurfaceAppearance: self.overlaySurfaceAppearance,
+            overlayCustomThemeHex: self.overlayCustomThemeHex,
+            overlayGlowStrength: self.overlayGlowStrength,
+            companionScale: self.companionScale,
+            companionVariant: self.companionVariant,
+            companionAccessories: self.companionAccessories.map(\.rawValue).sorted(),
+            overlayMotionIntensity: self.overlayMotionIntensity,
+            liveTypingExperimental: self.liveTypingExperimental,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
             saveTranscriptionHistory: self.saveTranscriptionHistory,
@@ -3474,6 +3793,47 @@ final class SettingsStore: ObservableObject {
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
         self.overlaySize = payload.overlaySize
+        // Optional in the payload so backups written before the premium overlay
+        // still restore; missing values keep whatever the user already had.
+        if let overlayVisualStyle = payload.overlayVisualStyle {
+            self.overlayVisualStyle = overlayVisualStyle
+        }
+        if let overlayColorTheme = payload.overlayColorTheme {
+            self.overlayColorTheme = overlayColorTheme
+        }
+        if let overlayGlowIntensity = payload.overlayGlowIntensity {
+            self.overlayGlowIntensity = overlayGlowIntensity
+        }
+        if let showTargetAppIcon = payload.showTargetAppIcon {
+            self.showTargetAppIcon = showTargetAppIcon
+        }
+        if let overlayScale = payload.overlayScale {
+            self.overlayScale = overlayScale
+        }
+        if let overlaySurfaceAppearance = payload.overlaySurfaceAppearance {
+            self.overlaySurfaceAppearance = overlaySurfaceAppearance
+        }
+        if let overlayCustomThemeHex = payload.overlayCustomThemeHex {
+            self.overlayCustomThemeHex = overlayCustomThemeHex
+        }
+        if let overlayGlowStrength = payload.overlayGlowStrength {
+            self.overlayGlowStrength = overlayGlowStrength
+        }
+        if let companionScale = payload.companionScale {
+            self.companionScale = companionScale
+        }
+        if let companionVariant = payload.companionVariant {
+            self.companionVariant = companionVariant
+        }
+        if let companionAccessories = payload.companionAccessories {
+            self.companionAccessories = Set(companionAccessories.compactMap(CompanionAccessory.init(rawValue:)))
+        }
+        if let overlayMotionIntensity = payload.overlayMotionIntensity {
+            self.overlayMotionIntensity = overlayMotionIntensity
+        }
+        if let liveTypingExperimental = payload.liveTypingExperimental {
+            self.liveTypingExperimental = liveTypingExperimental
+        }
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
         self.saveTranscriptionHistory = payload.saveTranscriptionHistory
@@ -5555,7 +5915,24 @@ private extension SettingsStore {
         static let overlayBottomOffset = "OverlayBottomOffset"
         static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"
         static let overlaySize = "OverlaySize"
+        static let overlayScale = "OverlayScale"
+        static let overlayVisualStyle = "OverlayVisualStyle"
+        static let overlayColorTheme = "OverlayColorTheme"
+        static let overlayGlowIntensity = "OverlayGlowIntensity"
+        static let showTargetAppIcon = "ShowTargetAppIcon"
+        static let overlaySurfaceAppearance = "OverlaySurfaceAppearance"
+        static let overlayGlowStrength = "OverlayGlowStrength"
+        static let overlayCustomThemeHex = "OverlayCustomThemeHex"
+        static let overlayMotionIntensity = "OverlayMotionIntensity"
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
+
+        // Companion style options
+        static let companionScale = "CompanionScale"
+        static let companionVariant = "CompanionVariant"
+        static let companionAccessories = "CompanionAccessories"
+
+        // Live Typing (experimental)
+        static let liveTypingExperimental = "LiveTypingExperimental"
 
         /// Media Playback Control
         static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"

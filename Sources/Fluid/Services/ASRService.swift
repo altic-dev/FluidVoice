@@ -2129,6 +2129,7 @@ final class ASRService: ObservableObject {
         self.audioBuffer.clear(keepingCapacity: true) // specific optimization for restart
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
+        LiveTypingController.shared.reset()
         self.lastBoostHitTerm = nil
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
@@ -3338,6 +3339,7 @@ final class ASRService: ObservableObject {
         completedBufferHandoff = true
         self.partialTranscription.removeAll()
         self.previousFullTranscription.removeAll()
+        LiveTypingController.shared.reset()
         self.lastBoostHitTerm = nil
         self.lastProcessedSampleCount = 0
         self.isProcessingChunk = false
@@ -5456,6 +5458,10 @@ final class ASRService: ObservableObject {
                 self.partialTranscription = updatedText
                 self.previousFullTranscription = newText
 
+                // Experimental Live Typing: streams the revised partial into the
+                // target field when the user opted in. Does nothing otherwise.
+                LiveTypingController.shared.observePartial(updatedText)
+
                 DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
             }
             let rtf = duration / (Double(currentSampleCount) / 16_000.0)
@@ -5538,6 +5544,13 @@ final class ASRService: ObservableObject {
         tracksDictionaryCorrections: Bool = false,
         completion: (@MainActor (TypingService.DeliveryOutcome) -> Void)? = nil
     ) {
+        // Live Typing may already own the text in the field. When it does, the
+        // normal insertion must not run again - but the caller still needs its
+        // completion so overlay dismissal and the pipeline summary are not lost.
+        if LiveTypingController.shared.consumeFinalDelivery(plainText: plan.plainText) {
+            completion?(.inserted)
+            return
+        }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
         let text = plan.plainText
@@ -5572,6 +5585,24 @@ final class ASRService: ObservableObject {
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil
     ) async -> TypingService.DeliveryOutcome {
+        // Same hand-off as the fire-and-forget path, except that this one may
+        // still owe a post-insertion action (Spoken Send). The text is already
+        // in the field, so only the key is dispatched - and its real outcome is
+        // reported, so a spoken send is not reported as failed.
+        if LiveTypingController.shared.consumeFinalDelivery(plainText: plan.plainText) {
+            guard let postInsertionKey else { return .inserted }
+            let actionOutcome = await self.dispatchPostInsertionActionOnly(
+                preferredTargetPID: preferredTargetPID,
+                textReadyAt: textReadyAt,
+                postInsertionKey: postInsertionKey,
+                requiredFocusTarget: requiredFocusTarget
+            )
+            switch actionOutcome {
+            case .actionDispatched: return .insertedAndActionDispatched
+            case .actionSuppressed: return .insertedActionSuppressed
+            default: return .inserted
+            }
+        }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
         let text = plan.plainText
@@ -5602,6 +5633,28 @@ final class ASRService: ObservableObject {
             source: "TypingBenchmark"
         )
         return outcome
+    }
+
+    /// Runs the delivery pipeline with an empty plan, which dispatches only the
+    /// configured post-insertion action. Used when Live Typing already owns the
+    /// text: the insertion is done, the Spoken Send key is still due.
+    private func dispatchPostInsertionActionOnly(
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval?,
+        postInsertionKey: SettingsStore.SpokenSendKey,
+        requiredFocusTarget: TypingService.CapturedFocusTarget?
+    ) async -> TypingService.DeliveryOutcome {
+        await withCheckedContinuation { continuation in
+            self.typingService.typeOutputPlanInstantly(
+                .plain(""),
+                preferredTargetPID: preferredTargetPID,
+                textReadyAt: textReadyAt,
+                postInsertionKey: postInsertionKey,
+                requiredFocusTarget: requiredFocusTarget
+            ) { outcome in
+                continuation.resume(returning: outcome)
+            }
+        }
     }
 
     /// Removes filler sounds from transcribed text
@@ -5918,6 +5971,7 @@ private extension ASRService {
             self.streamingWorkState.endSession(sessionID)
             self.partialTranscription = ""
             self.previousFullTranscription = ""
+            LiveTypingController.shared.reset()
             self.isProcessingChunk = false
             self.skipNextChunk = false
         }
