@@ -2262,6 +2262,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Off removes the pill's circling edge light entirely.
+    var overlayEdgeLightEnabled: Bool {
+        get { (self.defaults.object(forKey: "OverlayEdgeLightEnabled") as? Bool) ?? true }
+        set {
+            guard newValue != self.overlayEdgeLightEnabled else { return }
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: "OverlayEdgeLightEnabled")
+        }
+    }
+
     var overlayHighlight: Double {
         get {
             let value = (self.defaults.object(forKey: "OverlayHighlight") as? NSNumber)?.doubleValue ?? 0.5

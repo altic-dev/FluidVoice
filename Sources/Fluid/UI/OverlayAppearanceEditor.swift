@@ -27,6 +27,7 @@ struct OverlayAppearanceEditor: View {
                     self.settings.overlayGlassOpacity = SettingsStore.defaultOverlayGlassOpacity
                     self.settings.overlayTint = .ocean
                     self.settings.overlayHighlight = 0.5
+                    self.settings.overlayEdgeLightEnabled = true
                 } label: {
                     Label("Reset look", systemImage: "arrow.counterclockwise")
                         .font(self.theme.typography.bodyStrong)
@@ -146,7 +147,18 @@ struct OverlayAppearanceEditor: View {
                 }
             }
 
-            if self.settings.overlayMaterial != .original {
+            if self.settings.overlaySize == .pill {
+                // Same row shape as "Color" and the knob headers: title left, control right.
+                HStack(spacing: 12) {
+                    Text("Show edge light").font(self.theme.typography.bodySmall)
+                    Spacer()
+                    Toggle("Show edge light", isOn: self.$settings.overlayEdgeLightEnabled)
+                        .toggleStyle(.switch)
+                        .tint(self.theme.palette.accent)
+                        .labelsHidden()
+                }
+            }
+            if self.settings.overlayMaterial != .original, self.settings.overlaySize != .pill || self.settings.overlayEdgeLightEnabled {
                 self.knob(
                     "Edge light",
                     value: self.$settings.overlayHighlight,

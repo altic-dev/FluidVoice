@@ -3639,7 +3639,7 @@ struct BottomOverlayView: View {
                 showsBorder: !self.isPillSize
             )
             .overlay {
-                if self.isPillSize {
+                if self.isPillSize, self.settings.overlayEdgeLightEnabled {
                     // Preserve the pill's existing state animation above the shared material.
                     if self.reduceMotion || !self.contentState.isBottomOverlayPresented || (self.settings.overlayMaterial != .original && self.settings.overlayHighlight == 0) {
                         RoundedRectangle(cornerRadius: self.layout.cornerRadius)
