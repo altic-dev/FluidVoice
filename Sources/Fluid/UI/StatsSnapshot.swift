@@ -4,6 +4,10 @@ import Foundation
 nonisolated struct StatsSnapshot: Sendable {
     var totalWords = 0
     var totalTranscriptions = 0
+    var totalCharacters = 0
+    /// Words and recording time from entries that carry a real audio length.
+    var timedWords = 0
+    var timedMilliseconds = 0
     var aiProcessedCount = 0
     var longestTranscriptionWords = 0
     var mostWordsInDay = 0
@@ -15,6 +19,12 @@ nonisolated struct StatsSnapshot: Sendable {
     var peakHourFormatted = "N/A"
     var topApps: [String] = []
     var activity: [(date: Date, words: Int)] = []
+
+    /// Real speaking pace, only once there is at least a minute of measured audio.
+    var talkingWordsPerMinute: Int? {
+        guard self.timedMilliseconds >= 60_000, self.timedWords > 0 else { return nil }
+        return Int((Double(self.timedWords) / (Double(self.timedMilliseconds) / 60_000)).rounded())
+    }
 
     var averageWordsPerTranscription: Int {
         self.totalTranscriptions == 0 ? 0 : self.totalWords / self.totalTranscriptions
@@ -88,6 +98,11 @@ nonisolated struct StatsSnapshot: Sendable {
             appCounts[entry.appName.isEmpty ? "Unknown" : entry.appName, default: 0] += 1
             hours[calendar.component(.hour, from: entry.timestamp)] += 1
             result.totalWords += words
+            result.totalCharacters += entry.processedText.count
+            if let milliseconds = entry.audio?.durationMilliseconds, milliseconds > 0 {
+                result.timedWords += words
+                result.timedMilliseconds += milliseconds
+            }
             result.longestTranscriptionWords = max(result.longestTranscriptionWords, words)
             if entry.wasAIProcessed { result.aiProcessedCount += 1 }
         }

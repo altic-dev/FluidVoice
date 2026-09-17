@@ -8,6 +8,7 @@ struct StatsView: View {
     @Environment(\.theme) private var theme
 
     @State private var showResetConfirmation: Bool = false
+    @State private var showShareSheet = false
     @State private var showWPMEditor: Bool = false
     @State private var editingWPM: String = ""
     @State private var chartDays: Int = 7 // Toggle between 7 and 30
@@ -30,6 +31,13 @@ struct StatsView: View {
                     .frame(maxWidth: .infinity, minHeight: 240)
             } else {
                 VStack(spacing: 16) {
+                    HStack {
+                        Spacer()
+                        Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
+                            .fluidGlassAction()
+                            .help("Make an image of your stats to post or send")
+                    }
+
                     self.todayHeaderCard
 
                     Divider()
@@ -65,8 +73,26 @@ struct StatsView: View {
                 .padding(20)
             }
         }
+        .sheet(isPresented: self.$showShareSheet) {
+            StatsShareSheet(content: self.shareContent) { self.showShareSheet = false }
+        }
         .onAppear { self.statsStore.activate(self.statsOwner) }
         .onDisappear { self.statsStore.deactivate(self.statsOwner) }
+    }
+
+    private var shareContent: StatsShareContent {
+        StatsShareContent(
+            totalWords: self.stats.totalWords,
+            timeSaved: self.stats.formattedTimeSaved(typingWPM: self.settings.userTypingWPM),
+            currentStreak: self.stats.currentStreak,
+            totalTranscriptions: self.stats.totalTranscriptions,
+            keystrokesSaved: self.stats.totalCharacters,
+            aiPolishRate: self.stats.aiEnhancementRate,
+            talkingWordsPerMinute: self.stats.talkingWordsPerMinute,
+            biggestDayWords: self.stats.mostWordsInDay,
+            longestDictationWords: self.stats.longestTranscriptionWords,
+            activity: self.stats.dailyWordCounts(days: 30).map(\.words)
+        )
     }
 
     // MARK: - Today Header
