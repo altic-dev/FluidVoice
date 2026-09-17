@@ -13,8 +13,7 @@ struct BottomWaveformView: View {
         !self.audioLevel.isLive && !self.contentState.isProcessing && !self.isReleaseAnimationActive
     }
 
-    // Initialize with max possible bar count (11 for large) to prevent index-out-of-range before onAppear
-    @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 11)
+    @State private var simulation = WaveformSimulation()
     @State private var noiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
     private var barCount: Int {
@@ -70,14 +69,6 @@ struct BottomWaveformView: View {
         self.contentState.isBottomOverlayReleaseTransitioning || self.contentState.isBottomOverlayDismissing
     }
 
-    /// Safe accessor for bar heights to prevent index-out-of-range crashes
-    private func safeBarHeight(at index: Int) -> CGFloat {
-        guard index >= 0 && index < self.barHeights.count else {
-            return self.minHeight
-        }
-        return self.barHeights[index]
-    }
-
     var body: some View {
         ZStack {
             self.barsView
@@ -93,40 +84,6 @@ struct BottomWaveformView: View {
         }
         .opacity(self.isWaitingForMicrophone ? 0.45 : 1)
         .animation(.easeOut(duration: 0.22), value: self.isWaitingForMicrophone)
-        .onChange(of: self.audioLevel.level) { _, level in
-            guard !self.isReleaseAnimationActive else { return }
-            if !self.contentState.isProcessing {
-                self.updateBars(level: level)
-            }
-        }
-        .onChange(of: self.contentState.isProcessing) { _, processing in
-            guard !self.isReleaseAnimationActive else { return }
-            if processing {
-                self.setFlatProcessingBars()
-            } else {
-                // Resume from silence; next audio tick will animate up.
-                self.updateBars(level: 0)
-            }
-        }
-        .onChange(of: self.layout.barCount) { _, newCount in
-            self.barHeights = Array(repeating: self.minHeight, count: newCount)
-        }
-        .onAppear {
-            // Ensure bar count matches current layout
-            if self.barHeights.count != self.barCount {
-                self.barHeights = Array(repeating: self.minHeight, count: self.barCount)
-            }
-            if self.isReleaseAnimationActive {
-                self.barHeights = Array(repeating: self.minHeight, count: self.barCount)
-            } else if self.contentState.isProcessing {
-                self.setFlatProcessingBars()
-            } else {
-                self.updateBars(level: 0)
-            }
-        }
-        .onDisappear {
-            // No timers to clean up.
-        }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             // Update threshold when user changes sensitivity setting
             let newThreshold = CGFloat(SettingsStore.shared.visualizerNoiseThreshold)
@@ -136,65 +93,107 @@ struct BottomWaveformView: View {
         }
     }
 
+    /// Drawn at display rate so the bars move on springs instead of stepping with each level tick.
+    @ViewBuilder
     private var barsView: some View {
-        HStack(spacing: self.barSpacing) {
-            ForEach(0..<self.barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: self.barWidth / 2)
-                    .frame(width: self.barWidth, height: self.displayHeight(at: index))
-                    .shadow(
-                        color: self.color.opacity(self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity),
-                        radius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius,
-                        x: 0,
-                        y: 0
-                    )
+        // The panel stays alive while hidden; never tick the simulation unless it is on screen.
+        if !self.contentState.isBottomOverlayPresented || self.isReleaseAnimationActive || self.contentState.isProcessing {
+            self.bars(heights: Array(repeating: self.minHeight, count: self.barCount))
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 50.0)) { timeline in
+                self.bars(heights: self.simulation.step(
+                    at: timeline.date,
+                    barCount: self.barCount,
+                    minHeight: self.minHeight,
+                    maxHeight: self.maxHeight,
+                    level: self.audioLevel.isLive ? OverlayAudioLevelState.shared.level : 0,
+                    noiseThreshold: self.noiseThreshold,
+                    isIdleWaveEnabled: self.audioLevel.isLive
+                ))
             }
         }
     }
 
-    private func displayHeight(at index: Int) -> CGFloat {
-        if self.isReleaseAnimationActive || self.contentState.isProcessing {
-            return self.minHeight
-        }
-        return self.safeBarHeight(at: index)
-    }
-
-    private func visualizerPeakHeight(at index: Int) -> CGFloat {
-        let centerDistance = abs(CGFloat(index) - CGFloat(self.barCount - 1) / 2)
-        let maxDistance = max(CGFloat(self.barCount - 1) / 2, 1)
-        let normalizedDistance = min(centerDistance / maxDistance, 1)
-        let factor = max(0.18, 0.96 - normalizedDistance * 0.78)
-        return self.minHeight + (self.maxHeight - self.minHeight) * factor
-    }
-
-    private func setFlatProcessingBars() {
-        // Ensure array is properly sized before modifying
-        guard self.barHeights.count >= self.barCount else { return }
-
-        // During AI processing we want the visualizer to settle to silence (flat).
-        withAnimation(.easeOut(duration: 0.18)) {
-            for i in 0..<self.barCount {
-                self.barHeights[i] = self.minHeight
+    private func bars(heights: [CGFloat]) -> some View {
+        Canvas { context, size in
+            let count = heights.count
+            let totalWidth = CGFloat(count) * self.barWidth + CGFloat(max(count - 1, 0)) * self.barSpacing
+            var x = (size.width - totalWidth) / 2
+            for height in heights {
+                let rect = CGRect(x: x, y: (size.height - height) / 2, width: self.barWidth, height: height)
+                context.fill(Path(roundedRect: rect, cornerRadius: self.barWidth / 2), with: .foreground)
+                x += self.barWidth + self.barSpacing
             }
         }
+        .shadow(
+            color: self.color.opacity(self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity),
+            radius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius
+        )
     }
+}
 
-    private func updateBars(level: CGFloat) {
-        // Ensure array is properly sized before modifying
-        guard self.barHeights.count >= self.barCount else { return }
+/// Per-bar spring physics for the overlay visualizer. Voice energy lands on the center bars
+/// first and ripples outward, the spectrum tilts the shape, and a slow idle wave keeps the
+/// bars breathing while the user is quiet.
+final class WaveformSimulation {
+    private var heights: [CGFloat] = []
+    private var velocities: [CGFloat] = []
+    private var energyHistory: [CGFloat] = Array(repeating: 0, count: 32)
+    private var historyIndex = 0
+    private var energy: CGFloat = 0
+    private var lastDate: Date?
+    private var clock: TimeInterval = 0
 
-        let normalizedLevel = min(max(level, 0), 1)
-        let denominator = max(1.0 - self.noiseThreshold, 0.001)
-        let adjustedLevel = max(min((normalizedLevel - self.noiseThreshold) / denominator, 1.0), 0.0)
-        // Lower exponent => normal speech pushes the bars higher (taller "waves" while talking).
-        let amplifiedLevel = pow(adjustedLevel, 0.55)
-
-        withAnimation(.easeOut(duration: 0.08)) {
-            for i in 0..<self.barCount {
-                let peakHeight = self.visualizerPeakHeight(at: i)
-                let variation = 0.92 + 0.08 * cos(CGFloat(i) * 1.45)
-                let nextHeight = self.minHeight + (peakHeight - self.minHeight) * amplifiedLevel * variation
-                self.barHeights[i] = min(self.maxHeight, max(self.minHeight, nextHeight))
-            }
+    func step(
+        at date: Date,
+        barCount: Int,
+        minHeight: CGFloat,
+        maxHeight: CGFloat,
+        level: CGFloat,
+        noiseThreshold: CGFloat,
+        isIdleWaveEnabled: Bool
+    ) -> [CGFloat] {
+        if self.heights.count != barCount {
+            self.heights = Array(repeating: minHeight, count: barCount)
+            self.velocities = Array(repeating: 0, count: barCount)
         }
+        let dt = CGFloat(min(max(date.timeIntervalSince(self.lastDate ?? date), 0), 1.0 / 30.0))
+        self.lastDate = date
+        self.clock += TimeInterval(dt)
+        guard dt > 0 else { return self.heights }
+
+        let adjusted = max(min((min(max(level, 0), 1) - noiseThreshold) / max(1 - noiseThreshold, 0.001), 1), 0)
+        let gate = pow(adjusted, 0.5)
+        // Level arrives at ~20 Hz; glide toward it so the ripple source is continuous.
+        self.energy += (gate - self.energy) * min(dt * 18, 1)
+        self.historyIndex = (self.historyIndex + 1) % self.energyHistory.count
+        self.energyHistory[self.historyIndex] = self.energy
+
+        let bands = AudioSpectrumMeter.shared.bands(count: barCount)
+        let half = max(CGFloat(barCount - 1) / 2, 1)
+        let range = maxHeight - minHeight
+
+        for i in 0..<barCount {
+            let distance = abs(CGFloat(i) - half) / half
+            // Outer bars hear the voice a few frames later than the center.
+            let delayFrames = Int((distance * 0.09 / max(dt, 0.001)).rounded())
+            let delayed = self.energyHistory[
+                (self.historyIndex - min(delayFrames, self.energyHistory.count - 1) + self.energyHistory.count) % self.energyHistory.count
+            ]
+            let envelope = 0.34 + 0.66 * cos(distance * .pi / 2)
+            let band = i < bands.count ? bands[i] : 0
+            let wobble = 0.9 + 0.1 * sin(CGFloat(self.clock) * 9 + CGFloat(i) * 2.1)
+            let voice = delayed * (0.5 + 0.5 * band) * wobble * envelope
+            let idle = isIdleWaveEnabled
+                ? (1 - self.energy) * 0.13 * (0.5 + 0.5 * sin(CGFloat(self.clock) * 2.4 - CGFloat(i) * 0.75))
+                : 0
+            let target = minHeight + range * min(voice + idle, 1)
+
+            // Slightly underdamped spring: lively on the way up, settles without buzzing.
+            let acceleration = 260 * (target - self.heights[i]) - 21 * self.velocities[i]
+            self.velocities[i] += acceleration * dt
+            self.heights[i] = min(maxHeight, max(minHeight, self.heights[i] + self.velocities[i] * dt))
+        }
+        return self.heights
     }
 }

@@ -6345,6 +6345,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         }
         if recordingEnabled == false {
             self.lock.unlock()
+            AudioSpectrumMeter.shared.ingest(samples)
             self.onLevel(self.measureAudioLevel(samples).level)
             return
         }
@@ -6432,6 +6433,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         }
         self.lock.unlock()
         let measurement = self.measureAudioLevel(mono16k)
+        AudioSpectrumMeter.shared.ingest(mono16k)
         self.onLevel(measurement.level)
         if let health = self.captureHealthDiagnostic(
             sampleCount: mono16k.count,
