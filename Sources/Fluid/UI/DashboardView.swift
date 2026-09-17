@@ -133,49 +133,34 @@ struct DashboardView: View {
     }
 
     private var learningCenter: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
+        let lessons: [(title: String, icon: String, complete: Bool, detail: String, action: () -> Void)] = [
+            ("Voice model", "waveform", self.asr.modelsExistOnDisk || self.asr.isAsrReady, "Pick your engine", { self.selectedSidebarItem = .voiceEngine }),
+            ("Microphone", "mic", self.asr.micStatus == .authorized, "Set up voice input", {
+                if self.asr.micStatus == .notDetermined { self.asr.requestMicAccess() } else { self.asr.openSystemSettingsForMic() }
+            }),
+            ("Typing access", "keyboard", self.accessibilityEnabled, "Dictate in any app", self.openAccessibilitySettings),
+            ("AI cleanup", "sparkles", DictationAIPostProcessingGate.isProviderConfigured(), "Optional polish", { self.selectedSidebarItem = .aiEnhancements }),
+        ]
+        let completed = lessons.filter(\.complete).count
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("Learning center").font(self.theme.typography.sectionTitle)
+                Text("\(completed) of \(lessons.count) ready")
+                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Replay onboarding", systemImage: "arrow.counterclockwise", action: self.replayOnboarding)
                     .buttonStyle(.plain).font(self.theme.typography.caption)
                     .foregroundStyle(.secondary).disabled(self.busy)
             }
-            ScrollView(.horizontal) {
-                HStack(spacing: 12) {
-                    self.lesson("Voice model", icon: "waveform", complete: self.asr.modelsExistOnDisk || self.asr.isAsrReady, detail: "Choose your engine") { self.selectedSidebarItem = .voiceEngine }
-                    self.lesson("Microphone", icon: "mic", complete: self.asr.micStatus == .authorized, detail: "Set up voice input") {
-                        if self.asr.micStatus == .notDetermined { self.asr.requestMicAccess() } else { self.asr.openSystemSettingsForMic() }
-                    }
-                    self.lesson("Typing access", icon: "keyboard", complete: self.accessibilityEnabled, detail: "Dictate in any app", action: self.openAccessibilitySettings)
-                    self.lesson("AI cleanup", icon: "sparkles", complete: DictationAIPostProcessingGate.isProviderConfigured(), detail: "Optional · polish text") { self.selectedSidebarItem = .aiEnhancements }
-                }
-                .padding(.vertical, 4)
-            }
-            .scrollIndicators(.visible)
-        }
-    }
-
-    private func lesson(_ title: String, icon: String, complete: Bool, detail: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Image(systemName: icon).font(.fluidSystem(size: 22, weight: .medium)).foregroundStyle(self.theme.palette.accent)
-                    Spacer()
-                    if complete {
-                        Image(systemName: "checkmark.circle.fill").font(.fluidSystem(size: 12)).foregroundStyle(self.theme.palette.success)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(self.theme.typography.bodySmallStrong)
-                    Text(detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            // Fills the row and wraps on narrow windows instead of leaving a gap or scrolling sideways.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(lessons, id: \.title) { lesson in
+                    DashboardLessonCard(title: lesson.title, detail: lesson.detail, icon: lesson.icon, complete: lesson.complete, action: lesson.action)
+                        .disabled(self.busy)
                 }
             }
-            .padding(16).frame(width: 154, alignment: .leading)
-            .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
         }
-        .buttonStyle(.plain).disabled(self.busy)
-        .accessibilityLabel("\(title), \(complete ? "configured" : detail)")
     }
 
     private var quickActions: some View {
@@ -331,26 +316,106 @@ private struct DashboardQuickAction: View {
     var body: some View {
         Button(action: self.action) {
             HStack(spacing: 12) {
-                Image(systemName: self.icon)
-                    .font(.fluidSystem(size: 19, weight: .medium))
-                    .foregroundStyle(self.tint)
-                    .frame(width: 40, height: 44)
-                    .background(self.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 11))
-                VStack(alignment: .leading, spacing: 5) {
+                DashboardIconTile(icon: self.icon, tint: self.tint)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(self.title).font(self.theme.typography.bodySmallStrong)
                     Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.fluidSystem(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .opacity(self.hovered ? 1 : 0)
+                    .offset(x: self.hovered || self.reduceMotion ? 0 : -4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(self.tint.opacity(self.hovered ? 0.4 : 0.08), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 16))
+            .dashboardTile(hovered: self.hovered)
         }
         .buttonStyle(.plain)
         .onHover { self.hovered = $0 && self.isEnabled }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+    }
+}
+
+private struct DashboardLessonCard: View {
+    let title: String
+    let detail: String
+    let icon: String
+    let complete: Bool
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: self.action) {
+            HStack(spacing: 12) {
+                DashboardIconTile(icon: self.icon, tint: self.theme.palette.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(self.title).font(self.theme.typography.bodySmallStrong)
+                    Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                }
+                Spacer(minLength: 0)
+                if self.complete {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.fluidSystem(size: 13))
+                        .foregroundStyle(self.theme.palette.success)
+                } else {
+                    Text("Set up")
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.theme.palette.accent)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .dashboardTile(hovered: self.hovered)
+        }
+        .buttonStyle(.plain)
+        .onHover { self.hovered = $0 && self.isEnabled }
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+        .accessibilityLabel("\(self.title), \(self.complete ? "configured" : self.detail)")
+    }
+}
+
+private struct DashboardIconTile: View {
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: self.icon)
+            .font(.fluidSystem(size: 15, weight: .medium))
+            .foregroundStyle(self.tint)
+            .frame(width: 34, height: 34)
+            .background(
+                LinearGradient(colors: [self.tint.opacity(0.18), self.tint.opacity(0.07)], startPoint: .top, endPoint: .bottom),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(self.tint.opacity(0.16), lineWidth: 1))
+    }
+}
+
+private struct DashboardTileModifier: ViewModifier {
+    let hovered: Bool
+    @Environment(\.theme) private var theme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(self.theme.palette.cardBackground, in: shape)
+            .overlay(shape.fill(Color.primary.opacity(self.hovered ? 0.04 : 0)))
+            .overlay(shape.strokeBorder(self.theme.palette.cardBorder.opacity(self.hovered ? 0.9 : 0.45), lineWidth: 1))
+            .contentShape(shape)
+    }
+}
+
+private extension View {
+    /// One surface for every small dashboard card so they hover and read as a set.
+    func dashboardTile(hovered: Bool) -> some View {
+        modifier(DashboardTileModifier(hovered: hovered))
     }
 }
