@@ -1575,6 +1575,16 @@ extension DictationE2ETests {
         }
     }
 
+    func testDictationUserMessageWrapsTranscriptWithoutPromptInstructions() {
+        let userMessage = SettingsStore.renderDictationUserMessage(
+            promptText: "Clean up this transcript and output only the edited text.",
+            transcript: "hello fluid voice"
+        )
+
+        XCTAssertEqual(userMessage, "<transcript>\nhello fluid voice\n</transcript>")
+        XCTAssertFalse(userMessage.contains("Clean up this transcript"))
+    }
+
     func testCustomProviderSettingsRoundTripThroughSettingsStore() {
         self.withProviderSettingsRestored {
             let settings = SettingsStore.shared
