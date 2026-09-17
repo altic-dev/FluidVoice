@@ -1362,10 +1362,6 @@ struct SettingsView: View {
                                 .font(self.theme.typography.bodyStrong)
                                 .padding(.bottom, 4)
 
-                            self.overlayClosingAnimationSetting
-
-                            Divider().padding(.vertical, 8)
-
                             // Overlay Position
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -1561,6 +1557,10 @@ struct SettingsView: View {
                                 set: { SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled = $0 }
                             )
                         )
+
+                        Divider().padding(.vertical, 4)
+
+                        self.overlayClosingAnimationSetting
 
                         Divider().padding(.vertical, 4)
 
@@ -2282,16 +2282,11 @@ private extension SettingsView {
 
 private extension SettingsView {
     var overlayClosingAnimationSetting: some View {
-        Toggle(isOn: self.$settings.overlayClosingAnimationEnabled) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Animate overlay closing")
-                    .font(self.theme.typography.bodyStrong)
-                Text("Off closes immediately. Turn on to try the closing transition.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.settingsSecondaryText)
-            }
-        }
-        .toggleStyle(.switch)
+        self.settingsToggleRow(
+            title: "Animate overlay closing",
+            description: "Off closes immediately. Turn on to try the closing transition.",
+            isOn: self.$settings.overlayClosingAnimationEnabled
+        )
     }
 
     var overlayMaterialSettings: some View {
