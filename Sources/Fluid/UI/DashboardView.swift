@@ -213,7 +213,7 @@ struct DashboardView: View {
                 self.selectedSidebarItem = .customDictionary
             }
             .disabled(self.busy)
-            DashboardQuickAction(title: "Cleanup styles", detail: "Shape how your words read", icon: "slider.horizontal.3", tint: .purple) {
+            DashboardQuickAction(title: "Cleanup styles", detail: "Shape how your words read", icon: "wand.and.stars", tint: self.theme.palette.accent) {
                 self.selectedSidebarItem = .cleanupStyles
             }
             .disabled(self.busy)
