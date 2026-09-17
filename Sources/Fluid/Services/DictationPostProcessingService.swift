@@ -53,6 +53,10 @@ struct DictationProviderRoute: Equatable {
             configuredModel = nil
         }
 
+        return self.build(settings: settings, selectedProviderID: selectedProviderID, configuredModel: configuredModel)
+    }
+
+    private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?) -> Self {
         let selectedModels = settings.selectedModelByProvider
         let providerKeys = settings.providerAPIKeys
 
@@ -84,6 +88,38 @@ struct DictationProviderRoute: Equatable {
             model: configuredModel ?? selectedModels[selectedProviderID] ?? "",
             apiKey: providerKeys[selectedProviderID] ?? ""
         )
+    }
+
+    /// Where `.default` would route for dictation, regardless of what is selected now.
+    /// Mirrors the `.default` branch of `resolve` so the picker can drop an option that
+    /// would otherwise render as "Default · Unavailable".
+    static func resolveDictationDefault(settings: SettingsStore, appBundleID: String? = nil) -> Self {
+        let configuration = settings.dictationPromptConfiguration(for: .default)
+        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !providerID.isEmpty, !model.isEmpty {
+            return self.build(settings: settings, selectedProviderID: providerID, configuredModel: model)
+        }
+        let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
+        if !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
+            selectedProviderID: settings.selectedProviderID,
+            configuredProviderID: providerID,
+            configuredModel: model
+        ) {
+            return self.privateAIRoute(settings: settings)
+        }
+        return self.build(
+            settings: settings,
+            selectedProviderID: self.externalFallbackProviderID(from: settings.selectedProviderID),
+            configuredModel: nil
+        )
+    }
+
+    /// True when picking "Default" would actually reach a configured, verified provider.
+    static func isDictationDefaultAvailable(settings: SettingsStore, appBundleID: String? = nil) -> Bool {
+        let route = self.resolveDictationDefault(settings: settings, appBundleID: appBundleID)
+        guard !route.providerID.isEmpty, !route.model.isEmpty else { return false }
+        return DictationAIPostProcessingGate.isProviderConfigured(providerID: route.providerID, model: route.model)
     }
 
     static func privateAIRoute(settings: SettingsStore) -> Self {

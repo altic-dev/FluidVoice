@@ -819,15 +819,20 @@ struct NotchExpandedView: View {
 
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 2) {
-                    let defaultSelected = promptMode.normalized == .dictate
+                    let defaultAvailable = promptMode.normalized != .dictate
+                        || DictationProviderRoute.isDictationDefaultAvailable(settings: self.settings, appBundleID: self.promptResolutionBundleID)
+                    let defaultSelected = defaultAvailable && (promptMode.normalized == .dictate
                         ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .default)
-                        : (self.settings.selectedPromptID(for: promptMode) == nil)
+                        : (self.settings.selectedPromptID(for: promptMode) == nil))
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(
                             "Basic",
                             rowID: "off",
-                            isSelected: self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .off,
+                            isSelected: {
+                                let selection = self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID)
+                                return selection == .off || (selection == .default && !defaultAvailable)
+                            }(),
                             isEnabled: true
                         ) {
                             self.contentState.onDictationPromptSelectionRequested?(.off)
@@ -836,7 +841,12 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    self.promptMenuRow(SettingsStore.DictationModeLabels.externalDefault, rowID: "default", isSelected: defaultSelected) {
+                    self.promptMenuRow(
+                        SettingsStore.DictationModeLabels.externalDefault,
+                        rowID: "default",
+                        isSelected: defaultSelected,
+                        isEnabled: defaultAvailable
+                    ) {
                         if promptMode.normalized == .dictate {
                             self.contentState.onDictationPromptSelectionRequested?(.default)
                         } else {

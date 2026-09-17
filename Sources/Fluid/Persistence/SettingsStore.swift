@@ -795,7 +795,9 @@ final class SettingsStore: ObservableObject {
         let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
         let modelName = PrivateAIModelRegistry.model(id: route.model)?.displayName ?? route.model
         let model = modelName.replacingOccurrences(of: "Fluid-1 ", with: "")
-        return model.isEmpty ? "\(mode) · Unavailable" : "\(mode) · \(model)"
+        // An unroutable selection runs no cleanup at all, so it reads as Basic rather than
+        // as a long "· Unavailable" line that overflows the pill.
+        return model.isEmpty ? "Basic" : "\(mode) · \(model)"
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {

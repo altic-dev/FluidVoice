@@ -1775,10 +1775,18 @@ private struct BottomOverlayPromptMenuView: View {
         }
     }
 
+    /// Dictation "Default" needs a configured external provider; other prompt modes always allow it.
+    private var isDefaultPromptAvailable: Bool {
+        self.promptMode.normalized != .dictate
+            || DictationProviderRoute.isDictationDefaultAvailable(settings: self.settings, appBundleID: DictationAppSession.shared.appID)
+    }
+
     @ViewBuilder
     private func offRow() -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = self.settings.resolvedDictationPromptSelection(for: activeSlot, appBundleID: DictationAppSession.shared.appID) == .off
+        let selection = self.settings.resolvedDictationPromptSelection(for: activeSlot, appBundleID: DictationAppSession.shared.appID)
+        // A Default that cannot route runs no cleanup, so Basic is what is really active.
+        let isSelected = selection == .off || (selection == .default && !self.isDefaultPromptAvailable)
         Button(action: {
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.off)
@@ -1815,12 +1823,14 @@ private struct BottomOverlayPromptMenuView: View {
     @ViewBuilder
     private func defaultRow(selectedID: String?) -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = (
+        let isAvailable = self.isDefaultPromptAvailable
+        let isSelected = isAvailable && (
             self.promptMode.normalized == .dictate
                 ? (self.settings.resolvedDictationPromptSelection(for: activeSlot, appBundleID: DictationAppSession.shared.appID) == .default)
                 : (selectedID == nil)
         )
         Button(action: {
+            guard isAvailable else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.default)
             } else {
@@ -1843,8 +1853,11 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: "default"))
         }
         .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .opacity(isAvailable ? 1 : 0.45)
+        .help(isAvailable ? "Use your default provider" : "Add an API key to a provider to enable this prompt")
         .onHover { hovering in
-            self.hoveredRowID = hovering ? "default" : nil
+            self.hoveredRowID = hovering && isAvailable ? "default" : nil
         }
     }
 
