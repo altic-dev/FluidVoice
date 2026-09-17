@@ -529,10 +529,35 @@ final class MeetingTranscriptionService: ObservableObject {
             var totalConfidence: Float = 0
             var chunkCount = 0
 
+            // AVAudioFile can only open standalone audio files. Video containers (e.g. .mov, .mp4)
+            // must have their audio track extracted first, otherwise opening them directly fails
+            // with CoreAudio error -54 ("Could not open audio file") even though the container is
+            // in `supportedFileExtensions`.
+            var extractedAudioURL: URL?
+            defer {
+                if let extractedAudioURL {
+                    try? FileManager.default.removeItem(at: extractedAudioURL)
+                }
+            }
+
+            let audioSourceURL: URL
+            if isVideoContainer {
+                do {
+                    let extracted = try await Self.extractAudioTrack(from: fileURL)
+                    extractedAudioURL = extracted
+                    audioSourceURL = extracted
+                } catch {
+                    throw TranscriptionError
+                        .audioConversionFailed("Could not extract audio track from video: \(error.localizedDescription)")
+                }
+            } else {
+                audioSourceURL = fileURL
+            }
+
             // Open audio file for reading
             let audioFile: AVAudioFile
             do {
-                audioFile = try AVAudioFile(forReading: fileURL)
+                audioFile = try AVAudioFile(forReading: audioSourceURL)
             } catch {
                 throw TranscriptionError.audioConversionFailed("Could not open audio file: \(error.localizedDescription)")
             }
@@ -640,6 +665,37 @@ final class MeetingTranscriptionService: ObservableObject {
             self.error = wrappedError.localizedDescription
             throw wrappedError
         }
+    }
+
+    /// Extracts the audio track of a video container (e.g. .mov, .mp4) into a standalone
+    /// `.m4a` file that `AVAudioFile` can open directly. `AVAudioFile(forReading:)` rejects
+    /// many video containers outright (CoreAudio error -54), even ones whose extension is
+    /// advertised as supported, because it expects an audio-only file.
+    private static func extractAudioTrack(from videoURL: URL) async throws -> URL {
+        let asset = AVURLAsset(url: videoURL)
+
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw TranscriptionError.audioConversionFailed("Could not create audio export session")
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .m4a
+
+        await exportSession.export()
+
+        if let error = exportSession.error {
+            throw error
+        }
+        guard exportSession.status == .completed else {
+            throw TranscriptionError
+                .audioConversionFailed("Audio export did not complete (status: \(exportSession.status.rawValue))")
+        }
+
+        return outputURL
     }
 
     /// Export transcription result to text file
