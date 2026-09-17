@@ -306,7 +306,7 @@ struct AppTheme {
                 tertiaryText: Color(nsColor: .tertiaryLabelColor),
                 accent: accent,
                 warning: Color(nsColor: .systemOrange),
-                success: accent
+                success: Color(nsColor: .systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(
@@ -349,7 +349,7 @@ struct AppTheme {
                 tertiaryText: Color(nsColor: .tertiaryLabelColor),
                 accent: accent,
                 warning: Color(nsColor: .systemOrange),
-                success: accent
+                success: Color(nsColor: .systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(

@@ -163,7 +163,7 @@ struct DashboardView: View {
                     Image(systemName: icon).font(.fluidSystem(size: 22, weight: .medium)).foregroundStyle(self.theme.palette.accent)
                     Spacer()
                     if complete {
-                        Image(systemName: "checkmark.circle.fill").font(.fluidSystem(size: 12)).foregroundStyle(.secondary)
+                        Image(systemName: "checkmark.circle.fill").font(.fluidSystem(size: 12)).foregroundStyle(self.theme.palette.success)
                     }
                 }
                 VStack(alignment: .leading, spacing: 5) {
