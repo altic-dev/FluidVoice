@@ -2006,27 +2006,30 @@ struct OnboardingFlowView: View {
         }
     }
 
+    @ViewBuilder
     private func onboardingModelFeaturePanel(for model: SettingsStore.SpeechModel) -> some View {
-        VStack(spacing: 10) {
-            self.onboardingModelMetricRow(
-                fillPercent: model.speedPercent,
-                color: .yellow,
-                secondaryColor: .orange,
-                icon: "bolt.fill",
-                label: "Speed"
-            )
+        if model.hasPerformanceRatings {
+            VStack(spacing: 10) {
+                self.onboardingModelMetricRow(
+                    fillPercent: model.speedPercent,
+                    color: .yellow,
+                    secondaryColor: .orange,
+                    icon: "bolt.fill",
+                    label: "Speed"
+                )
 
-            self.onboardingModelMetricRow(
-                fillPercent: model.accuracyPercent,
-                color: Color.fluidGreen,
-                secondaryColor: .cyan,
-                icon: "target",
-                label: "Accuracy"
-            )
+                self.onboardingModelMetricRow(
+                    fillPercent: model.accuracyPercent,
+                    color: Color.fluidGreen,
+                    secondaryColor: .cyan,
+                    icon: "target",
+                    label: "Accuracy"
+                )
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Speed \(Int(model.speedPercent * 100)) percent. Accuracy \(Int(model.accuracyPercent * 100)) percent.")
         }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Speed \(Int(model.speedPercent * 100)) percent. Accuracy \(Int(model.accuracyPercent * 100)) percent.")
     }
 
     private func onboardingModelPreparationStatus(isUninstalling: Bool) -> some View {

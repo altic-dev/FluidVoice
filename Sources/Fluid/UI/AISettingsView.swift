@@ -70,6 +70,7 @@ enum ModelSortOption: String, CaseIterable, Identifiable {
 enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case all = "All"
     case nvidia = "NVIDIA"
+    case oruk = "Oruk"
     case apple = "Apple"
     case cohere = "Cohere"
     case openai = "OpenAI"

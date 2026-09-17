@@ -249,25 +249,27 @@ extension VoiceEngineSettingsView {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 16) {
-                    LiquidBar(
-                        fillPercent: model.speedPercent,
-                        color: .yellow,
-                        secondaryColor: .orange,
-                        icon: "bolt.fill",
-                        label: "Speed"
-                    )
+                if model.hasPerformanceRatings {
+                    HStack(spacing: 16) {
+                        LiquidBar(
+                            fillPercent: model.speedPercent,
+                            color: .yellow,
+                            secondaryColor: .orange,
+                            icon: "bolt.fill",
+                            label: "Speed"
+                        )
 
-                    LiquidBar(
-                        fillPercent: model.accuracyPercent,
-                        color: Color.fluidGreen,
-                        secondaryColor: .cyan,
-                        icon: "target",
-                        label: "Accuracy"
-                    )
+                        LiquidBar(
+                            fillPercent: model.accuracyPercent,
+                            color: Color.fluidGreen,
+                            secondaryColor: .cyan,
+                            icon: "target",
+                            label: "Accuracy"
+                        )
+                    }
+                    .frame(width: 140, alignment: .center)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 }
-                .frame(width: 140, alignment: .center)
-                .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
             }
 
             if supportsCustomWords {
@@ -331,22 +333,24 @@ extension VoiceEngineSettingsView {
                     .foregroundStyle(self.voiceEngineSecondaryText)
 
                 HStack(spacing: 12) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.yellow)
-                        Text("Speed \(Int(model.speedPercent * 100))%")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
-                    }
+                    if model.hasPerformanceRatings {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.yellow)
+                            Text("Speed \(Int(model.speedPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
 
-                    HStack(spacing: 4) {
-                        Image(systemName: "target")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.fluidGreen)
-                        Text("Acc \(Int(model.accuracyPercent * 100))%")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
+                        HStack(spacing: 4) {
+                            Image(systemName: "target")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.fluidGreen)
+                            Text("Acc \(Int(model.accuracyPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
                     }
 
                     if isSelected && !isActive {

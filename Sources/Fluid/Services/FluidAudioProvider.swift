@@ -59,7 +59,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         let asrModelVersion: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
         let modelVersion = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
-        self.pronunciationModelKey = "parakeet-\(modelVersion)"
+        self.pronunciationModelKey = selectedModel == .orukeet ? "orukeet" : "parakeet-\(modelVersion)"
         let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
         let modelCacheDirectory = AsrModels.defaultCacheDirectory(for: asrModelVersion)
         DebugLogger.shared.info(
@@ -68,7 +68,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         )
         DebugLogger.shared.debug("FluidAudioProvider: target cache directory=\(cacheDirectory.path)", source: "FluidAudioProvider")
         try Task.checkCancellation()
-        if FileManager.default.fileExists(atPath: modelCacheDirectory.path), !self.modelsExistOnDisk() {
+        if selectedModel != .orukeet, FileManager.default.fileExists(atPath: modelCacheDirectory.path), !self.modelsExistOnDisk() {
             DebugLogger.shared.warning(
                 "FluidAudioProvider: removing incomplete \(modelVersion) cache before download",
                 source: "FluidAudioProvider"
@@ -94,10 +94,14 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Download and load models
         let models: AsrModels
         do {
-            models = try await AsrModels.downloadAndLoad(
-                version: asrModelVersion,
-                progressHandler: fluidAudioProgressHandler
-            )
+            if selectedModel == .orukeet {
+                models = try await OrukeetModelStore.prepare(progress: progressRelay)
+            } else {
+                models = try await AsrModels.downloadAndLoad(
+                    version: asrModelVersion,
+                    progressHandler: fluidAudioProgressHandler
+                )
+            }
         } catch {
             let nsError = error as NSError
             if Task.isCancelled
@@ -129,7 +133,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Shares the same underlying MLModel objects (reference types) so memory overhead
         // is only the decoder state (~100KB).
         let finalManager: AsrManager
-        if self.configureWordBoosting {
+        if self.configureWordBoosting && selectedModel != .orukeet {
             do {
                 if let vocabBundle = try await ParakeetVocabularyStore.shared.loadTokenizedVocabularyBundle() {
                     DebugLogger.shared.debug(
@@ -697,7 +701,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     func modelsExistOnDisk() -> Bool {
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         switch selectedModel {
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .orukeet:
             return selectedModel.isInstalled
         default:
             return false
@@ -714,7 +718,11 @@ final class FluidAudioProvider: TranscriptionProvider {
         )
 
         let start = Date()
-        if selectedModel == .parakeetTDTv2 {
+        if selectedModel == .orukeet {
+            if FileManager.default.fileExists(atPath: OrukeetModelStore.directory.path) {
+                try FileManager.default.removeItem(at: OrukeetModelStore.directory)
+            }
+        } else if selectedModel == .parakeetTDTv2 {
             // Clear v2 cache only
             let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
             if FileManager.default.fileExists(atPath: v2CacheDir.path) {

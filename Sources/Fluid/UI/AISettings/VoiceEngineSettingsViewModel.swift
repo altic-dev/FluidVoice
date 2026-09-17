@@ -89,6 +89,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             break
         case .nvidia:
             models = models.filter { $0.provider == .nvidia }
+        case .oruk:
+            models = models.filter { $0.provider == .oruk }
         case .apple:
             models = models.filter { $0.provider == .apple }
         case .cohere:

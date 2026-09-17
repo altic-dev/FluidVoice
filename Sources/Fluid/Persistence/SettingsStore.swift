@@ -4661,6 +4661,7 @@ final class SettingsStore: ObservableObject {
         // MARK: - FluidAudio Models (Apple Silicon Only)
 
         case parakeetTDT = "parakeet-tdt"
+        case orukeet = "orukeet-coreml-preview"
         case parakeetTDTv2 = "parakeet-tdt-v2"
         case parakeetRealtime = "parakeet-realtime"
         case qwen3Asr = "qwen3-asr"
@@ -4691,6 +4692,7 @@ final class SettingsStore: ObservableObject {
 
         var displayName: String {
             switch self {
+            case .orukeet: return "Orukeet (Core ML Preview)"
             case .parakeetTDT: return "Parakeet TDT v3 (Multilingual)"
             case .parakeetTDTv2: return "Parakeet TDT v2 (English Only)"
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
@@ -4712,7 +4714,7 @@ final class SettingsStore: ObservableObject {
 
         var languageSupport: String {
             switch self {
-            case .parakeetTDT:
+            case .parakeetTDT, .orukeet:
                 return "25 Languages"
             case .parakeetTDTv2: return "English Only (Higher Accuracy)"
             case .parakeetRealtime: return "English Only (Live Streaming)"
@@ -4728,6 +4730,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
+            case .orukeet: return "~445 MiB"
             case .parakeetTDT: return "~460.9 MiB"
             case .parakeetTDTv2: return "~442.9 MiB"
             case .parakeetRealtime: return "~428.4 MiB"
@@ -4749,6 +4752,7 @@ final class SettingsStore: ObservableObject {
 
         var expectedDownloadBytes: Int64 {
             switch self {
+            case .orukeet: return 466_579_851
             case .parakeetTDT: return 483_288_717
             case .parakeetTDTv2: return 464_421_712
             case .parakeetRealtime: return 449_190_189
@@ -4768,14 +4772,14 @@ final class SettingsStore: ObservableObject {
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .orukeet, .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech, .appleSpeechAnalyzer: return false
+            case .orukeet, .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech, .appleSpeechAnalyzer: return false
             default: return true
             }
         }
@@ -4890,6 +4894,7 @@ final class SettingsStore: ObservableObject {
         /// Human-readable marketing name for the card UI
         var humanReadableName: String {
             switch self {
+            case .orukeet: return "Orukeet - Multilingual"
             case .parakeetTDT: return "Blazing Fast - Multilingual"
             case .parakeetTDTv2: return "Blazing Fast - English"
             case .parakeetRealtime: return "Flash Dictation"
@@ -4912,6 +4917,8 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
+            case .orukeet:
+                return "Local transcription using Oruk's adaptation of Parakeet TDT v3. Core ML preview with CC BY-SA 4.0 weights."
             case .parakeetTDT:
                 return "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
                     "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
@@ -4953,7 +4960,7 @@ final class SettingsStore: ObservableObject {
         /// Minimum recommended RAM in GB for this model to run safely
         var requiredMemoryGB: Double {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
+            case .orukeet, .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
                 return 4.0
             case .qwen3Asr:
                 return 8.0
@@ -4994,9 +5001,13 @@ final class SettingsStore: ObservableObject {
             }
         }
 
+        /// Preview models stay unrated until they have app-specific measurements.
+        var hasPerformanceRatings: Bool { self != .orukeet }
+
         /// Speed rating (1-5, higher is faster)
         var speedRating: Int {
             switch self {
+            case .orukeet: return 0 // Preview has no app-specific performance rating.
             case .parakeetTDT: return 5
             case .parakeetTDTv2: return 5
             case .parakeetRealtime: return 5
@@ -5018,6 +5029,7 @@ final class SettingsStore: ObservableObject {
         /// Accuracy rating (1-5, higher is more accurate)
         var accuracyRating: Int {
             switch self {
+            case .orukeet: return 0 // Preview has no app-specific performance rating.
             case .parakeetTDT: return 5
             case .parakeetTDTv2: return 5
             case .parakeetRealtime: return 4
@@ -5039,6 +5051,7 @@ final class SettingsStore: ObservableObject {
         /// Exact speed percentage (0.0 - 1.0) for the liquid bars
         var speedPercent: Double {
             switch self {
+            case .orukeet: return 0
             case .parakeetTDT: return 1.0
             case .parakeetTDTv2: return 1.0
             case .parakeetRealtime: return 1.0
@@ -5060,6 +5073,7 @@ final class SettingsStore: ObservableObject {
         /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
         var accuracyPercent: Double {
             switch self {
+            case .orukeet: return 0
             case .parakeetTDT: return 0.92
             case .parakeetTDTv2: return 0.96
             case .parakeetRealtime: return 0.75
@@ -5081,6 +5095,7 @@ final class SettingsStore: ObservableObject {
         /// Optional badge text for the card (e.g., "FluidVoice Pick")
         var badgeText: String? {
             switch self {
+            case .orukeet: return "Preview"
             case .parakeetTDT: return "FluidVoice Pick"
             case .parakeetTDTv2: return "FluidVoice Pick"
             case .parakeetRealtime: return "Beta"
@@ -5095,7 +5110,7 @@ final class SettingsStore: ObservableObject {
         /// Optimization level for Apple Silicon (for display)
         var appleSiliconOptimized: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
+            case .orukeet, .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
                 return true
             default:
                 return false
@@ -5163,11 +5178,13 @@ final class SettingsStore: ObservableObject {
             case openai = "OpenAI"
             case qwen = "Qwen"
             case cohere = "Cohere"
+            case oruk = "Oruk"
         }
 
         /// Which provider this model belongs to
         var provider: Provider {
             switch self {
+            case .orukeet: return .oruk
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
@@ -5189,6 +5206,12 @@ final class SettingsStore: ObservableObject {
         /// Whether this model is built-in or already downloaded on disk
         var isInstalled: Bool {
             switch self {
+            case .orukeet:
+                #if arch(arm64)
+                return OrukeetModelStore.isInstalled
+                #else
+                return false
+                #endif
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
             case .parakeetTDT:
@@ -5297,6 +5320,7 @@ final class SettingsStore: ObservableObject {
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {
             switch self {
+            case .orukeet: return "Oruk / NVIDIA"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "NVIDIA"
             case .qwen3Asr:
@@ -5321,6 +5345,7 @@ final class SettingsStore: ObservableObject {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
+            case .orukeet: return "#725643"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "#76B900"
             case .qwen3Asr:
@@ -5751,7 +5776,7 @@ extension SettingsStore {
 extension SettingsStore.SpeechModel {
     var supportedLanguageCodes: String? {
         switch self {
-        case .parakeetTDT:
+        case .parakeetTDT, .orukeet:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
         case .parakeetRealtime:
             return "EN"
@@ -5768,7 +5793,7 @@ extension SettingsStore.SpeechModel {
 
     var supportedLanguageNames: String? {
         switch self {
-        case .parakeetTDT:
+        case .parakeetTDT, .orukeet:
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
             """
