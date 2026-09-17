@@ -92,6 +92,21 @@ final class PrivateAISettingsController: ObservableObject {
         }
     }
 
+    /// Drives the Deactivate affordance: stays true after the idle unloader frees the runtime,
+    /// because dictation would still reload Fluid Intelligence on the next run.
+    var routesDictationThroughPrivateAI: Bool { self.viewModel.routesDictationThroughPrivateAI }
+
+    /// Inverse of `usePreviewModel`: stops routing dictation through Fluid Intelligence
+    /// and frees the loaded runtime. The model stays installed and selected.
+    func deactivateSelectedModel() {
+        guard !self.isBusy else { return }
+        self.viewModel.turnOffPrivateAIDictationSlots()
+        Task { @MainActor in
+            await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "user deactivated")
+            self.refreshPrivateAILoadState()
+        }
+    }
+
     func synchronizeSelection() {
         guard !self.isBusy else { return }
         self.session.select(PrivateAIIntegrationService.configuredModelID)

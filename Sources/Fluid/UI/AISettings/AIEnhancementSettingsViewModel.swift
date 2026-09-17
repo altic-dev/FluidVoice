@@ -2081,6 +2081,25 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Intentionally empty. Selection is sticky.
     }
 
+    /// True while any dictation shortcut still routes through Fluid Intelligence, even when
+    /// the runtime has been freed by the idle unloader.
+    var routesDictationThroughPrivateAI: Bool {
+        SettingsStore.DictationShortcutSlot.allCases.contains { slot in
+            DictationProviderRoute.resolve(settings: self.settings, dictationSlot: slot).usesPrivateAI
+        }
+    }
+
+    /// Turns off every dictation shortcut currently routed through Fluid Intelligence.
+    /// Slots bound to a cloud provider keep their own selection.
+    func turnOffPrivateAIDictationSlots() {
+        for slot in SettingsStore.DictationShortcutSlot.allCases
+            where DictationProviderRoute.resolve(settings: self.settings, dictationSlot: slot).usesPrivateAI
+        {
+            self.settings.setDictationPromptSelection(.off, for: slot)
+        }
+        self.refreshPromptSelectionState()
+    }
+
     func selectPrimaryDictationPromptOff() {
         self.settings.setDictationPromptSelection(.off)
         self.refreshPromptSelectionState()

@@ -173,6 +173,10 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                         })
                     }
                     .disabled(!selected || files?.installed != true || self.controller.isBusy)
+                    Button("Deactivate model") {
+                        self.controller.deactivateSelectedModel()
+                    }
+                    .disabled(!selected || !self.controller.routesDictationThroughPrivateAI || self.controller.isBusy)
                     if !selected {
                         Text("Activate this model to manage it")
                     }
