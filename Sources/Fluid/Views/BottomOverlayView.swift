@@ -2525,7 +2525,12 @@ struct BottomOverlayView: View {
     }
 
     private var displayedAppIcon: NSImage? {
-        self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon ?? self.lastResolvedAppIcon
+        // ActiveAppMonitor never tracks FluidVoice itself, so dictating into our own window
+        // would otherwise show the previous app's icon, or a bare dot after launch.
+        if DictationAppSession.shared.appID == Bundle.main.bundleIdentifier {
+            return NSApp.applicationIconImage
+        }
+        return self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon ?? self.lastResolvedAppIcon
     }
 
     private var processingLabel: String {
