@@ -59,11 +59,21 @@ final class PrivateAISettingsController: ObservableObject {
     var previewModelID: String { self.session.previewModelID }
     var isBusy: Bool { self.session.isBusy || self.viewModel.isTestingConnection }
     @Published var privateAILoadState: PrivateAIModelLoadState = .idle
+    private var runtimeObserver: NSObjectProtocol?
     @Published var privateAIModelUpdateStatusByID: [String: PrivateAIModelUpdateStatus] = [:]
 
     init(viewModel: AIEnhancementSettingsViewModel) {
         self.viewModel = viewModel
         self.session = PrivateAISettingsSession(selectedModelID: PrivateAIIntegrationService.configuredModelID)
+        self.runtimeObserver = NotificationCenter.default.addObserver(
+            forName: PrivateAIIntegrationService.runtimeDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPrivateAILoadState() }
+        }
+    }
+
+    deinit {
+        if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
     }
 
     /// Carousel arrows/dots call this; no defaults, provider, or runtime writes.

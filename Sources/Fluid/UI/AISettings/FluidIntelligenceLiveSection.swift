@@ -116,7 +116,10 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
     private func cardControls(_ model: PrivateAIRegisteredModel) -> some View {
         let files = self.snapshots[model.id]
         let selected = model.id == self.controller.privateAISelectedModelID
-        let active = selected && self.isVerified && self.controller.privateAILoadState.isLoaded(model.id)
+        // Active = dictation will use this model. Whether it is in memory right now is shown
+        // separately, because the idle unloader frees it and the next dictation reloads it.
+        let active = selected && self.isVerified && self.controller.routesDictationThroughPrivateAI
+        let inMemory = self.controller.privateAILoadState.isLoaded(model.id)
         let realUpdate = files?.installed == true && self.controller.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable
         return VStack(alignment: .leading, spacing: 8) {
             Divider().overlay(self.theme.palette.cardBorder)
@@ -127,6 +130,10 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                 Text("Preparing model…").font(self.theme.typography.caption)
             } else if let failure = self.controller.privateAILoadState.failureMessage(for: model.id) {
                 Text(failure).font(self.theme.typography.caption).foregroundStyle(.red).lineLimit(2).help(failure)
+            } else if active {
+                Text(inMemory ? "In memory" : "Not in memory · loads when you dictate")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack(spacing: 8) {
                 if active {
@@ -176,7 +183,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                     Button("Deactivate model") {
                         self.controller.deactivateSelectedModel()
                     }
-                    .disabled(!selected || !self.controller.routesDictationThroughPrivateAI || self.controller.isBusy)
+                    .disabled(!active || self.controller.isBusy)
                     if !selected {
                         Text("Activate this model to manage it")
                     }

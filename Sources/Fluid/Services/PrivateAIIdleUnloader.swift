@@ -9,14 +9,17 @@ actor PrivateAIIdleUnloader {
     private let delay: @Sendable () async -> Duration?
     private let isBusy: @Sendable () async -> Bool
     private let unload: @Sendable () async -> Void
+    private let activityEnded: @Sendable () async -> Void
     private var inFlight = 0
     private var pending: Task<Void, Never>?
 
     init(
         delay: @escaping @Sendable () async -> Duration?,
         isBusy: @escaping @Sendable () async -> Bool,
-        unload: @escaping @Sendable () async -> Void
+        unload: @escaping @Sendable () async -> Void,
+        activityEnded: @escaping @Sendable () async -> Void = {}
     ) {
+        self.activityEnded = activityEnded
         self.delay = delay
         self.isBusy = isBusy
         self.unload = unload
@@ -32,6 +35,7 @@ actor PrivateAIIdleUnloader {
         self.inFlight = max(0, self.inFlight - 1)
         guard self.inFlight == 0 else { return }
         self.schedule()
+        Task { [activityEnded] in await activityEnded() }
     }
 
     /// Runs `work` as model activity: the countdown restarts when it finishes.

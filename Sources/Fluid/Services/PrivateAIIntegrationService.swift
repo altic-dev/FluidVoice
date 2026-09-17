@@ -242,8 +242,19 @@ actor PrivateAIIntegrationService {
     nonisolated static let idleUnloader = PrivateAIIdleUnloader(
         delay: { await MainActor.run { SettingsStore.shared.privateAIIdleUnloadDelay } },
         isBusy: { await MainActor.run { AppServices.shared.asr.isRunningOrStarting } },
-        unload: { await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "idle") }
+        unload: { await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "idle") },
+        activityEnded: { await PrivateAIIntegrationService.postRuntimeDidChange() }
     )
+
+    /// Posted whenever the model may have entered or left memory, so Settings can show
+    /// "Active" for exactly as long as the model is loaded.
+    nonisolated static let runtimeDidChangeNotification = Notification.Name("PrivateAIRuntimeDidChange")
+
+    nonisolated static func postRuntimeDidChange() async {
+        await MainActor.run {
+            NotificationCenter.default.post(name: Self.runtimeDidChangeNotification, object: nil)
+        }
+    }
 
     func loadModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
         let status = try await Self.idleUnloader.tracking { try await Self.provider.loadModel(model) }
@@ -285,6 +296,7 @@ actor PrivateAIIntegrationService {
 
     func unloadCachedRuntime(reason: String = "manual") async {
         await Self.provider.unloadCachedRuntime(reason: reason)
+        await Self.postRuntimeDidChange()
     }
 
     func shutdownForTermination() async {
