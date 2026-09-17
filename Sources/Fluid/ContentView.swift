@@ -382,6 +382,7 @@ struct ContentView: View {
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isSidebarToggleHovered = false
 
     var body: some View {
         let layout = AnyView(
@@ -392,6 +393,10 @@ struct ContentView: View {
                     NavigationSplitView(columnVisibility: self.$columnVisibility) {
                         self.sidebarContent
                             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+                            // The system toggle draws dark glass over the sidebar; ours sits in the
+                            // same spot without a glass backing so it blends into the sidebar color.
+                            .toolbar(removing: .sidebarToggle)
+                            .toolbar { self.sidebarToggleToolbarItem }
                     } detail: {
                         self.detailView
                     }
@@ -422,6 +427,11 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .dictationPromptShortcutsChanged)) { _ in
                 self.hotkeyManager?.updatePromptShortcutAssignments(SettingsStore.shared.dictationPromptShortcutAssignments())
+            }
+            // Local UI diagnostics, same defaults gate as GlobalHotkeyManager+DebugTrigger.
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.toggleSidebar"))) { _ in
+                guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
+                self.toggleSidebar()
             }
             .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
                 self.reloadSettingsStateAfterBackupRestore()
@@ -1742,6 +1752,50 @@ struct ContentView: View {
             if self.asr.micStatus != .authorized {
                 self.microphoneInstructionsView
             }
+        }
+    }
+
+    private var sidebarToggleButton: some View {
+        Button(action: self.toggleSidebar) {
+            Image(systemName: "sidebar.left")
+        }
+        .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+        .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+    }
+
+    @ToolbarContentBuilder
+    private var sidebarToggleToolbarItem: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            // Keeps the toggle at the sidebar's trailing edge, where the system one sat.
+            ToolbarSpacer(.flexible)
+            ToolbarItem(placement: .automatic) {
+                // Same hover/press treatment as the sidebar's "Back to app" and entry buttons.
+                Button(action: self.toggleSidebar) {
+                    Image(systemName: "sidebar.left")
+                        .font(.fluidSystem(size: 14, weight: .medium))
+                        .frame(width: 30, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SidebarChromeButtonStyle(
+                    isHovered: self.isSidebarToggleHovered,
+                    reduceMotion: self.accessibilityReduceMotion
+                ))
+                .opacity(self.isSidebarToggleHovered ? 1 : 0.7)
+                .onHover { self.isSidebarToggleHovered = $0 }
+                .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .automatic) {
+                self.sidebarToggleButton
+            }
+        }
+    }
+
+    private func toggleSidebar() {
+        withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            self.columnVisibility = self.columnVisibility == .detailOnly ? .all : .detailOnly
         }
     }
 
