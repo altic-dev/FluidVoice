@@ -306,6 +306,7 @@ struct ContentView: View {
     @State private var isHelpEntryHovered = false
     @State private var isSettingsEntryHovered = false
     @State private var isSettingsBackHovered = false
+    @FocusState private var isSettingsSearchFocused: Bool
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
@@ -396,7 +397,7 @@ struct ContentView: View {
                             // The system toggle draws dark glass over the sidebar; ours sits in the
                             // same spot without a glass backing so it blends into the sidebar color.
                             .toolbar(removing: .sidebarToggle)
-                            .toolbar { self.sidebarToggleToolbarItem }
+                            .overlay(alignment: .topTrailing) { self.sidebarToggleOverlay }
                     } detail: {
                         self.detailView
                     }
@@ -432,6 +433,10 @@ struct ContentView: View {
             .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.toggleSidebar"))) { _ in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.toggleSidebar()
+            }
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { _ in
+                guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
+                self.menuBarManager.openPreferencesFromUI()
             }
             .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
                 self.reloadSettingsStateAfterBackupRestore()
@@ -1380,11 +1385,7 @@ struct ContentView: View {
             .help("Back to FluidVoice")
             .accessibilityLabel("Back to FluidVoice")
 
-            SettingsSearchField(text: Binding(
-                get: { self.settingsSearchQuery },
-                set: { self.updateSettingsSearchQuery($0) }
-            ), isActive: self.settingsNavigation.isPresented)
-                .frame(height: 24)
+            self.settingsSearchRow
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.top, self.theme.metrics.spacing.xs)
                 .padding(.bottom, self.theme.metrics.spacing.sm)
@@ -1755,42 +1756,73 @@ struct ContentView: View {
         }
     }
 
-    private var sidebarToggleButton: some View {
-        Button(action: self.toggleSidebar) {
-            Image(systemName: "sidebar.left")
+    /// Drawn inside the sidebar rather than as a toolbar item, so no macOS version can
+    /// wrap it in its own glass capsule. Sits up in the title bar band, where the system
+    /// toggle used to be.
+    /// Same height, font and corner as the section rows below it, so it reads as part of the list.
+    private var settingsSearchRow: some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.fluidSystem(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 16, height: 16)
+            TextField("Search Settings", text: Binding(
+                get: { self.settingsSearchQuery },
+                set: { self.updateSettingsSearchQuery($0) }
+            ))
+            .textFieldStyle(.plain)
+            .font(self.theme.typography.sidebarItem)
+            .focused(self.$isSettingsSearchFocused)
+            if !self.settingsSearchQuery.isEmpty {
+                Button {
+                    self.updateSettingsSearchQuery("")
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.fluidSystem(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
         }
-        .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-        .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(self.isSettingsSearchFocused ? 0.10 : 0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(self.theme.palette.accent.opacity(self.isSettingsSearchFocused ? 0.5 : 0), lineWidth: 1)
+        )
+        .animation(.easeOut(duration: 0.12), value: self.isSettingsSearchFocused)
+        .onChange(of: self.settingsNavigation.isPresented) { _, presented in
+            if !presented { self.isSettingsSearchFocused = false }
+        }
+        .accessibilityLabel("Search Settings")
     }
 
-    @ToolbarContentBuilder
-    private var sidebarToggleToolbarItem: some ToolbarContent {
-        if #available(macOS 26.0, *) {
-            // Keeps the toggle at the sidebar's trailing edge, where the system one sat.
-            ToolbarSpacer(.flexible)
-            ToolbarItem(placement: .automatic) {
-                // Same hover/press treatment as the sidebar's "Back to app" and entry buttons.
-                Button(action: self.toggleSidebar) {
-                    Image(systemName: "sidebar.left")
-                        .font(.fluidSystem(size: 14, weight: .medium))
-                        .frame(width: 30, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(SidebarChromeButtonStyle(
-                    isHovered: self.isSidebarToggleHovered,
-                    reduceMotion: self.accessibilityReduceMotion
-                ))
-                .opacity(self.isSidebarToggleHovered ? 1 : 0.7)
-                .onHover { self.isSidebarToggleHovered = $0 }
-                .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+    private var sidebarToggleOverlay: some View {
+        GeometryReader { proxy in
+            Button(action: self.toggleSidebar) {
+                Image(systemName: "sidebar.left")
+                    .font(.fluidSystem(size: 14, weight: .medium))
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
             }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .automatic) {
-                self.sidebarToggleButton
-            }
+            .buttonStyle(SidebarChromeButtonStyle(
+                isHovered: self.isSidebarToggleHovered,
+                reduceMotion: self.accessibilityReduceMotion
+            ))
+            .opacity(self.isSidebarToggleHovered ? 1 : 0.7)
+            .onHover { self.isSidebarToggleHovered = $0 }
+            .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+            .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 10)
+            .padding(.top, max(0, (proxy.safeAreaInsets.top - 26) / 2) - proxy.safeAreaInsets.top)
         }
+        .frame(height: 0)
     }
 
     private func toggleSidebar() {
@@ -1815,6 +1847,16 @@ struct ContentView: View {
             content
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        // The in-sidebar toggle hides with the sidebar; this is the way back.
+                        if self.columnVisibility == .detailOnly {
+                            Button(action: self.toggleSidebar) {
+                                Image(systemName: "sidebar.left")
+                            }
+                            .buttonStyle(.automatic)
+                            .help("Show sidebar")
+                            .accessibilityLabel("Show sidebar")
+                        }
+
                         self.todayStatsButton
                             .buttonStyle(.automatic)
 
