@@ -28,6 +28,14 @@
       }
     },
     {
+      "identity" : "fluidaudio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/altic-dev/FluidAudio.git",
+      "state" : {
+        "revision" : "cfabbc6cd7c603ad469cbbb5a30c1ece48db04be"
+      }
+    },
+    {
       "identity" : "foundation",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/PromiseKit/Foundation",
