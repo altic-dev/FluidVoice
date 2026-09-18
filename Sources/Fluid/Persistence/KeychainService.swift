@@ -41,6 +41,11 @@ final class KeychainService {
     private let testingBackend: TestingBackend?
 
     private init() {
+        // The ASR baseline host must never touch credentials; any transitive
+        // `SettingsStore.shared` initialization reaches this stored-property singleton.
+        #if FLUID_ASR_BASELINE
+        fatalError("KeychainService is unavailable in the ASR baseline host")
+        #endif
         self.testingBackend = nil
     }
 

@@ -1,4 +1,63 @@
 import Foundation
+
+/// Rejection of a meeting ASR configuration outside the fixed supported policy.
+nonisolated enum MeetingProviderOptionsError: Error, Equatable {
+    case unsupportedASRModel(String)
+    case unsupportedLanguageCode(String)
+    case unsupportedFeature(String)
+}
+
+/// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
+/// Parakeet TDT v2 English policy is supported; `resolve` rejects anything else instead of
+/// silently coercing it (e.g. labelling a v3 model "v2" or dropping a requested feature).
+nonisolated struct MeetingProviderOptions: Equatable, Sendable {
+    let model: SettingsStore.SpeechModel
+    let vocabularyBoostingEnabled: Bool
+    let pronunciationMatchingEnabled: Bool
+    let customDictionaryRewritingEnabled: Bool
+    let experimentalUnifiedFinalEnabled: Bool
+
+    static func resolve(
+        _ configuration: MeetingFinalProcessingConfiguration
+    ) throws -> MeetingProviderOptions {
+        let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel)
+        guard model == .parakeetTDTv2 else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
+        guard configuration.languageCode == MeetingFinalProcessingConfiguration.defaultLanguageCode else {
+            throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
+        }
+        guard !configuration.vocabularyBoostingEnabled else {
+            throw MeetingProviderOptionsError.unsupportedFeature("vocabularyBoosting")
+        }
+        guard !configuration.pronunciationMatchingEnabled else {
+            throw MeetingProviderOptionsError.unsupportedFeature("pronunciationMatching")
+        }
+        guard !configuration.customDictionaryRewritingEnabled else {
+            throw MeetingProviderOptionsError.unsupportedFeature("customDictionaryRewriting")
+        }
+        guard !configuration.experimentalUnifiedFinalEnabled else {
+            throw MeetingProviderOptionsError.unsupportedFeature("experimentalUnifiedFinal")
+        }
+        return MeetingProviderOptions(
+            model: .parakeetTDTv2,
+            vocabularyBoostingEnabled: false,
+            pronunciationMatchingEnabled: false,
+            customDictionaryRewritingEnabled: false,
+            experimentalUnifiedFinalEnabled: false
+        )
+    }
+}
+
+/// Immutable enhancement options pinned at construction for offline/baseline runs. When
+/// provided, these values replace the live `SettingsStore` reads for these enhancements.
+/// Full settings isolation also requires an explicit model and disabled vocabulary boosting.
+nonisolated struct FluidAudioProviderEnhancementOptions {
+    let experimentalUnifiedFinalEnabled: Bool
+    let pronunciationMatchingEnabled: Bool
+    let customDictionaryEntries: [SettingsStore.CustomDictionaryEntry]
+}
+
 #if arch(arm64)
 import FluidAudio
 
@@ -30,6 +89,10 @@ final class FluidAudioProvider: TranscriptionProvider {
         true
     }
 
+    /// Boosting rescores tokens without moving their timings. Checked up front so a chunk that
+    /// cannot be aligned is never transcribed twice.
+    var supportsWordTimings: Bool { !self.isWordBoostingActive }
+
     private var streamingAsrManager: AsrManager?
     private var finalAsrManager: AsrManager?
     private var latestStreamingPreviewText: String = ""
@@ -45,12 +108,72 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     /// Optional model override - if set, uses this model instead of the global setting.
     /// Used for downloading specific models without changing the active selection.
-    var modelOverride: SettingsStore.SpeechModel?
+    let modelOverride: SettingsStore.SpeechModel?
     private let configureWordBoosting: Bool
-    init(modelOverride: SettingsStore.SpeechModel? = nil, configureWordBoosting: Bool = true) {
+    /// Opt-in pinned meeting options. When nil (legacy dictation), enhancement switches and
+    /// the custom dictionary are still read live from `SettingsStore` at each call site.
+    private let meetingOptions: MeetingProviderOptions?
+    /// Explicitly pinned enhancement options for offline/baseline runs. Precedence for each
+    /// effective getter: fixed meeting policy, then this, then live `SettingsStore`.
+    private let enhancementOptions: FluidAudioProviderEnhancementOptions?
+
+    init(
+        modelOverride: SettingsStore.SpeechModel? = nil,
+        configureWordBoosting: Bool = true,
+        enhancementOptions: FluidAudioProviderEnhancementOptions? = nil
+    ) {
         self.modelOverride = modelOverride
         self.configureWordBoosting = configureWordBoosting
+        self.meetingOptions = nil
+        self.enhancementOptions = enhancementOptions
     }
+
+    /// Opt-in meeting post-processing provider. The model is pinned immutably and every
+    /// dictation enhancement (vocabulary store, pronunciation training/matching, custom
+    /// dictionary, experimental unified final) is disabled explicitly rather than read from
+    /// live settings. Unsupported configurations are rejected, never silently coerced.
+    init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
+        let options = try MeetingProviderOptions.resolve(configuration)
+        self.modelOverride = options.model
+        self.configureWordBoosting = false
+        self.meetingOptions = options
+        self.enhancementOptions = nil
+    }
+
+    private var effectiveExperimentalUnifiedFinalEnabled: Bool {
+        self.meetingOptions?.experimentalUnifiedFinalEnabled
+            ?? self.enhancementOptions?.experimentalUnifiedFinalEnabled
+            ?? SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled
+    }
+
+    private var effectivePronunciationMatchingEnabled: Bool {
+        self.meetingOptions?.pronunciationMatchingEnabled
+            ?? self.enhancementOptions?.pronunciationMatchingEnabled
+            ?? SettingsStore.shared.pronunciationMatchingEnabled
+    }
+
+    private var effectiveCustomDictionaryEntries: [SettingsStore.CustomDictionaryEntry] {
+        if let meetingOptions = self.meetingOptions, !meetingOptions.customDictionaryRewritingEnabled {
+            return []
+        }
+        return self.enhancementOptions?.customDictionaryEntries
+            ?? SettingsStore.shared.customDictionaryEntries
+    }
+
+    #if DEBUG
+    func setWordBoostingActiveForTesting(_ active: Bool) {
+        self.isWordBoostingActive = active
+    }
+
+    /// Read-only snapshot of the actual effective enhancement getters for baseline tests.
+    var effectiveEnhancementOptionsForTesting: FluidAudioProviderEnhancementOptions {
+        FluidAudioProviderEnhancementOptions(
+            experimentalUnifiedFinalEnabled: self.effectiveExperimentalUnifiedFinalEnabled,
+            pronunciationMatchingEnabled: self.effectivePronunciationMatchingEnabled,
+            customDictionaryEntries: self.effectiveCustomDictionaryEntries
+        )
+    }
+    #endif
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
@@ -206,7 +329,7 @@ final class FluidAudioProvider: TranscriptionProvider {
 
         let startedAt = Date().timeIntervalSince1970
         let result: ASRResult
-        if SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+        if self.effectiveExperimentalUnifiedFinalEnabled,
            samples.count > Self.incrementalChunkingThresholdSamples,
            let incrementalManager = self.finalAsrManager ?? self.streamingAsrManager
         {
@@ -227,7 +350,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
             }
         } else {
-            if !SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled
+            if !self.effectiveExperimentalUnifiedFinalEnabled
                 || samples.count < self.incrementalAcceptedSampleCount
             {
                 self.resetIncrementalSession()
@@ -257,7 +380,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// growing recording on every live-preview tick.
     func incrementalPreviewDeltaStart(totalSampleCount: Int) -> Int? {
         Self.incrementalPreviewDeltaRange(
-            enabled: SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+            enabled: self.effectiveExperimentalUnifiedFinalEnabled,
             hasSession: self.incrementalSession != nil,
             acceptedSampleCount: self.incrementalAcceptedSampleCount,
             totalSampleCount: totalSampleCount
@@ -329,7 +452,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
             )
         }
-        let shouldCapture = SettingsStore.shared.pronunciationMatchingEnabled
+        let shouldCapture = self.effectivePronunciationMatchingEnabled
         await manager.setPronunciationCustomizationEnabled(shouldCapture)
         do {
             let result = try await manager.transcribe(samples, source: AudioSource.microphone)
@@ -367,7 +490,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             )
         }
 
-        if SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled,
+        if self.effectiveExperimentalUnifiedFinalEnabled,
            samples.count > Self.incrementalChunkingThresholdSamples,
            self.incrementalSession != nil
         {
@@ -397,9 +520,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         // manager so the user still gets a transcription (just without CTC rescoring).
         do {
             let startedAt = Date().timeIntervalSince1970
-            let result = try await self.transcribeFinalResult(samples, manager: manager)
-            self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: false)
-            return result
+            let outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false)
+            return outcome.result
         } catch {
             guard let fallback = self.streamingAsrManager, fallback !== manager else {
                 throw error
@@ -409,9 +532,9 @@ final class FluidAudioProvider: TranscriptionProvider {
                 source: "FluidAudioProvider"
             )
             let startedAt = Date().timeIntervalSince1970
-            let result = try await self.transcribeFinalResult(samples, manager: fallback)
-            self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: true)
-            return result
+            let outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true)
+            return outcome.result
         }
     }
 
@@ -488,10 +611,47 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.incrementalAcceptedSampleCount = 0
     }
 
-    private func transcribeFinalResult(_ samples: [Float], manager: AsrManager) async throws -> ASRTranscriptionResult {
-        let matchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled && samples.count <= 16_000 * 15
+    func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        guard let manager = self.finalAsrManager ?? self.streamingAsrManager else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
+            )
+        }
+
+        let outcome: (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool)
+        do {
+            let startedAt = Date().timeIntervalSince1970
+            outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false, source: "meeting")
+        } catch {
+            guard let fallback = self.streamingAsrManager, fallback !== manager else {
+                throw error
+            }
+            let startedAt = Date().timeIntervalSince1970
+            outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true, source: "meeting")
+        }
+
+        guard !outcome.textMayBeCorrected, let tokenTimings = outcome.tokenTimings else {
+            return (outcome.result, [])
+        }
+        return (outcome.result, Self.makeWordTimings(from: tokenTimings))
+    }
+
+    static func makeWordTimings(from tokenTimings: [TokenTiming]) -> [ASRWordTiming] {
+        WordAudioChunkExtractor.words(from: tokenTimings).map {
+            ASRWordTiming(text: $0.text, start: $0.startTime, end: $0.endTime)
+        }
+    }
+
+    private func transcribeFinalResult(
+        _ samples: [Float], manager: AsrManager
+    ) async throws -> (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool) {
+        let matchingEnabled = self.effectivePronunciationMatchingEnabled && samples.count <= 16_000 * 15
         let dictionaryLabels = Self.dictionaryLabels(
-            from: SettingsStore.shared.customDictionaryEntries
+            from: self.effectiveCustomDictionaryEntries
         )
         let profiles: [PronunciationDictionaryProfile]
         if matchingEnabled {
@@ -509,13 +669,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         } else {
             profiles = []
         }
+        // Rewritten text leaves timings on the old tokens; realigning would revert corrections.
+        let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
             let result = try await manager.transcribe(samples, source: AudioSource.microphone)
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard let features, !profiles.isEmpty else {
-                return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+                return (ASRTranscriptionResult(text: result.text, confidence: result.confidence), result.tokenTimings, textMayBeCorrected)
             }
             let startedAt = Date().timeIntervalSince1970
             let corrected = self.applyPronunciationMatches(result: result, features: features, profiles: profiles)
@@ -524,7 +686,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 "PRONUNCIATION_MATCH profiles=\(profiles.count) elapsedMs=\(elapsedMs) changed=\(corrected != result.text)",
                 source: "PronunciationMatching"
             )
-            return ASRTranscriptionResult(text: corrected, confidence: result.confidence)
+            return (ASRTranscriptionResult(text: corrected, confidence: result.confidence), result.tokenTimings, textMayBeCorrected)
         } catch {
             _ = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
@@ -807,8 +969,17 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
 
-    init(modelOverride: SettingsStore.SpeechModel? = nil, configureWordBoosting: Bool = true) {
-        // Intel stub - parameter ignored
+    init(
+        modelOverride: SettingsStore.SpeechModel? = nil,
+        configureWordBoosting: Bool = true,
+        enhancementOptions: FluidAudioProviderEnhancementOptions? = nil
+    ) {
+        // Intel stub - parameters ignored
+    }
+
+    init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
+        // Intel stub - validates the meeting policy but never loads FluidAudio models
+        _ = try MeetingProviderOptions.resolve(configuration)
     }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {

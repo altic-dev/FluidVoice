@@ -1,0 +1,1128 @@
+{
+  "annotations": {
+    "annotationSet": "development-only-v1",
+    "schemaVersion": 1,
+    "sha256": "0837a3d5935a7ca945217c2fe869863ad39268a2ac7a1ce9ea0fbe8b400280cb",
+    "warning": "User-reported recording-level/coarse interval truth; not sample-level annotation and never held out."
+  },
+  "dispositions": {
+    "c2": "deliveryMetadataOnlyNoAcousticClaim",
+    "productionBehaviorChanged": false,
+    "trialA": "unexcitedOrPreflightClosedNoAcousticClaim",
+    "trialB": "frozenInvalidOrInconclusiveNoFurtherGenericRun"
+  },
+  "frozenAtUTC": "2026-09-11T01:32:04Z",
+  "legacyOutputs": [
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-3774-v2.json",
+      "bytes": 139078,
+      "sha256": "29c82f2e6abf67f2f183939ef86d5f17674fbc926298e458ef38fa0315b2fccb"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-88e3-v2.json",
+      "bytes": 362374,
+      "sha256": "16e8f5a036db001851d7b1786d2cb34b2edf5e7c76221888609b25aefcbf8d76"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-3b9a-v2.json",
+      "bytes": 184465,
+      "sha256": "515c3d6e12c29bfa8fca85f1c2b1ebd5e4d87c14904301668551c083c36b5b38"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-control-playback-v1.json",
+      "bytes": 217711,
+      "sha256": "89289f803b7009a61d6b5b7c34ac16dc4bb3b7361c0c9cb761f2aa65e8c463ea"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-control-normal-v1.json",
+      "bytes": 17363,
+      "sha256": "f9ceff7d6bc0574c241f4d85bd8ae0e15259dd821d0dcefe84b2a2a83655ece1"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-control-quiet-v1.json",
+      "bytes": 15475,
+      "sha256": "e874f339145f339ccc61806d2dca908186701f01ad8f9fbc34234ce6cc2fbb34"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-control-normal-overlap-v1.json",
+      "bytes": 219537,
+      "sha256": "1538e4e80055976497b681d921f2dc49032e5568ed5b0b1155b09b6a3a19f39c"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-speech-control-quiet-overlap-v1.json",
+      "bytes": 86574,
+      "sha256": "7538dd9c4d5b34ace9e77469170e012096e9fc06536cd27a3919e2eaa6f6df20"
+    },
+    {
+      "availabilityAtFreeze": "present",
+      "basename": "fv-admission-b3-controlled-v3.json",
+      "bytes": 63159,
+      "sha256": "875437729970fbc763d589a49961cd2045a30153f1a0dc9ea8d72df368e7655d"
+    }
+  ],
+  "privacy": "Hashes and bounded numeric inventory only; no PCM, transcript text, speaker names/IDs, embeddings, device identifiers, window titles, or absolute paths.",
+  "profileState": {
+    "canonicalProfileStateSHA256": "316d91deb4ca34dcc41fab3b3df8b99677851eecea37cc8b19b1be98a58dc65f",
+    "duplicatePrivateSnapshotCreated": false,
+    "embeddingDimensions": [
+      256
+    ],
+    "snapshotSemantics": "Private speaker/profile values remain only in original session manifests; future quarantine must be an overlay, so rollback removes the overlay and verifies this digest.",
+    "sourceSessionCount": 126,
+    "sourceSessionIDs": [
+      "0049A1B4-8D93-498D-9A05-2B710FCC3236",
+      "037C0C5D-1088-4BFC-AE06-715AEBD40C4E",
+      "05EF6AC0-3E26-4495-B5C9-F8C1E668198E",
+      "07990449-0F3A-4364-9C01-3DF6D23023FE",
+      "081C3BDE-A422-4808-9EDB-98B4D8E3FD41",
+      "09FEEF48-B6DF-4CBA-BA79-F3583EC47D89",
+      "0A9F19D6-E75C-4E00-B86A-8BC4FC38EFF5",
+      "0EBA9C7E-993A-4831-97BD-E1F4ED3D7F8D",
+      "0F1A883E-B1A9-49AD-8715-CE596070F8B3",
+      "11E103DF-CA63-437B-9714-C7DDA3385BAA",
+      "134A3EBC-4EC3-45F7-BAAF-DCBD69EBC268",
+      "1651057C-2532-4ABA-AF2F-DBA40F14193C",
+      "1AA3143B-31A9-4ADA-8FCD-030980350169",
+      "1B9DEA72-B26E-4767-A8C2-210AF0618EB6",
+      "2B6FF5ED-E811-4E5D-AF70-9C282681F678",
+      "2D128BCB-2BA3-48AA-8429-7831AA1C91FD",
+      "2D4FCF5B-EDED-490A-B306-EB8EBB2F58D0",
+      "2E9E58E0-B6F6-41F8-9B06-469BF46FC5D9",
+      "31FB5D8C-793D-485D-B82A-8E8D5E0EB1A9",
+      "326E7F1C-308D-4E18-93D4-45344668B132",
+      "333FEA09-5051-4473-921D-F9ACC62589F8",
+      "33A00236-82DD-4F92-AC90-33C64B3FBB56",
+      "34F33D04-B5FD-48A5-9AB4-DD5B12D21563",
+      "366E368B-F0C8-4574-9C02-68460EA2D928",
+      "3774ED4C-7267-4838-A9A2-71DACE246CF9",
+      "38E07DCF-A5BF-42DF-9A9D-0890DAD3B5B1",
+      "3B493482-904D-42D2-B48B-1720E3352210",
+      "3B9AC1A8-EB78-4C52-976D-7BF45427F423",
+      "3BBD487F-70FD-46A6-8DB8-E75942C6D3B6",
+      "3CAF5645-D2DB-4E02-AEC6-281AA8CD6D96",
+      "41459BAD-99CD-47EB-BA09-AB6AEA0C5459",
+      "467D8EF1-2C7E-41E9-862A-56A4073B85D6",
+      "4734B958-A92F-4AEB-954C-7A9AC91DE457",
+      "47F25B3E-AEF7-4652-87A7-1AF330203AE5",
+      "48029D49-D4B1-4DC8-B138-35C71EFE6340",
+      "48EB0304-E630-4445-A8E1-9031565C3106",
+      "4A8594D7-5395-4FE7-B3EF-27D5419A0DC9",
+      "4B54B6B4-953B-40C7-9F9E-EC406007B674",
+      "4C2939CD-9FDB-4CB1-A2E3-CF6B7AD6FB34",
+      "503545BA-FADC-48D2-B157-9671B32293AD",
+      "51507DB8-FD6B-48CD-9996-70AED789BDF5",
+      "52966FAB-948E-42AF-8871-F9DB09D23A49",
+      "54C4DBB0-DC30-42D3-88CA-774E9E23F9D8",
+      "56F2A80A-1A9E-43BC-90F8-38F055CF3F38",
+      "58540AFA-BD8F-4240-8640-B6048DB0E56C",
+      "58BE2885-0E2C-43E5-BB17-B7874CC48889",
+      "596C215C-CF72-49E8-9C34-09569ADD13A0",
+      "5A7451B9-9AAF-4758-98D3-4ADFC9300164",
+      "5A9CB252-F6AB-4331-BBB6-2BF98EFCD286",
+      "612AF9C1-E3C1-475F-8AF7-BBA13D707FA5",
+      "68137026-E5C3-4428-95F9-FE1E019CBFB9",
+      "683720D3-86D9-4225-B6BF-636239785B72",
+      "6972E433-B87F-4DCB-96AB-A41A9B5409C8",
+      "69F80EEA-F61A-4720-81D6-CB89BAE0E975",
+      "6A2958B9-0DD9-43AE-B7A7-028839B5197E",
+      "6CAFFEA6-7FD4-4ACF-A65A-10E6D2157238",
+      "6F760EA4-03C8-4A00-9D58-F57798E6BEFE",
+      "720AB8CD-842E-4D25-97A1-9CAAFBC28E74",
+      "74A60CE6-0DAA-42C0-BFB2-FC668A36CFD3",
+      "774B94DC-847D-4529-977D-32A1A5B9A09B",
+      "7CC5B90B-38D3-458A-A27D-5AB01ABABC9F",
+      "7CCAD4B1-703D-4ACF-B861-B125D47B6810",
+      "7D668D68-088C-414D-88A8-A38EDCD6438C",
+      "83168F09-1FDB-44B4-A203-D46D9B1644D7",
+      "85A3B217-DACA-4614-B1C4-89DAF495B2B8",
+      "8759B9E9-AC5E-445F-B573-9F339AC3A9DF",
+      "88E3BD44-6935-44AB-B139-1DED1002E8E0",
+      "8B286EFA-95C8-4FDF-8E1B-BBCD113DC72A",
+      "8D493F8B-4BBA-4049-863F-C7A76247AF09",
+      "8E4DF3FF-41A2-42B8-BFC0-DD8EDD9094B7",
+      "8F7F5B3B-D9EA-4593-BC6F-38F4B49FA40B",
+      "90DAEF7B-AABD-4EA2-BAB8-A9071AB8C16F",
+      "91222723-7EA7-45D3-AB33-2C71EC92E747",
+      "91436E0F-9245-4F22-A5B4-D3FBA809C947",
+      "92B9EAD4-13B4-47E5-8C0D-4149BF37DEB2",
+      "9345E9BD-C8BB-42EF-AB7C-B886FFB5CF08",
+      "9710ADA5-3168-43F9-861C-575A8F34F6E5",
+      "990EDF30-4BDD-420F-B78C-4CB5D430F998",
+      "9EF3F75C-5CA2-45AA-8512-6B5E7C9A58CE",
+      "A0713BCA-0004-4877-8FB5-BEB8B474A599",
+      "A07FD183-52BF-4120-A43F-9E21A344D230",
+      "A1EDE503-CADB-408E-8843-6A8EE70AB104",
+      "A29D35E7-2607-4D52-B3F5-D79B70171BE0",
+      "A436533D-FCF1-4F81-8F3A-EF61907AEE79",
+      "A74CA90D-731F-4373-B6BB-C991C8EE02BB",
+      "A8420564-23E2-4247-A94C-E066B672B8D6",
+      "AA42DF47-C157-4CF8-84DE-A2033BCE45CA",
+      "AED64CB9-9685-4CD2-864F-7BE58378F0D6",
+      "B210797F-B527-4E81-8A32-76AEE62E9CD7",
+      "B4C75C67-B0B5-4F92-A42B-8FECE14F4AF3",
+      "BB258F7E-F600-41F3-A186-2992A400FCF1",
+      "BD5A33D7-379D-4572-BBA5-B02F8F4C10FD",
+      "C0D3A55C-FC71-492B-B637-A6CC6C43DB02",
+      "C102F9B6-C61F-48EB-8F8B-A36451C712B8",
+      "C3A39F4A-254D-44A1-812F-A1A58DCAACBF",
+      "C61AEB2E-5C17-4D69-BD5B-1B9C40E7E506",
+      "C705D84C-0A23-4F8C-991D-5827894F13FC",
+      "CCFEBA3B-4C08-49C9-BF31-70FDC68ED4DC",
+      "CD08D637-C2AB-4CDE-9B37-49470EAC097E",
+      "CE533CA0-EB47-42E5-8942-B7E2E24C4A0E",
+      "CEBC7C8B-AF92-49EE-A5B2-838C39D2DDDC",
+      "CF302C76-718B-4D93-B411-EE2D47B876CF",
+      "D1BDCF4E-CA54-4FB6-A396-9ADD79E10D71",
+      "D2FDB4E3-ECF7-4807-BB29-9287ED1B1D4A",
+      "D37D3217-B1CF-4FE2-9AB2-527F9741963D",
+      "D5E76A3A-8DEA-46F7-9829-51244477BBE1",
+      "D60AAF82-A038-4B25-A856-F736E0F77454",
+      "D9E15A38-861D-461B-A5DB-218FFF8D0E0D",
+      "DA7390C3-A004-40A8-A48D-3CDA9D46E6EE",
+      "E6354737-A84A-4753-A6A5-D4C58DFA2943",
+      "E722BEFD-7F6B-46D4-A04E-92050D34266A",
+      "E8AF9617-E942-43F2-9F6E-A33A88CEEB30",
+      "ECA471E8-3A07-47CC-99A1-933B7BEFE1DA",
+      "EDD60059-952F-4CB2-B1C9-B44DE0B1A53D",
+      "F1BDE3C7-F90F-4362-A6E2-9B34C24CA46E",
+      "F29C66B1-090A-4535-B68C-E48357311E51",
+      "F49743A4-E850-4D8B-9715-D3AAFA16F9E1",
+      "F8F09A51-E40D-4B3F-9CDB-A2EFA6E05018",
+      "F9074879-8205-4BA0-86BE-A3F892D35D6D",
+      "F91BF4DE-5330-44E6-B054-6F01F47C7951",
+      "FAEB1743-5685-4407-AF73-922084A2844D",
+      "FB2E4998-1F79-45E7-B761-8C67DC7D3A7B",
+      "FD7D2C61-FEC3-4748-BAED-078B1EE65A09",
+      "FEBABC18-E0F7-4ED4-AA01-2141DE504BB3",
+      "FED94DA4-DA97-4FFB-85B7-0C2EFEC349B7",
+      "FFC2411C-EB81-40CA-9C45-BBDCE74DAE6E"
+    ],
+    "speakerRecordCount": 326,
+    "speakerRecordsWithEmbedding": 221
+  },
+  "recordings": [
+    {
+      "annotationCounts": {
+        "noNearEndSpeech": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "notPersisted",
+      "sessionID": "3774ED4C-7267-4838-A9A2-71DACE246CF9",
+      "sessionManifestSHA256": "cfe6c7fb291264734696989f8ac056f3e1bda073c3185a6dc51f6a6c5c8d3f7e",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 1135121,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 2,
+          "chunks": [
+            {
+              "bytes": 686293,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 109116.379942416,
+              "presentationStartSeconds": 109056.379942416,
+              "sequence": 0,
+              "sha256": "bb2b6ad42e26384da56488ca755221e8d3139921b6e13de9554c6a0faaed250d",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 448828,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 109154.879942416,
+              "presentationStartSeconds": 109116.379942416,
+              "sequence": 1,
+              "sha256": "3a8c0125df9e37af2c554beed3d517da60869c6c972d3105dc1b473985743565",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 98.5
+        },
+        {
+          "bytes": 697972,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 2,
+          "chunks": [
+            {
+              "bytes": 433440,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 109116.12410416667,
+              "presentationStartSeconds": 109056.12410416667,
+              "sequence": 0,
+              "sha256": "7ebe45ef024cae606f1935de45f18be304fb0efa6c7a161be6b805358b035dca",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 264532,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 109154.72410416667,
+              "presentationStartSeconds": 109116.12410416667,
+              "sequence": 1,
+              "sha256": "b7785e4adeebfa34c779390e394a571d5aa96df38659cf29389a348f13e6ed79",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 98.60000000000582
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "coarseNearEndSpeechRegion": 1,
+        "noNearEndSpeech": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "notPersisted",
+      "sessionID": "88E3BD44-6935-44AB-B139-1DED1002E8E0",
+      "sessionManifestSHA256": "1a39d151b5f593b10ecb30cd0385fda18298636fffed1912355ac7f52d85f6f3",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 2691060,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 5,
+          "chunks": [
+            {
+              "bytes": 662589,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108242.986516541,
+              "presentationStartSeconds": 108182.986516541,
+              "sequence": 0,
+              "sha256": "c523360577a31d7baf0b04674d4ea668a4ed8cfa04204db54bac33c592281db0",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 681273,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108302.986516541,
+              "presentationStartSeconds": 108242.986516541,
+              "sequence": 1,
+              "sha256": "cbb83a0c4ccee7190411044883e050765ac80c3ea3ab7b5ffde20ba447a6cd0b",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 682339,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108362.986516541,
+              "presentationStartSeconds": 108302.986516541,
+              "sequence": 2,
+              "sha256": "6eddb45651ab6372a76122e971c1c370561eb50737618af9e02ed722b3f26cf5",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 549955,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108422.986516541,
+              "presentationStartSeconds": 108362.986516541,
+              "sequence": 3,
+              "sha256": "38d41d1f4d96d83e9d49b575666216d6595c00dbca7f55143162c70e30e419c7",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 114904,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108443.126516541,
+              "presentationStartSeconds": 108422.986516541,
+              "sequence": 4,
+              "sha256": "9fc5e2a63cec5cbcdc7a1c6bc0608f724ac5a45da81075d7bd5f7a7569421f47",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 260.1399999999994
+        },
+        {
+          "bytes": 2021850,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 5,
+          "chunks": [
+            {
+              "bytes": 475311,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108242.804,
+              "presentationStartSeconds": 108182.804,
+              "sequence": 0,
+              "sha256": "c2bd0b59b264b381fb62915a57c28fda78ea4b33e8ad73fcc1c66a41c8caadbe",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 428848,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108302.804,
+              "presentationStartSeconds": 108242.804,
+              "sequence": 1,
+              "sha256": "bf8d5adccf63fb51070c6414e77053cc691ed3faf87e5c228eb20879a603c24d",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 478200,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108362.804,
+              "presentationStartSeconds": 108302.804,
+              "sequence": 2,
+              "sha256": "1e5e3a7c03fcbdfe531bc2b9a6ba69a24e510d2ba8f99553ffaf6f40c2e796ee",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 483423,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108422.804,
+              "presentationStartSeconds": 108362.804,
+              "sequence": 3,
+              "sha256": "426f8fdee4edff2fcef5327cf4b3c22d7329e124d5007ac3eb818cdc053adc2a",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 156068,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 108442.904,
+              "presentationStartSeconds": 108422.804,
+              "sequence": 4,
+              "sha256": "a2063885035249626ef1fa693384112e310a0fff2b749ca7c8e5ceefa1ae98e4",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 260.09999999999127
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "noNearEndSpeech": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "notPersisted",
+      "sessionID": "3B9AC1A8-EB78-4C52-976D-7BF45427F423",
+      "sessionManifestSHA256": "fbccf8fce03fb83a87643192e47e164a5d588726e2ad45f273d6d6383d3de557",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 1467914,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 669480,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66149.602264333,
+              "presentationStartSeconds": 66089.586722708,
+              "sequence": 0,
+              "sha256": "4d2b359d7249464c8fadc72641aaea6aa7564fcfae304ec7f992f8790629e5ca",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 693033,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66209.602264333,
+              "presentationStartSeconds": 66149.602264333,
+              "sequence": 1,
+              "sha256": "375a9db9c37da5aeff822cccd96eb850832d1eb22e496df72c862d18014009e9",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 105401,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66221.222264333,
+              "presentationStartSeconds": 66209.602264333,
+              "sequence": 2,
+              "sha256": "a1b3e8acfeafda15f834491c429dca6a4779e90e5efad03e19e4298cc3d2ce3b",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 131.63554162500077
+        },
+        {
+          "bytes": 967609,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 447104,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66149.3525,
+              "presentationStartSeconds": 66089.3525,
+              "sequence": 0,
+              "sha256": "c30d7fbb827e09302bf424e32a8bd5b968d1f3d4ce920d0dc647d234e7fac35f",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 432776,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66209.3525,
+              "presentationStartSeconds": 66149.3525,
+              "sequence": 1,
+              "sha256": "602f4785f9f902c59b5b1aa358e7bdce6e397f592fbe4509917178e11398a08a",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 87729,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 66221.0525,
+              "presentationStartSeconds": 66209.3525,
+              "sequence": 2,
+              "sha256": "79837d9fbc888469e877449fa50b4093801d3f0af8019f1b1cd85096e2765778",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 131.70000000001164
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "noNearEndSpeech": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "speakersUserReported",
+      "sessionID": "720AB8CD-842E-4D25-97A1-9CAAFBC28E74",
+      "sessionManifestSHA256": "0825b3846eba40da75997e903c547767409a737a6ee55169b58adc74eb51134e",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 1777089,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 686892,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129365.495321125,
+              "presentationStartSeconds": 129305.479925333,
+              "sequence": 0,
+              "sha256": "1383734e854624f7e50b0e52a26531cff4704abf10a57415b0e846ea2356a196",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 693100,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129425.495321125,
+              "presentationStartSeconds": 129365.495321125,
+              "sequence": 1,
+              "sha256": "ad1b04c0f6535f9b5def995c2268ceab571bb436d8ef59c0a9d963818387c92d",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 397097,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129460.555321125,
+              "presentationStartSeconds": 129425.495321125,
+              "sequence": 2,
+              "sha256": "2c064452e007a33a388edd34090c5fb83965f2f17d6b9239809451766cf9a275",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 155.0753957919951
+        },
+        {
+          "bytes": 1232883,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 473765,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129365.25589583334,
+              "presentationStartSeconds": 129305.25589583334,
+              "sequence": 0,
+              "sha256": "82c015afeb0f23f0cff314512bd23efff6d3b2c633ac508d68d071d029f43dd1",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 477313,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129425.25589583334,
+              "presentationStartSeconds": 129365.25589583334,
+              "sequence": 1,
+              "sha256": "f79fbf85d46d112531fa4ce1b50cfef7bbc088a7e7cbb0d8e69cf9c3d705c22e",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 281805,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 129460.45589583334,
+              "presentationStartSeconds": 129425.25589583334,
+              "sequence": 2,
+              "sha256": "f535000e35fbd342f1ecd44a5c0d352a876f45d92c1117ffd9d939eb6d9c9aae",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 155.1999999999971
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "coarseNearEndSpeechRegion": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "speakersUserReported",
+      "sessionID": "C102F9B6-C61F-48EB-8F8B-A36451C712B8",
+      "sessionManifestSHA256": "c5f6f21303f1aa6d13acb61dd0c71c396780742cce023ec45a59d25791b88f40",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 6308,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 1,
+          "chunks": [
+            {
+              "bytes": 6308,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138145.712708375,
+              "presentationStartSeconds": 138134.272708375,
+              "sequence": 0,
+              "sha256": "dfd13355df7ba4175be9cfa9871ab7b1b7f0177fadf061317e554b80052e8723",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 11.440000000002328
+        },
+        {
+          "bytes": 93292,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 1,
+          "chunks": [
+            {
+              "bytes": 93292,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138145.54935416667,
+              "presentationStartSeconds": 138134.04935416667,
+              "sequence": 0,
+              "sha256": "e1a23a99bf9ca4707f8d3c5f28f01f426387be7e731f39f9abbe6349991b4580",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 11.5
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "coarseNearEndSpeechRegion": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "speakersUserReported",
+      "sessionID": "4734B958-A92F-4AEB-954C-7A9AC91DE457",
+      "sessionManifestSHA256": "8c0441c31bceb0e713ed790c5cd56b33adc22d077a68fdc5c62bc2c99bef2595",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 5554,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 1,
+          "chunks": [
+            {
+              "bytes": 5554,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138250.828970125,
+              "presentationStartSeconds": 138240.988970125,
+              "sequence": 0,
+              "sha256": "91c5b1bf156552d1348b59329f3652c0cc00d17c3a8958882227d5a47b31d3c3",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 9.839999999996508
+        },
+        {
+          "bytes": 79361,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 1,
+          "chunks": [
+            {
+              "bytes": 79361,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138250.606375,
+              "presentationStartSeconds": 138240.806375,
+              "sequence": 0,
+              "sha256": "b2bb585f1cd233432415b5567363736eb15a912f287e6b51576f10497584d5bf",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 9.800000000017462
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "coarseNearEndSpeechRegion": 3
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "speakersUserReported",
+      "sessionID": "51507DB8-FD6B-48CD-9996-70AED789BDF5",
+      "sessionManifestSHA256": "eedcfec4a13f9e5d176c6bea2ffa3315f72d455efa46134076c280e7486579fd",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 1779862,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 665097,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138358.944993083,
+              "presentationStartSeconds": 138298.944993083,
+              "sequence": 0,
+              "sha256": "579638af6b505c7322489c2acec57e27aaf484bf3255c8e6692ed500d54b82c8",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 680910,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138418.944993083,
+              "presentationStartSeconds": 138358.944993083,
+              "sequence": 1,
+              "sha256": "3c541ebb1afb3c9c50d7d10df84432bad11404cf925aa7ee1ec6dd1c14354689",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 433855,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138456.204993083,
+              "presentationStartSeconds": 138418.944993083,
+              "sequence": 2,
+              "sha256": "96aabe9f9175c3ef068be82337625c8254450dd0c59191de79f1f831b9f70015",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 157.2600000000093
+        },
+        {
+          "bytes": 1244581,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 3,
+          "chunks": [
+            {
+              "bytes": 466402,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138358.713125,
+              "presentationStartSeconds": 138298.713125,
+              "sequence": 0,
+              "sha256": "64f9442ba79075a834e158008dc16ef0c77d18aaab387cd0e734c545f2312db1",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 477137,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138418.713125,
+              "presentationStartSeconds": 138358.713125,
+              "sequence": 1,
+              "sha256": "680da0db726849da85757a45aeae27b17a026fc6a2068bb6ea25a7df8c4ac27d",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 301042,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138456.013125,
+              "presentationStartSeconds": 138418.713125,
+              "sequence": 2,
+              "sha256": "ffec1c3d791888e34b059d535c19afe28267b2ff7eb6db91999d39c7240ef15b",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 157.29999999998836
+        }
+      ]
+    },
+    {
+      "annotationCounts": {
+        "coarseNearEndSpeechRegion": 1
+      },
+      "annotationSet": "development-only-v1",
+      "developmentOnly": true,
+      "route": "speakersUserReported",
+      "sessionID": "990EDF30-4BDD-420F-B78C-4CB5D430F998",
+      "sessionManifestSHA256": "f50e016b009ce659e138e306e13f623e55f92d7647a01a55dd69ea77583a67d8",
+      "stage05Eligible": false,
+      "stage05IneligibilityReasons": [
+        "consentProvenanceNotRecordedForSignalDomainCorpus",
+        "exactBuiltInRouteNotPersisted",
+        "excitationNotIndependentlyAnnotated",
+        "lossySourceCodec",
+        "notRawPairedSCKTopology",
+        "recordingBuildNotCryptographicallyBound"
+      ],
+      "topology": "selectedApplicationSCKPlusVPIOMicrophone",
+      "tracks": [
+        {
+          "bytes": 643600,
+          "captureDrops": 0,
+          "captureEras": [],
+          "captureMethod": "screenCaptureKit",
+          "chunkCount": 2,
+          "chunks": [
+            {
+              "bytes": 642388,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138613.40242775,
+              "presentationStartSeconds": 138553.40242775,
+              "sequence": 0,
+              "sha256": "54d44843809171e3c9c60388a531b4f61835402e8e9e4e7c06ec9c9392e54098",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 1212,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138614.10242775,
+              "presentationStartSeconds": 138613.40242775,
+              "sequence": 1,
+              "sha256": "23c784a14ce883e6db92c017add5620063a5405b93f07e0ccc8b92d4c4d9c42d",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 2,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "applicationAudio",
+          "presentationDurationSeconds": 60.70000000001164
+        },
+        {
+          "bytes": 486471,
+          "captureDrops": 0,
+          "captureEras": [
+            {
+              "echoProtection": "voiceProcessed",
+              "hasClockDriftRecord": true,
+              "hasSettledVoiceProcessingConfig": true,
+              "method": "voiceProcessing",
+              "startSeconds": 0.0
+            }
+          ],
+          "captureMethod": "voiceProcessing",
+          "chunkCount": 2,
+          "chunks": [
+            {
+              "bytes": 480683,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138613.18114583334,
+              "presentationStartSeconds": 138553.18114583334,
+              "sequence": 0,
+              "sha256": "d543ab34bfbea8dc39a24fe1b4b004d9e08e9f271e417fbae30ee932f8ad4566",
+              "storedSHA256Matches": true
+            },
+            {
+              "bytes": 5788,
+              "discontinuityCount": 0,
+              "presentationEndSeconds": 138613.88114583332,
+              "presentationStartSeconds": 138613.18114583334,
+              "sequence": 1,
+              "sha256": "6f88af13020d7404c4ea376fc1bc05dd898112206037abdaae86980788a83ee3",
+              "storedSHA256Matches": true
+            }
+          ],
+          "format": {
+            "channelCount": 1,
+            "codec": "aac-lc",
+            "sampleRate": 48000.0
+          },
+          "kind": "microphone",
+          "presentationDurationSeconds": 60.69999999998254
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 1,
+  "scope": "Stage 0 immutable development baseline; no acoustic/AEC claim",
+  "sourceArtifacts": [
+    {
+      "path": "MEETING_PLAYBACK_ECHO_CANCELLATION_EXECUTION_PLAN.md",
+      "sha256": "827a64a3fb9e6dcb14cf38360f4cdd0f5d445d2499f71a8e6117b8bef457b4ff"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift",
+      "sha256": "ce7a1368f8ce8f5b2050668c9a00e67ee9cc598d75fe1e8545543876a1d193b6"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingMicrophoneCapture.swift",
+      "sha256": "87af4f4334977dd2467e80604acb9e171fca2191dbe9c2d13bf1b813cc059d30"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingModels.swift",
+      "sha256": "5bf9acdba267dfba35f05305c577ec5b75d2156c867e9687fe7c954df398045c"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift",
+      "sha256": "5acaa2e2732b68ef75e51e3517504e168a35b21c93ab339cdccbee0bfe7be7cb"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingReferenceAttributionContracts.swift",
+      "sha256": "09ed4b6b55b3e3301508f913272e611d4375f33299910a9673e6bfac46031d1a"
+    },
+    {
+      "path": "Sources/Fluid/Services/Meeting/MeetingReferenceSynchronizer.swift",
+      "sha256": "821fab1f0e973b4c38dc9743252b719267bf65d21a8d4b4f370de63f479d6677"
+    },
+    {
+      "path": "tools/MEETING_ADMISSION_B3_DEVELOPMENT_EVAL.md",
+      "sha256": "389fda88f7bf7d5ef7fc8fbed250681fa7e1e3fec89d7cbeeb123833be419bb8"
+    },
+    {
+      "path": "tools/meeting_admission_b3_annotations.json",
+      "sha256": "0837a3d5935a7ca945217c2fe869863ad39268a2ac7a1ce9ea0fbe8b400280cb"
+    },
+    {
+      "path": "tools/meeting_playback_stage0_baseline.py",
+      "sha256": "be13b9d95864d2d282080051a8f61c9fd6cf187ad5dca0b0d7bca11112e47318"
+    }
+  ],
+  "stage05": {
+    "aec3DependencyAuthorized": false,
+    "decision": "blocked",
+    "eligibleRecordingCount": 0,
+    "forbiddenSubstitutes": [
+      "C2MetadataOnly",
+      "syntheticFIR",
+      "VPIOMicrophonePlusExternalReference",
+      "frozenInvalidTrialB",
+      "unexcitedTrialA"
+    ],
+    "ineligibleRecordingCount": 8,
+    "reason": "No frozen recording is lossless, raw paired-SCK, route-bound, consent-bound, and independently excitation-annotated."
+  }
+}

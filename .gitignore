@@ -210,6 +210,9 @@ create_dmg_only.sh
 # Scratch directory
 scratch/
 
+# Maintained local dependency workspaces (patches are exported separately)
+.local-dependencies/
+
 assets/
 .swiftpm/
 scripts/

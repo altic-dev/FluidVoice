@@ -9,8 +9,14 @@ let package = Package(
         .macOS("15.0"),
     ],
     dependencies: [
+        .package(path: "Vendor/WebRTCAudioProcessing"),
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
-        .package(url: "https://github.com/altic-dev/FluidAudio.git", branch: "main"),
+        // INTERIM local override (Stage D/E development): the Nemotron runtime work exists only
+        // in this checkout. Before release this MUST be replaced by a maintained-fork
+        // commit/revision pin (see MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md, "D release
+        // step"). Diarization evaluation and checkpoints depend on exact clustering behavior;
+        // the fork pin stays immutable and changes only with a reviewed before/after evaluation.
+        .package(path: ".local-dependencies/FluidAudio"),
         .package(url: "https://github.com/mxcl/PromiseKit", from: "6.0.0"),
         .package(url: "https://github.com/altic-dev/DynamicNotchKit.git", branch: "main"),
         .package(url: "https://github.com/altic-dev/transcribe-cpp-swift.git", exact: "0.1.2"),
@@ -31,6 +37,7 @@ let package = Package(
                 "FluidAudio",
                 "PromiseKit",
                 "DynamicNotchKit",
+                .product(name: "FluidAEC3Bridge", package: "WebRTCAudioProcessing"),
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
             ],
             linkerSettings: [

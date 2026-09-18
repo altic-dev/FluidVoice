@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "dependency": {
+    "repository": "https://github.com/altic-dev/FluidAudio.git",
+    "revision": "3fd63887eef1dc25edea8263ce4b44aa854d898b",
+    "diarizationFingerprint": "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;config=community-default-v1"
+  },
+  "normalization": {
+    "asrProvider": "record-per-run",
+    "asrModel": "record-per-run",
+    "pipelineVersion": "record-per-run",
+    "text": "lowercase-alphanumeric-apostrophe-v1"
+  },
+  "fixtures": [
+    {
+      "id": "five-speaker-brief-return",
+      "split": "development",
+      "status": "inventory",
+      "sessionDirectory": "/local/private/path/to/copied-session",
+      "expectedSpeakerCount": 5,
+      "recurringSpeakers": ["brief-speaker"],
+      "overlapRegions": [],
+      "captureDiscontinuities": [],
+      "knownMissingIntervals": [],
+      "tags": ["short-speaker", "recurring-speaker", "five-speakers"]
+    },
+    {
+      "id": "held-out-created-before-tuning",
+      "split": "heldOut",
+      "status": "inventory",
+      "sessionDirectory": "/local/private/path/to/held-out-session",
+      "tags": ["held-out"]
+    }
+  ]
+}

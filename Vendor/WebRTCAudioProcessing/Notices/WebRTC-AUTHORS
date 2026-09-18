@@ -1,0 +1,234 @@
+# Names should be added to this file with this pattern:
+#
+# For individuals:
+#   Name <email address>
+#
+# For organizations:
+#   Organization <fnmatch pattern>
+#
+# See python fnmatch module documentation for more information.
+#
+# Please keep the list sorted.
+
+# BEGIN individuals section.
+Aaron Clauson <aaron@sipsorcery.com>
+Adam Fedor <adam.fedor@gmail.com>
+Akshay Shah <meetakshay99@gmail.com>
+Alexander Brauckmann <a.brauckmann@gmail.com>
+Alexandre Gouaillard <agouaillard@gmail.com>
+Alex Henrie <alexhenrie24@gmail.com>
+Ambareesh Balaji <ambareeshbalaji@gmail.com>
+Andrei Volykhin <andrei.volykhin@gmail.com>
+Andrew MacDonald <andrew@webrtc.org>
+Andrey Efremov <yoklmnprst@ya.ru>
+Andrew Johnson <ajohnson@draster.com>
+Andy Tamilo <andytamilo@gmail.com>
+Anil Kumar <an1kumar@gmail.com>
+Anna Lemehova <Anna.Lemehova@gmail.com>
+Anton Barkov <anton.barkov@macpaw.com>
+Ben Strong <bstrong@gmail.com>
+Berthold Herrmann <bertholdherrmann08@googlemail.com>
+Bob Withers <bwit@pobox.com>
+Brett Hebert <brett@quebic.com>
+Brett Hebert <hebert.brett@pm.me>
+Bridger Maxwell <bridgeyman@gmail.com>
+Bruno Pitrus <brunopitrus@hotmail.com>
+Cheng Qian <chengqian1521@qq.com>
+Christophe Dumez <ch.dumez@samsung.com>
+Chris Tserng <tserng@amazon.com>
+Cody Barnes <conceptgenesis@gmail.com>
+Colin Plumb
+Corby Hoback <corby.hoback@gmail.com>
+Cyril Lashkevich <notorca@gmail.com>
+CZ Theng <cz.theng@gmail.com>
+Danail Kirov <dkirovbroadsoft@gmail.com>
+Dave Cowart <davecowart@gmail.com>
+David Porter <david@porter.me>
+David Sanders <dsanders11@ucsbalum.com>
+Dax Booysen <dax@younow.com>
+Denis Genestier <denis.genestier@shadow.tech>
+Dennis Angelo <dennis.angelo@gmail.com>
+Dharmesh Chauhan <dharmesh.r.chauhan@gmail.com>
+Di Wu <meetwudi@gmail.com>
+Dirk-Jan C. Binnema <djcb@djcbsoftware.nl>
+Dmitry Lizin <sdkdimon@gmail.com>
+Eike Rathke <erathke@redhat.com>
+Eric Rescorla, RTFM Inc. <ekr@rtfm.com>
+Filip Hlasek <filip@orcamobility.ai>
+Frederik Riedel, Frogg GmbH <frederik.riedel@frogg.io>
+Gao Chun <gaochun.dev@gmail.com>
+Giji Gangadharan <giji.g@samsung.com>
+Graham Yoakum <gyoakum@skobalt.com>
+Gregory Bolshakov <gubidonius@gmail.com>
+Guillaume Petit <guillaume.petit@shadow.tech>
+Gustavo Garcia <gustavogb@gmail.com>
+Hans Knoechel <hans@hans-knoechel.de>
+Helmut Januschka <helmut@januschka.com>
+Hugues Ekra <hekra01@gmail.com>
+Hyungjoo Na <element11sodium@gmail.com>
+Ilya Katsnelson <me@0upti.me>
+Jake Hilton <jakehilton@gmail.com>
+James H. Brown <jbrown@burgoyne.com>
+Jan Grulich <grulja@gmail.com>
+Jan Kalab <pitlicek@gmail.com>
+Jens Nielsen <jens.nielsen@berotec.se>
+Jesús Leganés-Combarro <piranna@gmail.com>
+Jiawei Ou <jiawei.ou@gmail.com>
+Jie Mao <maojie0924@gmail.com>
+Jiwon Kim <jwkim0000@gmail.com>
+Johnny Wong <hellojinqiang@gmail.com>
+Jose Antonio Olivera Ortega <josea.olivera@gmail.com>
+Kacper Wasniowski <kwasniow@cisco.com>
+Karim Hammache <karim@karhm.com>
+Keiichi Enomoto <enm10k@gmail.com>
+Kiran Thind <kiran.thind@gmail.com>
+Korniltsev Anatoly <korniltsev.anatoly@gmail.com>
+Kota Yoshida <yosikou0726@gmail.com>
+Kun Wu <kunwu1987@gmail.com>
+Kyutae Lee <gorisanson@gmail.com>
+lauren n. liberda <lauren@selfisekai.rocks>
+Lennart Grahl <lennart.grahl@gmail.com>
+Luke Weber <luke.weber@gmail.com>
+Maksim Khobat <maksimkhobat@gmail.com>
+Mallikarjuna Rao V <vm.arjun@samsung.com>
+Manish Jethani <manish.jethani@gmail.com>
+Martin Storsjo <martin@martin.st>
+Matthias Liebig <matthias.gcode@gmail.com>
+Maxim Pavlov <pavllovmax@gmail.com>
+Maxim Potapov <vopatop.skam@gmail.com>
+Michael Iedema <michael@kapsulate.com>
+Michael Klingbeil <klingm@amazon.com>
+Michael Reeves <michael.reeves077@gmail.com>
+Michał Zarach <michalzaq12@gmail.com>
+Michel Promonet <michel.promonet.1@gmail.com>
+Miguel Paris <mparisdiaz@gmail.com>
+Mike Gilbert <floppymaster@gmail.com>
+Mike Wei <Mike.WeiB@gmail.com>
+Min Wang <mingewang@gmail.com>
+Mike Woodworth <mike@divergentmedia.com>
+Mo Zanaty <mzanaty@cisco.com>
+Mohamed Risaldar UT <mohamed.ut@travancoreanalytics.com>
+Moonki Choi <moonki1107@gmail.com>
+Nico Schlumprecht <me@github.nico.onl>
+Niek van der Maas <mail@niekvandermaas.nl>
+Olivier Crête <olivier.crete@ocrete.ca>
+Pali Rohar
+Paul Kapustin <pkapustin@gmail.com>
+Peng Yu <yupeng323@gmail.com>
+Pete Makeev <guuud.morning@gmail.com>
+Philipp Hancke <philipp.hancke@googlemail.com>
+Piasy Xu <xz4215@gmail.com>
+Rafael Lopez Diez <rafalopezdiez@gmail.com>
+Ralph Giles <giles@ghostscript.com>
+Raman Budny <budnyjj@gmail.com>
+Ramprakash Jelari <ennajelari@gmail.com>
+Riku Voipio <riku.voipio@linaro.org>
+Rishit Bansal <rishitbansal0@gmail.com>
+Robert Bares <robert@bares.me>
+Robert Mader <robert.mader@collabora.com>
+Robert Mader <robert.mader@posteo.de>
+Robert Nagy <robert.nagy@gmail.com>
+Ryan Yoakum <ryoakum@skobalt.com>
+Saming Lin <santoin351@gmail.com>
+Samuel Attard <samuel.r.attard@gmail.com>
+Sarah Thompson <sarah@telergy.com>
+Satender Saroha <ssaroha@yahoo.com>
+Saul Kravitz <Saul.Kravitz@celera.com>
+Sergio Garcia Murillo <sergio.garcia.murillo@gmail.com>
+Shaofan Qi <vshaqi@gmail.com>
+Shigemasa Watanabe <shigemasa7watanabe@gmail.com>
+Shuhai Peng <shuhai.peng@intel.com>
+Shunbo Li <lishunbo@agora.io>
+Shunbo Li <lishunbo@shengwang.cn>
+Seija <doremylover123@gmail.com>
+Silviu Caragea <silviu.cpp@gmail.com>
+Stefan Gula <steweg@gmail.com>
+Stephan Hartmann <stha09@googlemail.com>
+Steve Reid <sreid@sea-to-sky.net>
+Tao chen <meemetao@gmail.com>
+Takaaki Suzuki <takaakisuzuki.14@gmail.com>
+Tarun Chawla <trnkumarchawla@gmail.com>
+Todd Wong <todd.wong.ndq@gmail.com>
+Tomas Popela <tomas.popela@gmail.com>
+Tomohiro Matsuzawa <mabtomoh@amazon.com>
+Trevor Hayes <trevor.axiom@gmail.com>
+Uladzislau Susha <landby@gmail.com>
+Vicken Simonian <vsimon@gmail.com>
+Victor Costan <costan@gmail.com>
+Vinzenz Feenstra <evilissimo@gmail.com>
+Vladimir Beloborodov <VladimirTechMan@gmail.com>
+Xiaohong Xu <freemine@yeah.net>
+Xiaolei Yu <dreifachstein@gmail.com>
+Xinchao Tian <tianxinchao@360.cn>
+Yaowen Guo <albertguo88@gmail.com>
+Youfa <vsyfar@gmail.com>
+Yura Yaroshevich <yura.yaroshevich@gmail.com>
+Yuriy Pavlyshak <yuriy@appear.in>
+Yusuke Suzuki <utatane.tea@gmail.com>
+Zuyao Chen <zuyaocat@gmail.com>
+Pengfei Han <hanpfei@gmail.com>
+Yingying Ma <yingying.ma@intel.com>
+Hailin Zhao <lynnworld7@gmail.com>
+Fizz Fang <fangkb555@gmail.com>
+Sai Xu <saixu@qti.qualcomm.com>
+Shunyang Zhang <zsy1522943066@gmail.com>
+Suresh Jain <jainudr1982@gmail.com>
+# END individuals section.
+
+# BEGIN organizations section.
+8x8 Inc. <*@8x8.com>
+8x8 Inc. <*@jitsi.org>
+8x8 Inc. <*@sip-communicator.org>
+Agora IO <*@agora.io>
+ARM Holdings <*@arm.com>
+BroadSoft Inc. <*@broadsoft.com>
+Canonical Ltd <*@canonical.com>
+CoSMo Software Consulting, Pte Ltd <*@cosmosoftware.io>
+Discord Inc. <*@discordapp.com>
+Eyevinn Technology AB <*@eyevinn.se>
+Facebook Inc. <*@fb.com>
+Google Inc. <*@google.com>
+Highfive, Inc. <*@highfive.com>
+Hopin Ltd. <*@hopin.to>
+HyperConnect Inc. <*@hpcnt.com>
+Igalia S.L. <*@igalia.com>
+Intel Corporation <*@intel.com>
+Island Technology, Inc. <*@island.io>
+LG Electronics, Inc. <*@lge.com>
+Life On Air Inc. <*@lifeonair.com>
+LiveKit <*@livekit.io>
+Meta Platforms, Inc. <*@meta.com>
+Microsoft Corporation <*@microsoft.com>
+MIPS Technologies <*@mips.com>
+Mozilla Foundation <*@mozilla.com>
+Netgem S.A. <*@netgem.com>
+Nutanix Inc. <*@nutanix.com>
+NVIDIA Corporation <*@nvidia.com>
+Opera Software ASA <*@opera.com>
+Optical Tone Ltd <*@opticaltone.com>
+Pengutronix e.K. <*@pengutronix.de>
+Quebic Inc. <*@quebic.com>
+Raptor Computing Systems, LLC <*@raptorcs.com>
+RingCentral, Inc. <*@ringcentral.com>
+Signal Messenger, LLC <*@signal.org>
+Sinch AB <*@sinch.com>
+SoftAvail, Inc. <*@softavail.com>
+struktur AG <*@struktur.de>
+Telenor Digital AS <*@telenor.com>
+Temasys Communications <*@temasys.io>
+The Chromium Authors <*@chromium.org>
+The WebRTC Authors <*@webrtc.org>
+Threema GmbH <*@threema.ch>
+Tuple, LLC <*@tuple.app>
+Twilio, Inc. <*@twilio.com>
+Twitch Interactive, Inc. <*@justin.tv>
+Vewd Software AS <*@vewd.com>
+Videona Socialmedia <*@videona.com>
+Videxio AS <*@videxio.com>
+Vidyo, Inc. <*@vidyo.com>
+Vonage Holdings Corp. <*@vonage.com>
+Wang Qing <wangqing-hf@loongson.cn>
+Wire Swiss GmbH <*@wire.com>
+&yet LLC <*@andyet.com>
+Ahmad Yar <ahmaddurranitrg@gmail.com>
+# END organizations section.

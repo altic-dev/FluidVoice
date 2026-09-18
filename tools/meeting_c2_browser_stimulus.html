@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FluidVoice C2 Diagnostic Stimulus — READY</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+  body { max-width: 46rem; margin: 5rem auto; padding: 0 2rem; background: #11151b; color: #e9eef6; }
+  button { font: inherit; font-weight: 650; padding: .8rem 1.1rem; border: 0; border-radius: .65rem;
+           color: #07111f; background: #7cc4ff; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  code { color: #9bd3ff; }
+  #status { margin-top: 1.25rem; min-height: 1.5rem; }
+</style>
+<h1>FluidVoice C2 diagnostic stimulus</h1>
+<p>
+  A deterministic 24-second, low-level broadband calibration signal for the selected-application
+  ScreenCaptureKit probe. No microphone or user data is read by this page.
+</p>
+<p>Browser master gain: <code>0.08</code>. FluidVoice still performs its own route checks.</p>
+<button id="start" type="button">Start 24-second diagnostic</button>
+<div id="status" role="status">Ready.</div>
+<script>
+  const button = document.querySelector('#start');
+  const status = document.querySelector('#status');
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    // Trial A uses the window title as a cross-process readiness handshake. The title is
+    // intentionally PLAYING only after this user gesture has resumed the AudioContext.
+    const context = new AudioContext({ sampleRate: 48000 });
+    await context.resume();
+    const durationSeconds = 24;
+    document.title = `FluidVoice C2 Diagnostic Stimulus — PLAYING — ${durationSeconds}s`;
+    const t0 = context.currentTime + 0.20;
+    const master = context.createGain();
+    master.gain.setValueAtTime(0.08, t0);
+    master.connect(context.destination);
+
+    const calibration = context.createGain();
+    calibration.gain.setValueAtTime(0, t0);
+    calibration.gain.linearRampToValueAtTime(1, t0 + 0.25);
+    calibration.gain.setValueAtTime(1, t0 + 22.25);
+    calibration.gain.linearRampToValueAtTime(0, t0 + 22.50);
+    calibration.connect(master);
+
+    // Seeded broadband noise makes the delay peak identifiable across every analysis window.
+    const frameCount = Math.ceil(context.sampleRate * 22.50);
+    const noiseBuffer = context.createBuffer(1, frameCount, context.sampleRate);
+    const samples = noiseBuffer.getChannelData(0);
+    let state = 0x6d2b79f5;
+    for (let i = 0; i < samples.length; i++) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      samples[i] = ((state / 0xffffffff) * 2 - 1) * 0.18;
+    }
+    const noise = context.createBufferSource();
+    noise.buffer = noiseBuffer;
+    noise.connect(calibration);
+    noise.start(t0);
+    noise.stop(t0 + 22.50);
+
+    // Fixed tones keep every registered analysis band above its excitation floor.
+    for (const frequency of [250, 500, 750, 1000, 1500, 2500, 4000, 6000]) {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(frequency, t0);
+      gain.gain.setValueAtTime(0.05, t0);
+      oscillator.connect(gain).connect(calibration);
+      oscillator.start(t0);
+      oscillator.stop(t0 + 22.50);
+    }
+
+    const ticks = [];
+    for (let remaining = durationSeconds; remaining >= 1; remaining--) {
+      ticks.push(setTimeout(() => {
+        document.title = `FluidVoice C2 Diagnostic Stimulus — PLAYING — ${remaining}s`;
+        status.textContent = `Playing: ${remaining}s remaining`;
+      }, (durationSeconds - remaining) * 1000));
+    }
+    setTimeout(async () => {
+      status.textContent = 'Complete.';
+      document.title = 'FluidVoice C2 Diagnostic Stimulus — COMPLETE';
+      await context.close();
+      button.disabled = false;
+    }, durationSeconds * 1000);
+  });
+</script>

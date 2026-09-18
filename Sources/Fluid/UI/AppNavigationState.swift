@@ -12,7 +12,8 @@ enum SidebarItem: Hashable {
     case voiceEngine
     case aiEnhancements
     case cleanupStyles
-    case meetingTools
+    case fileTranscription
+    case meetingTranscription
     case customDictionary
     case stats
     case history

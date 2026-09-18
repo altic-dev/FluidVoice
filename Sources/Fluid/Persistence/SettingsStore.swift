@@ -2039,6 +2039,76 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var meetingRecordingDefaults: MeetingRecordingDefaults {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.meetingRecordingDefaults),
+                  let saved = try? JSONDecoder().decode(MeetingRecordingDefaults.self, from: data)
+            else {
+                return .unconfigured
+            }
+            return saved
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else {
+                return
+            }
+            self.defaults.set(data, forKey: Keys.meetingRecordingDefaults)
+        }
+    }
+
+    var meetingAudioRetentionPolicy: MeetingAudioRetentionPolicy {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.meetingAudioRetentionPolicy),
+                  let policy = MeetingAudioRetentionPolicy(rawValue: raw)
+            else { return .days7 }
+            return policy
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.meetingAudioRetentionPolicy)
+        }
+    }
+
+    /// Which meeting transcription backend final processing should use.
+    ///
+    /// An absent preference resolves to the current production default. A stored value is handed
+    /// through verbatim, including an ID this build does not know: the pipeline rejects an unknown
+    /// selection loudly rather than quietly transcribing with a different backend than the one
+    /// that was chosen. An explicit legacy selection therefore remains a reliable rollback switch.
+    var meetingTranscriptionBackendID: MeetingBackendID {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.meetingTranscriptionBackendID)
+            else { return .productionDefault }
+            return MeetingBackendID(rawValue: raw)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.meetingTranscriptionBackendID)
+        }
+    }
+
+    /// Tier 1 native (Zoom/Teams/Webex) meeting auto-detection (default: ON).
+    var meetingAutoDetectEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingAutoDetectEnabled)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingAutoDetectEnabled)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectEnabled)
+        }
+    }
+
+    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    var meetingAutoDetectBrowserEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
+        }
+    }
+
     var preferredOutputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
@@ -2418,6 +2488,21 @@ final class SettingsStore: ObservableObject {
     private static func normalizedOverlayGlassOpacity(_ value: Double) -> Double {
         guard value.isFinite else { return self.defaultOverlayGlassOpacity }
         return min(max(value, self.overlayGlassOpacityRange.lowerBound), self.overlayGlassOpacityRange.upperBound)
+    }
+
+    var meetingOverlayPreference: MeetingOverlayPreference {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.meetingOverlayPreference),
+                  let preference = MeetingOverlayPreference(rawValue: raw)
+            else {
+                return .pill
+            }
+            return preference
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.meetingOverlayPreference)
+        }
     }
 
     /// How many recent transcription characters show in overlays (default: 150)
@@ -3491,6 +3576,7 @@ final class SettingsStore: ObservableObject {
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
+            meetingTranscriptionBackendID: self.meetingTranscriptionBackendID.rawValue,
             hotkeyShortcut: self.hotkeyShortcut,
             primaryDictationShortcuts: self.primaryDictationShortcuts,
             promptModeHotkeyShortcut: self.promptModeHotkeyShortcut,
@@ -3552,6 +3638,7 @@ final class SettingsStore: ObservableObject {
             overlayTint: self.overlayTint,
             overlayHighlight: self.overlayHighlight,
             overlayClosingAnimationEnabled: self.overlayClosingAnimationEnabled,
+            meetingOverlayPreference: self.meetingOverlayPreference,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
             saveTranscriptionHistory: self.saveTranscriptionHistory,
@@ -3629,6 +3716,11 @@ final class SettingsStore: ObservableObject {
         if let selectedAppleSpeechLocaleIdentifier = payload.selectedAppleSpeechLocaleIdentifier {
             self.selectedAppleSpeechLocaleIdentifier = selectedAppleSpeechLocaleIdentifier
         }
+        // A backup predating this setting represents an absent selection, which resolves to the
+        // current phase's local default. Unknown stored IDs remain intact and visibly unavailable.
+        self.meetingTranscriptionBackendID = payload.meetingTranscriptionBackendID.map {
+            MeetingBackendID(rawValue: $0)
+        } ?? .productionDefault
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
         self.promptModeShortcutEnabled = payload.promptModeShortcutEnabled
@@ -3727,6 +3819,9 @@ final class SettingsStore: ObservableObject {
         }
         if let enabled = payload.overlayClosingAnimationEnabled {
             self.overlayClosingAnimationEnabled = enabled
+        }
+        if let meetingOverlayPreference = payload.meetingOverlayPreference {
+            self.meetingOverlayPreference = meetingOverlayPreference
         }
         self.transcriptionPreviewCharLimit = payload.transcriptionPreviewCharLimit
         self.userTypingWPM = payload.userTypingWPM
@@ -5719,6 +5814,11 @@ private extension SettingsStore {
         static let microphonePriority = "MicrophonePriority"
         static let suppressedMicrophoneUIDs = "SuppressedMicrophoneUIDs"
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
+        static let meetingRecordingDefaults = "MeetingRecordingDefaults"
+        static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
+        static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
+        static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
+        static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
@@ -5848,6 +5948,7 @@ private extension SettingsStore {
         static let overlaySize = "OverlaySize"
         static let overlayMaterial = "OverlayMaterial"
         static let overlayGlassOpacity = "OverlayGlassOpacity"
+        static let meetingOverlayPreference = "MeetingOverlayPreference"
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
 
         /// Media Playback Control

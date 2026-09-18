@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "name": "Google WebRTC",
+    "remote": "https://webrtc.googlesource.com/src.git",
+    "revision": "d9bd07ba5f614156021df666ba4052ac73cf7953",
+    "tree": "7a114e3792c22f553ee980677d0aed345210a4a3",
+    "commitDate": "2026-09-11T11:56:49-07:00"
+  },
+  "checkoutRevisions": {
+    "build": "ee7f800124a25066c376b26d2f19a58161de5e7d",
+    "buildtools": "c202b4a9dac30e789ed6e3b2354efa94357a56f3",
+    "testing": "d292241086cc23cb6bf1433bd59970d7d4ef4469",
+    "third_party": "4c56f21bb6d7e9cb8856ba0f6ca26f7e95e546f5",
+    "third_party/perfetto": "d3b1841f171c17161cb4faa1489052a09d8545d9",
+    "third_party/protobuf": "4c56f21bb6d7e9cb8856ba0f6ca26f7e95e546f5"
+  },
+  "bridge": {
+    "configurationID": "webrtc-aec3-48k-mono-cxx20-no-protobuf-no-log-v1",
+    "sampleRateHz": 48000,
+    "frameSamples": 480,
+    "languageStandard": "c++20",
+    "exceptions": false,
+    "rtti": false,
+    "visibility": "hidden",
+    "staticLinkage": true,
+    "macOSDeploymentTarget": "15.0",
+    "usesAppleSystemLibcxx": true,
+    "aecDumpFactory": "null",
+    "protobufRuntimeLinked": false,
+    "perfettoRuntimeLinked": false
+  },
+  "gnArgs": {
+    "common": {
+      "target_os": "mac",
+      "is_debug": false,
+      "mac_deployment_target": "15.0",
+      "rtc_enable_protobuf": false,
+      "rtc_include_tests": false,
+      "rtc_build_examples": false,
+      "rtc_build_tools": false,
+      "rtc_disable_logging": true,
+      "rtc_disable_trace_events": true,
+      "rtc_disable_metrics": true,
+      "rtc_disable_check_msg": true,
+      "symbol_level": 0,
+      "use_custom_libcxx": false,
+      "use_custom_libcxx_for_host": true,
+      "clang_unsafe_buffers_paths": ""
+    },
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ]
+  },
+  "closure": {
+    "arm64RecursiveGNDependencies": 624,
+    "x86_64RecursiveGNDependencies": 687,
+    "arm64CompleteArchiveMembers": 769,
+    "x86_64CompleteArchiveMembers": 774,
+    "arm64LinkedArchiveMembers": 202,
+    "x86_64LinkedArchiveMembers": 210,
+    "vendoredUpstreamCompileInputs": 526,
+    "vendoredGeneratedCompileInputsPerArchitecture": 1
+  },
+  "artifacts": {
+    "xcframework": "Artifacts/FluidAEC3.xcframework",
+    "library": "Artifacts/FluidAEC3.xcframework/macos-arm64_x86_64/libFluidAEC3-system-exact.a",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "hashes": "artifact-files.sha256"
+  },
+  "realtimeBenchmark": {
+    "script": "Scripts/benchmark.sh",
+    "source": "BridgeSources/realtime_benchmark.cc",
+    "configuration": "optimized-current-architecture",
+    "warmupFrames": 6000,
+    "measurementFrames": 180000,
+    "simulatedMinutes": 30,
+    "maximumP99Milliseconds": 5.0,
+    "exclusiveMaximumFrameMilliseconds": 10.0,
+    "maximumRSSRangeBytes": 1048576,
+    "rejectMonotonicRSSGrowth": true
+  },
+  "sourceProvenance": {
+    "snapshot": "UpstreamSources",
+    "hashes": "source-files.sha256",
+    "selectedObjectDependencies": "selected-object-dependencies.json",
+    "arm64GNClosure": "gn-closure-arm64.json",
+    "x86_64GNClosure": "gn-closure-x86_64.json"
+  }
+}

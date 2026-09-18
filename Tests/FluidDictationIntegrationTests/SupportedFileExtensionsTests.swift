@@ -11,7 +11,7 @@ import XCTest
 @MainActor
 final class SupportedFileExtensionsTests: XCTestCase {
     func testWhatsAppOpusExtensionsAreAccepted() {
-        let supported = MeetingTranscriptionService.supportedFileExtensions
+        let supported = FileTranscriptionService.supportedFileExtensions
 
         XCTAssertTrue(supported.contains("opus"), "WhatsApp voice notes use .opus — macOS decodes them as Ogg Opus")
         XCTAssertTrue(supported.contains("oga"), ".oga is an alternate Ogg audio extension macOS decodes natively")
@@ -19,7 +19,7 @@ final class SupportedFileExtensionsTests: XCTestCase {
     }
 
     func testCommonFormatsRemainAccepted() {
-        let supported = MeetingTranscriptionService.supportedFileExtensions
+        let supported = FileTranscriptionService.supportedFileExtensions
 
         for ext in ["wav", "mp3", "m4a", "mp4", "mov", "flac", "aac"] {
             XCTAssertTrue(supported.contains(ext), ".\(ext) must remain accepted")
@@ -27,7 +27,7 @@ final class SupportedFileExtensionsTests: XCTestCase {
     }
 
     func testOnlyDecodableExtensionsAreAccepted() {
-        let supported = MeetingTranscriptionService.supportedFileExtensions
+        let supported = FileTranscriptionService.supportedFileExtensions
 
         // Every accepted extension must map to a UTType AVFoundation reports as decodable
         // audio/video — the set must not drift into subtitles, playlists, or arbitrary types.

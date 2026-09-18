@@ -47,10 +47,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AccessibilityMessagingTimeout.configure()
+        #if DEBUG
+            // Stage 0.5, Trial A, and C2 autoruns must return before Core Audio observers,
+            // logging, AppServices, and UI startup. Each owns one bounded diagnostic stream.
+            if MeetingStage05EvidenceAutorun.startIfRequested() {
+                return
+            }
+            if MeetingExternalReferenceTrialAAutorun.startIfRequested() {
+                return
+            }
+            if MeetingSCKPairedAutorun.startIfRequested() {
+                return
+            }
+            // Must precede every Core Audio observer. Disabled unless explicitly
+            // requested through the Phase 0 diagnostics environment.
+            AudioTopologyDiagnostics.shared.startIfRequested()
+            // App-hosted XCTest otherwise starts the normal UI/audio services alongside the
+            // exclusive VPIO hardware probe. Keep that opt-in diagnostic launch isolated.
+            if ProcessInfo.processInfo.environment["FLUIDVOICE_MIC_PHASE1"] != nil
+                || ProcessInfo.processInfo.environment["FLUIDVOICE_VPIO_ACOUSTIC"] == "1"
+            {
+                return
+            }
+        #endif
         // Bring up file logging + crash handlers immediately during launch.
         _ = FileLogger.shared
         TypingService.startKeyboardLayoutTracking()
         _ = TranscriptionHistoryStore.shared
+        #if DEBUG
+            MeetingDetectorFeasibilityProbe.startIfRequested()
+        #endif
         // Must be read during the launch callback - the current Apple Event identifies
         // login-item launches (used to optionally start silently, see issue #369).
         self.wasLaunchedAsLoginItem = Self.detectLoginItemLaunch()
@@ -84,6 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Login Items can launch hidden; reveal the real SwiftUI window so ContentView startup runs.
         self.openMainWindowOnLaunch()
+        self.scheduleMeetingAutoDetectorStart()
 
         // Note: App UI is designed with dark color scheme in mind
         // All gradients and effects are optimized for dark mode
@@ -127,6 +154,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Clean up the update check timer
         self.updateCheckTimer?.invalidate()
         self.updateCheckTimer = nil
+        #if DEBUG
+            AudioTopologyDiagnostics.shared.stop()
+        #endif
     }
 
     private func shutdownASRRuntimeForTermination() {
@@ -136,7 +166,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             didFinishShutdown = true
         }
 
-        let deadline = Date().addingTimeInterval(8)
+        // Meeting capture can spend up to three seconds stopping its runtime and
+        // four seconds finalizing audio before the durable session save.
+        let deadline = Date().addingTimeInterval(12)
         while !didFinishShutdown, Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
@@ -276,6 +308,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
+    private func scheduleMeetingAutoDetectorStart() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            Task { @MainActor in
+                _ = AppServices.shared.meetingAutoDetector
+            }
+        }
+    }
     /// Realize the main window invisibly so ContentView's startup runs, then order it out.
     /// Used for login-item launches when "Show window when launched at login" is off.
     @discardableResult

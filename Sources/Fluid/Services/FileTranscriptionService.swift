@@ -322,7 +322,8 @@ nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
 /// Service for transcribing complete audio/video files with optional speaker diarization
 /// NOTE: This service shares the ASR models with ASRService to avoid duplicate memory usage
 @MainActor
-final class MeetingTranscriptionService: ObservableObject {
+final class FileTranscriptionService: ObservableObject {
+    @Published private(set) var currentFileURL: URL?
     @Published var isTranscribing: Bool = false
     @Published var progress: Double = 0.0
     @Published var currentStatus: String = ""
@@ -363,6 +364,7 @@ final class MeetingTranscriptionService: ObservableObject {
     }
 
     enum TranscriptionError: LocalizedError {
+        case activityInProgress(String)
         case modelLoadFailed(String)
         case audioConversionFailed(String)
         case transcriptionFailed(String)
@@ -370,6 +372,8 @@ final class MeetingTranscriptionService: ObservableObject {
 
         var errorDescription: String? {
             switch self {
+            case let .activityInProgress(msg):
+                return msg
             case let .modelLoadFailed(msg):
                 return "Failed to load ASR models: \(msg)"
             case let .audioConversionFailed(msg):
@@ -403,6 +407,20 @@ final class MeetingTranscriptionService: ObservableObject {
     /// - Parameters:
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
+        guard !self.isTranscribing else {
+            throw TranscriptionError.activityInProgress("This file is already being transcribed.")
+        }
+
+        let activityLease: ASRActivityLease
+        do {
+            activityLease = try self.asrService.acquireExclusiveActivity(.fileTranscription)
+        } catch {
+            let wrappedError = TranscriptionError.activityInProgress(error.localizedDescription)
+            self.error = wrappedError.localizedDescription
+            throw wrappedError
+        }
+
+        self.currentFileURL = fileURL
         self.isTranscribing = true
         error = nil
         self.fallbackNotice = nil
@@ -410,8 +428,9 @@ final class MeetingTranscriptionService: ObservableObject {
         let startTime = Date()
 
         defer {
-            isTranscribing = false
-            progress = 0.0
+            self.isTranscribing = false
+            self.progress = 0.0
+            self.asrService.releaseExclusiveActivity(activityLease)
         }
 
         do {
@@ -451,7 +470,7 @@ final class MeetingTranscriptionService: ObservableObject {
             } catch {
                 // Fall back to 0 if we can't determine duration
                 duration = 0
-                DebugLogger.shared.warning("Could not determine audio duration: \(error.localizedDescription)", source: "MeetingTranscriptionService")
+                DebugLogger.shared.warning("Could not determine audio duration: \(error.localizedDescription)", source: "FileTranscriptionService")
             }
 
             let isVideoContainer = UTType(filenameExtension: fileExtension)
@@ -473,14 +492,14 @@ final class MeetingTranscriptionService: ObservableObject {
                 }
                 DebugLogger.shared.warning(
                     "Speaker labeling unavailable for this file; falling back to standard transcription",
-                    source: "MeetingTranscriptionService"
+                    source: "FileTranscriptionService"
                 )
                 self.fallbackNotice = "Speaker labeling was unavailable for this file. The transcript was completed without speaker labels."
                 self.progress = 0.3
             } else if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled, isVideoContainer {
                 DebugLogger.shared.info(
                     "Speaker labeling skipped for video container; using standard transcription",
-                    source: "MeetingTranscriptionService"
+                    source: "FileTranscriptionService"
                 )
             }
 
@@ -489,8 +508,8 @@ final class MeetingTranscriptionService: ObservableObject {
                 self.progress = 0.3
 
                 DebugLogger.shared.info(
-                    "MeetingTranscriptionService: using native file transcription path for provider=\(provider.name)",
-                    source: "MeetingTranscriptionService"
+                    "FileTranscriptionService: using native file transcription path for provider=\(provider.name)",
+                    source: "FileTranscriptionService"
                 )
 
                 let nativeResult = try await provider.transcribeFile(at: fileURL)
@@ -514,8 +533,8 @@ final class MeetingTranscriptionService: ObservableObject {
 
             if provider.prefersNativeFileTranscription && isVideoContainer {
                 DebugLogger.shared.info(
-                    "MeetingTranscriptionService: using buffered transcription path for video container [provider=\(provider.name), extension=\(fileExtension)]",
-                    source: "MeetingTranscriptionService"
+                    "FileTranscriptionService: using buffered transcription path for video container [provider=\(provider.name), extension=\(fileExtension)]",
+                    source: "FileTranscriptionService"
                 )
             }
 
@@ -604,7 +623,7 @@ final class MeetingTranscriptionService: ObservableObject {
             if allTranscriptions.isEmpty {
                 DebugLogger.shared.warning(
                     "No audio chunks were long enough to transcribe (minimum 1 second required)",
-                    source: "MeetingTranscriptionService"
+                    source: "FileTranscriptionService"
                 )
             }
 
@@ -659,9 +678,11 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// Reset the service state
     func reset() {
+        guard !self.isTranscribing else { return }
         self.result = nil
         self.error = nil
         self.fallbackNotice = nil
+        self.currentFileURL = nil
         self.currentStatus = ""
         self.progress = 0.0
     }
@@ -692,7 +713,7 @@ final class MeetingTranscriptionService: ObservableObject {
         } catch {
             DebugLogger.shared.warning(
                 "Diarization failed: \(error.localizedDescription)",
-                source: "MeetingTranscriptionService"
+                source: "FileTranscriptionService"
             )
             return nil
         }
@@ -700,7 +721,7 @@ final class MeetingTranscriptionService: ObservableObject {
         guard !turns.isEmpty else {
             DebugLogger.shared.info(
                 "Diarization found no speaker turns",
-                source: "MeetingTranscriptionService"
+                source: "FileTranscriptionService"
             )
             return nil
         }
@@ -711,7 +732,7 @@ final class MeetingTranscriptionService: ObservableObject {
         } catch {
             DebugLogger.shared.warning(
                 "Could not open audio for speaker slicing: \(error.localizedDescription)",
-                source: "MeetingTranscriptionService"
+                source: "FileTranscriptionService"
             )
             return nil
         }
@@ -730,7 +751,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 // Use the standard full-file path rather than accepting uncertain labels.
                 DebugLogger.shared.warning(
                     "Speaker labeling aborted at segment \(index + 1)/\(turns.count) (\(String(format: "%.1f", turn.startSeconds))s): \(error.localizedDescription); falling back to standard transcription",
-                    source: "MeetingTranscriptionService"
+                    source: "FileTranscriptionService"
                 )
                 return nil
             }
@@ -758,7 +779,7 @@ final class MeetingTranscriptionService: ObservableObject {
             )
             DebugLogger.shared.warning(
                 "\(diagnostic); falling back to standard transcription",
-                source: "MeetingTranscriptionService"
+                source: "FileTranscriptionService"
             )
             return nil
         }

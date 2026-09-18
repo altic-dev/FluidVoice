@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
+		AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
+		AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */; };
+		AEC3C0000000000000000002 /* WebRTCAEC3Notices in Resources */ = {isa = PBXBuildFile; fileRef = AEC3C0000000000000000001 /* WebRTCAEC3Notices */; };
 		7C078DA52E3B386A00FB7CAC /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
 		7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
 		7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
@@ -24,13 +28,62 @@
 		A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */; };
 		A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62300000000000000000001 /* AudioBufferConverterTests.swift */; };
 		D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */; };
+		D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */; };
 		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
+		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
+		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
+		BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */; };
+		C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* MeetingResultSidecarTests.swift */; };
+		C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */; };
+		C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */; };
+		C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */; };
+		E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */; };
+		E3A000000000000000000012 /* MeetingTextOverlapEchoVerdictProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */; };
+		E3A000000000000000000022 /* MeetingEpochAudioMaterializerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */; };
+		E3A000000000000000000032 /* MeetingNemotronModelLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */; };
+		E3A000000000000000000042 /* MeetingNemotronRealModelSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */; };
+		AD7A00000000000000000002 /* MeetingAutoDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */; };
+		A7D000000000000000000002 /* AudioTopologyDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */; };
+		7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */; };
+		E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */; };
+		E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */; };
+		E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */; };
+		E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */; };
+		E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */; };
+		E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */; };
+		E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */; };
+		E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000071 /* ClockDomainProbeTests.swift */; };
+		E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */; };
+		5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */; };
+		5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4B00000000000000000001 /* MeetingPhase4Tests.swift */; };
+		5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */; };
+		E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */; };
+		E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000091 /* ClockRegressionHelper.swift */; };
+		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
+		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
 		DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */; };
 		DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */; };
 		7CFA1D0B2F500000C0DEF001 /* TypingServiceTransientPasteboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */; };
 		803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803000000000000000000001 /* MediaPlaybackServiceTests.swift */; };
 		0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */; };
+		CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */; };
+		CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */; };
+		CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */; };
+		CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */; };
+		D2A000000000000000000004 /* MeetingStage05EvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */; };
+		D2A000000000000000000006 /* MeetingStage05SCKFrameAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */; };
+		CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */ = {isa = PBXBuildFile; fileRef = CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */; };
+		CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */; };
+		E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */; };
+		E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */; };
+		F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */; };
+		F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */; };
+		F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */; };
+		F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */; };
+		F1A00000000000000000000A /* MeetingPCMStoragePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */; };
+		E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */; };
 		803000000000000000000003 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 803000000000000000000004 /* MediaRemoteAdapter */; };
 		B51800000000000000000002 /* SpokenSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51800000000000000000001 /* SpokenSendTests.swift */; };
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
@@ -41,6 +94,15 @@
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		7CE006BD2E80EBE600DDCCD6 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
+		A5B00000000000000000000B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B00000000000000000000C /* main.swift */; };
+		A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */; };
+		A5B000000000000000000013 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 7C078DA42E3B386A00FB7CAC /* FluidAudio */; };
+		A5B000000000000000000014 /* DynamicNotchKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7C3697882ED70F9C005874CE /* DynamicNotchKit */; };
+		A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; };
+		A5B000000000000000000016 /* TranscribeCpp in Frameworks */ = {isa = PBXBuildFile; productRef = 7C9A71012F58B00000FB7CAF /* TranscribeCpp */; };
+		A5B000000000000000000017 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
+		A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A5B000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +112,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 7C078D8E2E3B339200FB7CAC;
 			remoteInfo = fluid;
+		};
+		A5B000000000000000000021 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5B000000000000000000001;
+			remoteInfo = FluidASRBaselineHost;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -65,6 +134,17 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000008 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -73,7 +153,39 @@
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
 		A62300000000000000000001 /* AudioBufferConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferConverterTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerTurnMergingTests.swift; sourceTree = "<group>"; };
+		D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingExistingAudioReplayTests.swift; sourceTree = "<group>"; };
 		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
+		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
+		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
+		BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptionBackendTests.swift; sourceTree = "<group>"; };
+		C1A000000000000000000001 /* MeetingResultSidecarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingResultSidecarTests.swift; sourceTree = "<group>"; };
+		C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAnalysisManifestTests.swift; sourceTree = "<group>"; };
+		C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptAssemblerTests.swift; sourceTree = "<group>"; };
+		C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCanonicalPipelineTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingParakeetNemotronBackendTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTextOverlapEchoVerdictProviderTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEpochAudioMaterializerTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNemotronModelLocatorTests.swift; sourceTree = "<group>"; };
+		E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNemotronRealModelSmokeTests.swift; sourceTree = "<group>"; };
+		AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAutoDetectorTests.swift; sourceTree = "<group>"; };
+		A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTopologyDiagnosticsTests.swift; sourceTree = "<group>"; };
+		B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoSignalScorerTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEchoVetoTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingFallbackEchoProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNearFieldGateTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveSilenceEndpointTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingDuckingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingSpeechDuckingTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProcessingAsrQualityTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000071 /* ClockDomainProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockDomainProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneCaptureTests.swift; sourceTree = "<group>"; };
+		5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingCaptureTests.swift; sourceTree = "<group>"; };
+		5A4B00000000000000000001 /* MeetingPhase4Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPhase4Tests.swift; sourceTree = "<group>"; };
+		2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEraBatchTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTimelineDriftProbeTests.swift; sourceTree = "<group>"; };
+		E5EC00000000000000000091 /* ClockRegressionHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockRegressionHelper.swift; sourceTree = "<group>"; };
+		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
+		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
 		DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAudioReliabilityTests.swift; sourceTree = "<group>"; };
 		DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHardwareRecoveryTests.swift; sourceTree = "<group>"; };
@@ -93,15 +205,58 @@
 		7CFA1D0B2F500000C0DEF002 /* TypingServiceTransientPasteboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingServiceTransientPasteboardTests.swift; sourceTree = "<group>"; };
 		803000000000000000000001 /* MediaPlaybackServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackServiceTests.swift; sourceTree = "<group>"; };
 		0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportedFileExtensionsTests.swift; sourceTree = "<group>"; };
+		CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingOverlayModelsTests.swift; sourceTree = "<group>"; };
+		CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingConfigurationTests.swift; sourceTree = "<group>"; };
+		CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProviderOptionsTests.swift; sourceTree = "<group>"; };
+		CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingASRPreparationOwnerTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStage05EvidenceTests.swift; sourceTree = "<group>"; };
+		D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStage05SCKFrameAdapterTests.swift; sourceTree = "<group>"; };
+		AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAEC3Tests.swift; sourceTree = "<group>"; };
+		AEC3C0000000000000000001 /* WebRTCAEC3Notices */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebRTCAEC3Notices; path = Vendor/WebRTCAudioProcessing/Notices; sourceTree = SOURCE_ROOT; };
+		CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceAttributionContractsTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingProbeTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedDiagnosticsTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkSinkTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioAssetCompatibilityTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioChunkLedgerRecoveryTests.swift; sourceTree = "<group>"; };
+		F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPCMStoragePolicyTests.swift; sourceTree = "<group>"; };
+		E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedHardwareTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		A5B000000000000000000005 /* FluidASRBaselineHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluidASRBaselineHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B00000000000000000000C /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingReferenceSynchronizerReplayCLI.swift; sourceTree = "<group>"; };
+		A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluidASRBaselineHost.entitlements; sourceTree = "<group>"; };
+		A5B00000000000000000000E /* stage-inputs.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "stage-inputs.sh"; sourceTree = "<group>"; };
+		A5B00000000000000000000F /* placeholder.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = placeholder.json; sourceTree = "<group>"; };
+		A5B00000000000000000001D /* FluidASRBaselineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidASRBaselineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				fluidApp.swift,
+			);
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7C078D912E3B339200FB7CAC /* Sources/Fluid */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = Sources/Fluid;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000020 /* FluidASRBaselineTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FluidASRBaselineTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -111,6 +266,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
@@ -128,6 +284,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
+				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
+				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
+				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
+				A5B000000000000000000017 /* AppUpdater in Frameworks */,
+				A5B000000000000000000013 /* FluidAudio in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B000000000000000000023 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -135,6 +312,7 @@
 			isa = PBXGroup;
 			children = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+				AEC3C0000000000000000001 /* WebRTCAEC3Notices */,
 				7CDB0A242F3C4D5600FB7CAD /* Tests */,
 				7CDB0A282F3C4D5600FB7CAD /* Frameworks */,
 			);
@@ -145,6 +323,8 @@
 			children = (
 				7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */,
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
+				A5B000000000000000000005 /* FluidASRBaselineHost.app */,
+				A5B00000000000000000001D /* FluidASRBaselineTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -153,6 +333,8 @@
 			isa = PBXGroup;
 			children = (
 				7CDB0A252F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000010 /* FluidASRBaselineHost */,
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -172,7 +354,39 @@
 				A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */,
 				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
 				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
+				D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */,
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
+				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
+				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
+				BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */,
+				C1A000000000000000000001 /* MeetingResultSidecarTests.swift */,
+				C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */,
+				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
+				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
+				E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */,
+				E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */,
+				E3A000000000000000000021 /* MeetingEpochAudioMaterializerTests.swift */,
+				E3A000000000000000000031 /* MeetingNemotronModelLocatorTests.swift */,
+				E3A000000000000000000041 /* MeetingNemotronRealModelSmokeTests.swift */,
+				AD7A00000000000000000001 /* MeetingAutoDetectorTests.swift */,
+				A7D000000000000000000001 /* AudioTopologyDiagnosticsTests.swift */,
+				B4AD7433B35340CEB85EA268 /* MeetingEchoSignalScorerTests.swift */,
+				E5EC00000000000000000001 /* MeetingEchoVetoTests.swift */,
+				E5EC00000000000000000011 /* MeetingFallbackEchoProbeTests.swift */,
+				E5EC00000000000000000021 /* MeetingNearFieldGateTests.swift */,
+				E5EC00000000000000000031 /* MeetingLiveSilenceEndpointTests.swift */,
+				E5EC00000000000000000041 /* VoiceProcessingDuckingProbeTests.swift */,
+				E5EC00000000000000000051 /* VoiceProcessingSpeechDuckingTests.swift */,
+				E5EC00000000000000000061 /* VoiceProcessingAsrQualityTests.swift */,
+				E5EC00000000000000000071 /* ClockDomainProbeTests.swift */,
+				E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */,
+				5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */,
+				5A4B00000000000000000001 /* MeetingPhase4Tests.swift */,
+				2A50F33BD2347EECE0B3853C /* MeetingEraBatchTests.swift */,
+				E5EC000000000000000000A1 /* MeetingTimelineDriftProbeTests.swift */,
+				E5EC00000000000000000091 /* ClockRegressionHelper.swift */,
+				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
+				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
 				DA7100010000000000000001 /* DirectAudioReliabilityTests.swift */,
 				DA7200010000000000000001 /* AudioHardwareRecoveryTests.swift */,
@@ -185,6 +399,23 @@
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
 				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
+				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
+				CD0F00000000000000000001 /* MeetingProcessingConfigurationTests.swift */,
+				CD100000000000000000000001 /* MeetingProviderOptionsTests.swift */,
+				CD110000000000000000000001 /* MeetingASRPreparationOwnerTests.swift */,
+				D2A000000000000000000001 /* MeetingReferenceSynchronizerTests.swift */,
+				D2A000000000000000000003 /* MeetingStage05EvidenceTests.swift */,
+				D2A000000000000000000005 /* MeetingStage05SCKFrameAdapterTests.swift */,
+				AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */,
+				CD120000000000000000000001 /* MeetingReferenceAttributionContractsTests.swift */,
+				E5EC000000000000000000B1 /* MeetingVoiceProcessingProbeTests.swift */,
+				E5EC000000000000000000C1 /* MeetingSCKPairedDiagnosticsTests.swift */,
+				F1A000000000000000000001 /* MeetingAudioChunkSinkTests.swift */,
+				F1A000000000000000000003 /* MeetingAudioAssetCompatibilityTests.swift */,
+				F1A000000000000000000005 /* MeetingAudioChunkLedgerTests.swift */,
+				F1A000000000000000000007 /* MeetingAudioChunkLedgerRecoveryTests.swift */,
+				F1A000000000000000000009 /* MeetingPCMStoragePolicyTests.swift */,
+				E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */,
 			);
 			path = FluidDictationIntegrationTests;
 			sourceTree = "<group>";
@@ -213,6 +444,26 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		A5B000000000000000000010 /* FluidASRBaselineHost */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000C /* main.swift */,
+				A5B000000000000000000025 /* MeetingReferenceSynchronizerReplayCLI.swift */,
+				A5B00000000000000000000D /* FluidASRBaselineHost.entitlements */,
+				A5B00000000000000000000E /* stage-inputs.sh */,
+				A5B000000000000000000011 /* Inputs */,
+			);
+			path = FluidASRBaselineHost;
+			sourceTree = "<group>";
+		};
+		A5B000000000000000000011 /* Inputs */ = {
+			isa = PBXGroup;
+			children = (
+				A5B00000000000000000000F /* placeholder.json */,
+			);
+			path = Inputs;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -234,6 +485,7 @@
 			);
 			name = fluid;
 			packageProductDependencies = (
+				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -265,6 +517,58 @@
 			productReference = 7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		A5B000000000000000000001 /* FluidASRBaselineHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */;
+			buildPhases = (
+				A5B000000000000000000006 /* Sources */,
+				A5B000000000000000000007 /* Frameworks */,
+				A5B000000000000000000008 /* Embed Frameworks */,
+				A5B000000000000000000009 /* Resources */,
+				A5B00000000000000000000A /* Stage ASR Baseline Inputs */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+			);
+			name = FluidASRBaselineHost;
+			packageProductDependencies = (
+				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
+				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
+				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
+				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
+				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+			);
+			productName = FluidASRBaselineHost;
+			productReference = A5B000000000000000000005 /* FluidASRBaselineHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A5B000000000000000000019 /* FluidASRBaselineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */;
+			buildPhases = (
+				A5B00000000000000000001E /* Sources */,
+				A5B00000000000000000001F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A5B000000000000000000022 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A5B000000000000000000020 /* FluidASRBaselineTests */,
+			);
+			name = FluidASRBaselineTests;
+			packageProductDependencies = (
+			);
+			productName = FluidASRBaselineTests;
+			productReference = A5B00000000000000000001D /* FluidASRBaselineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -281,6 +585,12 @@
 					7CDB0A1F2F3C4D5600FB7CAD = {
 						CreatedOnToolsVersion = 26.0;
 					};
+					A5B000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A5B000000000000000000019 = {
+						CreatedOnToolsVersion = 26.0;
+					};
 				};
 			};
 			buildConfigurationList = 7C078D8A2E3B339200FB7CAC /* Build configuration list for PBXProject "Fluid" */;
@@ -293,7 +603,8 @@
 			mainGroup = 7C078D862E3B339200FB7CAC;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
+				7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
@@ -306,6 +617,8 @@
 			targets = (
 				7C078D8E2E3B339200FB7CAC /* fluid */,
 				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
+				A5B000000000000000000001 /* FluidASRBaselineHost */,
+				A5B000000000000000000019 /* FluidASRBaselineTests */,
 			);
 		};
 /* End PBXProject section */
@@ -315,6 +628,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEC3C0000000000000000002 /* WebRTCAEC3Notices in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -326,7 +640,38 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5B000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A5B00000000000000000000A /* Stage ASR Baseline Inputs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(FLUID_ASR_BASELINE_INPUTS)",
+				"$(SRCROOT)/Tests/FluidASRBaselineHost/stage-inputs.sh",
+			);
+			name = "Stage ASR Baseline Inputs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ASRBaselineInputs",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Tests/FluidASRBaselineHost/stage-inputs.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7C078D8B2E3B339200FB7CAC /* Sources */ = {
@@ -352,7 +697,39 @@
 				A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */,
 				A62300000000000000000002 /* AudioBufferConverterTests.swift in Sources */,
 				D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */,
+				D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */,
 				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
+				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
+				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
+				BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */,
+				C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */,
+				C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */,
+				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
+				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
+				E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */,
+				E3A000000000000000000012 /* MeetingTextOverlapEchoVerdictProviderTests.swift in Sources */,
+				E3A000000000000000000022 /* MeetingEpochAudioMaterializerTests.swift in Sources */,
+				E3A000000000000000000032 /* MeetingNemotronModelLocatorTests.swift in Sources */,
+				E3A000000000000000000042 /* MeetingNemotronRealModelSmokeTests.swift in Sources */,
+				AD7A00000000000000000002 /* MeetingAutoDetectorTests.swift in Sources */,
+				A7D000000000000000000002 /* AudioTopologyDiagnosticsTests.swift in Sources */,
+				7E57C8BE6F444F6A9AC9FCB0 /* MeetingEchoSignalScorerTests.swift in Sources */,
+				E5EC00000000000000000002 /* MeetingEchoVetoTests.swift in Sources */,
+				E5EC00000000000000000012 /* MeetingFallbackEchoProbeTests.swift in Sources */,
+				E5EC00000000000000000022 /* MeetingNearFieldGateTests.swift in Sources */,
+				E5EC00000000000000000032 /* MeetingLiveSilenceEndpointTests.swift in Sources */,
+				E5EC00000000000000000042 /* VoiceProcessingDuckingProbeTests.swift in Sources */,
+				E5EC00000000000000000052 /* VoiceProcessingSpeechDuckingTests.swift in Sources */,
+				E5EC00000000000000000062 /* VoiceProcessingAsrQualityTests.swift in Sources */,
+				E5EC00000000000000000072 /* ClockDomainProbeTests.swift in Sources */,
+				E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */,
+				5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */,
+				5A4B00000000000000000002 /* MeetingPhase4Tests.swift in Sources */,
+				5C67BA461CBF1149E733A4E9 /* MeetingEraBatchTests.swift in Sources */,
+				E5EC000000000000000000A2 /* MeetingTimelineDriftProbeTests.swift in Sources */,
+				E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */,
+				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
+				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
 				DA7100020000000000000002 /* DirectAudioReliabilityTests.swift in Sources */,
 				DA7200020000000000000002 /* AudioHardwareRecoveryTests.swift in Sources */,
@@ -364,6 +741,40 @@
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
 				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,
+				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
+				CD0F00000000000000000002 /* MeetingProcessingConfigurationTests.swift in Sources */,
+				CD100000000000000000000002 /* MeetingProviderOptionsTests.swift in Sources */,
+				CD110000000000000000000002 /* MeetingASRPreparationOwnerTests.swift in Sources */,
+				D2A000000000000000000002 /* MeetingReferenceSynchronizerTests.swift in Sources */,
+				D2A000000000000000000004 /* MeetingStage05EvidenceTests.swift in Sources */,
+				D2A000000000000000000006 /* MeetingStage05SCKFrameAdapterTests.swift in Sources */,
+				AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */,
+				CD120000000000000000000002 /* MeetingReferenceAttributionContractsTests.swift in Sources */,
+				E5EC000000000000000000B2 /* MeetingVoiceProcessingProbeTests.swift in Sources */,
+				E5EC000000000000000000C2 /* MeetingSCKPairedDiagnosticsTests.swift in Sources */,
+				F1A000000000000000000002 /* MeetingAudioChunkSinkTests.swift in Sources */,
+				F1A000000000000000000004 /* MeetingAudioAssetCompatibilityTests.swift in Sources */,
+				F1A000000000000000000006 /* MeetingAudioChunkLedgerTests.swift in Sources */,
+				F1A000000000000000000008 /* MeetingAudioChunkLedgerRecoveryTests.swift in Sources */,
+				F1A00000000000000000000A /* MeetingPCMStoragePolicyTests.swift in Sources */,
+				E5EC000000000000000000D2 /* MeetingSCKPairedHardwareTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5B00000000000000000000B /* main.swift in Sources */,
+				A5B000000000000000000024 /* MeetingReferenceSynchronizerReplayCLI.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00000000000000000001E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD110000000000000000000003 /* MeetingASRPreparationOwnerTests.swift in Sources (ASR baseline) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -374,6 +785,11 @@
 			isa = PBXTargetDependency;
 			target = 7C078D8E2E3B339200FB7CAC /* fluid */;
 			targetProxy = 7CDB0A322F3C4D5600FB7CAD /* PBXContainerItemProxy */;
+		};
+		A5B000000000000000000022 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
+			targetProxy = A5B000000000000000000021 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -664,6 +1080,138 @@
 			};
 			name = Release;
 		};
+		A5B000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		A5B000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_CODE_COVERAGE = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.ASRBaselineHost;
+				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
+				PRODUCT_NAME = FluidASRBaselineHost;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
+		A5B00000000000000000001B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Debug;
+		};
+		A5B00000000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = FluidASRBaselineTests;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidASRBaselineTests;
+				PRODUCT_NAME = FluidASRBaselineTests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLUID_ASR_BASELINE_TESTS";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidASRBaselineHost.app/Contents/MacOS/FluidASRBaselineHost";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -694,17 +1242,38 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A5B000000000000000000002 /* Build configuration list for PBXNativeTarget "FluidASRBaselineHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B000000000000000000003 /* Debug */,
+				A5B000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5B00000000000000000001A /* Build configuration list for PBXNativeTarget "FluidASRBaselineTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5B00000000000000000001B /* Debug */,
+				A5B00000000000000000001C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ".local-dependencies/FluidAudio";
 		};
+		AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/WebRTCAudioProcessing;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/DynamicNotchKit.git";
@@ -740,9 +1309,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AEC300000000000000000002 /* FluidAEC3Bridge */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */;
+			productName = FluidAEC3Bridge;
+		};
 		7C078DA42E3B386A00FB7CAC /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			package = 7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
 		};
 		7C3697882ED70F9C005874CE /* DynamicNotchKit */ = {

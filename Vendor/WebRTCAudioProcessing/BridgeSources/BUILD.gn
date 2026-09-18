@@ -1,0 +1,28 @@
+import("../../webrtc.gni")
+
+rtc_static_library("fluid_aec3") {
+  complete_static_lib = true
+  sources = [
+    "fluid_aec3_bridge.cc",
+    "fluid_aec3_bridge.h",
+  ]
+  deps = [
+    "//api/audio:audio_processing",
+    "//api/audio:builtin_audio_processing_builder",
+    "//api/environment:environment_factory",
+    "//api/task_queue:default_task_queue_factory",
+  ]
+  suppressed_configs = [
+    "//build/config/clang:unsafe_buffers",
+  ]
+}
+
+executable("phase1_bridge") {
+  sources = [ "phase1_bridge.cc" ]
+  deps = [ ":fluid_aec3" ]
+  ldflags = [ "-Wl,-map,phase1_bridge.map" ]
+  configs -= [
+    "//build/config/clang:find_bad_constructs",
+    "//build/config/clang:unsafe_buffers",
+  ]
+}

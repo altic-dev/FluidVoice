@@ -122,6 +122,12 @@ struct ASRTranscriptionResult {
     }
 }
 
+nonisolated struct ASRWordTiming: Sendable {
+    let text: String
+    let start: TimeInterval
+    let end: TimeInterval
+}
+
 // MARK: - Transcription Provider Protocol
 
 /// Protocol that abstracts speech-to-text transcription.
@@ -156,6 +162,11 @@ protocol TranscriptionProvider {
     /// Providers can bypass final-output transforms that would distort the saved phrase.
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult
 
+    /// Meeting word alignment only; dictation never calls the method this gates.
+    var supportsWordTimings: Bool { get }
+
+    func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming])
+
     /// Whether this provider prefers to handle long-form file transcription itself.
     /// This is useful when the backend already has model-native long-audio chunking/reassembly.
     var prefersNativeFileTranscription: Bool { get }
@@ -180,6 +191,11 @@ extension TranscriptionProvider {
     func clearCache() async throws {}
     var shouldClearCacheAfterCancellation: Bool { true }
     var prefersNativeFileTranscription: Bool { false }
+    var supportsWordTimings: Bool { false }
+
+    func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        (try await self.transcribe(samples), [])
+    }
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         try await self.transcribe(samples)
     }

@@ -1,0 +1,185 @@
+{
+  "exitStatus": 0,
+  "report": {
+    "acousticMeasurementValid": false,
+    "appOwnedPlayback": false,
+    "builtInRouteConfirmed": true,
+    "captureValid": false,
+    "clock": {
+      "reason": "per-buffer PTS cannot establish an acoustic capture/reference mapping",
+      "relationship": "independent PTS origins; no defensible clock mapping",
+      "sharedClockEstablished": false
+    },
+    "combinedPeakBound": 0.02,
+    "defaultInputDeviceID": 82,
+    "defaultOutputDeviceID": 87,
+    "measuredCombinedPeak": 0,
+    "microphone": {
+      "arrivalBoundaryValid": true,
+      "arrivalCoverageSeconds": 5.3049835416546554,
+      "backwardsTimestampCount": 0,
+      "callbackCount": 53,
+      "captureCloseArrivalSeconds": 173138.78600870835,
+      "captureOpenArrivalSeconds": 173133.49417354167,
+      "clippedSampleCount": 0,
+      "coverageFraction": 1,
+      "coveredDurationSeconds": 5.2999999997438847,
+      "deliveredDurationSeconds": 5.2999999999999972,
+      "droppedFrameCount": 0,
+      "firstPresentationSeconds": 173133.48014583334,
+      "formatChangeCount": 0,
+      "gapCount": 0,
+      "gapDurationSeconds": 0,
+      "invalidTimestampCount": 0,
+      "lastPresentationEndSeconds": 173138.78014583333,
+      "overlapCount": 0,
+      "overlapDurationSeconds": 0,
+      "peak": 0.007458198349922895,
+      "rms": 0.0014110774349462589,
+      "synthesizedFrameCount": 0,
+      "timingValid": true,
+      "validSampleCount": 53
+    },
+    "microphoneDeviceID": 82,
+    "outputDeviceID": 87,
+    "outputVolume": 0.25,
+    "outputVolumeReadable": true,
+    "outputVolumeUnchanged": true,
+    "persisted": false,
+    "postCaptureOutputVolume": 0.25,
+    "postCaptureRouteConfirmed": true,
+    "rawPCMRetained": false,
+    "reasons": [
+      "diagnostic-only",
+      "no app-owned playback",
+      "independent clocks; acoustic delay unknown",
+      "reference below excitation floor"
+    ],
+    "reference": {
+      "arrivalBoundaryValid": true,
+      "arrivalCoverageSeconds": 5.2999272083211686,
+      "backwardsTimestampCount": 0,
+      "callbackCount": 264,
+      "captureCloseArrivalSeconds": 173138.78600783335,
+      "captureOpenArrivalSeconds": 173133.49417179168,
+      "clippedSampleCount": 0,
+      "coverageFraction": 1,
+      "coveredDurationSeconds": 5.2799999999999754,
+      "deliveredDurationSeconds": 5.2799999999999754,
+      "droppedFrameCount": 0,
+      "firstPresentationSeconds": 173133.455253708,
+      "formatChangeCount": 0,
+      "gapCount": 0,
+      "gapDurationSeconds": 0,
+      "invalidTimestampCount": 0,
+      "lastPresentationEndSeconds": 173138.735253708,
+      "overlapCount": 0,
+      "overlapDurationSeconds": 0,
+      "peak": 0,
+      "rms": 0,
+      "synthesizedFrameCount": 0,
+      "timingValid": true,
+      "validSampleCount": 264
+    },
+    "referenceExcitationConfirmed": false,
+    "schemaVersion": 2,
+    "selectionConfirmed": true,
+    "stopErrorCount": 0,
+    "streamErrorCount": 0,
+    "targetBundleID": "com.google.Chrome",
+    "targetProcessID": 1513,
+    "targetProcessStable": true,
+    "transcriptRetained": false,
+    "voiceProcessingReadback": {
+      "bypassVoiceProcessing": {
+        "element": 0,
+        "propertyID": 2100,
+        "scope": 0,
+        "status": 0,
+        "value": 0
+      },
+      "engineRunning": true,
+      "inputCurrentDevice": {
+        "element": 1,
+        "propertyID": 2000,
+        "scope": 0,
+        "status": 0,
+        "value": 82
+      },
+      "inputNodeInputFormat": {
+        "channelCount": 9,
+        "commonFormatRawValue": 1,
+        "interleaved": false,
+        "sampleRate": 48000
+      },
+      "inputNodeLastRenderTime": {
+        "hostTime": 4155331206753,
+        "sampleRate": 48000,
+        "sampleTime": 260768
+      },
+      "inputNodeOutputConnectionCount": 0,
+      "inputNodeOutputFormat": {
+        "channelCount": 9,
+        "commonFormatRawValue": 1,
+        "interleaved": false,
+        "sampleRate": 48000
+      },
+      "inputPresentationLatencySeconds": 0.0005416666666666666,
+      "nodeAdvancedDuckingEnabled": false,
+      "nodeDuckingLevelRawValue": 10,
+      "nodeVoiceProcessingAGCEnabled": true,
+      "nodeVoiceProcessingBypassed": false,
+      "nodeVoiceProcessingEnabled": true,
+      "nodeVoiceProcessingInputMuted": false,
+      "otherAudioDucking": {
+        "advancedDuckingEnabled": false,
+        "duckingLevelRawValue": 10,
+        "element": 0,
+        "propertyID": 2108,
+        "scope": 0,
+        "status": 0
+      },
+      "outputCurrentDevice": {
+        "element": 0,
+        "propertyID": 2000,
+        "scope": 0,
+        "status": 0,
+        "value": 87
+      },
+      "outputNodeInputFormat": {
+        "channelCount": 2,
+        "commonFormatRawValue": 1,
+        "interleaved": false,
+        "sampleRate": 48000
+      },
+      "outputNodeLastRenderTime": {
+        "hostTime": 4155330914755,
+        "sampleRate": 48000,
+        "sampleTime": 260184
+      },
+      "outputNodeOutputFormat": {
+        "channelCount": 2,
+        "commonFormatRawValue": 1,
+        "interleaved": false,
+        "sampleRate": 48000
+      },
+      "outputPresentationLatencySeconds": 2.0833333333333333e-05,
+      "schemaVersion": 1,
+      "voiceProcessingAGCEnabled": {
+        "element": 0,
+        "propertyID": 2101,
+        "scope": 0,
+        "status": 0,
+        "value": 1
+      },
+      "voiceProcessingOutputMuted": {
+        "element": 0,
+        "propertyID": 2104,
+        "scope": 0,
+        "status": 0,
+        "value": 0
+      }
+    }
+  },
+  "status": "success"
+}

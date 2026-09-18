@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "annotationSet": "development-only-v1",
+  "warning": "User-reported recording-level/coarse interval truth; not sample-level annotation and never held out.",
+  "sessions": [
+    {
+      "sessionID": "3774ED4C-7267-4838-A9A2-71DACE246CF9",
+      "sidecar": "fv-speech-3774-v2.json",
+      "intervals": [
+        {"start": 0.0, "end": 98.75583824932983, "label": "noNearEndSpeech", "provenance": "user reported no speech for whole recording"}
+      ]
+    },
+    {
+      "sessionID": "88E3BD44-6935-44AB-B139-1DED1002E8E0",
+      "sidecar": "fv-speech-88e3-v2.json",
+      "intervals": [
+        {"start": 0.0, "end": 208.0, "label": "noNearEndSpeech", "provenance": "user reported speaking only supplied script near end"},
+        {"start": 208.0, "end": 250.0, "label": "coarseNearEndSpeechRegion", "provenance": "script occurs somewhere in this coarse region; individual frames and pauses are not labelled"}
+      ]
+    },
+    {
+      "sessionID": "3B9AC1A8-EB78-4C52-976D-7BF45427F423",
+      "sidecar": "fv-speech-3b9a-v2.json",
+      "intervals": [
+        {"start": 0.0, "end": 131.8697643330088, "label": "noNearEndSpeech", "provenance": "user reported playback-only for whole recording"}
+      ]
+    },
+    {
+      "sessionID": "720AB8CD-842E-4D25-97A1-9CAAFBC28E74",
+      "sidecar": "fv-speech-control-playback-v1.json",
+      "intervals": [
+        {"start": 0.0, "end": 155.2994252916542, "label": "noNearEndSpeech", "provenance": "controlled recording 1: user reported YouTube playback through speakers, no near-end speech, and nobody else nearby for the whole recording"}
+      ]
+    },
+    {
+      "sessionID": "C102F9B6-C61F-48EB-8F8B-A36451C712B8",
+      "sidecar": "fv-speech-control-normal-v1.json",
+      "intervals": [
+        {"start": 0.0, "end": 11.663354208343662, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 2: user reported normal speech into the microphone with playback stopped and nobody else nearby; individual speech and pause frames are not labelled"}
+      ]
+    },
+    {
+      "sessionID": "4734B958-A92F-4AEB-954C-7A9AC91DE457",
+      "sidecar": "fv-speech-control-quiet-v1.json",
+      "intervals": [
+        {"start": 0.0, "end": 10.022595125017688, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 3: user reported quiet speech into the microphone with playback stopped and nobody else nearby; individual speech and pause frames are not labelled"}
+      ]
+    },
+    {
+      "sessionID": "51507DB8-FD6B-48CD-9996-70AED789BDF5",
+      "sidecar": "fv-speech-control-normal-overlap-v1.json",
+      "intervals": [
+        {"start": 18.0, "end": 31.0, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 4: user reported normal phrase into the microphone over YouTube playback through speakers with nobody else nearby; interval coarsely localized from the saved transcript and is not independent frame truth"},
+        {"start": 97.0, "end": 109.0, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 4: user reported normal phrase into the microphone over YouTube playback through speakers with nobody else nearby; interval coarsely localized from the saved transcript and is not independent frame truth"},
+        {"start": 147.0, "end": 157.2600000000093, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 4: user reported normal phrase into the microphone over YouTube playback through speakers with nobody else nearby; interval coarsely localized from the saved transcript and is not independent frame truth"}
+      ]
+    },
+    {
+      "sessionID": "990EDF30-4BDD-420F-B78C-4CB5D430F998",
+      "sidecar": "fv-speech-control-quiet-overlap-v1.json",
+      "intervals": [
+        {"start": 0.0, "end": 60.92128191667143, "label": "coarseNearEndSpeechRegion", "provenance": "controlled recording 5: user reported two sequences of five quiet replies into the microphone over YouTube playback through speakers with nobody else nearby; individual speech and pause frames are not labelled"}
+      ]
+    }
+  ]
+}

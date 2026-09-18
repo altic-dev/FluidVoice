@@ -1,0 +1,90 @@
+{
+  "bypassVoiceProcessing": {
+    "element": 0,
+    "propertyID": 2100,
+    "scope": 0,
+    "status": 0,
+    "value": 0
+  },
+  "engineRunning": true,
+  "inputCurrentDevice": {
+    "element": 1,
+    "propertyID": 2000,
+    "scope": 0,
+    "status": 0,
+    "value": 82
+  },
+  "inputNodeInputFormat": {
+    "channelCount": 9,
+    "commonFormatRawValue": 1,
+    "interleaved": false,
+    "sampleRate": 48000
+  },
+  "inputNodeLastRenderTime": {
+    "hostTime": 3459905607007,
+    "sampleRate": 48000,
+    "sampleTime": 147066
+  },
+  "inputNodeOutputConnectionCount": 0,
+  "inputNodeOutputFormat": {
+    "channelCount": 9,
+    "commonFormatRawValue": 1,
+    "interleaved": false,
+    "sampleRate": 48000
+  },
+  "inputPresentationLatencySeconds": 0.0005416666666666666,
+  "nodeAdvancedDuckingEnabled": false,
+  "nodeDuckingLevelRawValue": 10,
+  "nodeVoiceProcessingAGCEnabled": true,
+  "nodeVoiceProcessingBypassed": false,
+  "nodeVoiceProcessingEnabled": true,
+  "nodeVoiceProcessingInputMuted": false,
+  "otherAudioDucking": {
+    "advancedDuckingEnabled": false,
+    "duckingLevelRawValue": 10,
+    "element": 0,
+    "propertyID": 2108,
+    "scope": 0,
+    "status": 0
+  },
+  "outputCurrentDevice": {
+    "element": 0,
+    "propertyID": 2000,
+    "scope": 0,
+    "status": 0,
+    "value": 87
+  },
+  "outputNodeInputFormat": {
+    "channelCount": 2,
+    "commonFormatRawValue": 1,
+    "interleaved": false,
+    "sampleRate": 48000
+  },
+  "outputNodeLastRenderTime": {
+    "hostTime": 3459905315008,
+    "sampleRate": 48000,
+    "sampleTime": 146482
+  },
+  "outputNodeOutputFormat": {
+    "channelCount": 2,
+    "commonFormatRawValue": 1,
+    "interleaved": false,
+    "sampleRate": 48000
+  },
+  "outputPresentationLatencySeconds": 0.000020833333333333333,
+  "schemaVersion": 1,
+  "voiceProcessingAGCEnabled": {
+    "element": 0,
+    "propertyID": 2101,
+    "scope": 0,
+    "status": 0,
+    "value": 1
+  },
+  "voiceProcessingOutputMuted": {
+    "element": 0,
+    "propertyID": 2104,
+    "scope": 0,
+    "status": 0,
+    "value": 0
+  }
+}

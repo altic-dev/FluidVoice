@@ -1,0 +1,4 @@
+module FluidAEC3Binary {
+  header "FluidAEC3Binary.h"
+  export *
+}

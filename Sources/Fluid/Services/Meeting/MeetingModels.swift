@@ -1,0 +1,1390 @@
+import Foundation
+
+typealias MeetingSessionID = UUID
+typealias MeetingAudioTrackID = UUID
+typealias MeetingAudioChunkID = UUID
+typealias SessionSpeakerID = UUID
+typealias MeetingTranscriptSegmentID = UUID
+
+nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
+    case onlineCall
+    case inRoom
+}
+
+nonisolated enum MeetingSessionState: String, Codable, Sendable {
+    case preparing
+    case recording
+    case recordingDegraded
+    case stopping
+    case processing
+    case completed
+    case interrupted
+    case failed
+}
+
+nonisolated enum MeetingAudioTrackKind: String, Codable, CaseIterable, Sendable {
+    case applicationAudio
+    case microphone
+}
+
+nonisolated enum MeetingTrackHealthStatus: String, Codable, Sendable {
+    case waiting
+    case healthy
+    case degraded
+    case unavailable
+    case stopped
+}
+
+nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
+    case sourceLost
+    case sourceRecovered
+    case applicationExited
+    case microphoneDisconnected
+    case microphoneChanged
+    case permissionRevoked
+    case sleep
+    case wake
+    case clockDiscontinuity
+    case lowDiskSpace
+    case diskExhausted
+    case appTermination
+    case captureStoppedUnexpectedly
+    case writerBackpressure
+    case writerFailure
+    case voiceProcessingDeclined
+    case voiceProcessingConfigurationChanged
+    case voiceProcessingOverload
+    /// Final processing completed with typed gaps or quarantined evidence.
+    case transcriptCoverageIncomplete
+}
+
+nonisolated enum MeetingFailureDomain: String, Codable, Sendable {
+    case capture
+    case processing
+    case persistence
+}
+
+nonisolated enum MeetingProcessingStage: String, Codable, Sendable {
+    case pending
+    case saving
+    case identifyingSpeakers
+    case transcribing
+    case finalizing
+    case completed
+}
+
+nonisolated enum MeetingTranscriptStatus: String, Codable, Sendable {
+    case provisional
+    case final
+}
+
+nonisolated enum MeetingTranscriptCompleteness: String, Codable, Sendable {
+    case complete
+    case incompleteTrack
+    case noSpeech
+    case processingFailed
+}
+
+nonisolated enum MeetingTranscriptOverlap: String, Codable, Sendable {
+    case none
+    case overlapsOtherTrack
+    case ambiguous
+}
+
+/// Why a segment does or does not carry a resolved speaker. Additive alongside `speakerID` and
+/// `overlap`; optional so pre-fix manifests still decode.
+nonisolated enum MeetingTranscriptAttributionState: String, Codable, Sendable {
+    /// A single speaker was confidently resolved.
+    case assigned
+    /// Two or more speakers overlapped and could not be separated.
+    case overlappingSpeakers
+    /// No speaker evidence at all, without overlap or timing ambiguity.
+    case unassigned
+    /// Timing was uncertain, so the text is visible but never confidently assigned.
+    case timingUncertain
+}
+
+nonisolated enum MeetingTranscriptCoverageGapReason: String, Codable, Sendable {
+    case unprotectedMicrophone
+    // Canonical-assembly reasons (C2b2). Additive: old sessions keep decoding, and legacy output
+    // still only ever reports `unprotectedMicrophone`.
+    case missingOrUnreadableAudio
+    case processingFailed
+    case processingSkipped
+    case providerTruncated
+    /// An indivisible unit touched an excluded interval; its admissible portion is incomplete.
+    case excludedUnitIncompleteCoverage
+    /// Canonical admission rejected the capture era because positive echo-protection provenance
+    /// was absent or unsafe. Kept distinct from the legacy `unprotectedMicrophone` label.
+    case inadmissibleCaptureEra
+}
+
+nonisolated struct MeetingTranscriptCoverageGap: Codable, Equatable, Sendable {
+    var trackID: MeetingAudioTrackID
+    var start: TimeInterval
+    var end: TimeInterval
+    var reason: MeetingTranscriptCoverageGapReason
+}
+
+nonisolated enum MeetingMicrophoneRole: String, Codable, CaseIterable, Sendable {
+    case personal
+    case shared
+    case unknown
+}
+
+nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
+    var isConfigured: Bool
+    var mode: MeetingCaptureMode
+    var applicationBundleIdentifier: String?
+    var applicationDisplayName: String? = nil
+    var microphoneCaptureDeviceID: String?
+    var microphoneCoreAudioUID: String?
+    var microphoneRole: MeetingMicrophoneRole
+
+    static let unconfigured = Self(
+        isConfigured: false,
+        mode: .onlineCall,
+        applicationBundleIdentifier: nil,
+        microphoneCaptureDeviceID: nil,
+        microphoneCoreAudioUID: nil,
+        microphoneRole: .unknown
+    )
+
+    func savedApplication(in identities: [MeetingApplicationIdentity]) -> MeetingApplicationIdentity? {
+        guard self.isConfigured, let applicationBundleIdentifier else { return nil }
+        return identities.first(where: { $0.bundleIdentifier == applicationBundleIdentifier })
+    }
+
+    func savedMicrophone(in identities: [MeetingMicrophoneIdentity]) -> MeetingMicrophoneIdentity? {
+        guard self.isConfigured else { return nil }
+        return self.microphoneCoreAudioUID.flatMap { coreAudioUID in
+            identities.first(where: { $0.coreAudioUID == coreAudioUID })
+        } ?? self.microphoneCaptureDeviceID.flatMap { captureDeviceID in
+            identities.first(where: { $0.captureDeviceID == captureDeviceID })
+        }
+    }
+}
+
+nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
+    var bundleIdentifier: String
+    var processID: Int32?
+    var displayName: String
+    var displayID: UInt32?
+    /// The specific window auto-detection found evidence in. Additive/optional so pre-existing
+    /// manifests still decode (synthesized Codable uses decodeIfPresent/encodeIfPresent for
+    /// Optional properties). `MeetingWindowSelector` prefers it when set and it still exists —
+    /// prevents recording a different foreground window than the one that was actually detected.
+    var windowID: UInt32?
+
+    init(
+        bundleIdentifier: String,
+        processID: Int32? = nil,
+        displayName: String,
+        displayID: UInt32? = nil,
+        windowID: UInt32? = nil
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.processID = processID
+        self.displayName = displayName
+        self.displayID = displayID
+        self.windowID = windowID
+    }
+}
+
+nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable, Sendable {
+    /// Stable product-selection identifier. New identities use the Core Audio UID;
+    /// manifests written before identity schema 2 may contain an AVCaptureDevice uniqueID.
+    var captureDeviceID: String
+    /// Stable Core Audio UID used by VPIO and FluidVoice microphone preferences.
+    var coreAudioUID: String?
+    /// Resolved only inside an AVFoundation/ScreenCaptureKit capture adapter, after
+    /// the dictation-to-meeting audio handoff has completed.
+    var avCaptureDeviceID: String?
+    /// Nil identifies a legacy manifest whose `captureDeviceID` may be an AV uniqueID.
+    var identitySchemaVersion: Int?
+    var displayName: String
+    var role: MeetingMicrophoneRole
+
+    init(
+        captureDeviceID: String,
+        coreAudioUID: String? = nil,
+        avCaptureDeviceID: String? = nil,
+        identitySchemaVersion: Int? = 2,
+        displayName: String,
+        role: MeetingMicrophoneRole = .unknown
+    ) {
+        self.captureDeviceID = captureDeviceID
+        self.coreAudioUID = coreAudioUID
+        self.avCaptureDeviceID = avCaptureDeviceID
+        self.identitySchemaVersion = identitySchemaVersion
+        self.displayName = displayName
+        self.role = role
+    }
+}
+
+/// Pure decision for the new-meeting sheet's default microphone. Semantic ownership is legacy
+/// metadata only; all new selections are neutral.
+nonisolated enum MeetingMicrophonePreselection {
+    static func select(
+        identities: [MeetingMicrophoneIdentity],
+        savedDeviceID: String?,
+        savedRole: MeetingMicrophoneRole,
+        systemDefaultUID: String?,
+        preferredInputUID: String?,
+        systemDefaultCaptureID: String?
+    ) -> (deviceID: String?, role: MeetingMicrophoneRole) {
+        let matched = systemDefaultUID.flatMap { uid in
+            identities.first(where: { $0.coreAudioUID == uid })
+        } ?? preferredInputUID.flatMap { uid in
+            identities.first(where: { $0.coreAudioUID == uid })
+        } ?? systemDefaultCaptureID.flatMap { captureID in
+            identities.first(where: { $0.captureDeviceID == captureID })
+        } ?? identities.first
+
+        guard let matched else { return (nil, .unknown) }
+        _ = savedDeviceID
+        _ = savedRole
+        return (matched.captureDeviceID, .unknown)
+    }
+}
+
+nonisolated struct MeetingPlatformProfile: Codable, Equatable, Sendable {
+    var identifier: String
+    var displayName: String
+    var version: Int
+
+    init(identifier: String, displayName: String, version: Int = 1) {
+        self.identifier = identifier
+        self.displayName = displayName
+        self.version = version
+    }
+}
+
+nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
+    static let defaultChunkDuration: TimeInterval = 60
+
+    var mode: MeetingCaptureMode
+    var title: String
+    var languageCode: String
+    var platform: MeetingPlatformProfile?
+    var application: MeetingApplicationIdentity?
+    var microphone: MeetingMicrophoneIdentity
+    var chunkDuration: TimeInterval
+
+    init(
+        mode: MeetingCaptureMode,
+        title: String,
+        languageCode: String = "en",
+        platform: MeetingPlatformProfile? = nil,
+        application: MeetingApplicationIdentity? = nil,
+        microphone: MeetingMicrophoneIdentity,
+        chunkDuration: TimeInterval = Self.defaultChunkDuration
+    ) {
+        self.mode = mode
+        self.title = title
+        self.languageCode = languageCode
+        self.platform = platform
+        self.application = application
+        self.microphone = microphone
+        self.chunkDuration = max(60, chunkDuration)
+    }
+
+    func validate() throws {
+        guard self.languageCode == "en" else {
+            throw MeetingModelValidationError.unsupportedLanguage
+        }
+        guard !self.microphone.captureDeviceID.isEmpty else {
+            throw MeetingModelValidationError.missingMicrophone
+        }
+        switch (self.mode, self.application) {
+        case (.onlineCall, .none):
+            throw MeetingModelValidationError.missingOnlineApplication
+        case (.inRoom, .some):
+            throw MeetingModelValidationError.unexpectedInRoomApplication
+        case (.onlineCall, .some), (.inRoom, .none):
+            break
+        }
+    }
+}
+
+nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable, Sendable {
+    var value: Int64
+    var timescale: Int32
+
+    var seconds: TimeInterval {
+        guard self.timescale > 0 else { return 0 }
+        return TimeInterval(self.value) / TimeInterval(self.timescale)
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        lhs.seconds < rhs.seconds
+    }
+}
+
+nonisolated struct MeetingTimebaseMetadata: Codable, Equatable, Sendable {
+    var startedHostTime: UInt64
+    var machTimebaseNumerator: UInt32
+    var machTimebaseDenominator: UInt32
+    var firstPresentationTime: MeetingMediaTime?
+}
+
+nonisolated struct MeetingAudioFormat: Codable, Equatable, Sendable {
+    var codec: String
+    var sampleRate: Double
+    var channelCount: Int
+    var bitRate: Int?
+}
+
+nonisolated struct MeetingAudioDiscontinuity: Codable, Equatable, Sendable {
+    var kind: MeetingInterruptionKind
+    var presentationTime: MeetingMediaTime?
+    var gapSeconds: TimeInterval?
+    var detail: String?
+}
+
+nonisolated enum MeetingAudioChunkFinalizationState: String, Codable, Sendable {
+    case writing
+    case finalized
+    case failed
+}
+
+nonisolated struct MeetingAudioChunk: Codable, Identifiable, Equatable, Sendable {
+    var id: MeetingAudioChunkID
+    var sequence: Int
+    /// Relative to the session directory so sessions can be moved or exported safely.
+    var relativeFilePath: String
+    var presentationStart: MeetingMediaTime
+    var presentationEnd: MeetingMediaTime
+    var discontinuities: [MeetingAudioDiscontinuity]
+    var sha256: String
+    var byteCount: Int64
+    var finalizationState: MeetingAudioChunkFinalizationState
+    /// P0a additive metadata. Nil is deliberately omitted to preserve the legacy JSON shape.
+    /// Once a later activation writes these fields, old-build-read-new compatibility is not
+    /// claimed; this P0a slice writes none of them from production capture.
+    var audioSchemaVersion: Int? = nil
+    var captureAnalysisAsset: MeetingAudioAsset? = nil
+    var playbackArchiveAsset: MeetingAudioAsset? = nil
+
+    init(
+        id: MeetingAudioChunkID,
+        sequence: Int,
+        relativeFilePath: String,
+        presentationStart: MeetingMediaTime,
+        presentationEnd: MeetingMediaTime,
+        discontinuities: [MeetingAudioDiscontinuity],
+        sha256: String,
+        byteCount: Int64,
+        finalizationState: MeetingAudioChunkFinalizationState,
+        audioSchemaVersion: Int? = nil,
+        captureAnalysisAsset: MeetingAudioAsset? = nil,
+        playbackArchiveAsset: MeetingAudioAsset? = nil
+    ) {
+        self.id = id; self.sequence = sequence; self.relativeFilePath = relativeFilePath
+        self.presentationStart = presentationStart; self.presentationEnd = presentationEnd
+        self.discontinuities = discontinuities; self.sha256 = sha256; self.byteCount = byteCount
+        self.finalizationState = finalizationState; self.audioSchemaVersion = audioSchemaVersion
+        self.captureAnalysisAsset = captureAnalysisAsset; self.playbackArchiveAsset = playbackArchiveAsset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sequence, relativeFilePath, presentationStart, presentationEnd, discontinuities
+        case sha256, byteCount, finalizationState, audioSchemaVersion, captureAnalysisAsset, playbackArchiveAsset
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(MeetingAudioChunkID.self, forKey: .id)
+        self.sequence = try c.decode(Int.self, forKey: .sequence)
+        self.relativeFilePath = try c.decode(String.self, forKey: .relativeFilePath)
+        self.presentationStart = try c.decode(MeetingMediaTime.self, forKey: .presentationStart)
+        self.presentationEnd = try c.decode(MeetingMediaTime.self, forKey: .presentationEnd)
+        self.discontinuities = try c.decode([MeetingAudioDiscontinuity].self, forKey: .discontinuities)
+        self.sha256 = try c.decode(String.self, forKey: .sha256)
+        self.byteCount = try c.decode(Int64.self, forKey: .byteCount)
+        self.finalizationState = try c.decode(MeetingAudioChunkFinalizationState.self, forKey: .finalizationState)
+        self.audioSchemaVersion = try c.decodeIfPresent(Int.self, forKey: .audioSchemaVersion)
+        self.captureAnalysisAsset = try c.decodeIfPresent(MeetingAudioAsset.self, forKey: .captureAnalysisAsset)
+        self.playbackArchiveAsset = try c.decodeIfPresent(MeetingAudioAsset.self, forKey: .playbackArchiveAsset)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(self.id, forKey: .id); try c.encode(self.sequence, forKey: .sequence)
+        try c.encode(self.relativeFilePath, forKey: .relativeFilePath)
+        try c.encode(self.presentationStart, forKey: .presentationStart); try c.encode(self.presentationEnd, forKey: .presentationEnd)
+        try c.encode(self.discontinuities, forKey: .discontinuities); try c.encode(self.sha256, forKey: .sha256)
+        try c.encode(self.byteCount, forKey: .byteCount); try c.encode(self.finalizationState, forKey: .finalizationState)
+        try c.encodeIfPresent(self.audioSchemaVersion, forKey: .audioSchemaVersion)
+        try c.encodeIfPresent(self.captureAnalysisAsset, forKey: .captureAnalysisAsset)
+        try c.encodeIfPresent(self.playbackArchiveAsset, forKey: .playbackArchiveAsset)
+    }
+
+    func assetValidationIssues() -> [MeetingAudioAssetValidationIssue] {
+        var issues: [MeetingAudioAssetValidationIssue] = []
+        if let captureAnalysisAsset {
+            issues.append(contentsOf: captureAnalysisAsset.validationIssues())
+            if captureAnalysisAsset.role != .captureAnalysis {
+                issues.append(.encodingRoleContradiction)
+            }
+        }
+        if let playbackArchiveAsset {
+            issues.append(contentsOf: playbackArchiveAsset.validationIssues())
+            if playbackArchiveAsset.role != .playbackArchive {
+                issues.append(.encodingRoleContradiction)
+            }
+        }
+        return issues
+    }
+
+    func fileURL(relativeTo sessionDirectory: URL) -> URL {
+        sessionDirectory.appendingPathComponent(self.relativeFilePath, isDirectory: false)
+    }
+}
+
+nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
+    var status: MeetingTrackHealthStatus
+    var lastPresentationTime: MeetingMediaTime?
+    var lastSampleAt: Date?
+    var level: Float
+    var droppedSampleCount: Int
+    var detail: String?
+    /// Seconds of continuous below-threshold audio, derived from PTS durations. Optional so
+    /// pre-Phase-1c persisted manifests still decode.
+    var silentForSeconds: Double? = nil
+
+    static let waiting = Self(
+        status: .waiting,
+        lastPresentationTime: nil,
+        lastSampleAt: nil,
+        level: 0,
+        droppedSampleCount: 0,
+        detail: nil
+    )
+}
+
+nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
+    case screenCaptureKit
+    case avCaptureSession
+    case voiceProcessing
+}
+
+/// Whether microphone audio from a capture era is safe to use as speech evidence.
+/// This is deliberately independent of speaker identity or microphone ownership.
+nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
+    case voiceProcessed
+    case acousticallyClosed
+    /// Microphone PCM processed by the pinned WebRTC AEC3 bridge after clock attestation and
+    /// warm-up. This is software provenance, not a claim that the physical route is closed.
+    case softwareEchoCancelled
+    /// Pre-v9 audio that was historically transcribed without route evidence. It remains eligible
+    /// for backward compatibility, but must never be rewritten as positively verified protection.
+    case legacyUnclassified
+    case unprotected
+
+    var admitsTranscript: Bool {
+        self != .unprotected
+    }
+}
+
+nonisolated struct MeetingAECProvenance: Codable, Equatable, Sendable {
+    var upstreamRevision: String
+    var bridgeConfigurationID: String
+    var sampleRateHz: Int
+    var frameDurationMilliseconds: Int
+}
+
+nonisolated struct MeetingClockDriftRecord: Codable, Equatable, Sendable {
+    var cumulativeAbsorbedSeconds: Double
+    var elapsedValidHostSeconds: Double
+    var eligible: Bool
+}
+
+/// Provenance for one contiguous span of a track's capture. Absence of `captureEras` means single-era legacy.
+nonisolated struct MeetingCaptureEra: Codable, Equatable, Sendable {
+    var method: MeetingAudioTrackCaptureMethod
+    var deviceUID: String?
+    var deviceName: String?
+    var roleAtElection: MeetingMicrophoneRole
+    var echoProtection: MeetingMicrophoneEchoProtection = .unprotected
+    var startSeconds: Double
+    var settledConfig: MeetingMicrophoneSettledConfig? = nil
+    var clockDrift: MeetingClockDriftRecord? = nil
+    var aecProvenance: MeetingAECProvenance? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case method, deviceUID, deviceName, roleAtElection, echoProtection
+        case startSeconds, settledConfig, clockDrift, aecProvenance
+    }
+
+    init(
+        method: MeetingAudioTrackCaptureMethod,
+        deviceUID: String?,
+        deviceName: String?,
+        roleAtElection: MeetingMicrophoneRole,
+        echoProtection: MeetingMicrophoneEchoProtection = .unprotected,
+        startSeconds: Double,
+        settledConfig: MeetingMicrophoneSettledConfig? = nil,
+        clockDrift: MeetingClockDriftRecord? = nil,
+        aecProvenance: MeetingAECProvenance? = nil
+    ) {
+        self.method = method
+        self.deviceUID = deviceUID
+        self.deviceName = deviceName
+        self.roleAtElection = roleAtElection
+        self.echoProtection = echoProtection
+        self.startSeconds = startSeconds
+        self.settledConfig = settledConfig
+        self.clockDrift = clockDrift
+        self.aecProvenance = aecProvenance
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.method = try container.decode(MeetingAudioTrackCaptureMethod.self, forKey: .method)
+        self.deviceUID = try container.decodeIfPresent(String.self, forKey: .deviceUID)
+        self.deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+        self.roleAtElection = try container.decodeIfPresent(MeetingMicrophoneRole.self, forKey: .roleAtElection) ?? .unknown
+        let rawProtection = try container.decodeIfPresent(String.self, forKey: .echoProtection)
+        if let rawProtection {
+            self.echoProtection = MeetingMicrophoneEchoProtection(rawValue: rawProtection) ?? .unprotected
+        } else {
+            // Version-8 manifests predate echo-admission metadata and were already eligible for
+            // transcription. Preserve eligibility without laundering unknown provenance into a
+            // positive closed-route assertion when the manifest is written again.
+            self.echoProtection = self.method == .voiceProcessing ? .voiceProcessed : .legacyUnclassified
+        }
+        self.startSeconds = try container.decode(Double.self, forKey: .startSeconds)
+        self.settledConfig = try container.decodeIfPresent(MeetingMicrophoneSettledConfig.self, forKey: .settledConfig)
+        self.clockDrift = try container.decodeIfPresent(MeetingClockDriftRecord.self, forKey: .clockDrift)
+        self.aecProvenance = try container.decodeIfPresent(MeetingAECProvenance.self, forKey: .aecProvenance)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.method, forKey: .method)
+        try container.encodeIfPresent(self.deviceUID, forKey: .deviceUID)
+        try container.encodeIfPresent(self.deviceName, forKey: .deviceName)
+        try container.encode(self.roleAtElection, forKey: .roleAtElection)
+        try container.encode(self.echoProtection, forKey: .echoProtection)
+        try container.encode(self.startSeconds, forKey: .startSeconds)
+        try container.encodeIfPresent(self.settledConfig, forKey: .settledConfig)
+        try container.encodeIfPresent(self.clockDrift, forKey: .clockDrift)
+        try container.encodeIfPresent(self.aecProvenance, forKey: .aecProvenance)
+    }
+}
+
+/// Consumes and discards one malformed `captureEras` array element.
+private struct MeetingCaptureEraSkippedElement: Decodable {}
+
+/// Applied ONLY to emitted turn boundaries, never to raw `chunkOffset`. `k = 1 + cumulative/elapsed`:
+/// for a fast mic `cumulativeAbsorbedSeconds` is negative, so `k < 1` compresses the timeline.
+nonisolated enum MeetingMicrophoneDeDrift {
+    static let materialityThresholdSeconds: Double = 0.005
+    static let maxAbsolutePPM: Double = 100
+
+    /// Era-scoped: applies the era's own drift record within its span; `era.startSeconds` must already be origin-relative.
+    static func correct(_ t: Double, era: MeetingCaptureEra, eraEndRelative: Double?) -> Double {
+        guard era.method == .voiceProcessing,
+              let drift = era.clockDrift, drift.eligible,
+              drift.elapsedValidHostSeconds > 0
+        else { return t }
+        let eraStartRelative = era.startSeconds
+        guard t >= eraStartRelative, eraEndRelative.map({ t < $0 }) ?? true else { return t }
+        let fraction = drift.cumulativeAbsorbedSeconds / drift.elapsedValidHostSeconds
+        guard abs(drift.cumulativeAbsorbedSeconds) > Self.materialityThresholdSeconds,
+              abs(fraction) * 1_000_000 < Self.maxAbsolutePPM
+        else { return t }
+        return eraStartRelative + (t - eraStartRelative) * (1 + fraction)
+    }
+}
+
+nonisolated struct MeetingAudioTrack: Identifiable, Equatable, Sendable {
+    var id: MeetingAudioTrackID
+    var kind: MeetingAudioTrackKind
+    var sourceIdentifier: String
+    var sourceDisplayName: String
+    var format: MeetingAudioFormat?
+    var timebase: MeetingTimebaseMetadata
+    var health: MeetingTrackHealth
+    var chunks: [MeetingAudioChunk]
+    var captureMethod: MeetingAudioTrackCaptureMethod? = nil
+    var voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil
+    var clockDrift: MeetingClockDriftRecord? = nil
+    /// Ordered. PERSISTED startSeconds mixes domains: index 0 stores 0, eras 1+ store raw PTS
+    /// seconds — readers must go through the pipeline's microphoneEras(for:origin:), which
+    /// normalizes to origin-relative. Absence means single-era legacy.
+    var captureEras: [MeetingCaptureEra]? = nil
+
+    init(
+        id: MeetingAudioTrackID,
+        kind: MeetingAudioTrackKind,
+        sourceIdentifier: String,
+        sourceDisplayName: String,
+        format: MeetingAudioFormat?,
+        timebase: MeetingTimebaseMetadata,
+        health: MeetingTrackHealth,
+        chunks: [MeetingAudioChunk],
+        captureMethod: MeetingAudioTrackCaptureMethod? = nil,
+        voiceProcessingConfig: MeetingMicrophoneSettledConfig? = nil,
+        clockDrift: MeetingClockDriftRecord? = nil,
+        captureEras: [MeetingCaptureEra]? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.sourceIdentifier = sourceIdentifier
+        self.sourceDisplayName = sourceDisplayName
+        self.format = format
+        self.timebase = timebase
+        self.health = health
+        self.chunks = chunks
+        self.captureMethod = captureMethod
+        self.voiceProcessingConfig = voiceProcessingConfig
+        self.clockDrift = clockDrift
+        self.captureEras = captureEras
+    }
+}
+
+extension MeetingAudioTrack: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, sourceIdentifier, sourceDisplayName, format, timebase, health, chunks
+        case captureMethod, voiceProcessingConfig, clockDrift, captureEras
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(MeetingAudioTrackID.self, forKey: .id)
+        self.kind = try container.decode(MeetingAudioTrackKind.self, forKey: .kind)
+        self.sourceIdentifier = try container.decode(String.self, forKey: .sourceIdentifier)
+        self.sourceDisplayName = try container.decode(String.self, forKey: .sourceDisplayName)
+        self.format = try container.decodeIfPresent(MeetingAudioFormat.self, forKey: .format)
+        self.timebase = try container.decode(MeetingTimebaseMetadata.self, forKey: .timebase)
+        self.health = try container.decode(MeetingTrackHealth.self, forKey: .health)
+        self.chunks = try container.decode([MeetingAudioChunk].self, forKey: .chunks)
+        // Tolerant: an unrecognized raw value decodes to nil instead of failing the whole session.
+        let captureMethodRaw = try container.decodeIfPresent(String.self, forKey: .captureMethod)
+        self.captureMethod = captureMethodRaw.flatMap(MeetingAudioTrackCaptureMethod.init(rawValue:))
+        self.voiceProcessingConfig = try container.decodeIfPresent(MeetingMicrophoneSettledConfig.self, forKey: .voiceProcessingConfig)
+        self.clockDrift = try container.decodeIfPresent(MeetingClockDriftRecord.self, forKey: .clockDrift)
+        self.captureEras = try Self.decodeTolerantCaptureEras(container: container, key: .captureEras)
+    }
+
+    /// An unrecognized era `method` skips that era rather than failing the whole session decode.
+    private static func decodeTolerantCaptureEras(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) throws -> [MeetingCaptureEra]? {
+        guard container.contains(key) else { return nil }
+        var unkeyed = try container.nestedUnkeyedContainer(forKey: key)
+        var eras: [MeetingCaptureEra] = []
+        var encounteredMalformedEra = false
+        while !unkeyed.isAtEnd {
+            if let era = try? unkeyed.decode(MeetingCaptureEra.self) {
+                eras.append(era)
+            } else {
+                encounteredMalformedEra = true
+                _ = try? unkeyed.decode(MeetingCaptureEraSkippedElement.self)
+            }
+        }
+        if encounteredMalformedEra {
+            // Skipping an unknown middle era would let a neighbouring protected era extend across
+            // an interval whose safety is unknowable. Fail closed for the complete legacy track.
+            return [MeetingCaptureEra(
+                method: .avCaptureSession,
+                deviceUID: nil,
+                deviceName: nil,
+                roleAtElection: .unknown,
+                echoProtection: .unprotected,
+                startSeconds: 0
+            )]
+        }
+        return eras
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.kind, forKey: .kind)
+        try container.encode(self.sourceIdentifier, forKey: .sourceIdentifier)
+        try container.encode(self.sourceDisplayName, forKey: .sourceDisplayName)
+        try container.encodeIfPresent(self.format, forKey: .format)
+        try container.encode(self.timebase, forKey: .timebase)
+        try container.encode(self.health, forKey: .health)
+        try container.encode(self.chunks, forKey: .chunks)
+        try container.encodeIfPresent(self.captureMethod, forKey: .captureMethod)
+        try container.encodeIfPresent(self.voiceProcessingConfig, forKey: .voiceProcessingConfig)
+        try container.encodeIfPresent(self.clockDrift, forKey: .clockDrift)
+        try container.encodeIfPresent(self.captureEras, forKey: .captureEras)
+    }
+}
+
+nonisolated struct MeetingSessionEvent: Codable, Identifiable, Equatable, Sendable {
+    var id: UUID
+    var occurredAt: Date
+    var kind: MeetingInterruptionKind
+    var trackID: MeetingAudioTrackID?
+    var detail: String?
+}
+
+nonisolated struct MeetingSessionFailure: Codable, Identifiable, Equatable, Sendable {
+    var id: UUID
+    var occurredAt: Date
+    var domain: MeetingFailureDomain
+    var code: String
+    var message: String
+    var recoverable: Bool
+}
+
+nonisolated struct MeetingIdentityCandidate: Codable, Identifiable, Equatable, Sendable {
+    var id: UUID
+    var displayName: String
+    var source: String
+    var rejected: Bool
+    var confirmedAt: Date?
+}
+
+nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Sendable {
+    var id: SessionSpeakerID
+    var displayName: String
+    var diarizationClusterID: String?
+    // Optional keeps older session manifests decodable after this additive field.
+    // swiftlint:disable:next discouraged_optional_collection
+    var diarizationEmbedding: [Float]? = nil
+    var diarizationEmbeddingObservationCount: Int? = nil
+    var diarizationQuality: Float? = nil
+    var trackKind: MeetingAudioTrackKind
+    var isLocalUser: Bool
+    var identityCandidates: [MeetingIdentityCandidate]
+    /// Set when this speaker was merged into another; the speaker is kept (not removed) so
+    /// embedding/cluster provenance survives for M3. Optional keeps older manifests decodable.
+    var mergedIntoSpeakerID: SessionSpeakerID? = nil
+}
+
+nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, Sendable {
+    var id: MeetingTranscriptSegmentID
+    var start: MeetingMediaTime
+    var end: MeetingMediaTime
+    var sourceTrackID: MeetingAudioTrackID
+    var speakerID: SessionSpeakerID?
+    var text: String
+    var revision: Int
+    var status: MeetingTranscriptStatus
+    var overlap: MeetingTranscriptOverlap
+    var completeness: MeetingTranscriptCompleteness
+    /// Optional so pre-fix manifests still decode; a non-optional default would `keyNotFound`.
+    var isLikelyEcho: Bool? = nil
+    /// Optional so pre-fix manifests still decode; a non-optional default would `keyNotFound`.
+    var attributionState: MeetingTranscriptAttributionState? = nil
+
+    var isEcho: Bool {
+        self.isLikelyEcho == true
+    }
+}
+
+/// Persisted product transcript timestamps are elapsed seconds from the meeting's presentation
+/// origin. Optional on `MeetingSession` so legacy sessions and canonical sessions written before
+/// the contract was explicit remain decodable and can be handled separately.
+nonisolated enum MeetingTranscriptTimeDomain: String, Codable, Sendable {
+    case meetingRelative
+}
+
+nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, Sendable {
+    var id: UUID
+    var startedAt: Date
+    var completedAt: Date?
+    var stage: MeetingProcessingStage
+    var pipelineVersion: Int
+    var asrProvider: String?
+    var asrModel: String?
+    var languageCode: String? = nil
+    var diarizationModel: String?
+    var lastCompletedTrackID: MeetingAudioTrackID?
+    var errorCode: String?
+    /// Actual backend lineage for canonical attempts. Optional so attempts recorded before the
+    /// backend abstraction existed decode unchanged; legacy attempts leave these nil.
+    var backendID: String? = nil
+    var backendVersion: String? = nil
+}
+
+nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
+    var audioDeletedAt: Date?
+    var meetingDeletedAt: Date?
+    var retainAudioUntil: Date?
+}
+
+/// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
+/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
+nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
+    case afterTranscription
+    case days7
+    case days30
+    case never
+
+    var displayName: String {
+        switch self {
+        case .afterTranscription: return "After transcription"
+        case .days7: return "7 days"
+        case .days30: return "30 days"
+        case .never: return "Forever"
+        }
+    }
+
+    var retentionDays: Int? {
+        switch self {
+        case .days7: return 7
+        case .days30: return 30
+        case .afterTranscription, .never: return nil
+        }
+    }
+
+    func deadline(endedAt: Date?, startedAt: Date) -> Date? {
+        let completedAt = endedAt ?? startedAt
+        if self == .afterTranscription { return completedAt }
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: completedAt)
+    }
+
+    /// Informational display value only; sweep deadlines always come from `deadline(endedAt:startedAt:)`.
+    func retainUntil(startedAt: Date) -> Date? {
+        guard let retentionDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: retentionDays, to: startedAt)
+    }
+}
+
+nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
+    var id: MeetingSessionID
+    var title: String
+    var languageCode: String
+    var mode: MeetingCaptureMode
+    var platform: MeetingPlatformProfile?
+    var capturedApplication: MeetingApplicationIdentity?
+    var selectedMicrophone: MeetingMicrophoneIdentity
+    var startedAt: Date
+    var endedAt: Date?
+    var timebase: MeetingTimebaseMetadata
+    var state: MeetingSessionState
+    var events: [MeetingSessionEvent]
+    var failures: [MeetingSessionFailure]
+    var audioTracks: [MeetingAudioTrack]
+    var speakers: [MeetingSessionSpeaker]
+    var transcriptSegments: [MeetingTranscriptSegment]
+    /// Audio intervals intentionally excluded from the transcript. Optional for schema-1 sessions.
+    var transcriptCoverageGaps: [MeetingTranscriptCoverageGap]? = nil
+    /// Verified reference to the canonical attempt's durable result sidecar inside this session's
+    /// directory. Optional and backward compatible: sessions written before canonical publication
+    /// decode `nil`. Retention and deletion follow the session directory itself.
+    var resultSidecarReference: MeetingResultSidecarReference? = nil
+    /// Canonical transcript completeness. `nil` for older and legacy sessions whose existing
+    /// completeness semantics remain unchanged.
+    var transcriptIsComplete: Bool? = nil
+    /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
+    /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
+    var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
+    var retention: MeetingRetentionState
+    var processingAttempts: [MeetingProcessingAttempt]
+    var updatedAt: Date
+    /// Set when the user dismisses a recoverable session so it is not re-offered on next launch.
+    /// Optional so pre-M2 persisted manifests still decode.
+    var recoveryResolvedAt: Date? = nil
+
+    init(
+        id: MeetingSessionID = UUID(),
+        configuration: MeetingCaptureConfiguration,
+        startedAt: Date = Date(),
+        timebase: MeetingTimebaseMetadata
+    ) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.id = id
+        self.title = configuration.title
+        self.languageCode = configuration.languageCode
+        self.mode = configuration.mode
+        self.platform = configuration.platform
+        self.capturedApplication = configuration.application
+        self.selectedMicrophone = configuration.microphone
+        self.startedAt = startedAt
+        self.timebase = timebase
+        self.state = .preparing
+        self.events = []
+        self.failures = []
+        self.audioTracks = []
+        self.speakers = []
+        self.transcriptSegments = []
+        self.transcriptCoverageGaps = nil
+        // Informational; coordinator stamps it post-init from the current policy.
+        self.retention = MeetingRetentionState(
+            audioDeletedAt: nil,
+            meetingDeletedAt: nil,
+            retainAudioUntil: nil
+        )
+        self.processingAttempts = []
+        self.updatedAt = startedAt
+    }
+
+    var duration: TimeInterval {
+        (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
+    }
+
+    /// Speakers not merged away into another speaker — the set the UI should render.
+    var activeSpeakers: [MeetingSessionSpeaker] {
+        self.speakers.filter { $0.mergedIntoSpeakerID == nil }
+    }
+
+    mutating func renameSpeaker(id: SessionSpeakerID, to displayName: String) throws {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptySpeakerName }
+        guard let index = self.speakers.firstIndex(where: { $0.id == id }),
+              self.speakers[index].mergedIntoSpeakerID == nil
+        else {
+            throw MeetingDomainError.speakerNotFound
+        }
+        guard self.speakers[index].displayName != trimmed else { return }
+        self.speakers[index].displayName = trimmed
+        self.updatedAt = Date()
+    }
+
+    mutating func reassignSegment(id: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) throws {
+        guard let segmentIndex = self.transcriptSegments.firstIndex(where: { $0.id == id }) else {
+            throw MeetingDomainError.segmentNotFound
+        }
+        guard let target = self.speakers.first(where: { $0.id == speakerID }),
+              target.mergedIntoSpeakerID == nil
+        else {
+            throw MeetingDomainError.speakerNotFound
+        }
+        guard self.transcriptSegments[segmentIndex].speakerID != speakerID else { return }
+        self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].attributionState = .assigned
+        self.transcriptSegments[segmentIndex].overlap = .none
+        self.transcriptSegments[segmentIndex].revision += 1
+        self.updatedAt = Date()
+    }
+
+    /// Gives one unresolved segment its own manual speaker identity. The identity is intentionally
+    /// scoped to this segment: naming one unknown must never rename or relabel another unknown.
+    @discardableResult
+    mutating func nameUnknownSegment(
+        id: MeetingTranscriptSegmentID,
+        displayName: String
+    ) throws -> SessionSpeakerID {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw MeetingDomainError.emptySpeakerName }
+        guard let segmentIndex = self.transcriptSegments.firstIndex(where: { $0.id == id }) else {
+            throw MeetingDomainError.segmentNotFound
+        }
+        guard self.transcriptSegments[segmentIndex].speakerID == nil else {
+            throw MeetingDomainError.segmentAlreadyAssigned
+        }
+        guard let trackKind = self.audioTracks.first(where: {
+            $0.id == self.transcriptSegments[segmentIndex].sourceTrackID
+        })?.kind else {
+            throw MeetingDomainError.segmentTrackNotFound
+        }
+
+        let speakerID = UUID()
+        self.speakers.append(MeetingSessionSpeaker(
+            id: speakerID,
+            displayName: trimmed,
+            diarizationClusterID: nil,
+            trackKind: trackKind,
+            isLocalUser: false,
+            identityCandidates: []
+        ))
+        self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].overlap = .none
+        self.transcriptSegments[segmentIndex].attributionState = .assigned
+        self.transcriptSegments[segmentIndex].revision += 1
+        self.updatedAt = Date()
+        return speakerID
+    }
+
+    mutating func mergeSpeakers(_ sourceID: SessionSpeakerID, into targetID: SessionSpeakerID) throws {
+        guard sourceID != targetID else { throw MeetingDomainError.cannotMergeSpeakerWithItself }
+        guard let sourceIndex = self.speakers.firstIndex(where: { $0.id == sourceID }),
+              self.speakers[sourceIndex].mergedIntoSpeakerID == nil,
+              let targetIndex = self.speakers.firstIndex(where: { $0.id == targetID }),
+              self.speakers[targetIndex].mergedIntoSpeakerID == nil
+        else {
+            throw MeetingDomainError.speakerNotFound
+        }
+        let source = self.speakers[sourceIndex]
+        let target = self.speakers[targetIndex]
+        guard !source.isLocalUser, !target.isLocalUser, source.trackKind == target.trackKind else {
+            throw MeetingDomainError.cannotMergeSpeakers
+        }
+        for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
+            self.transcriptSegments[index].speakerID = targetID
+            self.transcriptSegments[index].revision += 1
+        }
+        self.speakers[sourceIndex].mergedIntoSpeakerID = targetID
+        self.updatedAt = Date()
+    }
+
+    func validateForPersistence() throws {
+        guard self.schemaVersion > 0,
+              self.schemaVersion <= Self.currentSchemaVersion
+        else {
+            throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
+        }
+        guard self.languageCode == "en" else {
+            throw MeetingModelValidationError.unsupportedLanguage
+        }
+        guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
+            throw MeetingModelValidationError.missingMicrophone
+        }
+        if let endedAt = self.endedAt, endedAt < self.startedAt {
+            throw MeetingModelValidationError.invalidTimeRange
+        }
+        guard self.timebase.machTimebaseDenominator > 0 else {
+            throw MeetingModelValidationError.invalidTimebase
+        }
+        switch (self.mode, self.capturedApplication) {
+        case (.onlineCall, .none):
+            throw MeetingModelValidationError.missingOnlineApplication
+        case (.inRoom, .some):
+            throw MeetingModelValidationError.unexpectedInRoomApplication
+        case (.onlineCall, .some), (.inRoom, .none):
+            break
+        }
+
+        let trackIDs = Set(self.audioTracks.map(\.id))
+        guard trackIDs.count == self.audioTracks.count else {
+            throw MeetingModelValidationError.duplicateTrackID
+        }
+        let trackKinds = self.audioTracks.map(\.kind)
+        guard Set(trackKinds).count == trackKinds.count else {
+            throw MeetingModelValidationError.duplicateTrackKind
+        }
+        if [.recording, .recordingDegraded, .stopping, .processing, .completed, .interrupted]
+            .contains(self.state)
+        {
+            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode == .onlineCall
+                ? [.applicationAudio, .microphone]
+                : [.microphone]
+            guard Set(trackKinds) == expectedKinds else {
+                throw MeetingModelValidationError.invalidTrackSet
+            }
+        }
+
+        var chunkIDs = Set<MeetingAudioChunkID>()
+        for track in self.audioTracks {
+            let sequences = track.chunks.map(\.sequence)
+            guard sequences == Array(0..<sequences.count) else {
+                throw MeetingModelValidationError.invalidChunkSequence
+            }
+            if let format = track.format,
+               format.sampleRate <= 0 || format.channelCount <= 0
+            {
+                throw MeetingModelValidationError.invalidAudioFormat
+            }
+            if let firstPresentationTime = track.timebase.firstPresentationTime {
+                try Self.validateMediaTime(firstPresentationTime)
+            }
+            if let lastPresentationTime = track.health.lastPresentationTime {
+                try Self.validateMediaTime(lastPresentationTime)
+            }
+            for chunk in track.chunks {
+                guard chunkIDs.insert(chunk.id).inserted else {
+                    throw MeetingModelValidationError.duplicateChunkID
+                }
+                try Self.validateMediaTime(chunk.presentationStart)
+                try Self.validateMediaTime(chunk.presentationEnd)
+                guard chunk.presentationEnd >= chunk.presentationStart else {
+                    throw MeetingModelValidationError.invalidTimeRange
+                }
+                let pathComponents = URL(fileURLWithPath: chunk.relativeFilePath).pathComponents
+                guard !chunk.relativeFilePath.hasPrefix("/"), !pathComponents.contains("..") else {
+                    throw MeetingModelValidationError.invalidRelativePath
+                }
+                for discontinuity in chunk.discontinuities {
+                    if let presentationTime = discontinuity.presentationTime {
+                        try Self.validateMediaTime(presentationTime)
+                    }
+                }
+                if chunk.finalizationState == .finalized {
+                    guard !chunk.sha256.isEmpty, chunk.byteCount > 0 else {
+                        throw MeetingModelValidationError.incompleteFinalizedChunk
+                    }
+                }
+            }
+        }
+        if let firstPresentationTime = self.timebase.firstPresentationTime {
+            try Self.validateMediaTime(firstPresentationTime)
+        }
+
+        let speakerIDs = Set(self.speakers.map(\.id))
+        guard speakerIDs.count == self.speakers.count else {
+            throw MeetingModelValidationError.duplicateSpeakerID
+        }
+        let segmentIDs = Set(self.transcriptSegments.map(\.id))
+        guard segmentIDs.count == self.transcriptSegments.count else {
+            throw MeetingModelValidationError.duplicateSegmentID
+        }
+        for segment in self.transcriptSegments {
+            try Self.validateMediaTime(segment.start)
+            try Self.validateMediaTime(segment.end)
+            guard segment.end >= segment.start else {
+                throw MeetingModelValidationError.invalidTimeRange
+            }
+            guard trackIDs.contains(segment.sourceTrackID) else {
+                throw MeetingModelValidationError.missingSegmentTrack
+            }
+            if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
+                throw MeetingModelValidationError.missingSegmentSpeaker
+            }
+        }
+        for attempt in self.processingAttempts {
+            if let languageCode = attempt.languageCode,
+               languageCode != self.languageCode
+            {
+                throw MeetingModelValidationError.unsupportedLanguage
+            }
+        }
+    }
+
+    private static func validateMediaTime(_ time: MeetingMediaTime) throws {
+        guard time.timescale > 0 else {
+            throw MeetingModelValidationError.invalidMediaTimescale
+        }
+    }
+}
+
+extension MeetingSession {
+    var hasFinalizedAudio: Bool {
+        self.audioTracks.contains { track in
+            track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
+        }
+    }
+
+    /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
+    var hasRetryableAudio: Bool {
+        self.retention.audioDeletedAt == nil && self.endedAt != nil && self.hasFinalizedAudio
+    }
+}
+
+nonisolated enum MeetingDomainError: LocalizedError, Equatable {
+    case emptySpeakerName
+    case speakerNotFound
+    case segmentNotFound
+    case segmentAlreadyAssigned
+    case segmentTrackNotFound
+    case cannotMergeSpeakerWithItself
+    case cannotMergeSpeakers
+    case emptyMeetingTitle
+
+    var errorDescription: String? {
+        switch self {
+        case .emptySpeakerName:
+            return "Speaker name cannot be empty."
+        case .speakerNotFound:
+            return "The speaker is no longer part of this meeting."
+        case .segmentNotFound:
+            return "This transcript line is no longer part of the meeting."
+        case .segmentAlreadyAssigned:
+            return "This transcript line already has a speaker."
+        case .segmentTrackNotFound:
+            return "The transcript line's audio track is no longer available."
+        case .cannotMergeSpeakerWithItself:
+            return "A speaker can't be merged into itself."
+        case .cannotMergeSpeakers:
+            return "These speakers can't be merged."
+        case .emptyMeetingTitle:
+            return "Meeting title cannot be empty."
+        }
+    }
+}
+
+nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
+    case unsupportedSchema(Int)
+    case unsupportedLanguage
+    case missingMicrophone
+    case missingOnlineApplication
+    case unexpectedInRoomApplication
+    case duplicateTrackID
+    case duplicateTrackKind
+    case invalidTrackSet
+    case invalidChunkSequence
+    case duplicateChunkID
+    case invalidTimeRange
+    case invalidMediaTimescale
+    case invalidTimebase
+    case invalidAudioFormat
+    case invalidRelativePath
+    case incompleteFinalizedChunk
+    case duplicateSpeakerID
+    case duplicateSegmentID
+    case missingSegmentTrack
+    case missingSegmentSpeaker
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupportedSchema(version):
+            return "Unsupported meeting schema version \(version)."
+        case .unsupportedLanguage:
+            return "Meeting transcription currently supports English only."
+        case .missingMicrophone:
+            return "A microphone must be selected."
+        case .missingOnlineApplication:
+            return "An online meeting application must be selected."
+        case .unexpectedInRoomApplication:
+            return "In-room meetings cannot include an application-audio source."
+        case .duplicateTrackID, .duplicateTrackKind, .invalidTrackSet:
+            return "The meeting has an invalid audio track manifest."
+        case .invalidChunkSequence, .duplicateChunkID, .invalidTimeRange, .invalidMediaTimescale,
+             .invalidTimebase, .invalidAudioFormat, .invalidRelativePath, .incompleteFinalizedChunk:
+            return "The meeting has an invalid audio chunk manifest."
+        case .duplicateSpeakerID, .duplicateSegmentID, .missingSegmentTrack, .missingSegmentSpeaker:
+            return "The meeting transcript contains invalid references."
+        }
+    }
+}
+
+/// Resumed by the coordinator once its MainActor work lands, before the upgrade opens the gate.
+final nonisolated class MeetingCaptureMethodChangeAck: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var resumedEarly = false
+
+    /// Bounded: a dropped event (generation guard) never resumes, and an unbounded wait would deadlock the transition.
+    func wait(timeoutSeconds: Double = 2.0) async {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+            self?.resume()
+        }
+        await withCheckedContinuation { continuation in
+            let shouldResumeNow = self.lock.withLock { () -> Bool in
+                if self.resumedEarly { return true }
+                self.continuation = continuation
+                return false
+            }
+            if shouldResumeNow { continuation.resume() }
+        }
+        timeoutTask.cancel()
+    }
+
+    func resume() {
+        let pending = self.lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { self.resumedEarly = true }
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        pending?.resume()
+    }
+}
+
+nonisolated enum MeetingCaptureEvent: Sendable {
+    case trackHealth(trackID: MeetingAudioTrackID, health: MeetingTrackHealth)
+    case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
+    case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
+    case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
+}
+
+/// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
+/// ScreenCaptureKit stream at all (in-room microphone-only capture).
+nonisolated enum MeetingCaptureScope: Sendable {
+    case display
+    case window
+}
+
+nonisolated struct MeetingCaptureStartResult: Sendable {
+    var tracks: [MeetingAudioTrack]
+    var firstPresentationTime: MeetingMediaTime?
+    var captureScope: MeetingCaptureScope? = nil
+}
+
+nonisolated struct MeetingCaptureStopResult: Sendable {
+    var tracks: [MeetingAudioTrack]
+    var stoppedAt: Date
+}
+
+nonisolated struct MeetingProcessingResult: Sendable {
+    var speakers: [MeetingSessionSpeaker]
+    var segments: [MeetingTranscriptSegment]
+    var attempt: MeetingProcessingAttempt
+    var skippedChunkIDs: [MeetingAudioChunkID] = []
+    var coverageGaps: [MeetingTranscriptCoverageGap] = []
+    /// Present only on the canonical path: the sidecar was written and read-back verified before
+    /// this result was returned, so the coordinator may persist the reference with the session.
+    var resultSidecarReference: MeetingResultSidecarReference? = nil
+    var isComplete: Bool = true
+}
+
+/// Resume point written after the application-audio pass so a retry can skip re-diarizing and
+/// re-transcribing that track. `trackFingerprints` cover every track's finalized, byteCount>0
+/// chunks (origin depends on all chunks), but deliberately NOT `embeddingIndexByTrack`: only the
+/// microphone pass reads `embeddingIndexByTrack[.microphone]`, so a resumed run keeps the
+/// embeddings already stored on `MeetingSessionSpeaker` instead of rebuilding that index.
+/// No pipelineVersion bump for batch de-drift: this checkpoint snapshots only the application-audio
+/// pass; the mic pass re-derives its correction deterministically from `clockDrift` every run.
+nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
+    static let currentVersion = 2
+
+    /// Immutable identity of the diarization implementation used to produce persisted speaker
+    /// state. A dependency or configuration change must update this value so stale checkpoints
+    /// cannot be resumed with different clustering behavior.
+    static let currentDiarizationFingerprint =
+        "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;config=community-default-v1"
+
+    nonisolated struct ChunkFingerprint: Codable, Equatable, Sendable {
+        var id: MeetingAudioChunkID
+        var byteCount: Int64
+        var sha256: String
+    }
+
+    nonisolated struct SpeechInterval: Codable, Equatable, Sendable {
+        var start: TimeInterval
+        var end: TimeInterval
+    }
+
+    var version: Int
+    var sessionID: MeetingSessionID
+    var pipelineVersion: Int
+    var asrProvider: String
+    var asrModel: String
+    var languageCode: String
+    var diarizationFingerprint: String
+    var completedTrackID: MeetingAudioTrackID
+    var trackFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
+    var speakers: [MeetingSessionSpeaker]
+    var segments: [MeetingTranscriptSegment]
+    var remoteSpeech: [SpeechInterval]
+    var speakerIDByKey: [String: SessionSpeakerID]
+    var nextRemoteSpeaker: Int
+    var nextMicrophoneSpeaker: Int
+
+    static func fingerprints(for tracks: [MeetingAudioTrack]) -> [MeetingAudioTrackID: [ChunkFingerprint]] {
+        Dictionary(uniqueKeysWithValues: tracks.map { track in
+            (
+                track.id,
+                track.chunks
+                    .filter { $0.finalizationState == .finalized && $0.byteCount > 0 }
+                    .map { ChunkFingerprint(id: $0.id, byteCount: $0.byteCount, sha256: $0.sha256) }
+            )
+        })
+    }
+
+    func isValid(
+        session: MeetingSession,
+        pipelineVersion: Int,
+        provider: String,
+        model: String,
+        language: String,
+        diarizationFingerprint: String = Self.currentDiarizationFingerprint,
+        completedTrackID: MeetingAudioTrackID,
+        expectedFingerprints: [MeetingAudioTrackID: [ChunkFingerprint]]
+    ) -> Bool {
+        self.version == Self.currentVersion
+            && self.sessionID == session.id
+            && self.pipelineVersion == pipelineVersion
+            && self.asrProvider == provider
+            && self.asrModel == model
+            && self.languageCode == language
+            && self.diarizationFingerprint == diarizationFingerprint
+            && self.completedTrackID == completedTrackID
+            && self.trackFingerprints == expectedFingerprints
+    }
+}

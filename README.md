@@ -212,8 +212,8 @@ fallback:
 ./build.sh unsigned
 ```
 
-Unsigned builds are tied to a specific executable version and may require Accessibility
-permission to be removed and granted again after rebuilding.
+Unsigned builds are tied to a specific executable version and may require Accessibility,
+Screen Recording, and microphone permissions to be removed and granted again after rebuilding.
 
 ---
 
