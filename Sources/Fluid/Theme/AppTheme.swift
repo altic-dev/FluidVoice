@@ -112,7 +112,8 @@ struct AppTheme {
             let opacity: Double
 
             static func subtle(color: Color, opacity: Double = 0.45) -> Shadow {
-                Shadow(color: color, radius: 12, x: 0, y: 6, opacity: opacity)
+                // Wide and low: reads as ambient depth rather than a hard drop.
+                Shadow(color: color, radius: 18, x: 0, y: 4, opacity: opacity)
             }
         }
 
@@ -317,8 +318,8 @@ struct AppTheme {
                 cardSurface: .defaults,
                 onboardingSurface: .standard,
                 window: .standard,
-                cardShadow: .subtle(color: .black, opacity: 0.18),
-                elevatedCardShadow: .subtle(color: .black, opacity: 0.22)
+                cardShadow: .subtle(color: .black, opacity: 0.12),
+                elevatedCardShadow: .subtle(color: .black, opacity: 0.16)
             ),
             materials: Materials(
                 window: .thinMaterial,
@@ -360,8 +361,8 @@ struct AppTheme {
                 cardSurface: .defaults,
                 onboardingSurface: .standard,
                 window: .standard,
-                cardShadow: .subtle(color: .black, opacity: 0.70),
-                elevatedCardShadow: .subtle(color: .black, opacity: 0.80)
+                cardShadow: .subtle(color: .black, opacity: 0.45),
+                elevatedCardShadow: .subtle(color: .black, opacity: 0.55)
             ),
             materials: Materials(
                 window: .thinMaterial,
