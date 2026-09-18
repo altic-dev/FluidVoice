@@ -140,11 +140,12 @@ struct FluidOnboardingLandingBackdrop: View {
                 endRadius: 520
             )
         }
-        .mask {
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .inset(by: 14)
-                .fill(.white)
-                .blur(radius: 20)
+        // A crisp card edge: the old feathered mask let the window's rectangle show through
+        // the fade, which read as a second, uglier boundary on light desktops.
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
         }
         .ignoresSafeArea()
     }
@@ -163,7 +164,10 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         let isOpaque: Bool
         let backgroundColor: NSColor
         let hasShadow: Bool
+        let hiddenButtons: [NSWindow.ButtonType: Bool]
     }
+
+    private static let windowButtons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
 
     private weak var observedWindow: NSWindow?
     private var snapshot: WindowSnapshot?
@@ -188,13 +192,20 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
             self.snapshot = WindowSnapshot(
                 isOpaque: window.isOpaque,
                 backgroundColor: window.backgroundColor,
-                hasShadow: window.hasShadow
+                hasShadow: window.hasShadow,
+                hiddenButtons: Dictionary(uniqueKeysWithValues: Self.windowButtons.map {
+                    ($0, window.standardWindowButton($0)?.isHidden ?? false)
+                })
             )
         }
 
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = false
+        window.hasShadow = true
+        // Onboarding is a single guided flow; the traffic lights only break the card illusion.
+        for button in Self.windowButtons {
+            window.standardWindowButton(button)?.isHidden = true
+        }
     }
 
     private func restoreWindow() {
@@ -202,6 +213,9 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         window.isOpaque = snapshot.isOpaque
         window.backgroundColor = snapshot.backgroundColor
         window.hasShadow = snapshot.hasShadow
+        for (button, wasHidden) in snapshot.hiddenButtons {
+            window.standardWindowButton(button)?.isHidden = wasHidden
+        }
         self.observedWindow = nil
         self.snapshot = nil
     }
