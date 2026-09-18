@@ -1579,7 +1579,9 @@ struct SettingsView: View {
                 .settingsSearchTarget(.fasterLongDictation)
                 .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
             }
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 48)
             .frame(maxWidth: self.selectedSection == .shortcuts ? 960 : .infinity)
             .frame(maxWidth: .infinity)
             .environment(\.settingsSearchPresentation, self.settingsSearchPresentation)

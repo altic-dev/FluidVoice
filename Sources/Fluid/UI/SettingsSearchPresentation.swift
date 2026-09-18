@@ -55,10 +55,15 @@ final class SettingsSearchScrollCoordinator {
               anchorView.window != nil
         else { return }
 
+        // Scroll the match to just below the toolbar. scrollToVisible ignores the
+        // toolbar inset, which left matches hidden under the glass.
         let targetRect = anchorView.convert(anchorView.bounds, to: documentView)
-            .insetBy(dx: 0, dy: -16)
-        documentView.scrollToVisible(targetRect)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let clipView = scrollView.contentView
+        let topInset = scrollView.contentInsets.top
+        let maxY = max(documentView.bounds.height - clipView.bounds.height + topInset, -topInset)
+        let y = min(max(targetRect.minY - topInset - 16, -topInset), maxY)
+        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: y))
+        scrollView.reflectScrolledClipView(clipView)
     }
 }
 
@@ -192,6 +197,11 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     func makeNSView(context _: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
+        // SwiftUI already keeps this view below the toolbar. Left on, AppKit adds a second
+        // toolbar-height inset on macOS 26 and paints its blurred edge effect in the gap.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
+        scrollView.scrollerInsets = NSEdgeInsetsZero
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false
