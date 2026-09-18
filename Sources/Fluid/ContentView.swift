@@ -397,7 +397,7 @@ struct ContentView: View {
                             // The system toggle draws dark glass over the sidebar; ours sits in the
                             // same spot without a glass backing so it blends into the sidebar color.
                             .toolbar(removing: .sidebarToggle)
-                            .overlay(alignment: .topTrailing) { self.sidebarToggleOverlay }
+                            .overlay(alignment: .topLeading) { self.sidebarToggleOverlay }
                     } detail: {
                         self.detailView
                     }
@@ -1757,8 +1757,8 @@ struct ContentView: View {
     }
 
     /// Drawn inside the sidebar rather than as a toolbar item, so no macOS version can
-    /// wrap it in its own glass capsule. Sits up in the title bar band, where the system
-    /// toggle used to be.
+    /// wrap it in its own glass capsule. Sits up in the title bar band, just right of the
+    /// traffic lights, well clear of the detail toolbar's glass group.
     /// Same height, font and corner as the section rows below it, so it reads as part of the list.
     private var settingsSearchRow: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -1818,8 +1818,8 @@ struct ContentView: View {
             .onHover { self.isSidebarToggleHovered = $0 }
             .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
             .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.trailing, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 94)
             .padding(.top, max(0, (proxy.safeAreaInsets.top - 26) / 2) - proxy.safeAreaInsets.top)
         }
         .frame(height: 0)
