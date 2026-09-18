@@ -321,11 +321,6 @@ final class TypingService {
         )
     }
 
-    /// Safari turns one synthesized unicode key event into a single `keypress` carrying only the
-    /// first character. Editors that build their text from `keypress`, which is what Google Docs and
-    /// Slides appear to do, therefore drop everything after it and need the clipboard path. The
-    /// title is looked up lazily so targets that match on bundle ID alone, and the far more common
-    /// targets that match nothing, never pay for an Accessibility round trip.
     static func pasteOnlyReason(
         bundleIdentifier: String?,
         focusedWindowTitle: @autoclosure () -> String?
