@@ -55,6 +55,12 @@ struct StatsView: View {
                         self.transcriptionsCard
                     }
 
+                    // Third row: Fluid Intelligence + Keystrokes
+                    HStack(spacing: 16) {
+                        self.fluidIntelligenceCard
+                        self.keystrokesCard
+                    }
+
                     // Activity Chart
                     self.activityChartCard
 
@@ -327,6 +333,34 @@ struct StatsView: View {
     }
 
     // MARK: - Transcriptions Card
+
+    private var fluidIntelligenceCard: some View {
+        StatCard(title: "FLUID INTELLIGENCE", icon: "sparkles") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(self.formatNumber(self.stats.fluidFixedWords))
+                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+
+                Text(self.stats.fluidFixedWords == 0 ? "Words fixed by Smart mode show up here" : "words fixed for you by Smart mode")
+                    .font(.fluidSystem(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var keystrokesCard: some View {
+        StatCard(title: "KEYSTROKES SAVED", icon: "keyboard") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(self.formatNumber(self.stats.totalCharacters))
+                    .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+
+                Text("keys you never had to press")
+                    .font(.fluidSystem(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
 
     private var transcriptionsCard: some View {
         StatCard(title: "TRANSCRIPTIONS", icon: "doc.text.fill") {

@@ -19,6 +19,9 @@ struct DashboardView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var statsOwner = UUID()
     @State private var greeting = "Welcome back."
+    @State private var statisticsHovered = false
+    @FocusState private var statisticsFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var busy: Bool { self.asr.isRunning || self.asr.isStarting || self.contentState.isProcessing }
     private var shortcut: String { self.settings.primaryDictationShortcutDisplayString }
@@ -76,15 +79,42 @@ struct DashboardView: View {
     private var statistics: some View {
         let today = self.history.todaySummary
         let streak = self.stats.snapshot?.usingWeekdays(self.settings.weekendsDontBreakStreak).currentStreak
-        return HStack(alignment: .top, spacing: 20) {
-            self.stat("Today", value: today.words.formatted(), detail: "words dictated")
-            Divider()
-            self.stat("Time saved", value: today.words == 0 ? "0m" : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
-            Divider()
-            self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
+        return Button { self.selectedSidebarItem = .stats } label: {
+            HStack(alignment: .top, spacing: 20) {
+                self.stat("Today", value: today.words.formatted(), detail: "words dictated")
+                Divider()
+                self.stat("Time saved", value: today.words == 0 ? "0m" : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
+                Divider()
+                self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
+                // Quiet proof that Smart mode earns its keep; absent until it has fixed something.
+                if let fixed = self.stats.snapshot?.fluidFixedWords, fixed > 0 {
+                    Divider()
+                    self.stat("Fluid Intelligence", value: fixed.formatted(), detail: "words fixed for you")
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 4) {
+                    Text("View stats")
+                    Image(systemName: "chevron.right").font(.fluidSystem(size: 9, weight: .semibold))
+                }
+                .font(self.theme.typography.captionStrong)
+                .foregroundStyle(self.theme.palette.accent)
+                .opacity(self.statisticsHovered ? 1 : 0)
+                .offset(x: self.statisticsHovered || self.reduceMotion ? 0 : -4)
+            }
+            // Keyboard focus reuses the hover border instead of the heavy system ring,
+            // which otherwise lands on this card every time the dashboard opens.
+            .dashboardTile(hovered: self.statisticsHovered || self.statisticsFocused, horizontalPadding: 20, verticalPadding: 18, cornerRadius: 18)
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.vertical, 16)
+        .buttonStyle(.plain)
+        .focused(self.$statisticsFocused)
+        .focusEffectDisabled()
+        .disabled(self.busy)
+        .onHover { self.statisticsHovered = $0 && !self.busy }
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.statisticsHovered)
+        .help("Open your full stats")
+        .accessibilityHint("Opens the Stats page")
     }
 
     private func stat(_ title: String, value: String, detail: String) -> some View {
@@ -399,13 +429,16 @@ private struct DashboardIconTile: View {
 
 private struct DashboardTileModifier: ViewModifier {
     let hovered: Bool
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+    let cornerRadius: CGFloat
     @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
         content
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
+            .padding(.horizontal, self.horizontalPadding)
+            .padding(.vertical, self.verticalPadding)
             .background(self.theme.palette.cardBackground, in: shape)
             .overlay(shape.fill(Color.primary.opacity(self.hovered ? 0.04 : 0)))
             .overlay(shape.strokeBorder(self.theme.palette.cardBorder.opacity(self.hovered ? 0.9 : 0.45), lineWidth: 1))
@@ -415,7 +448,17 @@ private struct DashboardTileModifier: ViewModifier {
 
 private extension View {
     /// One surface for every small dashboard card so they hover and read as a set.
-    func dashboardTile(hovered: Bool) -> some View {
-        modifier(DashboardTileModifier(hovered: hovered))
+    func dashboardTile(
+        hovered: Bool,
+        horizontalPadding: CGFloat = 12,
+        verticalPadding: CGFloat = 11,
+        cornerRadius: CGFloat = 14
+    ) -> some View {
+        modifier(DashboardTileModifier(
+            hovered: hovered,
+            horizontalPadding: horizontalPadding,
+            verticalPadding: verticalPadding,
+            cornerRadius: cornerRadius
+        ))
     }
 }

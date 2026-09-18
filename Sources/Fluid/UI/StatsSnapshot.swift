@@ -5,6 +5,8 @@ nonisolated struct StatsSnapshot: Sendable {
     var totalWords = 0
     var totalTranscriptions = 0
     var totalCharacters = 0
+    /// Words Fluid Intelligence changed, dropped or added compared with the raw transcript.
+    var fluidFixedWords = 0
     /// Words and recording time from entries that carry a real audio length.
     var timedWords = 0
     var timedMilliseconds = 0
@@ -105,6 +107,9 @@ nonisolated struct StatsSnapshot: Sendable {
             }
             result.longestTranscriptionWords = max(result.longestTranscriptionWords, words)
             if entry.wasAIProcessed { result.aiProcessedCount += 1 }
+            if entry.wasAIProcessed, entry.processingModel?.lowercased().hasPrefix("fluid-1") == true {
+                result.fluidFixedWords += Self.changedWordCount(raw: entry.rawText, processed: entry.processedText)
+            }
         }
         try Task.checkCancellation()
         result.mostWordsInDay = dayWords.values.max() ?? 0
@@ -130,6 +135,25 @@ nonisolated struct StatsSnapshot: Sendable {
             }
         }
         return result
+    }
+
+    /// Order-free word difference: cheap enough for the whole history, and blind to
+    /// punctuation and capitalization so it never overstates what was fixed.
+    static func changedWordCount(raw: String, processed: String) -> Int {
+        func counts(_ text: String) -> [Substring: Int] {
+            var result: [Substring: Int] = [:]
+            for word in text.lowercased().split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") }) {
+                result[word, default: 0] += 1
+            }
+            return result
+        }
+        let before = counts(raw)
+        let after = counts(processed)
+        var removed = 0
+        var added = 0
+        for (word, count) in before { removed += max(0, count - (after[word] ?? 0)) }
+        for (word, count) in after { added += max(0, count - (before[word] ?? 0)) }
+        return max(removed, added)
     }
 
     private static func previousDay(_ day: Date, calendar: Calendar, weekdays: Bool) -> Date? {
