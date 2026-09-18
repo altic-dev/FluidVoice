@@ -1293,8 +1293,8 @@ struct ContentView: View {
                 .allowsHitTesting(!self.settingsNavigation.isPresented)
                 .accessibilityHidden(self.settingsNavigation.isPresented)
 
+            // No flat backdrop: the settings sidebar shows the same system material as the app one.
             self.settingsSidebarView
-                .background(self.theme.palette.sidebarBackground)
                 .opacity(self.settingsNavigation.isPresented ? 1 : 0)
                 .offset(x: self.settingsNavigation.isPresented ? 0 : self.sidebarTransitionDistance)
                 .allowsHitTesting(self.settingsNavigation.isPresented)
