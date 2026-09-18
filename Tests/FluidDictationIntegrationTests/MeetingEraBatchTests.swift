@@ -246,7 +246,7 @@ final class MeetingEraBatchTests: XCTestCase {
         XCTAssertEqual(eras[0].method, .voiceProcessing)
     }
 
-    func testUnknownEraMethodIsToleratedBySkippingThatEra() throws {
+    func testUnknownEraMethodFailsClosedToSingleUnprotectedEra() throws {
         let legacyJSON: [String: Any] = [
             "id": UUID().uuidString,
             "kind": "microphone",
@@ -265,7 +265,9 @@ final class MeetingEraBatchTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: legacyJSON)
         let track = try JSONDecoder().decode(MeetingAudioTrack.self, from: data)
         let eras = try XCTUnwrap(track.captureEras)
-        XCTAssertEqual(eras.count, 2, "the unrecognized era is skipped, not defaulted, and the rest of the session still decodes")
-        XCTAssertEqual(eras.map(\.startSeconds), [0, 60])
+        XCTAssertEqual(eras.count, 1, "an unrecognized era fails closed: the whole track collapses to one unprotected era")
+        XCTAssertEqual(eras[0].method, .avCaptureSession)
+        XCTAssertEqual(eras[0].echoProtection, .unprotected)
+        XCTAssertEqual(eras[0].startSeconds, 0)
     }
 }
