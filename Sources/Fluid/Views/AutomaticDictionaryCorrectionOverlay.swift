@@ -667,7 +667,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var choiceContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            self.header(title: "Correction noticed", allowsBack: false)
+            self.header(title: "Learn this word?", allowsBack: false)
 
             self.correctionPair
 
@@ -703,7 +703,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         Menu {
             Button("Ignore This Correction", systemImage: "eye.slash", action: self.onIgnore)
 
-            Menu("Suggest After") {
+            Menu("Ask after") {
                 ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
                     Button {
                         self.onFrequencyChange(frequency)
@@ -720,7 +720,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             Divider()
 
-            Button("Turn Off Auto-Learn", role: .destructive, action: self.onDisableSuggestions)
+            Button("Stop asking", role: .destructive, action: self.onDisableSuggestions)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.fluidSystem(size: 12, weight: .semibold))

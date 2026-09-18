@@ -2992,40 +2992,58 @@ private struct DictionarySuggestionsSettingsRow: View {
     @ObservedObject private var settings = SettingsStore.shared
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Auto-Learn Corrections")
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text("Suggest saving words after you correct dictated text.")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Picker("Suggest after", selection: self.$settings.automaticDictionarySuggestionFrequency) {
-                ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
-                    Text(frequency.displayName).tag(frequency)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Learn from my corrections")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text("If you retype a word FluidVoice got wrong, it asks to add the right spelling to your dictionary.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            .pickerStyle(.menu)
-            .fluidDropdownStyle()
-            .frame(width: 180)
-            .disabled(!self.settings.automaticDictionaryLearningEnabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Toggle("", isOn: Binding(
-                get: { self.settings.automaticDictionaryLearningEnabled },
-                set: { enabled in
-                    self.settings.automaticDictionaryLearningEnabled = enabled
-                    if !enabled {
-                        AutomaticDictionaryCorrectionTracker.shared.cancel()
+                Toggle("Learn from my corrections", isOn: Binding(
+                    get: { self.settings.automaticDictionaryLearningEnabled },
+                    set: { enabled in
+                        self.settings.automaticDictionaryLearningEnabled = enabled
+                        if !enabled {
+                            AutomaticDictionaryCorrectionTracker.shared.cancel()
+                        }
                     }
+                ))
+                .toggleStyle(.switch)
+                .tint(self.theme.palette.accent)
+                .labelsHidden()
+            }
+
+            // The threshold only matters while learning is on; keep it visibly subordinate.
+            if self.settings.automaticDictionaryLearningEnabled {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Ask after")
+                            .font(self.theme.typography.bodyStrong)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                        Text("Wait until you've fixed the same word this many times. Pick 2 or 3 if it asks too often.")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Picker("Ask after", selection: self.$settings.automaticDictionarySuggestionFrequency) {
+                        ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
+                            Text(frequency.displayName).tag(frequency)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fluidDropdownStyle()
+                    .fixedSize()
                 }
-            ))
-            .toggleStyle(.switch)
-            .tint(self.theme.palette.accent)
-            .labelsHidden()
+                .padding(.leading, 16)
+            }
         }
     }
 }
