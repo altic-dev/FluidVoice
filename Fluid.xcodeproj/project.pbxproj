@@ -604,7 +604,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
-				7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */,
+				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
 				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
@@ -1263,10 +1263,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ".local-dependencies/FluidAudio";
-		};
 		AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/WebRTCAudioProcessing;
@@ -1274,6 +1270,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
+			requirement = {
+				kind = revision;
+				revision = cfabbc6cd7c603ad469cbbb5a30c1ece48db04be;
+			};
+		};
 		7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/DynamicNotchKit.git";
@@ -1316,7 +1320,7 @@
 		};
 		7C078DA42E3B386A00FB7CAC /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7C078DA32E3B386A00FB7CAC /* XCLocalSwiftPackageReference "FluidAudio" */;
+			package = 7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
 		};
 		7C3697882ED70F9C005874CE /* DynamicNotchKit */ = {
