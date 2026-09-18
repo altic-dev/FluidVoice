@@ -162,14 +162,22 @@ struct DashboardView: View {
         }
     }
 
+    private struct Lesson {
+        let title: String
+        let icon: String
+        let complete: Bool
+        let detail: String
+        let action: () -> Void
+    }
+
     private var learningCenter: some View {
-        let lessons: [(title: String, icon: String, complete: Bool, detail: String, action: () -> Void)] = [
-            ("Voice model", "waveform", self.asr.modelsExistOnDisk || self.asr.isAsrReady, "Pick your engine", { self.selectedSidebarItem = .voiceEngine }),
-            ("Microphone", "mic", self.asr.micStatus == .authorized, "Set up voice input", {
+        let lessons: [Lesson] = [
+            .init(title: "Voice model", icon: "waveform", complete: self.asr.modelsExistOnDisk || self.asr.isAsrReady, detail: "Pick your engine", action: { self.selectedSidebarItem = .voiceEngine }),
+            .init(title: "Microphone", icon: "mic", complete: self.asr.micStatus == .authorized, detail: "Set up voice input", action: {
                 if self.asr.micStatus == .notDetermined { self.asr.requestMicAccess() } else { self.asr.openSystemSettingsForMic() }
             }),
-            ("Typing access", "keyboard", self.accessibilityEnabled, "Dictate in any app", self.openAccessibilitySettings),
-            ("AI cleanup", "sparkles", DictationAIPostProcessingGate.isProviderConfigured(), "Optional polish", { self.selectedSidebarItem = .aiEnhancements }),
+            .init(title: "Typing access", icon: "keyboard", complete: self.accessibilityEnabled, detail: "Dictate in any app", action: self.openAccessibilitySettings),
+            .init(title: "AI cleanup", icon: "sparkles", complete: DictationAIPostProcessingGate.isProviderConfigured(), detail: "Optional polish", action: { self.selectedSidebarItem = .aiEnhancements }),
         ]
         let completed = lessons.filter(\.complete).count
 

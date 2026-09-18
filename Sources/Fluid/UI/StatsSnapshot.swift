@@ -151,8 +151,12 @@ nonisolated struct StatsSnapshot: Sendable {
         let after = counts(processed)
         var removed = 0
         var added = 0
-        for (word, count) in before { removed += max(0, count - (after[word] ?? 0)) }
-        for (word, count) in after { added += max(0, count - (before[word] ?? 0)) }
+        for (word, count) in before {
+            removed += max(0, count - (after[word] ?? 0))
+        }
+        for (word, count) in after {
+            added += max(0, count - (before[word] ?? 0))
+        }
         return max(removed, added)
     }
 

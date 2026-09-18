@@ -68,9 +68,11 @@ final class AudioSpectrumMeter: @unchecked Sendable {
         let halfSize = Self.frameSize / 2
         self.real.withUnsafeMutableBufferPointer { realPointer in
             self.imaginary.withUnsafeMutableBufferPointer { imaginaryPointer in
-                var split = DSPSplitComplex(realp: realPointer.baseAddress!, imagp: imaginaryPointer.baseAddress!)
+                guard let realBase = realPointer.baseAddress, let imaginaryBase = imaginaryPointer.baseAddress else { return }
+                var split = DSPSplitComplex(realp: realBase, imagp: imaginaryBase)
                 self.frame.withUnsafeBufferPointer { framePointer in
-                    framePointer.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complex in
+                    guard let frameBase = framePointer.baseAddress else { return }
+                    frameBase.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complex in
                         vDSP_ctoz(complex, 2, &split, 1, vDSP_Length(halfSize))
                     }
                 }
@@ -86,7 +88,8 @@ final class AudioSpectrumMeter: @unchecked Sendable {
             let upper = min(max(self.bandEdges[band + 1], lower + 1), halfSize)
             var peak: Float = 0
             self.magnitudes.withUnsafeBufferPointer { pointer in
-                vDSP_maxv(pointer.baseAddress! + lower, 1, &peak, vDSP_Length(upper - lower))
+                guard let base = pointer.baseAddress else { return }
+                vDSP_maxv(base + lower, 1, &peak, vDSP_Length(upper - lower))
             }
             let octave = Float(band) / Float(Self.bandCount) * log2(Self.highestFrequency / Self.lowestFrequency)
             let decibels = 20 * log10(max(peak * amplitudeScale, 1e-9)) + octave * Self.tiltDecibelsPerOctave
@@ -99,8 +102,12 @@ final class AudioSpectrumMeter: @unchecked Sendable {
     func reset() {
         self.lock.lock()
         defer { self.lock.unlock() }
-        for index in self.ring.indices { self.ring[index] = 0 }
-        for index in self.latest.indices { self.latest[index] = 0 }
+        for index in self.ring.indices {
+            self.ring[index] = 0
+        }
+        for index in self.latest.indices {
+            self.latest[index] = 0
+        }
     }
 
     /// Band levels in 0...1, low frequencies first, resampled to `count` bars.
