@@ -17,6 +17,10 @@ struct CustomDictionaryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appServices: AppServices
 
+    /// A row picked in the sidebar search. Opening it is the reveal; the binding is
+    /// cleared so the same row can be picked again later.
+    @Binding var revealTarget: AppSearchHit.Target?
+
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
     @State private var editingEntry: SettingsStore.CustomDictionaryEntry?
@@ -267,6 +271,9 @@ struct CustomDictionaryView: View {
             .padding(self.theme.metrics.spacing.xl)
         }
         .dismissTextFocusOnBackgroundTap()
+        .task(id: self.revealTarget) {
+            self.revealSearchTarget()
+        }
         .overlay {
             if let confirmation = self.replacementConfirmation {
                 ReplacementConfirmationToast(confirmation: confirmation)
@@ -1745,6 +1752,29 @@ struct CustomDictionaryView: View {
         self.addReplacementEntry(entry)
         self.manualTriggerDraft = ""
         self.manualReplacement = ""
+    }
+
+    /// Opens the editor for the row the sidebar search matched, so the screen lands on
+    /// that word or rule instead of the top of the dictionary.
+    private func revealSearchTarget() {
+        switch self.revealTarget {
+        case let .dictionaryEntry(id):
+            self.entries = SettingsStore.shared.customDictionaryEntries
+            self.editingEntry = self.entries.first { $0.id == id }
+        case let .vocabulary(text):
+            self.presentCustomWords()
+            if let index = self.boostTerms.firstIndex(where: { $0.text == text }) {
+                self.editBoostTerm(at: index)
+            }
+        case let .punctuation(id):
+            self.presentPunctuationDictionary()
+            if let rule = self.punctuationRules.first(where: { $0.id == id }) {
+                self.editPunctuationRule(rule)
+            }
+        default:
+            return
+        }
+        self.revealTarget = nil
     }
 
     private func presentYourDictionary() {

@@ -38,6 +38,9 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
     /// message for display / debugging.
     let aiProcessingError: String?
     let audio: DictationAudioMetadata?
+    /// Rises when a restore gives this id different text. Nil on entries written
+    /// before the field existed, and on entries that were never restored.
+    var searchRevision: UInt64?
 
     init(
         id: UUID = UUID(),
@@ -52,7 +55,8 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         aiProcessingDurationMilliseconds: Int? = nil,
         aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
-        audio: DictationAudioMetadata? = nil
+        audio: DictationAudioMetadata? = nil,
+        searchRevision: UInt64? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -68,6 +72,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
+        self.searchRevision = searchRevision
     }
 
     private init(
@@ -84,7 +89,8 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         aiProcessingDurationMilliseconds: Int?,
         aiTokensPerSecond: Double?,
         aiProcessingError: String?,
-        audio: DictationAudioMetadata?
+        audio: DictationAudioMetadata?,
+        searchRevision: UInt64?
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -100,6 +106,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
+        self.searchRevision = searchRevision
     }
 
     init(from decoder: Decoder) throws {
@@ -124,6 +131,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .aiTokensPerSecond)
         self.aiProcessingError = try container.decodeIfPresent(String.self, forKey: .aiProcessingError)
         self.audio = try container.decodeIfPresent(DictationAudioMetadata.self, forKey: .audio)
+        self.searchRevision = try container.decodeIfPresent(UInt64.self, forKey: .searchRevision)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -131,7 +139,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
-        case aiProcessingError, audio
+        case aiProcessingError, audio, searchRevision
     }
 
     /// Preview text for list display (first 80 chars)
@@ -198,8 +206,19 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
             aiProcessingDurationMilliseconds: self.aiProcessingDurationMilliseconds,
             aiTokensPerSecond: self.aiTokensPerSecond,
             aiProcessingError: self.aiProcessingError,
-            audio: audio
+            audio: audio,
+            searchRevision: self.searchRevision
         )
+    }
+
+    /// A restore can hand an existing id different text, and the search index only
+    /// replaces a row whose revision rose. Bumping past the restored revision, the
+    /// indexed one and the wall clock keeps that true whichever backup the text came
+    /// from, including one written before this field existed.
+    mutating func markRestored(over indexed: UInt64?, at date: Date = Date()) {
+        let now = UInt64(max(1, date.timeIntervalSince1970 * 1000))
+        let base = max(now, self.searchRevision ?? 1, indexed ?? 1)
+        self.searchRevision = base == .max ? .max : base + 1
     }
 }
 
@@ -211,7 +230,7 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     private let writer: TranscriptionHistoryWriter
     private var loadTask: Task<Void, Never>?
-    private var hasLoaded = false
+    @Published private var hasLoaded = false
     private var pendingUpserts: [UUID: TranscriptionHistoryEntry] = [:]
     private var pendingDeletes: Set<UUID> = []
     private var pendingReplacement = false
@@ -219,6 +238,15 @@ final class TranscriptionHistoryStore: ObservableObject {
     @Published private(set) var persistenceError: String?
 
     @Published private(set) var entries: [TranscriptionHistoryEntry] = []
+
+    /// Replays the current snapshot only after loading and merging pending edits succeed.
+    /// An empty loaded history is authoritative; an unloaded or failed one is not.
+    var loadedEntriesPublisher: AnyPublisher<[TranscriptionHistoryEntry], Never> {
+        self.$entries.combineLatest(self.$hasLoaded)
+            .compactMap { entries, hasLoaded in hasLoaded ? entries : nil }
+            .eraseToAnyPublisher()
+    }
+
     @Published var selectedEntryID: UUID?
     /// Last completed snapshot while a coalesced background refresh is pending.
     /// Rendering must never scan history or schedule work.
@@ -232,15 +260,18 @@ final class TranscriptionHistoryStore: ObservableObject {
     private var calendarObservers: [NSObjectProtocol] = []
     private let summaryNow: () -> Date
     private let summaryCalendar: () -> Calendar
+    private let deleteAllAudioFiles: () -> Void
 
     init(
         writer: TranscriptionHistoryWriter = TranscriptionHistoryWriter(),
         summaryNow: @escaping () -> Date = Date.init,
-        summaryCalendar: @escaping () -> Calendar = { Calendar.current }
+        summaryCalendar: @escaping () -> Calendar = { Calendar.current },
+        deleteAllAudioFiles: @escaping () -> Void = { DictationAudioHistoryStore.shared.deleteAllAudioFiles() }
     ) {
         self.writer = writer
         self.summaryNow = summaryNow
         self.summaryCalendar = summaryCalendar
+        self.deleteAllAudioFiles = deleteAllAudioFiles
         self.observeSummaryCalendarChanges()
         self.loadEntries()
     }
@@ -355,7 +386,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     func clearAllHistory() {
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
-        DictationAudioHistoryStore.shared.deleteAllAudioFiles()
+        self.deleteAllAudioFiles()
         self.entries.removeAll()
         self.refreshTodaySummary()
         self.selectedEntryID = nil
@@ -401,7 +432,14 @@ final class TranscriptionHistoryStore: ObservableObject {
     func restore(from payload: [TranscriptionHistoryEntry]) {
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
-        self.entries = payload.sorted { $0.timestamp > $1.timestamp }
+        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRecord.revision) }) { first, _ in first }
+        self.entries = payload
+            .map { entry in
+                var entry = entry
+                entry.markRestored(over: indexed[entry.id])
+                return entry
+            }
+            .sorted { $0.timestamp > $1.timestamp }
         self.refreshTodaySummary()
         self.selectedEntryID = self.entries.first?.id
         self.persist(upserts: self.entries, replacing: true)
@@ -431,7 +469,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
         let removedCount = self.entries.filter { $0.audio != nil }.count
-        DictationAudioHistoryStore.shared.deleteAllAudioFiles()
+        self.deleteAllAudioFiles()
         let changed = self.entries.filter { $0.audio != nil }.map { $0.replacingAudio(nil) }
         self.entries = self.entries.map { $0.replacingAudio(nil) }
         self.persist(upserts: changed)

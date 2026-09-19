@@ -11,7 +11,6 @@ struct TranscriptionHistoryView: View {
     @State private var showClearConfirmation: Bool = false
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
-    @State private var selectedEntryID: UUID?
     @State private var audioEntryID: UUID?
     @State private var copiedEntryID: UUID?
     @State private var copyFeedbackTask: Task<Void, Never>?
@@ -28,6 +27,13 @@ struct TranscriptionHistoryView: View {
             fileNames: self.historyStore.entries.compactMap { $0.audio?.fileName },
             revision: self.audioAvailabilityRevision
         )
+    }
+
+    /// Lives in the store so the sidebar search can select a row before this view
+    /// exists, and the store's delete and clear paths keep it valid.
+    private var selectedEntryID: UUID? {
+        get { self.historyStore.selectedEntryID }
+        nonmutating set { self.historyStore.selectedEntryID = newValue }
     }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
@@ -184,15 +190,34 @@ struct TranscriptionHistoryView: View {
     // MARK: - Entry List
 
     private var entryListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 6) {
-                ForEach(self.filteredEntries) { entry in
-                    self.entryRow(entry)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(self.filteredEntries) { entry in
+                        self.entryRow(entry)
+                            .id(entry.id)
+                    }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .onAppear { self.reveal(self.selectedEntryID, with: proxy) }
+            .onChange(of: self.historyStore.selectedEntryID) { _, id in self.reveal(id, with: proxy) }
         }
+    }
+
+    /// Scrolls to a row chosen elsewhere (the sidebar search). A local filter that
+    /// hides it is cleared first, or the selection would fall back to the first row.
+    private func reveal(_ id: UUID?, with proxy: ScrollViewProxy) {
+        guard let id else { return }
+        if !self.filteredEntries.contains(where: { $0.id == id }) {
+            self.searchQuery = ""
+            DispatchQueue.main.async {
+                proxy.scrollTo(id)
+            }
+            return
+        }
+        proxy.scrollTo(id)
     }
 
     private func entryRow(_ entry: TranscriptionHistoryEntry) -> some View {

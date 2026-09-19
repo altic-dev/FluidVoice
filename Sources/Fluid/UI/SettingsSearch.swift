@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -147,6 +148,59 @@ struct SettingsSearchResult: Identifiable, Equatable {
 
     var section: SettingsSection {
         self.target.section
+    }
+}
+
+struct SettingsSearchAvailability {
+    let microphoneAuthorized: Bool
+    let accessibilityEnabled: Bool
+    let savesTranscriptionHistory: Bool
+    let savesAudioWithTranscriptionHistory: Bool
+    let overlayAtBottom: Bool
+
+    static var current: Self {
+        let settings = SettingsStore.shared
+        return Self(
+            microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+            accessibilityEnabled: AXIsProcessTrusted(),
+            savesTranscriptionHistory: settings.saveTranscriptionHistory,
+            savesAudioWithTranscriptionHistory: settings.saveAudioWithTranscriptionHistory,
+            overlayAtBottom: settings.overlayPosition == .bottom
+        )
+    }
+
+    func includes(_ target: SettingsSearchTarget) -> Bool {
+        switch target {
+        case .microphonePermission:
+            return !self.microphoneAuthorized
+        case .accessibilityPermission:
+            return !self.accessibilityEnabled
+        case .primaryDictationShortcuts,
+             .commandModeShortcut,
+             .editModeShortcut,
+             .cancelRecordingShortcut,
+             .pasteLastTranscriptionShortcut,
+             .activationMode,
+             .copyToClipboard,
+             .textInsertionMode,
+             .spokenSend,
+             .transcriptionHistory,
+             .audioHistory,
+             .usageStreak,
+             .skipSilentRecordings,
+             .pauseMedia,
+             .dictionarySuggestions,
+             .analyticsPrivacy:
+            return self.accessibilityEnabled
+        case .audioStorage:
+            return self.accessibilityEnabled &&
+                self.savesTranscriptionHistory &&
+                self.savesAudioWithTranscriptionHistory
+        case .bottomOffset:
+            return self.overlayAtBottom
+        default:
+            return true
+        }
     }
 }
 
@@ -389,6 +443,17 @@ enum SettingsSearchIndex {
         .map(\.result)
     }
 
+    static func results(
+        for query: String,
+        availability: SettingsSearchAvailability
+    ) -> [SettingsSearchResult] {
+        self.results(for: query).filter { availability.includes($0.target) }
+    }
+
+    static func title(for target: SettingsSearchTarget) -> String {
+        self.entries.first { $0.target == target }?.title ?? target.section.title
+    }
+
     static func matchingSections(for query: String) -> [SettingsSection] {
         let matchingSections = Set(self.results(for: query).map(\.section))
         return SettingsSection.allCases.filter(matchingSections.contains)
@@ -546,9 +611,17 @@ enum SettingsSearchIndex {
     }
 }
 
-struct SettingsSearchField: NSViewRepresentable {
+/// An `NSSearchField` for a sidebar. Esc clears it. Up, Down and Return are handed
+/// to `onCommand` so a results list can be driven from the keyboard, and Cmd+F
+/// (`Notification.Name.sidebarSearchFocusRequested`) focuses whichever instance
+/// is active.
+struct SidebarSearchField: NSViewRepresentable {
+    private static let identifier = NSUserInterfaceItemIdentifier("FluidVoice.SidebarSearchField")
+
     @Binding var text: String
+    let placeholder: String
     let isActive: Bool
+    var onCommand: (Selector) -> Bool = { _ in false }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -557,12 +630,14 @@ struct SettingsSearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSearchField {
         let searchField = NSSearchField()
         searchField.delegate = context.coordinator
-        searchField.placeholderString = "Search Settings"
+        searchField.placeholderString = self.placeholder
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
         searchField.controlSize = .regular
         searchField.focusRingType = .default
-        searchField.setAccessibilityLabel("Search Settings")
+        searchField.identifier = Self.identifier
+        searchField.setAccessibilityLabel(self.placeholder)
+        context.coordinator.observeFocusRequests(for: searchField)
         return searchField
     }
 
@@ -583,11 +658,40 @@ struct SettingsSearchField: NSViewRepresentable {
         window.makeFirstResponder(nil)
     }
 
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: SettingsSearchField
+    static func owns(_ editor: NSTextView, in window: NSWindow) -> Bool {
+        guard editor.isFieldEditor, let contentView = window.contentView else { return false }
+        var views = [contentView]
+        while let view = views.popLast() {
+            if let searchField = view as? NSSearchField,
+               searchField.identifier == Self.identifier,
+               searchField.currentEditor() === editor
+            {
+                return true
+            }
+            views.append(contentsOf: view.subviews)
+        }
+        return false
+    }
 
-        init(_ parent: SettingsSearchField) {
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: SidebarSearchField
+        private var focusObserver: NSObjectProtocol?
+
+        init(_ parent: SidebarSearchField) {
             self.parent = parent
+        }
+
+        deinit {
+            self.focusObserver.map(NotificationCenter.default.removeObserver)
+        }
+
+        func observeFocusRequests(for searchField: NSSearchField) {
+            self.focusObserver = NotificationCenter.default.addObserver(
+                forName: .sidebarSearchFocusRequested, object: nil, queue: .main
+            ) { [weak self, weak searchField] _ in
+                guard let self, self.parent.isActive, let searchField else { return }
+                searchField.window?.makeFirstResponder(searchField)
+            }
         }
 
         func controlTextDidChange(_ notification: Notification) {
@@ -600,11 +704,17 @@ struct SettingsSearchField: NSViewRepresentable {
             textView: NSTextView,
             doCommandBy commandSelector: Selector
         ) -> Bool {
-            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else {
+                return self.parent.onCommand(commandSelector)
+            }
             textView.string = ""
             control.stringValue = ""
             self.parent.text = ""
             return true
         }
     }
+}
+
+extension Notification.Name {
+    static let sidebarSearchFocusRequested = Notification.Name("FluidVoice.sidebarSearchFocusRequested")
 }

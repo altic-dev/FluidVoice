@@ -58,14 +58,30 @@ struct ChatSession: Codable, Identifiable, Equatable {
     var title: String
     let createdAt: Date
     var updatedAt: Date
+    var searchRevision: UInt64?
     var messages: [ChatMessage]
 
-    init(id: String = UUID().uuidString, title: String = "New Chat", createdAt: Date = Date(), updatedAt: Date = Date(), messages: [ChatMessage] = []) {
+    init(
+        id: String = UUID().uuidString,
+        title: String = "New Chat",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        searchRevision: UInt64? = nil,
+        messages: [ChatMessage] = []
+    ) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.searchRevision = searchRevision
         self.messages = messages
+    }
+
+    mutating func markUpdated(at date: Date = Date()) {
+        let timestampRevision = UInt64(max(1, self.updatedAt.timeIntervalSince1970 * 1000))
+        let previousRevision = max(self.searchRevision ?? timestampRevision, timestampRevision)
+        self.searchRevision = previousRevision == .max ? .max : previousRevision + 1
+        self.updatedAt = date
     }
 
     /// Generate title from first user message (max 50 chars)
@@ -156,11 +172,11 @@ final class ChatHistoryStore: ObservableObject {
     func saveChat(_ session: ChatSession) {
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             var updated = session
-            updated.updatedAt = Date()
+            updated.markUpdated()
             self.sessions[index] = updated
         } else {
             var updated = session
-            updated.updatedAt = Date()
+            updated.markUpdated()
             self.sessions.insert(updated, at: 0)
         }
 
@@ -175,7 +191,7 @@ final class ChatHistoryStore: ObservableObject {
 
         var session = self.sessions[index]
         session.messages = messages
-        session.updatedAt = Date()
+        session.markUpdated()
         session.updateTitleFromFirstMessage()
         self.sessions[index] = session
 
@@ -226,7 +242,7 @@ final class ChatHistoryStore: ObservableObject {
 
         self.sessions[index].messages = []
         self.sessions[index].title = "New Chat"
-        self.sessions[index].updatedAt = Date()
+        self.sessions[index].markUpdated()
 
         self.saveSessions()
     }
