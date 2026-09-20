@@ -4,6 +4,38 @@ import CoreAudio
 import Foundation
 import XCTest
 
+final class StreamingCaptureHealthAssessmentTests: XCTestCase {
+    func testFilteredSilenceUsesRawCaptureProgressInsteadOfAcceptedBuffer() {
+        XCTAssertFalse(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 0,
+            previousBufferCount: 0,
+            currentCaptureInputSampleCount: 16_000,
+            previousCaptureInputSampleCount: 0,
+            activityGateEnabled: true
+        ))
+    }
+
+    func testFilteredSessionStillDetectsStoppedRawCapture() {
+        XCTAssertTrue(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 0,
+            previousBufferCount: 0,
+            currentCaptureInputSampleCount: 16_000,
+            previousCaptureInputSampleCount: 16_000,
+            activityGateEnabled: true
+        ))
+    }
+
+    func testUnfilteredSessionRetainsAcceptedBufferDiagnostic() {
+        XCTAssertTrue(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 2_000,
+            previousBufferCount: 2_000,
+            currentCaptureInputSampleCount: 4_000,
+            previousCaptureInputSampleCount: 2_000,
+            activityGateEnabled: false
+        ))
+    }
+}
+
 final class StreamingSpeechActivityGateTests: XCTestCase {
     private let frameSampleCount = 320
 

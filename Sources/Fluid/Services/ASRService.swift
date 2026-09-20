@@ -1560,6 +1560,7 @@ final class ASRService: ObservableObject {
     private var resetProviderAfterStreamingRecovery = false
     private var streamingHealthCheckCount: Int = 0
     private var streamingHealthLastBufferCount: Int = 0
+    private var streamingHealthLastInputSampleCount: Int = 0
     private var streamingActivityGateEnabled: Bool = false
     private var lastProcessedSampleCount: Int = 0
     private var isProcessingChunk: Bool = false
@@ -2254,6 +2255,7 @@ final class ASRService: ObservableObject {
         self.streamingWorkState.beginSession(self.benchmarkSessionID)
         self.streamingHealthCheckCount = 0
         self.streamingHealthLastBufferCount = 0
+        self.streamingHealthLastInputSampleCount = 0
         self.silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
         let captureSessionID = self.benchmarkSessionID
         // Start media work alongside microphone startup; never await it on the
@@ -5382,17 +5384,26 @@ final class ASRService: ObservableObject {
         self.streamingHealthCheckCount += 1
         if self.streamingHealthCheckCount >= 3 {
             let currentBufferCount = self.audioBuffer.count
-            if currentBufferCount == self.streamingHealthLastBufferCount,
-               currentBufferCount < 16_000,
-               self.streamingActivityGateEnabled == false
-            {
+            let currentCaptureInputSampleCount = self.audioCapturePipeline.captureInputSampleCount(
+                sessionID: sessionID
+            )
+            if StreamingCaptureHealthAssessment.isStalled(
+                currentBufferCount: currentBufferCount,
+                previousBufferCount: self.streamingHealthLastBufferCount,
+                currentCaptureInputSampleCount: currentCaptureInputSampleCount,
+                previousCaptureInputSampleCount: self.streamingHealthLastInputSampleCount,
+                activityGateEnabled: self.streamingActivityGateEnabled
+            ) {
                 DebugLogger.shared.warning(
-                    "Audio buffer not growing after three streaming intervals (count: \(currentBufferCount)). " +
+                    "Audio capture not progressing after three streaming intervals " +
+                        "(bufferCount: \(currentBufferCount), " +
+                        "captureInputSamples: \(currentCaptureInputSampleCount)). " +
                         "Audio capture may have failed. Check if engine is running and tap is installed.",
                     source: "ASRService"
                 )
             }
             self.streamingHealthLastBufferCount = currentBufferCount
+            self.streamingHealthLastInputSampleCount = currentCaptureInputSampleCount
             self.streamingHealthCheckCount = 0
         }
 
@@ -6079,6 +6090,24 @@ private extension ASRService {
     }
 }
 
+// MARK: - Streaming capture health
+
+struct StreamingCaptureHealthAssessment {
+    static func isStalled(
+        currentBufferCount: Int,
+        previousBufferCount: Int,
+        currentCaptureInputSampleCount: Int,
+        previousCaptureInputSampleCount: Int,
+        activityGateEnabled: Bool
+    ) -> Bool {
+        guard currentBufferCount < 16_000 else { return false }
+        if activityGateEnabled {
+            return currentCaptureInputSampleCount == previousCaptureInputSampleCount
+        }
+        return currentBufferCount == previousBufferCount
+    }
+}
+
 // MARK: - Streaming speech activity gate
 
 /// Removes sustained low-level background audio before it reaches streaming ASR.
@@ -6353,6 +6382,15 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         self.smoothedLevel = 0.0
         self.lock.unlock()
         self.onLevel(0.0)
+    }
+
+    func captureInputSampleCount(sessionID: Int) -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.recordingEnabled,
+              self.recordingSessionID == sessionID
+        else { return 0 }
+        return self.captureHealthTotalSampleCount
     }
 
     /// Compatibility for capture teardown paths. Session-scoped timestamps
