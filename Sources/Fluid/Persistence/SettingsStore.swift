@@ -1865,6 +1865,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Filters sustained low-level background audio before streaming and final ASR.
+    /// Opt-in so unusually quiet speech keeps the existing behavior by default.
+    var lowLevelBackgroundAudioFilterEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.lowLevelBackgroundAudioFilterEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.lowLevelBackgroundAudioFilterEnabled)
+        }
+    }
+
     var enableAIStreaming: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.enableAIStreaming)
@@ -3299,6 +3309,7 @@ final class SettingsStore: ObservableObject {
             experimentalParakeetUnifiedFinalEnabled: self.experimentalParakeetUnifiedFinalEnabled,
             showHistoryPerformanceMetrics: self.showHistoryPerformanceMetrics,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
+            lowLevelBackgroundAudioFilterEnabled: self.lowLevelBackgroundAudioFilterEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
@@ -3437,6 +3448,9 @@ final class SettingsStore: ObservableObject {
         }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
+        }
+        if let lowLevelBackgroundAudioFilterEnabled = payload.lowLevelBackgroundAudioFilterEnabled {
+            self.lowLevelBackgroundAudioFilterEnabled = lowLevelBackgroundAudioFilterEnabled
         }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
@@ -5450,6 +5464,7 @@ private extension SettingsStore {
         static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
         static let showHistoryPerformanceMetrics = "ShowHistoryPerformanceMetrics"
         static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
+        static let lowLevelBackgroundAudioFilterEnabled = "LowLevelBackgroundAudioFilterEnabled"
         static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
