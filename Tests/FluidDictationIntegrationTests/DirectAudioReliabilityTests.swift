@@ -4,6 +4,139 @@ import CoreAudio
 import Foundation
 import XCTest
 
+final class StreamingCaptureHealthAssessmentTests: XCTestCase {
+    func testFilteredSilenceUsesRawCaptureProgressInsteadOfAcceptedBuffer() {
+        XCTAssertFalse(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 0,
+            previousBufferCount: 0,
+            currentCaptureInputSampleCount: 16_000,
+            previousCaptureInputSampleCount: 0,
+            activityGateEnabled: true
+        ))
+    }
+
+    func testFilteredSessionStillDetectsStoppedRawCapture() {
+        XCTAssertTrue(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 0,
+            previousBufferCount: 0,
+            currentCaptureInputSampleCount: 16_000,
+            previousCaptureInputSampleCount: 16_000,
+            activityGateEnabled: true
+        ))
+    }
+
+    func testUnfilteredSessionRetainsAcceptedBufferDiagnostic() {
+        XCTAssertTrue(StreamingCaptureHealthAssessment.isStalled(
+            currentBufferCount: 2_000,
+            previousBufferCount: 2_000,
+            currentCaptureInputSampleCount: 4_000,
+            previousCaptureInputSampleCount: 2_000,
+            activityGateEnabled: false
+        ))
+    }
+}
+
+final class StreamingSpeechActivityGateTests: XCTestCase {
+    private let frameSampleCount = 320
+
+    func testRejectsSustainedFaintBackgroundAudio() {
+        var gate = StreamingSpeechActivityGate()
+        // A representative faint background signal remains comfortably beneath
+        // both production activity limits for every 20 ms frame.
+        let televisionFrame = (0..<self.frameSampleCount).map { index in
+            index.isMultiple(of: 8) ? Float(0.0023) : Float.zero
+        }
+        let televisionOnly = Array(repeating: televisionFrame, count: 100).flatMap { $0 }
+
+        let output = gate.process(televisionOnly) + gate.finish()
+
+        XCTAssertTrue(output.isEmpty)
+    }
+
+    func testPreservesQuietSpeechImmediatelyAboveActivityThreshold() {
+        var gate = StreamingSpeechActivityGate()
+        let quietSpeech = self.frames(count: 6, amplitude: 0.0021)
+
+        let output = gate.process(quietSpeech) + gate.finish()
+
+        XCTAssertEqual(output, quietSpeech)
+    }
+
+    func testPreservesSpeechOnsetWithPreRollAndRetainsWholeUtterance() throws {
+        var gate = StreamingSpeechActivityGate()
+        let leadingSilence = self.frames(count: 50, amplitude: 0.0005)
+        let speech = self.frames(count: 10, amplitude: 0.02)
+        let trailingSilence = self.frames(count: 30, amplitude: 0.0005)
+
+        let output = gate.process(leadingSilence + speech + trailingSilence) + gate.finish()
+        let firstSpeechSample = try XCTUnwrap(output.firstIndex { abs($0) >= 0.019 })
+
+        XCTAssertEqual(firstSpeechSample, 6 * self.frameSampleCount)
+        XCTAssertEqual(output.filter { abs($0) >= 0.019 }.count, speech.count)
+        XCTAssertEqual(output.count, 34 * self.frameSampleCount)
+    }
+
+    func testRejectsSingleLoudTransientWithoutOpening() {
+        var gate = StreamingSpeechActivityGate()
+        let quiet = self.frames(count: 20, amplitude: 0.0005)
+        let click = self.frames(count: 1, amplitude: 0.02)
+
+        let output = gate.process(quiet + click + quiet) + gate.finish()
+
+        XCTAssertTrue(output.isEmpty)
+    }
+
+    func testLongPauseIsCompressedButBothSpeechBurstsRemainComplete() {
+        var gate = StreamingSpeechActivityGate()
+        let speech = self.frames(count: 10, amplitude: 0.02)
+        let longPause = self.frames(count: 100, amplitude: 0.0005)
+
+        let output = gate.process(speech + longPause + speech) + gate.finish()
+
+        XCTAssertEqual(output.filter { abs($0) >= 0.019 }.count, speech.count * 2)
+        XCTAssertLessThan(output.count, speech.count * 2 + longPause.count)
+    }
+
+    func testArbitraryCallbackBoundariesProduceSameResult() {
+        let input =
+            self.frames(count: 20, amplitude: 0.0005) +
+            self.frames(count: 12, amplitude: 0.02) +
+            self.frames(count: 30, amplitude: 0.0005)
+        var contiguousGate = StreamingSpeechActivityGate()
+        let contiguousOutput = contiguousGate.process(input) + contiguousGate.finish()
+
+        var chunkedGate = StreamingSpeechActivityGate()
+        var chunkedOutput: [Float] = []
+        var index = 0
+        let chunkSizes = [137, 503, 61, 997, 211]
+        var chunkIndex = 0
+        while index < input.count {
+            let end = min(index + chunkSizes[chunkIndex % chunkSizes.count], input.count)
+            chunkedOutput.append(contentsOf: chunkedGate.process(Array(input[index..<end])))
+            index = end
+            chunkIndex += 1
+        }
+        chunkedOutput.append(contentsOf: chunkedGate.finish())
+
+        XCTAssertEqual(chunkedOutput, contiguousOutput)
+    }
+
+    func testResetDoesNotLeakPriorSessionPreRoll() {
+        var gate = StreamingSpeechActivityGate()
+        _ = gate.process(self.frames(count: 8, amplitude: 0.0005))
+        gate.reset()
+
+        let speech = self.frames(count: 2, amplitude: 0.02)
+        let output = gate.process(speech) + gate.finish()
+
+        XCTAssertEqual(output, speech)
+    }
+
+    private func frames(count: Int, amplitude: Float) -> [Float] {
+        Array(repeating: amplitude, count: count * self.frameSampleCount)
+    }
+}
+
 final class DirectAudioReliabilityTests: XCTestCase {
     func testPipelineCorrelationIsInheritedAndRestoredAcrossConcurrentRequests() async {
         let original = DebugLogger.pipelineID

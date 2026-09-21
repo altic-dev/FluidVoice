@@ -62,8 +62,10 @@ struct SettingsBackupPayload: Codable, Equatable {
     let experimentalParakeetUnifiedFinalEnabled: Bool?
     // Optional so backups created before History performance details still decode.
     let showHistoryPerformanceMetrics: Bool?
-    // Optional so backups created before the silence filter still decode.
+    // Optional so backups created before silent-recording detection still decode.
     let skipSilentRecordingsEnabled: Bool?
+    // Optional so backups created before low-level background filtering still decode.
+    let lowLevelBackgroundAudioFilterEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode

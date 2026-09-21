@@ -1551,7 +1551,7 @@ final class ASRService: ObservableObject {
     private let audioBuffer = ThreadSafeAudioBuffer()
     private var lastCompletedAudioSnapshot: DictationAudioSnapshot?
 
-    // Streaming transcription state (no VAD)
+    // Streaming transcription state
     private let streamingTaskLifecycle = StreamingTaskLifecycle()
     private var streamingWorkState = StreamingTranscriptionWorkState()
     private var streamingSchedulingSessionID: Int?
@@ -1560,6 +1560,8 @@ final class ASRService: ObservableObject {
     private var resetProviderAfterStreamingRecovery = false
     private var streamingHealthCheckCount: Int = 0
     private var streamingHealthLastBufferCount: Int = 0
+    private var streamingHealthLastInputSampleCount: Int = 0
+    private var streamingActivityGateEnabled: Bool = false
     private var lastProcessedSampleCount: Int = 0
     private var isProcessingChunk: Bool = false
     private var skipNextChunk: Bool = false
@@ -2253,6 +2255,7 @@ final class ASRService: ObservableObject {
         self.streamingWorkState.beginSession(self.benchmarkSessionID)
         self.streamingHealthCheckCount = 0
         self.streamingHealthLastBufferCount = 0
+        self.streamingHealthLastInputSampleCount = 0
         self.silentPCMRecoveryWatchdog = AudioCaptureIdlePolicy.SilentPCMRecoveryWatchdog()
         let captureSessionID = self.benchmarkSessionID
         // Start media work alongside microphone startup; never await it on the
@@ -2275,11 +2278,14 @@ final class ASRService: ObservableObject {
         self.benchmarkCompletedStreamingChunks = 0
         self.benchmarkLastChunkSampleCount = 0
         (self.transcriptionProvider as? FluidAudioProvider)?.resetStreamingPreviewCache()
+        self.streamingActivityGateEnabled =
+            SettingsStore.shared.lowLevelBackgroundAudioFilterEnabled && !forDictionaryTraining
         self.audioCapturePipeline.setRecordingEnabled(
             true,
             sessionID: captureSessionID,
             attemptID: readinessAttemptID,
-            startHostTime: mach_absolute_time()
+            startHostTime: mach_absolute_time(),
+            activityGateEnabled: self.streamingActivityGateEnabled
         )
         self.refreshWordBoostStatus()
         let dims = self.currentTranscriptionAnalyticsDimensions()
@@ -2628,7 +2634,8 @@ final class ASRService: ObservableObject {
             true,
             sessionID: sessionID,
             attemptID: attemptID,
-            startHostTime: mach_absolute_time()
+            startHostTime: mach_absolute_time(),
+            activityGateEnabled: self.streamingActivityGateEnabled
         )
         DebugLogger.shared.info(
             "Retrying direct audio startup in the same session after \(reason) " +
@@ -4210,7 +4217,8 @@ final class ASRService: ObservableObject {
                     true,
                     sessionID: self.benchmarkSessionID,
                     attemptID: readinessAttemptID,
-                    startHostTime: mach_absolute_time()
+                    startHostTime: mach_absolute_time(),
+                    activityGateEnabled: self.streamingActivityGateEnabled
                 )
 
                 do {
@@ -5376,16 +5384,26 @@ final class ASRService: ObservableObject {
         self.streamingHealthCheckCount += 1
         if self.streamingHealthCheckCount >= 3 {
             let currentBufferCount = self.audioBuffer.count
-            if currentBufferCount == self.streamingHealthLastBufferCount,
-               currentBufferCount < 16_000
-            {
+            let currentCaptureInputSampleCount = self.audioCapturePipeline.captureInputSampleCount(
+                sessionID: sessionID
+            )
+            if StreamingCaptureHealthAssessment.isStalled(
+                currentBufferCount: currentBufferCount,
+                previousBufferCount: self.streamingHealthLastBufferCount,
+                currentCaptureInputSampleCount: currentCaptureInputSampleCount,
+                previousCaptureInputSampleCount: self.streamingHealthLastInputSampleCount,
+                activityGateEnabled: self.streamingActivityGateEnabled
+            ) {
                 DebugLogger.shared.warning(
-                    "Audio buffer not growing after three streaming intervals (count: \(currentBufferCount)). " +
+                    "Audio capture not progressing after three streaming intervals " +
+                        "(bufferCount: \(currentBufferCount), " +
+                        "captureInputSamples: \(currentCaptureInputSampleCount)). " +
                         "Audio capture may have failed. Check if engine is running and tap is installed.",
                     source: "ASRService"
                 )
             }
             self.streamingHealthLastBufferCount = currentBufferCount
+            self.streamingHealthLastInputSampleCount = currentCaptureInputSampleCount
             self.streamingHealthCheckCount = 0
         }
 
@@ -6072,6 +6090,145 @@ private extension ASRService {
     }
 }
 
+// MARK: - Streaming capture health
+
+struct StreamingCaptureHealthAssessment {
+    static func isStalled(
+        currentBufferCount: Int,
+        previousBufferCount: Int,
+        currentCaptureInputSampleCount: Int,
+        previousCaptureInputSampleCount: Int,
+        activityGateEnabled: Bool
+    ) -> Bool {
+        guard currentBufferCount < 16_000 else { return false }
+        if activityGateEnabled {
+            return currentCaptureInputSampleCount == previousCaptureInputSampleCount
+        }
+        return currentBufferCount == previousBufferCount
+    }
+}
+
+// MARK: - Streaming speech activity gate
+
+/// Removes sustained low-level background audio before it reaches streaming ASR.
+///
+/// The gate deliberately uses the same amplitude limits as the existing clear-
+/// silence assessment. A short attack rejects isolated clicks, while pre-roll
+/// and hangover retain complete words when speech opens or closes the gate.
+struct StreamingSpeechActivityGate: Sendable {
+    struct Configuration: Sendable {
+        let frameSampleCount: Int
+        let rmsThreshold: Float
+        let peakThreshold: Float
+        let activationFrameCount: Int
+        let preRollFrameCount: Int
+        let hangoverFrameCount: Int
+
+        static let dictation = Configuration(
+            frameSampleCount: 320, // 20 ms at FluidVoice's 16 kHz ASR rate
+            rmsThreshold: 0.002,
+            peakThreshold: 0.01,
+            activationFrameCount: 2,
+            preRollFrameCount: 8, // 160 ms
+            hangoverFrameCount: 18 // 360 ms
+        )
+    }
+
+    private let configuration: Configuration
+    private var pendingSamples: [Float] = []
+    private var preRollFrames: [[Float]] = []
+    private var consecutiveActiveFrames = 0
+    private var remainingHangoverFrames = 0
+    private(set) var isOpen = false
+
+    init(configuration: Configuration = .dictation) {
+        precondition(configuration.frameSampleCount > 0)
+        precondition(configuration.activationFrameCount > 0)
+        precondition(configuration.preRollFrameCount >= configuration.activationFrameCount)
+        precondition(configuration.hangoverFrameCount >= 0)
+        self.configuration = configuration
+        self.pendingSamples.reserveCapacity(configuration.frameSampleCount * 2)
+        self.preRollFrames.reserveCapacity(configuration.preRollFrameCount)
+    }
+
+    mutating func process(_ samples: [Float]) -> [Float] {
+        guard samples.isEmpty == false else { return [] }
+        self.pendingSamples.append(contentsOf: samples)
+
+        var output: [Float] = []
+        var consumedSampleCount = 0
+        while self.pendingSamples.count - consumedSampleCount >= self.configuration.frameSampleCount {
+            let frameEnd = consumedSampleCount + self.configuration.frameSampleCount
+            let frame = Array(self.pendingSamples[consumedSampleCount..<frameEnd])
+            consumedSampleCount = frameEnd
+            self.processFrame(frame, into: &output)
+        }
+        if consumedSampleCount > 0 {
+            self.pendingSamples.removeFirst(consumedSampleCount)
+        }
+        return output
+    }
+
+    /// Flushes only a partial frame that belongs to already-accepted speech.
+    /// Pending low-level audio and inactive pre-roll remain rejected.
+    mutating func finish() -> [Float] {
+        let output = self.isOpen ? self.pendingSamples : []
+        self.reset()
+        return output
+    }
+
+    mutating func reset() {
+        self.pendingSamples.removeAll(keepingCapacity: true)
+        self.preRollFrames.removeAll(keepingCapacity: true)
+        self.consecutiveActiveFrames = 0
+        self.remainingHangoverFrames = 0
+        self.isOpen = false
+    }
+
+    private mutating func processFrame(_ frame: [Float], into output: inout [Float]) {
+        let isActive = self.isActive(frame)
+        if self.isOpen {
+            output.append(contentsOf: frame)
+            if isActive {
+                self.remainingHangoverFrames = self.configuration.hangoverFrameCount
+            } else if self.remainingHangoverFrames > 1 {
+                self.remainingHangoverFrames -= 1
+            } else {
+                self.remainingHangoverFrames = 0
+                self.isOpen = false
+                self.consecutiveActiveFrames = 0
+            }
+            return
+        }
+
+        self.preRollFrames.append(frame)
+        if self.preRollFrames.count > self.configuration.preRollFrameCount {
+            self.preRollFrames.removeFirst()
+        }
+
+        self.consecutiveActiveFrames = isActive ? self.consecutiveActiveFrames + 1 : 0
+        guard self.consecutiveActiveFrames >= self.configuration.activationFrameCount else { return }
+
+        self.isOpen = true
+        self.remainingHangoverFrames = self.configuration.hangoverFrameCount
+        for bufferedFrame in self.preRollFrames {
+            output.append(contentsOf: bufferedFrame)
+        }
+        self.preRollFrames.removeAll(keepingCapacity: true)
+    }
+
+    private func isActive(_ frame: [Float]) -> Bool {
+        var squareSum: Double = 0
+        var peak: Float = 0
+        for sample in frame {
+            squareSum += Double(sample) * Double(sample)
+            peak = max(peak, abs(sample))
+        }
+        let rms = Float(sqrt(squareSum / Double(frame.count)))
+        return rms >= self.configuration.rmsThreshold || peak >= self.configuration.peakThreshold
+    }
+}
+
 // MARK: - Audio capture pipeline
 
 //
@@ -6095,6 +6252,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private var recordingAttemptID: UInt64 = 0
     private var recordingStartHostTime: UInt64 = 0
     private var recordingStopHostTime: UInt64?
+    private var activityGateEnabled: Bool = false
+    private var activityGate = StreamingSpeechActivityGate()
     private var resampleSourceRate: Double = 0
     private var resampleSourceFrameCursor: Int64 = 0
     private var resampleNextSourcePosition: Double = 0
@@ -6134,7 +6293,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         _ enabled: Bool,
         sessionID: Int = 0,
         attemptID: UInt64 = 0,
-        startHostTime: UInt64 = 0
+        startHostTime: UInt64 = 0,
+        activityGateEnabled: Bool = false
     ) {
         self.lock.lock()
         if enabled {
@@ -6143,6 +6303,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.recordingAttemptID = attemptID
             self.recordingStartHostTime = startHostTime == 0 ? mach_absolute_time() : startHostTime
             self.recordingStopHostTime = nil
+            self.activityGateEnabled = activityGateEnabled
+            self.activityGate.reset()
             self.resetResamplerLocked()
             self.lastInputSampleEnd = nil
             self.resetCaptureHealthLocked()
@@ -6154,6 +6316,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.recordingAttemptID = 0
             self.recordingStartHostTime = 0
             self.recordingStopHostTime = nil
+            self.activityGateEnabled = false
+            self.activityGate.reset()
             self.resetResamplerLocked()
             self.lastInputSampleEnd = nil
             self.resetCaptureHealthLocked()
@@ -6197,8 +6361,36 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     }
 
     func finishRecording() {
-        self.setRecordingEnabled(false)
+        self.lock.lock()
+        if self.recordingEnabled, self.activityGateEnabled {
+            let acceptedTail = self.activityGate.finish()
+            if acceptedTail.isEmpty == false {
+                self.audioBuffer.append(acceptedTail)
+            }
+        }
+        self.recordingEnabled = false
+        self.recordingSessionID = 0
+        self.recordingAttemptID = 0
+        self.recordingStartHostTime = 0
+        self.recordingStopHostTime = nil
+        self.activityGateEnabled = false
+        self.activityGate.reset()
+        self.resetResamplerLocked()
+        self.lastInputSampleEnd = nil
+        self.resetCaptureHealthLocked()
+        self.levelHistory.removeAll(keepingCapacity: true)
+        self.smoothedLevel = 0.0
+        self.lock.unlock()
         self.onLevel(0.0)
+    }
+
+    func captureInputSampleCount(sessionID: Int) -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard self.recordingEnabled,
+              self.recordingSessionID == sessionID
+        else { return 0 }
+        return self.captureHealthTotalSampleCount
     }
 
     /// Compatibility for capture teardown paths. Session-scoped timestamps
@@ -6317,10 +6509,16 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.firstAudioReported = true
         }
 
+        let acceptedForTranscription = self.activityGateEnabled
+            ? self.activityGate.process(mono16k)
+            : mono16k
+
         // Keep append and first-audio attribution inside the capture lock.
         // Disabling an attempt therefore returns only after every accepted
         // callback has committed its PCM and queued its attempt-scoped signal.
-        self.audioBuffer.append(mono16k)
+        if acceptedForTranscription.isEmpty == false {
+            self.audioBuffer.append(acceptedForTranscription)
+        }
         if shouldReportFirstAudio {
             let acceptedHostTime = Self.hostTime(
                 inputHostTime,
@@ -6423,6 +6621,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         self.resampleSourceFrameCursor = 0
         self.resampleNextSourcePosition = 0
         self.resamplePreviousSample = nil
+        self.activityGate.reset()
     }
 
     private func resetCaptureHealthLocked() {

@@ -949,6 +949,17 @@ struct SettingsView: View {
                                     Divider().opacity(0.2)
 
                                     self.optionToggleRow(
+                                        title: "Filter Low-Level Background Audio",
+                                        description: "Prevent faint background audio from reaching live or final transcription. May suppress unusually quiet speech.",
+                                        isOn: Binding(
+                                            get: { SettingsStore.shared.lowLevelBackgroundAudioFilterEnabled },
+                                            set: { SettingsStore.shared.lowLevelBackgroundAudioFilterEnabled = $0 }
+                                        )
+                                    )
+                                    .settingsSearchTarget(.lowLevelBackgroundAudioFilter)
+                                    Divider().opacity(0.2)
+
+                                    self.optionToggleRow(
                                         title: "Pause Media During Transcription",
                                         description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
                                         isOn: Binding(

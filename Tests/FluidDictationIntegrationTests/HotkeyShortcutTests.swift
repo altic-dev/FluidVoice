@@ -267,6 +267,36 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testLowLevelBackgroundFilterSettingIsIndependentAndLegacySafe() async throws {
+        let settingsStore = SettingsStore.shared
+        let originalSilentValue = settingsStore.skipSilentRecordingsEnabled
+        let originalFilterValue = settingsStore.lowLevelBackgroundAudioFilterEnabled
+        defer {
+            settingsStore.skipSilentRecordingsEnabled = originalSilentValue
+            settingsStore.lowLevelBackgroundAudioFilterEnabled = originalFilterValue
+        }
+
+        settingsStore.skipSilentRecordingsEnabled = false
+        settingsStore.lowLevelBackgroundAudioFilterEnabled = true
+        XCTAssertFalse(settingsStore.skipSilentRecordingsEnabled)
+        XCTAssertTrue(settingsStore.lowLevelBackgroundAudioFilterEnabled)
+
+        let document = try await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.skipSilentRecordingsEnabled, false)
+        XCTAssertEqual(document.settings.lowLevelBackgroundAudioFilterEnabled, true)
+
+        let encoded = try BackupService.shared.encode(document)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var settings = try XCTUnwrap(root["settings"] as? [String: Any])
+        settings.removeValue(forKey: "lowLevelBackgroundAudioFilterEnabled")
+        root["settings"] = settings
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root)
+        let decoded = try BackupService.shared.decode(legacyData)
+        XCTAssertNil(decoded.settings.lowLevelBackgroundAudioFilterEnabled)
+    }
+
+    @MainActor
     func testIncrementalParakeetDefaultsOnAndRoundTripsWithoutBreakingLegacyBackups() async throws {
         let defaults = UserDefaults.standard
         let originalValue = defaults.object(forKey: self.incrementalParakeetEnabledKey)

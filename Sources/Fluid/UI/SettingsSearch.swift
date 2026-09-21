@@ -36,6 +36,7 @@ enum SettingsSearchTarget: Hashable {
     case audioHistory
     case usageStreak
     case skipSilentRecordings
+    case lowLevelBackgroundAudioFilter
     case pauseMedia
     case dictionarySuggestions
     case accessibilityPermission
@@ -94,6 +95,7 @@ enum SettingsSearchTarget: Hashable {
              .audioStorage,
              .usageStreak,
              .skipSilentRecordings,
+             .lowLevelBackgroundAudioFilter,
              .pauseMedia,
              .dictionarySuggestions,
              .accessibilityPermission,
@@ -311,6 +313,11 @@ enum SettingsSearchIndex {
             target: .skipSilentRecordings,
             title: "Skip Silent Recordings",
             terms: ["silence quiet speech avoid transcription"]
+        ),
+        .init(
+            target: .lowLevelBackgroundAudioFilter,
+            title: "Filter Low-Level Background Audio",
+            terms: ["noise television TV background streaming gate speech activity faint audio"]
         ),
         .init(
             target: .pauseMedia,
