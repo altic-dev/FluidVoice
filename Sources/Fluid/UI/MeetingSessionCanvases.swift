@@ -426,7 +426,13 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     MeetingDocumentTitle(title: self.session.title)
-                        .contextMenu { self.renameMeetingAction }
+                        .editableTitle(
+                            self.session.title,
+                            id: String(describing: self.session.id),
+                            enabled: self.isQuiescent,
+                            editorFont: .system(.largeTitle, design: .serif).weight(.medium),
+                            onRename: self.onRenameSession
+                        )
                     self.meetingMetadata
                     if self.session.state != .completed { self.documentStatus }
                 }

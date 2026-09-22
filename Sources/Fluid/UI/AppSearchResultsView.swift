@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Grouped search results shown in place of the sidebar sections while the search
-/// box has text. Each group shows a few rows and a "more" row that expands it.
+/// box has text. Each category independently toggles between a preview and all hits.
 struct AppSearchResultsView: View {
     static let rowsPerGroup = 5
 
@@ -35,19 +35,26 @@ struct AppSearchResultsView: View {
                         ForEach(shown) { hit in
                             self.row(hit)
                         }
-                        if group.hits.count > shown.count {
-                            Button("\(group.hits.count - shown.count) more…") {
-                                self.expanded.insert(group.kind)
+                        if group.hits.count > Self.rowsPerGroup {
+                            Button {
+                                let wasExpanded = self.expanded.contains(group.kind)
+                                self.toggle(group)
+                                if wasExpanded { proxy.scrollTo(group.kind, anchor: .top) }
+                            } label: {
+                                Text(self.expanded.contains(group.kind) ? "Show less" : "Show more (\(group.hits.count - Self.rowsPerGroup))")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .padding(.vertical, self.theme.metrics.spacing.xs / 2)
                             }
                             .buttonStyle(.plain)
                             .font(self.theme.typography.sidebarItem)
                             .foregroundStyle(self.theme.palette.accent)
-                            .padding(.vertical, self.theme.metrics.spacing.xs / 2)
+                            .sidebarOptionHover(isSelected: false, reduceMotion: self.reduceMotion)
+                            .accessibilityLabel("\(self.expanded.contains(group.kind) ? "Show fewer" : "Show all") \(group.kind.title) results")
                         }
                     } header: {
-                        Text(group.kind.title)
-                            .font(self.theme.typography.sidebarSection)
-                            .foregroundStyle(.secondary)
+                        self.groupHeader(group)
+                            .id(group.kind)
                     }
                 }
             }
@@ -56,6 +63,44 @@ struct AppSearchResultsView: View {
             .onChange(of: self.cursor) { _, target in
                 target.map { proxy.scrollTo($0) }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func groupHeader(_ group: AppSearchGroup) -> some View {
+        if group.hits.count > Self.rowsPerGroup {
+            Button { self.toggle(group) } label: {
+                HStack(spacing: self.theme.metrics.spacing.xs) {
+                    Text(group.kind.title)
+                    Image(systemName: self.expanded.contains(group.kind) ? "chevron.down" : "chevron.right")
+                        .imageScale(.small)
+                    Spacer(minLength: 0)
+                }
+                .font(self.theme.typography.sidebarSection)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, self.theme.metrics.spacing.xs / 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sidebarOptionHover(isSelected: false, reduceMotion: self.reduceMotion)
+            .accessibilityLabel("\(group.kind.title) results")
+            .accessibilityValue(self.expanded.contains(group.kind) ? "Expanded, \(group.hits.count) results" : "Showing \(Self.rowsPerGroup) of \(group.hits.count) results")
+            .accessibilityHint(self.expanded.contains(group.kind) ? "Show fewer results" : "Show all results")
+        } else {
+            Text(group.kind.title)
+                .font(self.theme.typography.sidebarSection)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func toggle(_ group: AppSearchGroup) {
+        guard group.hits.count > Self.rowsPerGroup else { return }
+        if self.expanded.remove(group.kind) == nil {
+            self.expanded.insert(group.kind)
+        } else if let cursor = self.cursor,
+                  group.hits.dropFirst(Self.rowsPerGroup).contains(where: { $0.target == cursor })
+        {
+            self.cursor = nil
         }
     }
 

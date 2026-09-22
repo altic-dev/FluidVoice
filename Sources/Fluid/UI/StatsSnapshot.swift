@@ -21,6 +21,8 @@ nonisolated struct StatsSnapshot: Sendable {
     var weekdayBestStreak = 0
     var peakHourFormatted = "N/A"
     var topApps: [String] = []
+    var topAppUsage: [(name: String, sessions: Int)] = []
+    var hourlySessions: [Int] = Array(repeating: 0, count: 24)
     var activity: [(date: Date, words: Int)] = []
 
     /// Real speaking pace, only once there is at least a minute of measured audio.
@@ -116,9 +118,12 @@ nonisolated struct StatsSnapshot: Sendable {
         try Task.checkCancellation()
         result.mostWordsInDay = dayWords.values.max() ?? 0
         result.mostTranscriptionsInDay = dayCounts.values.max() ?? 0
-        result.topApps = appCounts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.prefix(5).map(\.key)
+        let rankedApps = appCounts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.prefix(5)
+        result.topApps = rankedApps.map(\.key)
+        result.topAppUsage = rankedApps.map { (name: $0.key, sessions: $0.value) }
+        result.hourlySessions = hours
         let today = calendar.startOfDay(for: now)
-        result.activity = (0..<30).reversed().compactMap { offset in
+        result.activity = (0..<180).reversed().compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
             return (date, dayWords[date, default: 0])
         }

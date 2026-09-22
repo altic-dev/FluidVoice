@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct MeetingModelSettingsSection: View {
+    let onModelImported: @MainActor () -> Void
     @Environment(\.theme) private var theme
     @State private var installed: MeetingNemotronModelArtifact?
     @State private var isBusy = true
@@ -97,6 +98,9 @@ struct MeetingModelSettingsSection: View {
                     self.installed = try await Task.detached(priority: .utility) {
                         try MeetingModelInstaller.install(from: source)
                     }.value
+                    // This task outlives the sheet. Refresh only model readiness, even if
+                    // the user saved or cancelled settings while the copy was running.
+                    self.onModelImported()
                 } catch {
                     self.message = error.localizedDescription
                 }

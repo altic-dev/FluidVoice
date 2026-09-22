@@ -133,8 +133,8 @@ final class CommandModeService: ObservableObject {
 
     /// Create a new chat and switch to it
     func createNewChat() {
-        // Can't switch while processing
-        guard !self.isProcessing else { return }
+        // Keep the active conversation until its command has finished or been resolved.
+        guard !self.isProcessing, self.pendingCommand == nil else { return }
 
         // Save current chat first
         self.saveCurrentChat()
@@ -143,9 +143,7 @@ final class CommandModeService: ObservableObject {
         let newSession = self.chatStore.createNewChat()
         self.currentChatID = newSession.id
         self.conversationHistory = []
-        self.pendingCommand = nil
-        self.currentTurnCount = 0
-        self.currentStep = nil
+        self.resetChatTransientState()
 
         // Clear notch state
         NotchContentState.shared.clearCommandOutput()
@@ -153,14 +151,14 @@ final class CommandModeService: ObservableObject {
     }
 
     /// Switch to a different chat by ID
-    /// Returns false if switching is blocked (e.g., during processing)
+    /// Returns false if switching is blocked or the session no longer exists.
     @discardableResult
     func switchToChat(id: String) -> Bool {
-        // Can't switch while processing
-        guard !self.isProcessing else { return false }
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
 
         // Don't switch to current
         guard id != self.currentChatID else { return true }
+        guard self.chatStore.sessions.contains(where: { $0.id == id && !$0.isArchived }) else { return false }
 
         // Save current chat first
         self.saveCurrentChat()
@@ -170,9 +168,7 @@ final class CommandModeService: ObservableObject {
 
         self.currentChatID = session.id
         self.conversationHistory = session.messages.map { self.chatMessageToMessage($0) }
-        self.pendingCommand = nil
-        self.currentTurnCount = 0
-        self.currentStep = nil
+        self.resetChatTransientState()
 
         // Sync to notch state
         self.syncToNotchState()
@@ -183,14 +179,63 @@ final class CommandModeService: ObservableObject {
 
     /// Delete current chat and switch to next
     func deleteCurrentChat() {
-        // Can't delete while processing
-        guard !self.isProcessing else { return }
+        guard let id = self.currentChatID else { return }
+        self.deleteChat(id: id)
+    }
 
-        self.chatStore.deleteCurrentChat()
+    /// Delete a saved chat, preserving the active conversation when deleting another session.
+    @discardableResult
+    func deleteChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.sessions.contains(where: { $0.id == id }) else { return false }
 
-        // Load the new current chat
-        self.loadCurrentChatFromStore()
+        let deletesCurrentChat = id == self.currentChatID
+        self.chatStore.deleteChat(id: id)
+
+        if deletesCurrentChat {
+            self.resetChatTransientState()
+            self.loadCurrentChatFromStore()
+        }
         NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    /// Move a conversation out of active history without deleting its messages.
+    @discardableResult
+    func archiveChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.sessions.contains(where: { $0.id == id && !$0.isArchived }),
+              self.chatStore.sessions.filter(\.isArchived).count < ChatHistoryStore.maxArchivedChats else { return false }
+        let archivesCurrentChat = id == self.currentChatID
+        if archivesCurrentChat { self.saveCurrentChat() }
+        guard self.chatStore.archiveChat(id: id) else { return false }
+        if archivesCurrentChat {
+            self.resetChatTransientState()
+            self.loadCurrentChatFromStore()
+        }
+        NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    /// Return an archived conversation to history without changing the current conversation.
+    @discardableResult
+    func restoreChat(id: String) -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        guard self.chatStore.restoreChat(id: id) else { return false }
+        NotchContentState.shared.refreshRecentChats()
+        return true
+    }
+
+    private func resetChatTransientState() {
+        self.pendingCommand = nil
+        self.currentTurnCount = 0
+        self.currentStep = nil
+        self.streamingText = ""
+        self.streamingThinkingText = ""
+        self.streamingBuffer = []
+        self.thinkingBuffer = []
+        self.lastUIUpdate = 0
+        self.lastThinkingUIUpdate = 0
     }
 
     /// Save current conversation to store
@@ -198,6 +243,16 @@ final class CommandModeService: ObservableObject {
         guard self.currentChatID != nil else { return }
 
         let messages = self.conversationHistory.map { self.messageToChatMessage($0) }
+        if let savedMessages = self.chatStore.currentSession?.messages,
+           savedMessages.count == messages.count,
+           zip(savedMessages, messages).allSatisfy({ saved, current in
+               saved.role == current.role && saved.content == current.content &&
+                   saved.toolCall == current.toolCall && saved.stepType == current.stepType
+           })
+        {
+            // Restoring a session recreates display IDs and timestamps; browsing is not an edit.
+            return
+        }
         self.chatStore.updateCurrentChat(messages: messages)
     }
 

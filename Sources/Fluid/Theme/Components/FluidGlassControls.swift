@@ -142,12 +142,15 @@ private struct FluidGlassActionModifier: ViewModifier {
     let circular: Bool
     let tone: Color?
     let spacious: Bool
+    let quiet: Bool
 
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26, *), !self.reduceTransparency {
+        if self.quiet, !self.prominent {
+            content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
+        } else if #available(macOS 26, *), !self.reduceTransparency {
             if self.prominent {
                 content.buttonStyle(.glassProminent).tint(self.tone ?? FluidBrandColors.blue)
-                    .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(.capsule)
+                    .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
                 content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             }
@@ -161,9 +164,37 @@ private struct FluidGlassActionModifier: ViewModifier {
     }
 }
 
+/// Native button behavior with an unboxed label and a stable, usable hit target.
+private struct FluidQuietActionStyle: ButtonStyle {
+    let circular: Bool
+    let tone: Color?
+    let spacious: Bool
+    @Environment(\.theme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let highlighted = self.isHovered && self.isEnabled
+        let height = self.spacious ? FluidButtonSize.large.controlHeight : FluidButtonSize.small.controlHeight
+        configuration.label
+            .font(self.theme.typography.bodySmall)
+            .foregroundStyle(self.tone ?? (highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
+            .padding(.horizontal, self.circular ? 0 : 8)
+            .frame(minWidth: height, minHeight: height)
+            .contentShape(Rectangle())
+            .opacity(self.isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+            .onHover { self.isHovered = $0 && self.isEnabled }
+            .onChange(of: self.isEnabled) { _, enabled in
+                if !enabled { self.isHovered = false }
+            }
+            .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: highlighted)
+    }
+}
+
 extension View {
-    func fluidGlassAction(prominent: Bool = false, circular: Bool = false, tone: Color? = nil, spacious: Bool = false) -> some View {
-        self.modifier(FluidGlassActionModifier(prominent: prominent, circular: circular, tone: tone, spacious: spacious))
+    func fluidGlassAction(prominent: Bool = false, circular: Bool = false, tone: Color? = nil, spacious: Bool = false, quiet: Bool = false) -> some View {
+        self.modifier(FluidGlassActionModifier(prominent: prominent, circular: circular, tone: tone, spacious: spacious, quiet: quiet))
             .fixedSize(horizontal: true, vertical: false)
     }
 }

@@ -45,11 +45,13 @@ struct FileTranscriptionView: View {
 
     @State private var rowMetadata: [UUID: RowMetadata] = [:]
     @State private var filteredEntries: [FileTranscriptionEntry] = []
+    // Only an explicit global-search reveal may move the library viewport.
+    @State private var pendingRevealID: UUID?
 
     private func updateSearchResults(entries: [FileTranscriptionEntry]) {
         let query = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         self.filteredEntries = query.isEmpty ? entries : entries.filter {
-            $0.fileName.localizedStandardContains(query) || $0.text.localizedStandardContains(query)
+            $0.displayTitle.localizedStandardContains(query) || $0.fileName.localizedStandardContains(query) || $0.text.localizedStandardContains(query)
         }
     }
 
@@ -168,6 +170,7 @@ struct FileTranscriptionView: View {
             self.searchQuery = ""
             self.updateSearchResults(entries: self.fileHistoryStore.entries)
             self.fileHistoryStore.selectedEntryID = id
+            self.pendingRevealID = self.filteredEntries.contains(where: { $0.id == id }) ? id : nil
             self.revealTarget = nil
         }
         .onChange(of: self.searchQuery) { _, _ in
@@ -563,14 +566,13 @@ struct FileTranscriptionView: View {
                         }
                         .padding(self.theme.metrics.spacing.sm)
                     }
-                    .task(id: self.fileHistoryStore.selectedEntryID) {
+                    .task(id: self.pendingRevealID) {
+                        guard let id = self.pendingRevealID else { return }
                         await Task.yield()
-                        guard !Task.isCancelled, let id = self.fileHistoryStore.selectedEntryID else { return }
-                        proxy.scrollTo(id, anchor: .top)
-                    }
-                    .onChange(of: self.filteredEntries.map(\.id)) { _, _ in
-                        guard let id = self.fileHistoryStore.selectedEntryID else { return }
-                        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .top) }
+                        guard !Task.isCancelled, self.pendingRevealID == id,
+                              self.filteredEntries.contains(where: { $0.id == id }) else { return }
+                        proxy.scrollTo(id)
+                        self.pendingRevealID = nil
                     }
                 }
             }
@@ -595,10 +597,11 @@ struct FileTranscriptionView: View {
         let isSelected = self.selectedEntry?.id == entry.id
         return HStack(spacing: self.theme.metrics.spacing.xs) {
             Button {
+                self.pendingRevealID = nil
                 self.fileHistoryStore.selectedEntryID = entry.id
             } label: {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                    Text(entry.fileName)
+                    Text(entry.displayTitle)
                         .font(self.theme.typography.bodySmallStrong)
                         .lineLimit(2)
                         .truncationMode(.middle)
@@ -617,6 +620,9 @@ struct FileTranscriptionView: View {
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .editableTitle(entry.displayTitle, id: entry.id.uuidString, doubleClickEnabled: false) {
+                self.fileHistoryStore.renameEntry(id: entry.id, to: $0)
+            }
             Button { self.copyToClipboard(entry.text) } label: {
                 Image(systemName: "doc.on.doc")
                     .frame(width: 32, height: 32)
@@ -624,7 +630,7 @@ struct FileTranscriptionView: View {
             }
             .buttonStyle(.plain)
             .help("Copy transcript")
-            .accessibilityLabel("Copy \(entry.fileName)")
+            .accessibilityLabel("Copy \(entry.displayTitle)")
             .padding(.trailing, self.theme.metrics.spacing.sm)
         }
         .background(
@@ -657,11 +663,13 @@ struct FileTranscriptionView: View {
     private func transcriptDetail(entry: FileTranscriptionEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                Text(entry.fileName)
+                Text(entry.displayTitle)
                     .font(self.theme.typography.sectionTitle)
                     .lineLimit(2)
                     .truncationMode(.middle)
-                    .textSelection(.enabled)
+                    .editableTitle(entry.displayTitle, id: entry.id.uuidString) {
+                        self.fileHistoryStore.renameEntry(id: entry.id, to: $0)
+                    }
                 Text(self.rowMetadata[entry.id]?.fullDate ?? "")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)

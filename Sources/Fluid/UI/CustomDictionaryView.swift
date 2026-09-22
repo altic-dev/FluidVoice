@@ -290,7 +290,9 @@ struct CustomDictionaryView: View {
                                 .accessibilityHidden(true)
                         }
                         .overlay(alignment: .leading) {
-                            Divider()
+                            Rectangle()
+                                .fill(self.theme.palette.separator)
+                                .frame(width: 1)
                                 .ignoresSafeArea(.container, edges: [.top, .bottom])
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)
@@ -2474,8 +2476,9 @@ struct CustomDictionaryView: View {
             return
         }
 
+        let originalEntries = SettingsStore.shared.customDictionaryEntries
         let updatedEntries = CustomDictionaryTrainingMerge.mergedEntries(
-            current: SettingsStore.shared.customDictionaryEntries,
+            current: originalEntries,
             replacement: replacementText,
             triggers: filtered.accepted,
             savePronunciation: savePronunciation
@@ -2491,12 +2494,18 @@ struct CustomDictionaryView: View {
                     modelKey: modelKey,
                     enrollments: enrollments,
                     automaticMatchingEnabled: true,
-                    canPersist: { DictionaryMatcherExperiment.sharedFeaturesEnabled && DictionaryMatcherExperiment.generation == pronunciationGeneration }
+                    canPersist: {
+                        DictionaryMatcherExperiment.sharedFeaturesEnabled &&
+                            DictionaryMatcherExperiment.generation == pronunciationGeneration &&
+                            SettingsStore.shared.customDictionaryEntries == originalEntries
+                    }
                 )
             } catch {
-                self.isTrainingProcessing = false
+                guard self.trainingSaveID == saveID, !Task.isCancelled, self.pronunciationEnabled else { return }
                 self.trainingHasError = true
-                self.trainingStatusMessage = "Couldn't save the voice profile. Try again."
+                self.trainingStatusMessage = SettingsStore.shared.customDictionaryEntries == originalEntries
+                    ? "Couldn't save the voice profile. Try again."
+                    : "Your dictionary changed while saving. Try again."
                 DebugLogger.shared.error(
                     "Failed to save pronunciation profile: \(error.localizedDescription)",
                     source: "PronunciationMatching"
@@ -2505,6 +2514,13 @@ struct CustomDictionaryView: View {
             }
         }
         guard self.trainingSaveID == saveID, !Task.isCancelled, self.pronunciationEnabled else { return }
+        // Profile persistence suspends this view. Never publish a snapshot over a newer
+        // manual edit, import, or deletion; keep the recordings available for a retry.
+        guard SettingsStore.shared.customDictionaryEntries == originalEntries else {
+            self.trainingHasError = true
+            self.trainingStatusMessage = "Your dictionary changed while saving. Try again."
+            return
+        }
         self.entries = updatedEntries
         self.saveEntries()
         self.wizardSavedWord = replacementText

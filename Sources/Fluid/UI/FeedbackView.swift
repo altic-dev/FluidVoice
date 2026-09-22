@@ -58,7 +58,7 @@ struct FeedbackView: View {
         .background(self.theme.palette.windowBackground)
     }
 
-    // MARK: Category
+    // MARK: - Category
 
     private var categories: some View {
         ViewThatFits(in: .horizontal) {
@@ -91,7 +91,7 @@ struct FeedbackView: View {
         }
     }
 
-    // MARK: Form
+    // MARK: - Form
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -243,7 +243,7 @@ struct FeedbackView: View {
         .keyboardShortcut(.return, modifiers: .command)
     }
 
-    // MARK: Confirmation
+    // MARK: - Confirmation
 
     private var confirmation: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
@@ -268,7 +268,7 @@ struct FeedbackView: View {
         .accessibilityElement(children: .combine)
     }
 
-    // MARK: Footer
+    // MARK: - Footer
 
     private var footer: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -287,7 +287,7 @@ struct FeedbackView: View {
         .padding(.top, self.theme.metrics.spacing.sm)
     }
 
-    // MARK: Surfaces
+    // MARK: - Surfaces
 
     /// Flat: a hairline, no shadow, no material. The page stays quiet around the message.
     private var surface: some View {
@@ -304,7 +304,7 @@ struct FeedbackView: View {
             .overlay(shape.strokeBorder(focused ? self.theme.palette.secondaryText.opacity(0.5) : self.theme.palette.separator, lineWidth: 1))
     }
 
-    // MARK: Submit
+    // MARK: - Submit
 
     @MainActor private func submit() async {
         guard !self.sending, self.draft.isValid else { return }

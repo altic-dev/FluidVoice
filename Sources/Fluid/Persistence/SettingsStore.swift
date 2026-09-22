@@ -4918,7 +4918,7 @@ final class SettingsStore: ObservableObject {
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    struct CustomDictionaryEntry: Codable, Identifiable, Hashable {
+    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable, Sendable {
         let id: UUID
         /// Words/phrases to look for (case-insensitive matching)
         var triggers: [String]

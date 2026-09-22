@@ -13,6 +13,10 @@ struct FileTranscriptScrollViewTests {
         precondition(!textView.isEditable && textView.isSelectable, "Transcript must remain read-only and selectable")
         precondition(textView.layoutManager?.allowsNonContiguousLayout == true)
         textView.setSelectedRange(NSRange(location: 8, length: 30))
+        textView.setFrameSize(NSSize(width: 450, height: 50000))
+        view.contentView.scroll(to: NSPoint(x: 0, y: 400))
+        let readingPosition = view.contentView.bounds.origin
+        precondition(readingPosition.y > 0, "Fixture must start scrolled away from the top")
         guard let storage = textView.textStorage else { preconditionFailure("Missing text storage") }
         var edits = 0
         let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: nil) { _ in
@@ -22,6 +26,7 @@ struct FileTranscriptScrollViewTests {
             view.display(entryID: id, text: text, font: .systemFont(ofSize: 14), color: .labelColor, inset: 16)
         }
         precondition(edits == 0, "Unrelated updates must not replace or restyle text storage")
+        precondition(view.contentView.bounds.origin == readingPosition, "Unrelated updates must not move the reading position")
         precondition(textView.selectedRange() == NSRange(location: 8, length: 30), "Unrelated updates must preserve selection")
         view.display(entryID: id, text: text, font: .systemFont(ofSize: 16), color: .systemBlue, inset: 20)
         precondition(textView.string == text && textView.selectedRange().length == 30, "Theme/font changes must preserve content and selection")

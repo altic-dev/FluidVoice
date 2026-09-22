@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum FluidDropdownAppearance {
+    case standard
+    case inline
+}
+
 /// Shared dropdown surface. Native menus, pickers, and searchable popovers use
 /// this appearance while retaining their own selection and presentation logic.
 struct FluidDropdownSurface: ViewModifier {
@@ -8,22 +13,30 @@ struct FluidDropdownSurface: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     var cornerRadius: CGFloat = 10
+    var appearance: FluidDropdownAppearance = .standard
 
     func body(content: Content) -> some View {
         let highlighted = self.isHovered && self.isEnabled
         content
             .background {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                    .fill(self.theme.palette.elevatedCardBackground)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                            .fill(self.theme.palette.accent.opacity(highlighted ? 0.08 : 0))
-                    }
+                if self.appearance == .inline {
+                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                        .fill(self.theme.palette.primaryText.opacity(highlighted ? 0.055 : 0))
+                } else {
+                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                        .fill(self.theme.palette.elevatedCardBackground)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                                .fill(self.theme.palette.accent.opacity(highlighted ? 0.08 : 0))
+                        }
+                }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                    .strokeBorder(highlighted ? self.theme.palette.accent.opacity(0.45) : self.theme.palette.cardBorder, lineWidth: 1)
-                    .allowsHitTesting(false)
+                if self.appearance == .standard {
+                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                        .strokeBorder(highlighted ? self.theme.palette.accent.opacity(0.45) : self.theme.palette.cardBorder, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
             }
             .contentShape(RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous))
             .onHover { self.isHovered = $0 }
@@ -43,6 +56,8 @@ struct FluidDropdownChevron: View {
 
 private struct FluidDropdownControlStyle: ViewModifier {
     var fillsWidth = false
+    var appearance: FluidDropdownAppearance = .standard
+    var tone: Color?
 
     @Environment(\.theme) private var theme
 
@@ -50,7 +65,7 @@ private struct FluidDropdownControlStyle: ViewModifier {
         if self.fillsWidth {
             content
                 .menuStyle(.button)
-                .buttonStyle(FluidDropdownButtonStyle(fillsWidth: true))
+                .buttonStyle(FluidDropdownButtonStyle(fillsWidth: true, appearance: self.appearance, tone: self.tone))
                 .menuIndicator(.hidden)
                 .labelsHidden()
         } else {
@@ -59,14 +74,14 @@ private struct FluidDropdownControlStyle: ViewModifier {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .labelsHidden()
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .padding(.leading, 12)
-                .padding(.trailing, 30)
-                .padding(.vertical, 9)
-                .fluidDropdownSurface()
+                .font(self.appearance == .inline ? self.theme.typography.statement : self.theme.typography.bodySmall)
+                .foregroundStyle(self.tone ?? self.theme.palette.primaryText)
+                .padding(.leading, self.appearance == .inline ? 8 : 12)
+                .padding(.trailing, self.appearance == .inline ? 24 : 30)
+                .padding(.vertical, self.appearance == .inline ? 8 : 9)
+                .fluidDropdownSurface(appearance: self.appearance)
                 .overlay(alignment: .trailing) {
-                    FluidDropdownChevron().padding(.trailing, 12).allowsHitTesting(false)
+                    FluidDropdownChevron().padding(.trailing, self.appearance == .inline ? 8 : 12).allowsHitTesting(false)
                 }
         }
     }
@@ -77,18 +92,20 @@ private struct FluidDropdownControlStyle: ViewModifier {
 private struct FluidDropdownButtonStyle: ButtonStyle {
     @Environment(\.theme) private var theme
     let fillsWidth: Bool
+    let appearance: FluidDropdownAppearance
+    let tone: Color?
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.theme.palette.primaryText)
+            .font(self.appearance == .inline ? self.theme.typography.statement : self.theme.typography.bodySmall)
+            .foregroundStyle(self.tone ?? self.theme.palette.primaryText)
             .frame(maxWidth: self.fillsWidth ? .infinity : nil, alignment: .leading)
-            .padding(.leading, 12)
-            .padding(.trailing, 30)
-            .padding(.vertical, 9)
-            .fluidDropdownSurface()
+            .padding(.leading, self.appearance == .inline ? 8 : 12)
+            .padding(.trailing, self.appearance == .inline ? 24 : 30)
+            .padding(.vertical, self.appearance == .inline ? 8 : 9)
+            .fluidDropdownSurface(appearance: self.appearance)
             .overlay(alignment: .trailing) {
-                FluidDropdownChevron().padding(.trailing, 12).allowsHitTesting(false)
+                FluidDropdownChevron().padding(.trailing, self.appearance == .inline ? 8 : 12).allowsHitTesting(false)
             }
     }
 }
@@ -98,13 +115,13 @@ extension View {
     /// macOS may flatten label styling when building the native control.
     /// Full-width selectors use a Menu containing an inline Picker. Native
     /// menu Pickers and borderless menus ignore custom ButtonStyle hit geometry.
-    func fluidDropdownStyle(fillsWidth: Bool = false) -> some View {
-        modifier(FluidDropdownControlStyle(fillsWidth: fillsWidth))
+    func fluidDropdownStyle(fillsWidth: Bool = false, appearance: FluidDropdownAppearance = .standard, tone: Color? = nil) -> some View {
+        modifier(FluidDropdownControlStyle(fillsWidth: fillsWidth, appearance: appearance, tone: tone))
     }
 
     /// For custom searchable controls that provide their own label and chevron.
-    func fluidDropdownSurface(cornerRadius: CGFloat = 10) -> some View {
-        modifier(FluidDropdownSurface(cornerRadius: cornerRadius))
+    func fluidDropdownSurface(cornerRadius: CGFloat = 10, appearance: FluidDropdownAppearance = .standard) -> some View {
+        modifier(FluidDropdownSurface(cornerRadius: cornerRadius, appearance: appearance))
     }
 }
 

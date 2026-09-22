@@ -59,14 +59,13 @@ extension FileTranscriptionEntry {
     /// `text` only. When diarization ran, `text` is already the speaker segments
     /// joined together, so indexing both would count every word twice.
     ///
-    /// Revision 1 is enough here: every transcription is stored under a fresh id, the
-    /// store only appends and deletes, and no backup restores these rows, so an id
-    /// never comes back with different text.
+    /// Renaming advances the persisted revision without changing the recording date.
     var searchRecord: SearchIndexRecord {
         SearchIndexRecord(
             id: self.id,
+            revision: self.searchRevision ?? 1,
             timestamp: self.timestamp,
-            text: SearchIndexRecord.joined([self.fileName, self.text])
+            text: SearchIndexRecord.joined([self.displayTitle, self.fileName, self.text])
         )
     }
 }
@@ -76,10 +75,10 @@ extension ChatSession {
     /// reloaded, so they cannot be keys; the session id is stable and the persisted
     /// search revision rises on every save regardless of wall-clock corrections.
     ///
-    /// Returns `nil` when the session id is not a UUID, which the store never
-    /// produces but a hand-edited defaults file could.
+    /// Archived sessions belong only in the Command Mode archive. Also returns
+    /// `nil` for a malformed id, which a hand-edited defaults file could contain.
     var searchRecord: SearchIndexRecord? {
-        guard let id = UUID(uuidString: self.id) else { return nil }
+        guard !self.isArchived, let id = UUID(uuidString: self.id) else { return nil }
         var parts = [self.title]
         for message in self.messages {
             parts.append(message.content)

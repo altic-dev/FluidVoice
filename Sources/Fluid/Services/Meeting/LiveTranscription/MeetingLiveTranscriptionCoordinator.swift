@@ -174,6 +174,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         let speaker = Self.speaker(for: kind)
 
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
+            self.snapshot.revision &+= 1
             if speaker == .you {
                 if self.microphoneCaptureMethod != .voiceProcessing {
                     let recentThem = MeetingLiveEchoFilter.recentThemText(
@@ -218,6 +219,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private func publish(_ transform: (MeetingLiveTranscriptSnapshot) -> MeetingLiveTranscriptSnapshot) {
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
             self.snapshot = transform(self.snapshot)
+            self.snapshot.revision &+= 1
             return self.snapshot
         }
         self.onUpdate(updated)

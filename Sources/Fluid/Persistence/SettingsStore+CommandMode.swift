@@ -52,7 +52,7 @@ extension SettingsStore {
     var commandModeReadinessIssue: String? {
         let sourceProviderID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
         if self.isPrivateAIProviderID(sourceProviderID) {
-            return "\(PrivateAIProviderFeature.displayName) for Command Mode is coming soon. Choose a verified chat provider or turn Sync off."
+            return "\(PrivateAIProviderFeature.displayName) for Command Mode is coming soon. Choose a model from a verified chat provider."
         }
 
         let providerID = self.effectiveCommandModeProviderID
@@ -71,7 +71,7 @@ extension SettingsStore {
 
         guard self.isCommandModeProviderVerified(providerID) else {
             if self.commandModeLinkedToGlobal {
-                return "Command Mode needs a verified chat provider. Verify the synced provider in AI Providers, or turn Sync off and choose one for Command Mode."
+                return "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
             }
             return "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
         }
@@ -80,11 +80,65 @@ extension SettingsStore {
     }
 
     func commandModeModels(for providerID: String) -> [String] {
-        let storedList = ModelRepository.shared.providerKeys(for: providerID).lazy
+        let canonicalKey = ModelRepository.shared.providerKey(for: providerID)
+        let keys = [canonicalKey] + ModelRepository.shared.providerKeys(for: providerID).filter { $0 != canonicalKey }.sorted()
+        let storedList = keys.lazy
             .compactMap { self.availableModelsByProvider[$0] }
             .first { !$0.isEmpty }
 
-        return storedList ?? ModelRepository.shared.defaultModels(for: providerID)
+        let models: [String]
+        if let storedList {
+            models = storedList
+        } else if let saved = self.commandModeSavedProvider(for: providerID), !saved.models.isEmpty {
+            models = saved.models
+        } else {
+            models = ModelRepository.shared.defaultModels(for: providerID)
+        }
+        var seen = Set<String>()
+        return models.compactMap { rawModel in
+            let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !model.isEmpty && seen.insert(model).inserted ? model : nil
+        }
+    }
+
+    /// Build on presentation/catalog events, not while rendering rows. Credentials use the existing process cache.
+    func commandModeModelCatalog() -> [CommandModelOption] {
+        let apiKeys = self.providerAPIKeys
+        let providers = ModelRepository.shared.builtInProvidersList() + self.savedProviders.map { (id: $0.id, name: $0.name) }
+        var seenProviders = Set<String>()
+        var options: [CommandModelOption] = []
+        for provider in providers {
+            let providerID = provider.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = ModelRepository.shared.providerKey(for: providerID)
+            guard !providerID.isEmpty, !self.isPrivateAIProviderID(providerID),
+                  seenProviders.insert(key).inserted,
+                  self.isCommandModeProviderVerified(providerID, apiKeys: apiKeys) else { continue }
+            var seenModels = Set<String>()
+            for rawModel in self.commandModeModels(for: providerID) {
+                let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !model.isEmpty, !self.isUnsupportedCommandModeModel(model), seenModels.insert(model).inserted else { continue }
+                options.append(CommandModelOption(
+                    providerID: providerID,
+                    providerName: provider.name,
+                    modelID: model,
+                    displayName: ModelDisplayName.forID(model)
+                ))
+            }
+        }
+        return options
+    }
+
+    /// A chooser selection is local to Command Mode; global and Edit Mode routes stay unchanged.
+    @discardableResult
+    func selectCommandModeModel(_ option: CommandModelOption) -> Bool {
+        let key = ModelRepository.shared.providerKey(for: option.providerID)
+        guard let current = self.commandModeModelCatalog().first(where: {
+            ModelRepository.shared.providerKey(for: $0.providerID) == key && $0.modelID == option.modelID
+        }) else { return false }
+        self.commandModeSelectedProviderID = current.providerID
+        self.commandModeSelectedModel = current.modelID
+        self.commandModeLinkedToGlobal = false
+        return true
     }
 
     private func supportedCommandModeProviderID(_ providerID: String) -> String? {
@@ -95,17 +149,27 @@ extension SettingsStore {
     }
 
     func isCommandModeProviderVerified(_ providerID: String) -> Bool {
+        self.isCommandModeProviderVerified(providerID, apiKeys: self.providerAPIKeys)
+    }
+
+    private func isCommandModeProviderVerified(_ providerID: String, apiKeys: [String: String]) -> Bool {
         guard !self.isPrivateAIProviderID(providerID) else { return false }
         let key = ModelRepository.shared.providerKey(for: providerID)
         guard let stored = self.verifiedProviderFingerprints[key] else { return false }
 
         let baseURL = self.commandModeProviderBaseURL(for: providerID)
-        let apiKey = self.getAPIKey(for: providerID) ?? ""
+        // Match getAPIKey exactly: the registered ID takes precedence, then its canonical key.
+        let apiKey = apiKeys[providerID] ?? apiKeys[key] ?? ""
         return self.commandModeProviderFingerprint(baseURL: baseURL, apiKey: apiKey) == stored
     }
 
+    private func commandModeSavedProvider(for providerID: String) -> SavedProvider? {
+        let key = ModelRepository.shared.providerKey(for: providerID)
+        return self.savedProviders.first { ModelRepository.shared.providerKey(for: $0.id) == key }
+    }
+
     private func commandModeProviderBaseURL(for providerID: String) -> String {
-        if let saved = self.savedProviders.first(where: { $0.id == providerID }) {
+        if let saved = self.commandModeSavedProvider(for: providerID) {
             return saved.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if ModelRepository.shared.isBuiltIn(providerID) {

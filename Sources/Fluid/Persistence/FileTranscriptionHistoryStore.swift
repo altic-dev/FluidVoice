@@ -14,6 +14,10 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let timestamp: Date
     let fileName: String
+    /// User-facing name; never changes the source file or its original filename.
+    var customTitle: String?
+    var searchRevision: UInt64?
+    var displayTitle: String { self.customTitle ?? self.fileName }
     let duration: TimeInterval
     let processingTime: TimeInterval
     let confidence: Float
@@ -62,7 +66,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, timestamp, fileName, duration, processingTime, confidence, text, speakerSegments
-        case speakerLabelingNotice, speakerLabelingGaps
+        case speakerLabelingNotice, speakerLabelingGaps, customTitle, searchRevision
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +74,8 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.id = try c.decode(UUID.self, forKey: .id)
         self.timestamp = try c.decode(Date.self, forKey: .timestamp)
         self.fileName = try c.decode(String.self, forKey: .fileName)
+        self.customTitle = try c.decodeIfPresent(String.self, forKey: .customTitle)
+        self.searchRevision = try c.decodeIfPresent(UInt64.self, forKey: .searchRevision)
         self.duration = try c.decode(TimeInterval.self, forKey: .duration)
         self.processingTime = try c.decode(TimeInterval.self, forKey: .processingTime)
         self.confidence = try c.decode(Float.self, forKey: .confidence)
@@ -85,6 +91,8 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         try c.encode(self.id, forKey: .id)
         try c.encode(self.timestamp, forKey: .timestamp)
         try c.encode(self.fileName, forKey: .fileName)
+        try c.encodeIfPresent(self.customTitle, forKey: .customTitle)
+        try c.encodeIfPresent(self.searchRevision, forKey: .searchRevision)
         try c.encode(self.duration, forKey: .duration)
         try c.encode(self.processingTime, forKey: .processingTime)
         try c.encode(self.confidence, forKey: .confidence)
@@ -146,7 +154,7 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 final class FileTranscriptionHistoryStore: ObservableObject {
     static let shared = FileTranscriptionHistoryStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let maxEntries = 50
 
     private enum Keys {
@@ -156,7 +164,8 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     @Published private(set) var entries: [FileTranscriptionEntry] = []
     @Published var selectedEntryID: UUID?
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.loadEntries()
     }
 
@@ -185,6 +194,17 @@ final class FileTranscriptionHistoryStore: ObservableObject {
             "Added file transcription to history (total: \(self.entries.count))",
             source: "FileTranscriptionHistoryStore"
         )
+    }
+
+    func renameEntry(id: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = self.entries.firstIndex(where: { $0.id == id }),
+              self.entries[index].displayTitle != trimmed else { return }
+        self.entries[index].customTitle = trimmed
+        let revision = self.entries[index].searchRevision ?? 1
+        self.entries[index].searchRevision = revision == .max ? .max : revision + 1
+        self.saveEntries()
     }
 
     func deleteEntry(id: UUID) {

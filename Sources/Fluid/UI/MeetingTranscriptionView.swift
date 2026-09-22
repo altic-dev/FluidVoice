@@ -108,6 +108,7 @@ struct MeetingTranscriptionView: View {
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
     @State private var cachedModelReady = false
+    @State private var modelReadinessRevision = 0
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
     @State private var meetingHistory: [MeetingSession] = []
@@ -217,10 +218,17 @@ struct MeetingTranscriptionView: View {
                             onExportTranscript: { self.exportTranscript($0, format: $1, includeEchoes: false) },
                             onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
                             onDeleteRequest: { self.pendingDeleteSessionID = $0 },
+                            onRename: { self.renameMeetingSession(sessionID: $0, to: $1) },
                             onRecordAgain: self.recordAgain
                         )
                         .frame(width: min(272, geometry.size.width))
-                        .overlay(alignment: .leading) { Divider() }
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(self.theme.palette.separator)
+                                .frame(width: 1)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
@@ -277,7 +285,8 @@ struct MeetingTranscriptionView: View {
                 onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
                 onOpenVoiceEngine: self.onOpenVoiceEngine,
                 onCancel: self.cancelMeetingSettings,
-                onSave: self.saveMeetingSettings
+                onSave: self.saveMeetingSettings,
+                onModelImported: { Task { await self.refreshModelReadiness() } }
             )
             .background(FluidSheetOutsideDismiss(onCancel: self.cancelMeetingSettings))
             .interactiveDismissDisabled()
@@ -477,12 +486,22 @@ struct MeetingTranscriptionView: View {
     }
 
     @MainActor
+    private func refreshModelReadiness() async {
+        self.modelReadinessRevision += 1
+        let revision = self.modelReadinessRevision
+        let ready = await Task.detached(priority: .utility) {
+            CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
+        }.value
+        // An older check must not overwrite an import completion's newer result.
+        guard self.modelReadinessRevision == revision else { return }
+        self.cachedModelReady = ready
+    }
+
+    @MainActor
     private func refreshSources(requestPermissions: Bool) async {
         guard !self.isRefreshingSources else { return }
         self.isRefreshingSources = true
-        self.cachedModelReady = await Task.detached(priority: .utility) {
-            CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
-        }.value
+        await self.refreshModelReadiness()
         self.refreshCachedReadiness()
         defer {
             self.refreshCachedReadiness()
@@ -894,6 +913,7 @@ struct MeetingTranscriptionView: View {
         panel.prompt = "Choose"
         guard panel.runModal() == .OK, let destinationFolder = panel.url else { return }
 
+        self.actionErrorMessage = nil
         Task {
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
@@ -911,17 +931,38 @@ struct MeetingTranscriptionView: View {
                     self.actionErrorMessage = "Export failed: recording no longer on disk."
                     return
                 }
-                try Self.stageExport(of: freshSession, from: sourceDirectory, into: destinationFolder)
+                try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder)
             } catch {
                 self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
     }
 
-    private static func stageExport(
+    private nonisolated static let audioExportLock = NSLock()
+
+    nonisolated static func exportAudioFiles(
         of session: MeetingSession,
         from sourceDirectory: URL,
-        into destinationFolder: URL
+        into destinationFolder: URL,
+        copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
+    ) async throws {
+        // The session and URLs are immutable snapshots; no view state crosses to the worker.
+        try await Task.detached(priority: .utility) {
+            let accessing = destinationFolder.startAccessingSecurityScopedResource()
+            defer { if accessing { destinationFolder.stopAccessingSecurityScopedResource() } }
+            // Preserve the old serial export semantics when users request another export
+            // while copying. The lock and all filesystem work stay off the main actor.
+            try Self.audioExportLock.withLock {
+                try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
+            }
+        }.value
+    }
+
+    private nonisolated static func stageExport(
+        of session: MeetingSession,
+        from sourceDirectory: URL,
+        into destinationFolder: URL,
+        copyItem: (URL, URL) throws -> Void
     ) throws {
         let fileManager = FileManager.default
         let baseName = Self.sanitizedExportName(session.title)
@@ -935,10 +976,7 @@ struct MeetingTranscriptionView: View {
                     let sourceURL = chunk.fileURL(relativeTo: sourceDirectory)
                     let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
                     let fileName = "\(track.kind.rawValue)-\(String(format: "%03d", chunk.sequence)).\(ext)"
-                    try fileManager.copyItem(
-                        at: sourceURL,
-                        to: stagingDirectory.appendingPathComponent(fileName, isDirectory: false)
-                    )
+                    try copyItem(sourceURL, stagingDirectory.appendingPathComponent(fileName, isDirectory: false))
                 }
             }
             var destinationName = name
@@ -955,13 +993,13 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private static func sanitizedExportName(_ title: String) -> String {
+    private nonisolated static func sanitizedExportName(_ title: String) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-")
         let sanitized = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }.prefix(80))
         return sanitized.isEmpty ? "Meeting" : sanitized
     }
 
-    private static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
+    private nonisolated static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
         var candidate = baseName
         var suffix = 2
         while fileManager.fileExists(atPath: folder.appendingPathComponent(candidate).path) {
@@ -1270,29 +1308,40 @@ struct MeetingTranscriptionCanvas: View {
             case let .processing(session, stage):
                 MeetingProcessingCanvas(session: session, stage: stage)
             case let .result(session):
-                MeetingResultCanvas(
-                    session: session,
-                    isQuiescent: self.isQuiescent,
-                    canUndo: self.canUndoCorrection(session.id),
-                    onCopyTranscript: self.onCopyTranscript,
-                    onExportTranscript: self.onExportTranscript,
-                    onReassignSegment: { segmentID, speakerID in
-                        self.onReassignSegment(session.id, segmentID, speakerID)
-                    },
-                    onNameUnknownSegment: { segmentID, name in
-                        self.onNameUnknownSegment(session.id, segmentID, name)
-                    },
-                    onRenameSpeaker: { speakerID, name in
-                        self.onRenameSpeaker(session.id, speakerID, name)
-                    },
-                    onMergeSpeakers: { source, target in
-                        self.onMergeSpeakers(session.id, source, target)
-                    },
-                    onUndo: { self.onUndoCorrection(session.id) },
-                    onRenameSession: { title in self.onRenameSession(session.id, title) },
-                    onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
-                    onClose: self.onCloseSelection
-                )
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                    if let errorMessage, !errorMessage.isEmpty {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 760, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .accessibilityIdentifier("meeting-result-action-error")
+                    }
+                    MeetingResultCanvas(
+                        session: session,
+                        isQuiescent: self.isQuiescent,
+                        canUndo: self.canUndoCorrection(session.id),
+                        onCopyTranscript: self.onCopyTranscript,
+                        onExportTranscript: self.onExportTranscript,
+                        onReassignSegment: { segmentID, speakerID in
+                            self.onReassignSegment(session.id, segmentID, speakerID)
+                        },
+                        onNameUnknownSegment: { segmentID, name in
+                            self.onNameUnknownSegment(session.id, segmentID, name)
+                        },
+                        onRenameSpeaker: { speakerID, name in
+                            self.onRenameSpeaker(session.id, speakerID, name)
+                        },
+                        onMergeSpeakers: { source, target in
+                            self.onMergeSpeakers(session.id, source, target)
+                        },
+                        onUndo: { self.onUndoCorrection(session.id) },
+                        onRenameSession: { title in self.onRenameSession(session.id, title) },
+                        onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
+                        onClose: self.onCloseSelection
+                    )
+                }
             case let .failed(session, message):
                 MeetingFailureCanvas(
                     session: session,
@@ -1423,7 +1472,11 @@ private struct MeetingHistoryInspector: View {
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
     let onDeleteAudioRequest: (MeetingSessionID) -> Void
     let onDeleteRequest: (MeetingSessionID) -> Void
+    let onRename: (MeetingSessionID, String) -> Void
     let onRecordAgain: (MeetingSession) -> Void
+
+    @State private var renameSessionID: MeetingSessionID?
+    @State private var renameDraft = ""
 
     @Environment(\.theme) private var theme
     @State private var searchText = ""
@@ -1530,6 +1583,7 @@ private struct MeetingHistoryInspector: View {
                                             isQuiescent: self.isQuiescent,
                                             onSelect: { self.selectedSessionID = session.id },
                                             onRetry: { self.onRetry(session.id) },
+                                            onRename: { self.onRename(session.id, $0) },
                                             onRecordAgain: { self.onRecordAgain(session) }
                                         )
                                         .id(session.id)
@@ -1577,6 +1631,22 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .background(self.theme.materials.sidebar)
+        .alert("Rename Meeting", isPresented: Binding(
+            get: { self.renameSessionID != nil },
+            set: { if !$0 { self.renameSessionID = nil } }
+        )) {
+            TextField("Meeting title", text: self.$renameDraft)
+            Button("Cancel", role: .cancel) { self.renameSessionID = nil }
+            Button("Rename") {
+                if self.isQuiescent, let id = self.renameSessionID,
+                   self.sessions.contains(where: { $0.id == id })
+                {
+                    self.onRename(id, self.renameDraft)
+                }
+                self.renameSessionID = nil
+            }
+            .disabled(!self.isQuiescent || self.renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 
     private func sessionID(
@@ -1592,6 +1662,12 @@ private struct MeetingHistoryInspector: View {
 
     @ViewBuilder
     private func contextMenu(for session: MeetingSession) -> some View {
+        Button("Rename…", systemImage: "pencil") {
+            self.renameDraft = session.title
+            self.renameSessionID = session.id
+        }
+        .disabled(!self.isQuiescent)
+        Divider()
         if session.hasRetryableAudio, session.state == .failed || session.state == .interrupted {
             Button("Retry Transcription", systemImage: "arrow.clockwise") {
                 self.onRetry(session.id)
@@ -1649,6 +1725,7 @@ private struct MeetingHistoryRow: View {
     let isQuiescent: Bool
     let onSelect: () -> Void
     let onRetry: () -> Void
+    let onRename: (String) -> Void
     let onRecordAgain: () -> Void
 
     @Environment(\.theme) private var theme
@@ -1680,6 +1757,7 @@ private struct MeetingHistoryRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
             .accessibilityAddTraits(self.isSelected ? .isSelected : [])
+            .editableTitle(self.session.title, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {
                 Button(actionLabel, action: self.performAction)
                     .buttonStyle(.borderless)

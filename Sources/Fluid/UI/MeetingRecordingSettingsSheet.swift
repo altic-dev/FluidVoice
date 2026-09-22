@@ -36,6 +36,7 @@ struct MeetingRecordingSettingsSheet: View {
     let readiness: MeetingSetupReadiness
     let isFirstSetup: Bool
     let onRefreshSources: () -> Void
+    let onModelImported: @MainActor () -> Void
     let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
     let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
     let onOpenVoiceEngine: () -> Void
@@ -60,6 +61,7 @@ struct MeetingRecordingSettingsSheet: View {
         onOpenVoiceEngine: @escaping () -> Void,
         onCancel: @escaping () -> Void,
         onSave: @escaping () -> Void,
+        onModelImported: @escaping @MainActor () -> Void = {},
         initialSection: MeetingSettingsSection = .recording
     ) {
         self._draft = draft
@@ -69,6 +71,7 @@ struct MeetingRecordingSettingsSheet: View {
         self.readiness = readiness
         self.isFirstSetup = isFirstSetup
         self.onRefreshSources = onRefreshSources
+        self.onModelImported = onModelImported
         self.onOpenMicrophoneSettings = onOpenMicrophoneSettings
         self.onOpenScreenRecordingSettings = onOpenScreenRecordingSettings
         self.onOpenVoiceEngine = onOpenVoiceEngine
@@ -273,7 +276,7 @@ struct MeetingRecordingSettingsSheet: View {
                     .accessibilityLabel("Refresh audio sources")
             }
 
-            MeetingModelSettingsSection()
+            MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {
                 FluidManagementGroup(title: "Permissions need attention") {

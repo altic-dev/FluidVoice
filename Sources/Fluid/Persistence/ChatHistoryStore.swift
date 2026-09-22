@@ -56,10 +56,16 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 struct ChatSession: Codable, Identifiable, Equatable {
     let id: String
     var title: String
+    var hasCustomTitle: Bool = false
     let createdAt: Date
     var updatedAt: Date
     var searchRevision: UInt64?
+    var isArchived: Bool
     var messages: [ChatMessage]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, hasCustomTitle, createdAt, updatedAt, searchRevision, isArchived, messages
+    }
 
     init(
         id: String = UUID().uuidString,
@@ -67,6 +73,7 @@ struct ChatSession: Codable, Identifiable, Equatable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         searchRevision: UInt64? = nil,
+        isArchived: Bool = false,
         messages: [ChatMessage] = []
     ) {
         self.id = id
@@ -74,7 +81,20 @@ struct ChatSession: Codable, Identifiable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.searchRevision = searchRevision
+        self.isArchived = isArchived
         self.messages = messages
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.hasCustomTitle = try container.decodeIfPresent(Bool.self, forKey: .hasCustomTitle) ?? false
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.searchRevision = try container.decodeIfPresent(UInt64.self, forKey: .searchRevision)
+        self.isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        self.messages = try container.decode([ChatMessage].self, forKey: .messages)
     }
 
     mutating func markUpdated(at date: Date = Date()) {
@@ -86,6 +106,7 @@ struct ChatSession: Codable, Identifiable, Equatable {
 
     /// Generate title from first user message (max 50 chars)
     mutating func updateTitleFromFirstMessage() {
+        guard !self.hasCustomTitle else { return }
         guard let firstUserMessage = messages.first(where: { $0.role == .user }) else { return }
         let content = firstUserMessage.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if content.count > 50 {
@@ -108,6 +129,7 @@ struct ChatSession: Codable, Identifiable, Equatable {
 @MainActor
 final class ChatHistoryStore: ObservableObject {
     static let shared = ChatHistoryStore()
+    static let maxArchivedChats = 30
 
     private let defaults = UserDefaults.standard
     private let maxChats = 30
@@ -123,17 +145,10 @@ final class ChatHistoryStore: ObservableObject {
     private init() {
         self.loadSessions()
 
-        // Ensure there's always a current chat
-        if self.currentChatID == nil || self.sessions.first(where: { $0.id == currentChatID }) == nil {
-            if let first = sessions.first {
-                self.currentChatID = first.id
-            } else {
-                // Create initial chat
-                let newChat = ChatSession()
-                self.sessions = [newChat]
-                self.currentChatID = newChat.id
-                self.saveSessions()
-            }
+        // Archived sessions remain saved, but cannot become the active conversation on launch.
+        if self.currentSession == nil {
+            self.selectMostRecentActiveChat()
+            self.saveSessions()
         }
     }
 
@@ -142,12 +157,12 @@ final class ChatHistoryStore: ObservableObject {
     /// Get the current active chat session
     var currentSession: ChatSession? {
         guard let id = currentChatID else { return nil }
-        return self.sessions.first(where: { $0.id == id })
+        return self.sessions.first(where: { $0.id == id && !$0.isArchived })
     }
 
     /// Get recent chats for dropdown (excluding current, sorted by updatedAt)
     func getRecentChats(excludingCurrent: Bool = true) -> [ChatSession] {
-        var result = self.sessions.sorted { $0.updatedAt > $1.updatedAt }
+        var result = self.sessions.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
         if excludingCurrent, let currentID = currentChatID {
             result = result.filter { $0.id != currentID }
         }
@@ -170,6 +185,12 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Save/update a chat session
     func saveChat(_ session: ChatSession) {
+        if session.isArchived,
+           !self.sessions.contains(where: { $0.id == session.id && $0.isArchived }),
+           self.sessions.filter(\.isArchived).count >= Self.maxArchivedChats
+        {
+            return
+        }
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             var updated = session
             updated.markUpdated()
@@ -198,9 +219,22 @@ final class ChatHistoryStore: ObservableObject {
         self.saveSessions()
     }
 
+    /// Rename only metadata; preserve selection, messages, archive state and ordering.
+    func renameChat(id: String, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = self.sessions.firstIndex(where: { $0.id == id }),
+              self.sessions[index].title != trimmed else { return }
+        self.sessions[index].title = trimmed
+        self.sessions[index].hasCustomTitle = true
+        let date = self.sessions[index].updatedAt
+        self.sessions[index].markUpdated(at: date)
+        self.saveSessions()
+    }
+
     /// Load a chat by ID and set as current
     func loadChat(id: String) -> ChatSession? {
-        guard let session = sessions.first(where: { $0.id == id }) else { return nil }
+        guard let session = sessions.first(where: { $0.id == id && !$0.isArchived }) else { return nil }
         self.currentChatID = id
         self.saveCurrentChatID()
         return session
@@ -211,19 +245,41 @@ final class ChatHistoryStore: ObservableObject {
         return self.loadChat(id: id)
     }
 
+    /// Archives never expire implicitly; at capacity, restore one before archiving another.
+    @discardableResult
+    func archiveChat(id: String) -> Bool {
+        guard let index = self.sessions.firstIndex(where: { $0.id == id && !$0.isArchived }),
+              self.sessions.filter(\.isArchived).count < Self.maxArchivedChats else { return false }
+        self.sessions[index].isArchived = true
+        // A restored search record must be newer than its deletion tombstone, without reordering history.
+        let updatedAt = self.sessions[index].updatedAt
+        self.sessions[index].markUpdated(at: updatedAt)
+        if self.currentChatID == id { self.selectMostRecentActiveChat() }
+        self.trimOldChats()
+        self.saveSessions()
+        return true
+    }
+
+    /// Restoring preserves conversation dates and does not change the selected session.
+    @discardableResult
+    func restoreChat(id: String) -> Bool {
+        guard let index = self.sessions.firstIndex(where: { $0.id == id && $0.isArchived }) else { return false }
+        self.sessions[index].isArchived = false
+        let updatedAt = self.sessions[index].updatedAt
+        self.sessions[index].markUpdated(at: updatedAt)
+        self.trimOldChats(preservingID: id)
+        self.saveSessions()
+        return true
+    }
+
     /// Delete a chat by ID
     func deleteChat(id: String) {
+        guard self.sessions.contains(where: { $0.id == id }) else { return }
         self.sessions.removeAll { $0.id == id }
 
         // If deleted current chat, switch to most recent or create new
         if self.currentChatID == id {
-            if let first = sessions.sorted(by: { $0.updatedAt > $1.updatedAt }).first {
-                self.currentChatID = first.id
-            } else {
-                // No chats left, create new
-                let newChat = self.createNewChat()
-                self.currentChatID = newChat.id
-            }
+            self.selectMostRecentActiveChat()
         }
 
         self.saveSessions()
@@ -242,6 +298,7 @@ final class ChatHistoryStore: ObservableObject {
 
         self.sessions[index].messages = []
         self.sessions[index].title = "New Chat"
+        self.sessions[index].hasCustomTitle = false
         self.sessions[index].markUpdated()
 
         self.saveSessions()
@@ -274,11 +331,24 @@ final class ChatHistoryStore: ObservableObject {
         self.defaults.set(self.currentChatID, forKey: Keys.currentChatID)
     }
 
-    private func trimOldChats() {
-        if self.sessions.count > self.maxChats {
-            // Sort by updatedAt and keep most recent
-            let sorted = self.sessions.sorted { $0.updatedAt > $1.updatedAt }
-            self.sessions = Array(sorted.prefix(self.maxChats))
+    private func selectMostRecentActiveChat() {
+        if let recent = self.getRecentChats(excludingCurrent: false).first {
+            self.currentChatID = recent.id
+        } else {
+            let newChat = ChatSession()
+            self.sessions.insert(newChat, at: 0)
+            self.currentChatID = newChat.id
         }
+    }
+
+    private func trimOldChats(preservingID: String? = nil) {
+        let active = self.sessions.filter { !$0.isArchived }
+        guard active.count > self.maxChats else { return }
+        // Retain archives independently; new sessions only trim the 30-session active budget.
+        let protected = active.filter { $0.id == self.currentChatID || $0.id == preservingID }
+        let candidates = active.filter { $0.id != self.currentChatID && $0.id != preservingID }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        let retainedIDs = Set((protected + candidates.prefix(self.maxChats - protected.count)).map(\.id))
+        self.sessions.removeAll { !$0.isArchived && !retainedIDs.contains($0.id) }
     }
 }

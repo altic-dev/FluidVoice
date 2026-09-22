@@ -2667,6 +2667,10 @@ struct BottomOverlayView: View {
     }
 
     private var promptSelectorDisplayLabel: String {
+        if self.layout.showsTopControls {
+            let label = self.selectedPromptLabel
+            return label.count > 8 ? "\(label.prefix(7))…" : label
+        }
         if self.activePromptMode?.normalized == .dictate {
             let label = self.selectedPromptLabel
             let limit = self.isCompactControls ? 12 : 18
@@ -2704,8 +2708,8 @@ struct BottomOverlayView: View {
 
     private var promptSelectorFontSize: CGFloat {
         if self.isPillSize { return 8 }
-        if self.isCompactControls { return 10 }
-        return max(self.layout.modeFontSize - 1, 9)
+        if self.isCompactControls { return 9 }
+        return max(self.layout.modeFontSize - 3, 9)
     }
 
     private var promptSelectorLabelFontSize: CGFloat {
@@ -2732,11 +2736,14 @@ struct BottomOverlayView: View {
 
     private var promptSelectorTriggerMaxWidth: CGFloat {
         guard self.layout.showsTopControls else { return 120 }
-        // Trailing controls are overlaid on the waveform row. Reserve the waveform,
-        // an 8pt gap, and the 32pt actions button plus its 8pt spacing.
+        // Reserve the visible bars plus a 16pt clearance, rather than the
+        // waveform's wider transparent canvas. Keep its center and the leading
+        // app control unchanged, with a fixed budget for the trailing controls.
         let rowWidth = self.layout.containerWidth - self.layout.hPadding * 2
-        let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + self.layout.waveformWidth / 2
-        return max(0, rowWidth - waveformRight - 8 - 32 - 8)
+        let barsWidth = CGFloat(self.layout.barCount) * self.layout.barWidth
+            + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
+        let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
+        return max(0, rowWidth - waveformRight - 16 - 32 - 8)
     }
 
     private var previewMaxHeight: CGFloat {
@@ -3124,7 +3131,10 @@ struct BottomOverlayView: View {
         }
         .padding(.horizontal, 7)
         .padding(.vertical, self.promptSelectorVerticalPadding)
-        .frame(maxWidth: self.promptSelectorTriggerMaxWidth, alignment: .trailing)
+        .frame(
+            width: self.layout.showsTopControls ? self.promptSelectorTriggerMaxWidth : nil,
+            alignment: .trailing
+        )
         .help(self.selectedPromptLabel)
         .background(
             RoundedRectangle(cornerRadius: self.promptSelectorCornerRadius, style: .continuous)

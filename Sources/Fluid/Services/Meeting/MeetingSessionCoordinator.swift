@@ -427,7 +427,11 @@ final class MeetingSessionCoordinator: ObservableObject {
             // user drags a window (event-tracking mode), which froze live captions mid-drag.
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
                 MainActor.assumeIsolated {
-                    self?.liveTranscript = snapshot
+                    guard let self,
+                          self.liveTranscriptionCoordinator != nil,
+                          self.liveTranscript.accepts(snapshot, generation: generation, activeGeneration: self.captureGeneration)
+                    else { return }
+                    self.liveTranscript = snapshot
                 }
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())

@@ -5,6 +5,24 @@ import XCTest
 /// The query side of the sidebar search.
 @MainActor
 final class AppSearchServiceTests: XCTestCase {
+    func testSearchCategoryExpansionIsIndependentAndReversible() {
+        let history = (0..<12).map { index in
+            AppSearchHit(kind: .history, target: .history(UUID()), title: "History \(index)", snippet: "", date: nil)
+        }
+        let transcripts = (0..<8).map { index in
+            AppSearchHit(kind: .transcripts, target: .transcript(UUID()), title: "Transcript \(index)", snippet: "", date: nil)
+        }
+        let groups = [AppSearchGroup(kind: .history, hits: history), AppSearchGroup(kind: .transcripts, hits: transcripts)]
+        XCTAssertEqual(AppSearchResultsView.visibleHits(groups, expanded: []), Array(history.prefix(5)) + Array(transcripts.prefix(5)))
+        XCTAssertEqual(AppSearchResultsView.visibleHits(groups, expanded: [.history]), history + Array(transcripts.prefix(5)))
+        XCTAssertEqual(AppSearchResultsView.visibleHits(groups, expanded: [.history, .transcripts]), history + transcripts)
+        // Collapsing History must not collapse Transcripts or reorder their results.
+        XCTAssertEqual(AppSearchResultsView.visibleHits(groups, expanded: [.transcripts]), Array(history.prefix(5)) + transcripts)
+        XCTAssertEqual(groups[0].hits, history)
+        XCTAssertEqual(groups[1].hits, transcripts)
+        XCTAssertTrue(AppSearchResultsView.visibleHits([], expanded: [.history]).isEmpty)
+    }
+
     private struct Row {
         let id: UUID
         let date: Date

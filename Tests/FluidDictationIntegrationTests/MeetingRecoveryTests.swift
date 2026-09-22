@@ -11,6 +11,36 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testFileTranscriptRenamePreservesSourceAndSelection() throws {
+        let suite = "FileRenameTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = FileTranscriptionHistoryStore(defaults: defaults)
+        let result = TranscriptionResult(text: "Unchanged transcript", confidence: 0.9, duration: 12, processingTime: 1, fileName: "original.wav")
+        store.addEntry(result)
+        let original = try XCTUnwrap(store.selectedEntry)
+        store.renameEntry(id: original.id, to: "  Weekly review  ")
+        let renamed = try XCTUnwrap(store.selectedEntry)
+        XCTAssertEqual(renamed.displayTitle, "Weekly review")
+        XCTAssertEqual(renamed.fileName, "original.wav")
+        XCTAssertEqual(renamed.text, original.text)
+        XCTAssertEqual(renamed.speakerSegments, original.speakerSegments)
+        XCTAssertEqual(renamed.toTranscriptionResult().fileName, original.fileName)
+        XCTAssertEqual(renamed.timestamp, original.timestamp)
+        XCTAssertEqual(renamed.searchRevision, 2)
+        store.renameEntry(id: original.id, to: "  ")
+        store.renameEntry(id: UUID(), to: "Missing")
+        store.renameEntry(id: original.id, to: "Weekly review")
+        XCTAssertEqual(store.selectedEntry, renamed)
+        let reloaded = FileTranscriptionHistoryStore(defaults: defaults)
+        XCTAssertEqual(reloaded.entries, [renamed])
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(renamed)) as? [String: Any])
+        legacy.removeValue(forKey: "customTitle")
+        legacy.removeValue(forKey: "searchRevision")
+        let decoded = try JSONDecoder().decode(FileTranscriptionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(decoded.displayTitle, "original.wav")
+    }
+
     func testNotesSetupDraftDoesNotPersistDetectionChanges() {
         let native = SettingsStore.shared.meetingAutoDetectEnabled
         let browser = SettingsStore.shared.meetingAutoDetectBrowserEnabled
@@ -299,6 +329,40 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Opening settings must not change retention, detection, or audio routing")
     }
 
+    func testFluidMeetCompletedActionErrorRendersWithoutSideEffects() throws {
+        let preferences = MeetingUIPreferences()
+        let actions = MeetingUIActionRecorder()
+        let fixture = self.makeMeetingUISetupFixture()
+        let session = self.makeCorrectionSession(state: .completed).session
+        for scheme in [ColorScheme.dark, .light] {
+            for width in [CGFloat(520), 1000] {
+                for message in [String?.none, "Export failed: the destination is read-only."] {
+                    let bitmap = try self.renderMeetingUI(
+                        self.meetingUICanvas(
+                            draft: fixture.draft,
+                            readiness: fixture.readiness,
+                            fixture: fixture,
+                            actions: actions,
+                            state: .result(session),
+                            errorMessage: message
+                        ),
+                        name: message == nil ? "result-no-action-error" : "result-action-error",
+                        width: width,
+                        scheme: scheme
+                    )
+                    let top = Int(100 * CGFloat(bitmap.pixelsWide) / width)
+                    let warning = self.meetingUIPixelBounds(in: bitmap) { color, y in
+                        y < top && color.redComponent - color.greenComponent > 0.15
+                            && color.greenComponent - color.blueComponent > 0.15
+                    }
+                    XCTAssertEqual(warning != nil, message != nil, "Completed actions must visibly report errors above the transcript")
+                }
+            }
+        }
+        XCTAssertEqual(actions.count, 0, "Showing an action failure must not retry, export, or change the transcript")
+        XCTAssertEqual(MeetingUIPreferences(), preferences, "Showing an action failure must not change recording settings")
+    }
+
     func testFluidMeetLongTranscriptRendersWithoutSideEffects() throws {
         let preferences = MeetingUIPreferences()
         let actions = MeetingUIActionRecorder()
@@ -463,7 +527,8 @@ final class MeetingRecoveryTests: XCTestCase {
         readiness: MeetingSetupReadiness,
         fixture: MeetingUISetupFixture,
         actions: MeetingUIActionRecorder,
-        state: MeetingTranscriptionCanvasState = .setup(isStarting: false, recentSession: nil)
+        state: MeetingTranscriptionCanvasState = .setup(isStarting: false, recentSession: nil),
+        errorMessage: String? = nil
     ) -> some View {
         MeetingTranscriptionCanvas(
             setupDraft: Binding(get: { draft }, set: { _ in actions.record() }),
@@ -471,7 +536,7 @@ final class MeetingRecoveryTests: XCTestCase {
             applications: fixture.applications,
             microphones: fixture.microphones,
             readiness: readiness,
-            errorMessage: nil,
+            errorMessage: errorMessage,
             onStart: { actions.record() },
             onStop: { actions.record() },
             onRetrySession: { _ in actions.record() },
@@ -3260,6 +3325,167 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertNotNil(fresh?.retention.audioDeletedAt)
         XCTAssertFalse(hasFinalizedAudio)
+    }
+
+    func testMeetingAudioExportKeepsMainActorAvailableDuringCopy() async throws {
+        let preferences = MeetingUIPreferences()
+        let source = self.makeTempDirectory()
+        let destination = self.makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let chunk = self.makeFinalizedChunk(path: "fixture.caf")
+        let bytes = Data("recorded-audio".utf8)
+        let sourceFile = chunk.fileURL(relativeTo: source)
+        try bytes.write(to: sourceFile)
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
+        let started = self.expectation(description: "copy started on worker")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let export = Task {
+            try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination) { from, to in
+                XCTAssertFalse(Thread.isMainThread, "Copying meeting audio must not block the UI thread")
+                started.fulfill()
+                guard release.wait(timeout: .now() + 5) == .success else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try FileManager.default.copyItem(at: from, to: to)
+            }
+        }
+        await self.fulfillment(of: [started], timeout: 2)
+        // Reaching the main actor while the worker is held proves UI actions can still run.
+        MainActor.assertIsolated()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Test").path), "Do not publish a partially copied export")
+        release.signal()
+        try await export.value
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), bytes)
+        XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Export must not alter the recording")
+        XCTAssertEqual(MeetingUIPreferences(), preferences, "Export must not change capture or retention settings")
+    }
+
+    func testMeetingAudioExportRemovesStagingAfterCopyFailure() async throws {
+        let source = self.makeTempDirectory()
+        let destination = self.makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let chunk = self.makeFinalizedChunk(path: "fixture.caf")
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
+        do {
+            try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination) { _, _ in
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            XCTFail("Copy errors must reach the UI caller")
+        } catch let error as CocoaError {
+            XCTAssertEqual(error.code, .fileWriteNoPermission)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [], "Failed export must not leave partial files")
+    }
+
+    func testMeetingAudioExportRepeatedRequestsPreserveExistingExportAndSource() async throws {
+        let source = self.makeTempDirectory()
+        let destination = self.makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let chunk = self.makeFinalizedChunk(path: "fixture.caf")
+        let sourceFile = chunk.fileURL(relativeTo: source)
+        let first = Data("first-recording".utf8)
+        let second = Data("second-recording".utf8)
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
+        try first.write(to: sourceFile)
+        try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
+        try second.write(to: sourceFile)
+        try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test/microphone-000.caf")), first)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("Test 2/microphone-000.caf")), second)
+        XCTAssertEqual(try Data(contentsOf: sourceFile), second)
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), ["Test", "Test 2"])
+    }
+
+    func testMeetingAudioExportConcurrentRequestsPreserveEveryExport() async throws {
+        let source = self.makeTempDirectory()
+        let destination = self.makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let chunk = self.makeFinalizedChunk(path: "fixture.caf")
+        let sourceFile = chunk.fileURL(relativeTo: source)
+        let bytes = Data("recorded-audio".utf8)
+        try bytes.write(to: sourceFile)
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: [chunk])])
+        let started = self.expectation(description: "first export copying")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let first = Task {
+            try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination) { from, to in
+                started.fulfill()
+                guard release.wait(timeout: .now() + 5) == .success else { throw CocoaError(.fileWriteUnknown) }
+                try FileManager.default.copyItem(at: from, to: to)
+            }
+        }
+        await self.fulfillment(of: [started], timeout: 2)
+        let queued = self.expectation(description: "three more exports requested while first is copying")
+        queued.expectedFulfillmentCount = 3
+        let following = (0..<3).map { _ in
+            Task {
+                queued.fulfill()
+                try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination)
+            }
+        }
+        await self.fulfillment(of: [queued], timeout: 2)
+        release.signal()
+        try await first.value
+        for task in following {
+            try await task.value
+        }
+        let names = ["Test", "Test 2", "Test 3", "Test 4"]
+        XCTAssertEqual(try Set(FileManager.default.contentsOfDirectory(atPath: destination.path)), Set(names))
+        for name in names {
+            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("\(name)/microphone-000.caf")), bytes)
+        }
+        XCTAssertEqual(try Data(contentsOf: sourceFile), bytes, "Concurrent exports must leave the recording intact")
+    }
+
+    func testMeetingAudioExportDeletionDuringCopyRemovesPartialExport() async throws {
+        let source = self.makeTempDirectory()
+        let destination = self.makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let chunks = [self.makeFinalizedChunk(path: "first.caf"), self.makeFinalizedChunk(sequence: 1, path: "second.caf")]
+        for chunk in chunks {
+            try Data("recorded-audio".utf8).write(to: chunk.fileURL(relativeTo: source))
+        }
+        let session = self.makeSession(state: .completed, audioTracks: [self.makeMicrophoneTrack(chunks: chunks)])
+        let started = self.expectation(description: "first chunk copied, second chunk waiting")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let export = Task {
+            try await MeetingTranscriptionView.exportAudioFiles(of: session, from: source, into: destination) { from, to in
+                if from.lastPathComponent == "second.caf" {
+                    started.fulfill()
+                    guard release.wait(timeout: .now() + 5) == .success else { throw CocoaError(.fileWriteUnknown) }
+                }
+                try FileManager.default.copyItem(at: from, to: to)
+            }
+        }
+        await self.fulfillment(of: [started], timeout: 2)
+        try FileManager.default.removeItem(at: source)
+        release.signal()
+        do {
+            try await export.value
+            XCTFail("A source deleted during export must report failure")
+        } catch {
+            XCTAssertTrue(error is CocoaError)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [], "The earlier copied chunk must not survive as a partial export")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "Export must not recreate deleted source audio")
     }
 
     // MARK: - ASR activity arbiter

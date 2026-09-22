@@ -3858,7 +3858,7 @@ final class ASRService: ObservableObject {
         {
             let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: fileURL)
             let samples = try await reader.nextSamples()
-            let result = try await self.transcribeSamplesForAPI(samples)
+            let result = try await self.transcribeSamplesForAPIWithLease(samples)
             return (result, sampleCount: estimatedSamples)
         }
 

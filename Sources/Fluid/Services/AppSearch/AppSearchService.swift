@@ -79,9 +79,20 @@ final class AppSearchService: ObservableObject {
     private let index: SearchIndex
     private var task: Task<Void, Never>?
     private var token: ZeppelinCancellationToken?
+    private var chatAvailabilitySubscription: AnyCancellable?
 
     init(index: SearchIndex = .shared) {
         self.index = index
+        self.chatAvailabilitySubscription = ChatHistoryStore.shared.$sessions
+            .map { Set($0.filter { !$0.isArchived }.map(\.id)) }
+            .removeDuplicates()
+            .sink { [weak self] availableIDs in
+                guard let self else { return }
+                // Remove unopenable rows immediately, before the index's write debounce.
+                // Use the emitted snapshot: @Published sends before the store assigns it.
+                let visible = Self.removingUnavailableChats(from: self.groups, availableIDs: availableIDs)
+                if visible != self.groups { self.groups = visible }
+            }
     }
 
     /// Re-runs the current query. Called when the index changes under it.
@@ -108,7 +119,8 @@ final class AppSearchService: ObservableObject {
             // A newer keystroke cancelled this task while it was waiting on the
             // index; its answer would overwrite a fresher one.
             guard !Task.isCancelled else { return }
-            self.groups = groups
+            let availableIDs = Set(ChatHistoryStore.shared.sessions.filter { !$0.isArchived }.map(\.id))
+            self.groups = Self.removingUnavailableChats(from: groups, availableIDs: availableIDs)
         }
     }
 
@@ -151,6 +163,18 @@ final class AppSearchService: ObservableObject {
 
     // MARK: - Indexed kinds
 
+    /// Covers both already displayed results and queries that finish after an archive.
+    nonisolated static func removingUnavailableChats(from groups: [AppSearchGroup], availableIDs: Set<String>) -> [AppSearchGroup] {
+        groups.compactMap { group in
+            guard group.kind == .chats else { return group }
+            let hits = group.hits.filter { hit in
+                guard case let .chat(id) = hit.target else { return true }
+                return availableIDs.contains(id)
+            }
+            return hits.isEmpty ? nil : AppSearchGroup(kind: group.kind, hits: hits)
+        }
+    }
+
     /// Score first, newest breaks ties. Rows the store no longer has are dropped.
     nonisolated static func ranked<Row>(
         _ hits: [SearchIndex.Hit],
@@ -185,7 +209,7 @@ final class AppSearchService: ObservableObject {
             AppSearchHit(
                 kind: .transcripts,
                 target: .transcript(entry.id),
-                title: entry.fileName,
+                title: entry.displayTitle,
                 snippet: AppSearchSnippet.make(entry.text, query: query),
                 date: entry.timestamp
             )
@@ -194,7 +218,10 @@ final class AppSearchService: ObservableObject {
 
     private func chatGroup(_ hits: [SearchIndex.Hit], _ query: String) -> AppSearchGroup {
         let rows = Dictionary(
-            ChatHistoryStore.shared.sessions.compactMap { session in UUID(uuidString: session.id).map { ($0, session) } }
+            ChatHistoryStore.shared.sessions.compactMap { session -> (UUID, ChatSession)? in
+                guard !session.isArchived, let id = UUID(uuidString: session.id) else { return nil }
+                return (id, session)
+            }
         ) { first, _ in first }
         return AppSearchGroup(kind: .chats, hits: Self.ranked(hits, rows: rows, date: \.updatedAt) { session in
             AppSearchHit(

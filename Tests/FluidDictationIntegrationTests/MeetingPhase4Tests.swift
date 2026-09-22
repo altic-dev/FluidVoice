@@ -233,6 +233,48 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
 // MARK: - 6. Live gating
 
 final class MeetingPhase4LiveGatingTests: XCTestCase {
+    private final class DeliveryProbe: @unchecked Sendable {
+        let lock = NSLock()
+        let firstReady = DispatchSemaphore(value: 0)
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let generation = UUID()
+        var visible = MeetingLiveTranscriptSnapshot.empty
+        var deliveredRevisions: [UInt64] = []
+
+        func receive(_ snapshot: MeetingLiveTranscriptSnapshot) {
+            if snapshot.utterances.count == 1 {
+                self.firstReady.signal()
+                _ = self.releaseFirst.wait(timeout: .now() + 5)
+            }
+            self.lock.withLock {
+                self.deliveredRevisions.append(snapshot.revision)
+                if self.visible.accepts(snapshot, generation: self.generation, activeGeneration: self.generation) {
+                    self.visible = snapshot
+                }
+            }
+        }
+    }
+
+    func testConcurrentPublicationCannotRollBackDisplayedTranscript() {
+        let probe = DeliveryProbe()
+        let coordinator = self.makeCoordinatorWithOrigin { probe.receive($0) }
+        coordinator.setMicrophoneCaptureMethod(.voiceProcessing)
+        let firstFinished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            coordinator.handleUtterance(kind: .applicationAudio, text: "remote", start: .zero, end: CMTime(value: 1, timescale: 1))
+            firstFinished.signal()
+        }
+        defer { probe.releaseFirst.signal() }
+        XCTAssertEqual(probe.firstReady.wait(timeout: .now() + 5), .success)
+        coordinator.handleUtterance(kind: .microphone, text: "local", start: CMTime(value: 1, timescale: 1), end: CMTime(value: 2, timescale: 1))
+        probe.releaseFirst.signal()
+        XCTAssertEqual(firstFinished.wait(timeout: .now() + 5), .success)
+        let (revisions, visible) = probe.lock.withLock { (probe.deliveredRevisions, probe.visible) }
+        XCTAssertEqual(revisions, [2, 1], "Force the older callback to arrive last")
+        XCTAssertEqual(visible.utterances.map(\.text), ["remote", "local"])
+        XCTAssertEqual(visible.revision, 2)
+    }
+
     private func sampleBuffer(ptsSeconds: Double) -> CMSampleBuffer {
         // Fixed test fixture: missing required audio storage or evidence is a setup failure.
         // swiftlint:disable:next force_unwrapping

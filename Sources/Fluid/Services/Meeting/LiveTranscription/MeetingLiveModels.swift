@@ -39,6 +39,8 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
 nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
     private static let finalizedTurnIDCap = 64
 
+    /// Assigned under the coordinator's state lock, independently of callback delivery order.
+    var revision: UInt64 = 0
     var utterances: [MeetingLiveUtterance] = []
     var partials: [MeetingLiveSpeaker: MeetingLivePartial] = [:]
     var availability: MeetingLiveAvailability = .unavailable(reason: "Live captions have not started.")
@@ -47,6 +49,11 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
     private(set) var finalizedTurnIDs: [UUID] = []
 
     static let empty = MeetingLiveTranscriptSnapshot()
+
+    /// Old callbacks must neither roll back this session nor repopulate a stopped/new session.
+    func accepts(_ update: Self, generation: UUID, activeGeneration: UUID?) -> Bool {
+        generation == activeGeneration && update.revision > self.revision
+    }
 
     /// Inserts keeping `utterances` sorted by `start` — two engines finalize independently, so a
     /// later-arriving utterance with an earlier PTS must still land in the right place.

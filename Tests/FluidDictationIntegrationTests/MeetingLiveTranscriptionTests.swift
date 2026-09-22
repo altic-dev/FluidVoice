@@ -89,6 +89,22 @@ final class MeetingLiveTimeConversionTests: XCTestCase {
 }
 
 final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
+    func testDeliveryRejectsStoppedPreviousAndDuplicateSessionUpdates() {
+        let generation = UUID()
+        var current = MeetingLiveTranscriptSnapshot.empty
+        current.revision = 2
+        var latest = current
+        latest.revision = 3
+        latest.availability = .available
+        XCTAssertTrue(current.accepts(latest, generation: generation, activeGeneration: generation))
+        XCTAssertFalse(current.accepts(current, generation: generation, activeGeneration: generation))
+        XCTAssertFalse(current.accepts(.empty, generation: generation, activeGeneration: generation))
+        XCTAssertFalse(current.accepts(latest, generation: generation, activeGeneration: nil))
+        XCTAssertFalse(MeetingLiveTranscriptSnapshot.empty.accepts(latest, generation: generation, activeGeneration: UUID()))
+        XCTAssertEqual(current.revision, 2, "Rejected deliveries do not mutate existing captions")
+        XCTAssertNotEqual(current.availability, .available)
+    }
+
     private func utterance(_ speaker: MeetingLiveSpeaker, _ text: String, start: TimeInterval, end: TimeInterval) -> MeetingLiveUtterance {
         MeetingLiveUtterance(id: UUID(), speaker: speaker, text: text, start: start, end: end)
     }
