@@ -58,8 +58,6 @@ struct CommandModeView: View {
             let dockedHistory = CommandWorkspaceLayout.showsDockedHistory(width: geometry.size.width, preferred: self.prefersHistoryVisible)
             let overlayHistory = !isWide && self.compactHistoryPresented
             VStack(spacing: 0) {
-                self.headerView(historyVisible: dockedHistory || overlayHistory, isWide: isWide)
-                Divider()
                 ZStack(alignment: .trailing) {
                     self.workspace
                         .padding(.trailing, dockedHistory ? CommandWorkspaceLayout.sidebarWidth : 0)
@@ -77,6 +75,7 @@ struct CommandModeView: View {
                         CommandSessionSidebar(
                             canChangeSession: self.canChangeSession,
                             blockingReason: self.sessionBlockingReason,
+                            onNewSession: self.newSession,
                             onSelect: { id in
                                 guard self.canChangeSession, self.service.switchToChat(id: id) else { return }
                                 self.compactHistoryPresented = false
@@ -99,6 +98,9 @@ struct CommandModeView: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
+            }
+            .fluidPageActions {
+                self.headerView(historyVisible: dockedHistory || overlayHistory, isWide: isWide)
             }
             .onChange(of: isWide) { _, _ in self.compactHistoryPresented = false }
         }
@@ -154,34 +156,28 @@ struct CommandModeView: View {
     }
 
     private func headerView(historyVisible: Bool, isWide: Bool) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Text("Command Mode").font(self.theme.typography.sectionTitle)
-                Text("ALPHA")
-                    .font(self.theme.typography.tinyStrong)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-            Spacer(minLength: 12)
-            FluidGlassControlGroup {
-                HStack(spacing: 8) {
-                    Button(action: self.newSession) {
-                        Label("New session", systemImage: "square.and.pencil")
+        Group {
+            if !historyVisible {
+                Button(action: self.newSession) {
+                    Label {
+                        Text("New session")
+                    } icon: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 17, weight: .regular))
+                            .symbolRenderingMode(.monochrome)
                     }
-                    .fluidGlassAction()
-                    .disabled(!self.canChangeSession)
-                    .help(self.sessionBlockingReason ?? "Start a new session")
-                    Button { self.toggleHistory(isWide: isWide) } label: {
-                        Image(systemName: historyVisible ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                            .foregroundStyle(historyVisible ? self.theme.palette.accent : self.theme.palette.secondaryText)
-                    }
-                    .fluidGlassAction(circular: true)
-                    .help(historyVisible ? "Hide sessions" : "Show sessions")
-                    .accessibilityLabel(historyVisible ? "Hide sessions" : "Show sessions")
                 }
+                .disabled(!self.canChangeSession)
+                .help(self.sessionBlockingReason ?? "New session")
+                .accessibilityLabel("New session")
             }
+            Button { self.toggleHistory(isWide: isWide) } label: {
+                Label("Sessions", systemImage: historyVisible ? "rectangle.righthalf.inset.filled" : "sidebar.right")
+                    .foregroundStyle(historyVisible ? self.theme.palette.accent : self.theme.palette.primaryText)
+            }
+            .help(historyVisible ? "Hide sessions" : "Show sessions")
+            .accessibilityLabel(historyVisible ? "Hide sessions" : "Show sessions")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
     }
 
     private var chatArea: some View {

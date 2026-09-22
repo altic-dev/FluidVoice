@@ -5,6 +5,7 @@ struct CommandSessionSidebar: View {
     @ObservedObject var history = ChatHistoryStore.shared
     let canChangeSession: Bool
     let blockingReason: String?
+    let onNewSession: () -> Void
     let onSelect: (String) -> Void
     let onArchive: (String) -> Void
     let onRestore: (String) -> Void
@@ -14,6 +15,7 @@ struct CommandSessionSidebar: View {
     @State private var rows: [SessionRow] = []
     @State private var scope = SessionScope.active
     @State private var keyboardSessionID: String?
+    @State private var newSessionHovered = false
     @FocusState private var listFocused: Bool
 
     private struct SessionRow: Identifiable, Equatable {
@@ -71,7 +73,6 @@ struct CommandSessionSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             self.header
-            self.searchField
             if self.filteredRows.isEmpty {
                 self.emptyState
             } else {
@@ -97,26 +98,72 @@ struct CommandSessionSidebar: View {
         }
     }
 
+    /// Every control shares one text column: container inset `md` plus content inset `md`.
+    private static let controlHeight: CGFloat = 34
+    private static let iconWidth: CGFloat = 16
+
     private var header: some View {
-        HStack(spacing: self.theme.metrics.spacing.sm) {
-            Picker("Session history view", selection: self.$scope) {
-                ForEach(SessionScope.allCases, id: \.self) { scope in
-                    Text("\(scope.rawValue) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))")
-                        .tag(scope)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            self.newSessionButton
+            Menu {
+                Picker("Session history view", selection: self.$scope) {
+                    ForEach(SessionScope.allCases, id: \.self) { scope in
+                        Text(self.scopeTitle(scope)).tag(scope)
+                    }
                 }
+                .pickerStyle(.inline)
+            } label: {
+                Text(self.scopeTitle(self.scope))
             }
-            .pickerStyle(.menu)
-            .fluidDropdownStyle()
+            .fluidDropdownStyle(fillsWidth: true)
             .accessibilityLabel("Session history view")
-            Spacer(minLength: 0)
+            .accessibilityValue(self.scopeTitle(self.scope))
+            self.searchField
         }
-        .padding(self.theme.metrics.spacing.md)
+        .padding([.horizontal, .top], self.theme.metrics.spacing.md)
+        .padding(.bottom, self.theme.metrics.spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func scopeTitle(_ scope: SessionScope) -> String {
+        "\(scope.rawValue) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))"
+    }
+
+    private var newSessionButton: some View {
+        Button {
+            guard self.canChangeSession else { return }
+            self.scope = .active
+            self.searchText = ""
+            self.onNewSession()
+        } label: {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Image(systemName: "square.and.pencil")
+                    .fontWeight(.light)
+                    .frame(width: Self.iconWidth)
+                    .accessibilityHidden(true)
+                Text("New chat")
+            }
+            .font(self.theme.typography.bodySmall)
+            .foregroundStyle(self.newSessionHovered ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+            .padding(.horizontal, self.theme.metrics.spacing.md)
+            .frame(maxWidth: .infinity, minHeight: Self.controlHeight, alignment: .leading)
+            .background(
+                self.newSessionHovered && self.canChangeSession ? self.theme.palette.cardBorder.opacity(0.25) : .clear,
+                in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { self.newSessionHovered = $0 }
+        .disabled(!self.canChangeSession)
+        .help(self.blockingReason ?? "Start a new chat")
     }
 
     private var searchField: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(self.theme.palette.secondaryText)
+                .frame(width: Self.iconWidth)
                 .accessibilityHidden(true)
             TextField("Search sessions", text: self.$searchText)
                 .textFieldStyle(.plain)
@@ -131,18 +178,16 @@ struct CommandSessionSidebar: View {
             }
         }
         .font(self.theme.typography.bodySmall)
-        .padding(.horizontal, 10)
-        .padding(.vertical, self.theme.metrics.spacing.sm)
+        .padding(.horizontal, self.theme.metrics.spacing.md)
+        .frame(maxWidth: .infinity, minHeight: Self.controlHeight)
         .background {
-            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
-                .fill(self.theme.palette.cardBackground)
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                .fill(self.theme.palette.elevatedCardBackground)
                 .overlay {
-                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md)
-                        .strokeBorder(self.theme.palette.cardBorder.opacity(0.6))
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
+                        .strokeBorder(self.theme.palette.cardBorder)
                 }
         }
-        .padding(.horizontal, self.theme.metrics.spacing.md)
-        .padding(.bottom, self.theme.metrics.spacing.sm)
     }
 
     private var sessionList: some View {
@@ -172,7 +217,7 @@ struct CommandSessionSidebar: View {
                             Text(group.rawValue)
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.theme.palette.secondaryText)
-                                .padding(.horizontal, self.theme.metrics.spacing.sm)
+                                .padding(.horizontal, self.theme.metrics.spacing.md)
                                 .padding(.top, self.theme.metrics.spacing.lg)
                                 .padding(.bottom, self.theme.metrics.spacing.xs)
                         case let .session(presentation):
@@ -189,7 +234,7 @@ struct CommandSessionSidebar: View {
                         }
                     }
                 }
-                .padding(.horizontal, self.theme.metrics.spacing.sm)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.bottom, self.theme.metrics.spacing.md)
             }
             .focusable()
@@ -256,48 +301,49 @@ struct CommandSessionSidebar: View {
             case archive
         }
 
-        private var showsActions: Bool { self.selected || self.keyboardSelected || self.hovered || self.focusedControl != nil }
+        private var showsActions: Bool { self.keyboardSelected || self.hovered || self.focusedControl != nil }
         private var actionTitle: String { self.row.isArchived ? "Restore session" : "Archive session" }
         private var openHint: String { self.row.isArchived ? "Restore and open this session" : "Open this session" }
 
         var body: some View {
-            HStack(spacing: self.theme.metrics.spacing.xs) {
-                Button {
-                    guard self.canChangeSession else { return }
-                    self.onSelect(self.row.id)
-                } label: {
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        HStack(spacing: 6) {
-                            Text(self.row.title)
-                                .font(self.selected ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
-                                .foregroundStyle(self.theme.palette.primaryText)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            Text(self.row.relativeTime)
-                                .font(self.theme.typography.captionSmall)
-                                .foregroundStyle(self.theme.palette.tertiaryText)
-                                .fixedSize()
-                        }
-                        Text(self.row.preview)
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+            Button {
+                guard self.canChangeSession else { return }
+                self.onSelect(self.row.id)
+            } label: {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                    HStack(spacing: 6) {
+                        Text(self.row.title)
+                            .font(self.selected ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.primaryText)
                             .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(self.row.relativeTime)
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .fixedSize()
+                            .opacity(self.showsActions ? 0 : 1)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .multilineTextAlignment(.leading)
-                    .padding(.vertical, self.theme.metrics.spacing.sm)
-                    .padding(.leading, self.theme.metrics.spacing.sm)
-                    .contentShape(Rectangle())
+                    Text(self.row.preview)
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .focused(self.$focusedControl, equals: .open)
-                .accessibilityAddTraits(self.selected ? .isSelected : [])
-                .accessibilityHint(self.openHint)
-                .help(self.blockingReason ?? self.openHint)
-                .accessibilityAction(named: Text(self.actionTitle)) { self.performArchiveAction() }
-                .editableTitle(self.row.title, id: self.row.id, enabled: self.canChangeSession) {
-                    ChatHistoryStore.shared.renameChat(id: self.row.id, to: $0)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+                .padding(.vertical, self.theme.metrics.spacing.sm)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focused(self.$focusedControl, equals: .open)
+            .accessibilityAddTraits(self.selected ? .isSelected : [])
+            .accessibilityHint(self.openHint)
+            .help(self.blockingReason ?? self.openHint)
+            .accessibilityAction(named: Text(self.actionTitle)) { self.performArchiveAction() }
+            .editableTitle(self.row.title, id: self.row.id, enabled: self.canChangeSession) {
+                ChatHistoryStore.shared.renameChat(id: self.row.id, to: $0)
+            }
+            .overlay(alignment: .trailing) {
                 Button(action: self.performArchiveAction) {
                     Image(systemName: self.row.isArchived ? "arrow.uturn.backward" : "archivebox")
                         .font(self.theme.typography.body)

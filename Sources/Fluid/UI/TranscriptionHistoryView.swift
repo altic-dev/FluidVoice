@@ -50,14 +50,6 @@ struct TranscriptionHistoryView: View {
             // MARK: - Left Panel: Entry List
 
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "clock.arrow.circlepath").foregroundStyle(self.theme.palette.accent)
-                    Text("History").font(self.theme.typography.sectionTitle)
-                    Spacer()
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 20)
-                .padding(.bottom, 8)
                 self.searchBar
                     .padding(12)
 
@@ -512,9 +504,7 @@ struct TranscriptionHistoryView: View {
                     }
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 1080, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .fluidPageContent()
         }
         .background(self.theme.palette.contentBackground)
     }

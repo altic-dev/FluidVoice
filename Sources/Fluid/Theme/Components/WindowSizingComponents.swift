@@ -4,6 +4,7 @@ import SwiftUI
 struct FluidWindowSizing: Equatable {
     let minWidth: CGFloat
     let minHeight: CGFloat
+    var maximumSize: NSSize? = nil
 
     var minSize: NSSize {
         NSSize(width: self.minWidth, height: self.minHeight)
@@ -97,12 +98,16 @@ private final class FluidWindowSizingNSView: NSView {
 
         let minSize = self.sizing.minSize
         window.minSize = minSize
+        let maximumSize = self.sizing.maximumSize ?? NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        window.maxSize = maximumSize
+
+        // Full-screen geometry belongs to macOS, not the normal-window bounds.
+        guard !window.styleMask.contains(.fullScreen) else { return }
 
         let frame = window.frame
-        guard frame.width < minSize.width || frame.height < minSize.height else { return }
-
-        let targetWidth = max(frame.width, minSize.width)
-        let targetHeight = max(frame.height, minSize.height)
+        let targetWidth = min(max(frame.width, minSize.width), maximumSize.width)
+        let targetHeight = min(max(frame.height, minSize.height), maximumSize.height)
+        guard frame.width != targetWidth || frame.height != targetHeight else { return }
         let targetFrame = NSRect(
             x: frame.midX - targetWidth / 2,
             y: frame.midY - targetHeight / 2,

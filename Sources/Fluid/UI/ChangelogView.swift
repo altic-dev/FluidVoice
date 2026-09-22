@@ -14,7 +14,11 @@ struct ChangelogView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                self.header
+                if let errorMessage {
+                    Label(errorMessage, systemImage: "wifi.exclamationmark")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.warning)
+                }
 
                 if self.releases.isEmpty, self.isRefreshing {
                     self.loadingCard
@@ -34,49 +38,27 @@ struct ChangelogView: View {
 
                 self.footer
             }
-            .padding(24)
-            .frame(maxWidth: 880, alignment: .leading)
+            .fluidPageContent(width: .reading)
+        }
+        .fluidPageActions {
+            Button {
+                Task { await self.refreshReleases(force: true) }
+            } label: {
+                ZStack {
+                    Image(systemName: "arrow.clockwise")
+                        .fluidToolbarIcon()
+                        .opacity(self.isRefreshing ? 0 : 1)
+                    if self.isRefreshing { ProgressView().controlSize(.small) }
+                }
+                .frame(width: 22, height: 22)
+            }
+            .disabled(self.isRefreshing)
+            .help("Refresh changelog")
+            .accessibilityLabel("Refresh changelog")
         }
         .task {
             self.loadCachedReleases()
             await self.refreshReleases()
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            HStack(spacing: self.theme.metrics.spacing.md) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.fluidSystem(size: 30, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.accent)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Change logs")
-                        .font(.fluidSystem(size: 28, weight: .bold))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                }
-
-                Spacer()
-
-                if self.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Button {
-                        Task { await self.refreshReleases(force: true) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Refresh changelog")
-                }
-            }
-
-            if let errorMessage {
-                Label(errorMessage, systemImage: "wifi.exclamationmark")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.warning)
-            }
         }
     }
 

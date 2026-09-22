@@ -642,7 +642,71 @@ enum SettingsSearchIndex {
 /// to `onCommand` so a results list can be driven from the keyboard, and Cmd+F
 /// (`Notification.Name.sidebarSearchFocusRequested`) focuses whichever instance
 /// is active.
-struct SidebarSearchField: NSViewRepresentable {
+struct SidebarSearchField: View {
+    @Environment(\.theme) private var theme
+    @Binding var text: String
+    let placeholder: String
+    let isActive: Bool
+    var onCommand: (Selector) -> Bool = { _ in false }
+    @State private var isFocused = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            SidebarSearchInput(
+                text: self.$text,
+                placeholder: self.placeholder,
+                isActive: self.isActive,
+                onCommand: self.onCommand,
+                isFocused: self.$isFocused
+            )
+            if !self.text.isEmpty {
+                Button {
+                    self.text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(.system(size: 14))
+        .padding(.horizontal, self.theme.metrics.spacing.sm)
+        .frame(height: 32)
+        .background(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
+                .fill(Color.primary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
+                .strokeBorder(self.isFocused ? self.theme.palette.accent : .clear, lineWidth: 2)
+                .allowsHitTesting(false)
+        )
+    }
+
+    static func owns(_ editor: NSTextView, in window: NSWindow) -> Bool {
+        SidebarSearchInput.owns(editor, in: window)
+    }
+
+    static func resignFocusIfNeeded(from searchField: NSSearchField, isActive: Bool) {
+        SidebarSearchInput.resignFocusIfNeeded(from: searchField, isActive: isActive)
+    }
+}
+
+private final class SidebarSearchNativeField: NSSearchField {
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { self.onFocus?() }
+        return accepted
+    }
+}
+
+private struct SidebarSearchInput: NSViewRepresentable {
     private static let identifier = NSUserInterfaceItemIdentifier("FluidVoice.SidebarSearchField")
 
     @Binding var text: String
@@ -650,18 +714,28 @@ struct SidebarSearchField: NSViewRepresentable {
     let isActive: Bool
     var onCommand: (Selector) -> Bool = { _ in false }
 
+    @Binding var isFocused: Bool
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
     func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField()
+        let searchField = SidebarSearchNativeField()
+        searchField.onFocus = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isFocused = true
+        }
         searchField.delegate = context.coordinator
         searchField.placeholderString = self.placeholder
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
-        searchField.controlSize = .regular
-        searchField.focusRingType = .default
+        searchField.controlSize = .large
+        searchField.isBezeled = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
+        (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
+        (searchField.cell as? NSSearchFieldCell)?.cancelButtonCell = nil
+        searchField.font = .systemFont(ofSize: 14)
         searchField.identifier = Self.identifier
         searchField.setAccessibilityLabel(self.placeholder)
         context.coordinator.observeFocusRequests(for: searchField)
@@ -701,10 +775,10 @@ struct SidebarSearchField: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: SidebarSearchField
+        var parent: SidebarSearchInput
         private var focusObserver: NSObjectProtocol?
 
-        init(_ parent: SidebarSearchField) {
+        init(_ parent: SidebarSearchInput) {
             self.parent = parent
         }
 
@@ -719,6 +793,14 @@ struct SidebarSearchField: NSViewRepresentable {
                 guard let self, self.parent.isActive, let searchField else { return }
                 searchField.window?.makeFirstResponder(searchField)
             }
+        }
+
+        func controlTextDidBeginEditing(_: Notification) {
+            self.parent.isFocused = true
+        }
+
+        func controlTextDidEndEditing(_: Notification) {
+            self.parent.isFocused = false
         }
 
         func controlTextDidChange(_ notification: Notification) {

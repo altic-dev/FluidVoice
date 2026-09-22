@@ -136,24 +136,6 @@ struct MeetingTranscriptionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MeetingTranscriptionHeader(
-                state: self.canvasState,
-                isMeetingHistoryVisible: self.isMeetingHistoryVisible,
-                onNewMeeting: self.startNewMeeting,
-                onOpenMeetingSettings: self.openMeetingSettings,
-                onToggleMeetingHistory: {
-                    let willShowHistory = !self.isMeetingHistoryVisible
-                    withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                        self.isMeetingHistoryVisible.toggle()
-                    }
-                    if willShowHistory, self.meetingHistory.isEmpty {
-                        Task { await self.loadMeetingHistory() }
-                    }
-                }
-            )
-
-            Divider()
-
             GeometryReader { geometry in
                 ZStack(alignment: .trailing) {
                     MeetingTranscriptionCanvas(
@@ -234,7 +216,24 @@ struct MeetingTranscriptionView: View {
                 }
             }
         }
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.palette.contentBackground)
+        .fluidPageActions {
+            MeetingTranscriptionHeader(
+                state: self.canvasState,
+                isMeetingHistoryVisible: self.isMeetingHistoryVisible,
+                onNewMeeting: self.startNewMeeting,
+                onOpenMeetingSettings: self.openMeetingSettings,
+                onToggleMeetingHistory: {
+                    let willShowHistory = !self.isMeetingHistoryVisible
+                    withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        self.isMeetingHistoryVisible.toggle()
+                    }
+                    if willShowHistory, self.meetingHistory.isEmpty {
+                        Task { await self.loadMeetingHistory() }
+                    }
+                }
+            )
+        }
         .clipped()
         .task {
             async let sources: Void = self.refreshSources(requestPermissions: false)
@@ -1364,58 +1363,34 @@ private struct MeetingTranscriptionHeader: View {
     let onOpenMeetingSettings: () -> Void
     let onToggleMeetingHistory: () -> Void
 
-    @Environment(\.theme) private var theme
-
     var body: some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Label("FluidMeet", systemImage: "person.2")
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
-
-            Spacer()
-
-            ViewThatFits(in: .horizontal) {
-                self.actions(showsLabels: true)
-                self.actions(showsLabels: false)
-            }
-        }
-        .padding(.horizontal, self.theme.metrics.spacing.xxl)
-        .padding(.vertical, self.theme.metrics.spacing.md)
-    }
-
-    private func actions(showsLabels: Bool) -> some View {
-        FluidGlassControlGroup {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                if self.canStartNewMeeting {
-                    MeetingHeaderIconButton(
-                        systemImage: "plus",
-                        label: "New Meeting",
-                        visibleTitle: showsLabels ? "New meeting" : nil,
-                        action: self.onNewMeeting
-                    )
-                    .keyboardShortcut("n", modifiers: .command)
-                    .accessibilityHint("Clear the current meeting and return to recording setup")
-                }
-
+        Group {
+            if self.canStartNewMeeting {
                 MeetingHeaderIconButton(
-                    systemImage: "gearshape",
-                    label: "FluidMeet settings",
-                    visibleTitle: showsLabels ? "Settings" : nil,
-                    action: self.onOpenMeetingSettings
+                    systemImage: "plus",
+                    label: "New Meeting",
+                    action: self.onNewMeeting
                 )
-                .disabled(!self.canEditSetup)
-                .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
-
-                MeetingHeaderIconButton(
-                    systemImage: self.isMeetingHistoryVisible
-                        ? "rectangle.righthalf.inset.filled"
-                        : "sidebar.right",
-                    label: self.isMeetingHistoryVisible ? "Hide meeting history" : "Show meeting history",
-                    visibleTitle: showsLabels ? "Meetings" : nil,
-                    isSelected: self.isMeetingHistoryVisible,
-                    action: self.onToggleMeetingHistory
-                )
+                .keyboardShortcut("n", modifiers: .command)
+                .accessibilityHint("Clear the current meeting and return to recording setup")
             }
+
+            MeetingHeaderIconButton(
+                systemImage: "gearshape",
+                label: "FluidMeet settings",
+                action: self.onOpenMeetingSettings
+            )
+            .disabled(!self.canEditSetup)
+            .accessibilityHint("Change the saved recording application, microphone, and meeting defaults")
+
+            MeetingHeaderIconButton(
+                systemImage: self.isMeetingHistoryVisible
+                    ? "rectangle.righthalf.inset.filled"
+                    : "sidebar.right",
+                label: self.isMeetingHistoryVisible ? "Hide meeting history" : "Show meeting history",
+                isSelected: self.isMeetingHistoryVisible,
+                action: self.onToggleMeetingHistory
+            )
         }
     }
 
@@ -1440,20 +1415,16 @@ private struct MeetingTranscriptionHeader: View {
 private struct MeetingHeaderIconButton: View {
     let systemImage: String
     let label: String
-    var visibleTitle: String? = nil
     var isSelected = false
     let action: () -> Void
 
     @Environment(\.theme) private var theme
     var body: some View {
         Button(action: self.action) {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: self.systemImage)
-                if let visibleTitle { Text(visibleTitle) }
-            }
-            .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
+            Label(self.label, systemImage: self.systemImage)
+                .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
         }
-        .meetingGlassAction(circular: self.visibleTitle == nil)
+        .buttonStyle(.automatic)
         .help(self.label)
         .accessibilityLabel(self.label)
         .accessibilityAddTraits(self.isSelected ? .isSelected : [])

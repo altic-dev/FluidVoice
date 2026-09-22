@@ -90,22 +90,6 @@ struct FileTranscriptionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: self.theme.metrics.spacing.md) {
-                Image(systemName: "doc.text")
-                    .font(self.theme.typography.titleIcon)
-                    .foregroundStyle(self.theme.palette.accent)
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                    Text("File Transcription")
-                        .font(self.theme.typography.title)
-                    Text("Turn audio and video into text.")
-                        .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                }
-                Spacer()
-            }
-            .padding(self.theme.metrics.spacing.lg)
-            Divider()
-
             VStack(spacing: self.theme.metrics.spacing.sm) {
                 if let activity = self.conflictingActivity {
                     self.activityConflictCard(activity: activity)
@@ -121,13 +105,13 @@ struct FileTranscriptionView: View {
                     self.dropErrorCard(message: message)
                 }
             }
-            .padding(self.theme.metrics.spacing.lg)
+            .padding(FluidPageLayout.inset)
 
             Divider()
             self.transcriptBrowser
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.palette.contentBackground)
         .overlay(alignment: .topTrailing) {
             if self.showingCopyConfirmation {
                 Text("Copied!")

@@ -393,7 +393,7 @@ struct ContentView: View {
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var isSidebarToggleHovered = false
+    @State private var toolbarTrailingInset: CGFloat = 80
 
     var body: some View {
         let layout = AnyView(
@@ -403,13 +403,16 @@ struct ContentView: View {
                 } else {
                     NavigationSplitView(columnVisibility: self.$columnVisibility) {
                         self.sidebarContent
-                            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-                            // The system toggle draws dark glass over the sidebar; ours sits in the
-                            // same spot without a glass backing so it blends into the sidebar color.
+                            .frame(minWidth: 264, maxWidth: 360)
+                            .navigationSplitViewColumnWidth(min: 264, ideal: 300, max: 360)
                             .toolbar(removing: .sidebarToggle)
-                            .overlay(alignment: .topLeading) { self.sidebarToggleOverlay }
                     } detail: {
                         self.detailView
+                            .onGeometryChange(for: CGFloat.self) { geometry in
+                                (geometry.size.width * 0.1).rounded()
+                            } action: { inset in
+                                self.toolbarTrailingInset = inset
+                            }
                     }
                     .navigationSplitViewStyle(.balanced)
                 }
@@ -427,6 +430,7 @@ struct ContentView: View {
         let withToolbar = self.applyMainWindowToolbar(to: observed)
 
         return withToolbar
+            .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
             }
@@ -1341,7 +1345,6 @@ struct ContentView: View {
                 .accessibilityHidden(!self.settingsNavigation.isPresented)
         }
         .clipped()
-        .navigationTitle(self.settingsNavigation.isPresented ? "Settings" : "FluidVoice")
         .tint(self.theme.palette.accent)
         .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
     }
@@ -1354,7 +1357,6 @@ struct ContentView: View {
                 isActive: !self.settingsNavigation.isPresented,
                 onCommand: self.handleAppSearchCommand
             )
-            .frame(height: 24)
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .padding(.top, self.theme.metrics.spacing.sm)
             .padding(.bottom, self.theme.metrics.spacing.sm)
@@ -1513,7 +1515,6 @@ struct ContentView: View {
                 placeholder: "Search Settings",
                 isActive: self.settingsNavigation.isPresented
             )
-            .frame(height: 24)
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .padding(.top, self.theme.metrics.spacing.xs)
             .padding(.bottom, self.theme.metrics.spacing.sm)
@@ -1724,6 +1725,7 @@ struct ContentView: View {
             self.settings.themePreference = self.nextThemePreference(after: self.settings.themePreference)
         } label: {
             Image(systemName: self.settings.themePreference.systemImageName)
+                .fluidToolbarIcon()
         }
         .help("Theme: \(self.settings.themePreference.displayName)")
         .accessibilityLabel("Theme")
@@ -1745,11 +1747,12 @@ struct ContentView: View {
 
     private var detailView: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            self.theme.palette.contentBackground
                 .ignoresSafeArea()
 
             // Preserve the app destination so Back never waits on expensive detail initialization.
             self.appDetailContent
+                .environment(\.fluidPageToolbarVisible, self.pagePresentation.showsPageActions)
                 .opacity(self.settingsNavigation.isPresented ? 0 : 1)
                 .offset(x: self.settingsNavigation.isPresented ? -6 : 0)
                 .allowsHitTesting(!self.settingsNavigation.isPresented)
@@ -1761,6 +1764,11 @@ struct ContentView: View {
             }
         }
         .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
+        .navigationTitle(self.pagePresentation.title)
+    }
+
+    private var pagePresentation: AppPagePresentation {
+        AppPagePresentation(destination: self.selectedSidebarItem, settings: self.settingsNavigation)
     }
 
     private var settingsDetailTransition: AnyTransition {
@@ -1941,29 +1949,6 @@ struct ContentView: View {
         .accessibilityLabel("Search Settings")
     }
 
-    private var sidebarToggleOverlay: some View {
-        GeometryReader { proxy in
-            Button(action: self.toggleSidebar) {
-                Image(systemName: "sidebar.left")
-                    .font(.fluidSystem(size: 14, weight: .medium))
-                    .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(SidebarChromeButtonStyle(
-                isHovered: self.isSidebarToggleHovered,
-                reduceMotion: self.accessibilityReduceMotion
-            ))
-            .opacity(self.isSidebarToggleHovered ? 1 : 0.7)
-            .onHover { self.isSidebarToggleHovered = $0 }
-            .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-            .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 94)
-            .padding(.top, max(0, (proxy.safeAreaInsets.top - 26) / 2) - proxy.safeAreaInsets.top)
-        }
-        .frame(height: 0)
-    }
-
     private func toggleSidebar() {
         withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
             self.columnVisibility = self.columnVisibility == .detailOnly ? .all : .detailOnly
@@ -1975,7 +1960,11 @@ struct ContentView: View {
         if self.settings.shouldShowOnboarding {
             return .minimum(width: window.onboardingMinWidth, height: window.onboardingMinHeight)
         }
-        return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
+        return FluidWindowSizing(
+            minWidth: window.mainMinWidth,
+            minHeight: window.mainMinHeight,
+            maximumSize: NSSize(width: 1440, height: 1000)
+        )
     }
 
     @ViewBuilder
@@ -1985,17 +1974,18 @@ struct ContentView: View {
         } else {
             content
                 .toolbar {
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        // The in-sidebar toggle hides with the sidebar; this is the way back.
-                        if self.columnVisibility == .detailOnly {
-                            Button(action: self.toggleSidebar) {
-                                Image(systemName: "sidebar.left")
-                            }
-                            .buttonStyle(.automatic)
-                            .help("Show sidebar")
-                            .accessibilityLabel("Show sidebar")
+                    // Keep one navigation control alive in both sidebar states. An overlay
+                    // belongs to the sidebar content and shifts below AppKit-hosted title bars.
+                    ToolbarItem(placement: .navigation) {
+                        Button(action: self.toggleSidebar) {
+                            Image(systemName: "sidebar.left")
+                                .fluidToolbarIcon()
                         }
-
+                        .buttonStyle(.automatic)
+                        .help(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                        .accessibilityLabel(self.columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                    }
+                    ToolbarItemGroup(placement: .primaryAction) {
                         self.todayStatsButton
                             .buttonStyle(.automatic)
 
@@ -2004,13 +1994,25 @@ struct ContentView: View {
 
                         Button(action: self.openIssueReportingPage) {
                             Image(systemName: "ladybug.fill")
+                                .fluidToolbarIcon()
                         }
                         .buttonStyle(.automatic)
                         .help("Report an issue")
                         .accessibilityLabel("Report an issue")
                     }
+                    if !self.hasPageToolbarActions {
+                        FluidToolbarEdgeSpace(width: self.toolbarTrailingInset)
+                    }
                 }
                 .toolbar(removing: .sidebarToggle)
+        }
+    }
+
+    private var hasPageToolbarActions: Bool {
+        guard !self.settingsNavigation.isPresented else { return false }
+        return switch self.selectedSidebarItem ?? .welcome {
+        case .stats, .commandMode, .meetingTranscription, .customDictionary, .changelog: true
+        default: false
         }
     }
 

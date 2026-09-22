@@ -1496,6 +1496,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             defer: false
         )
         window.title = "FluidVoice"
+        // Match the SwiftUI main scene when recreating a closed window.
+        window.toolbarStyle = .unified
         window.animationBehavior = .none
         window.minSize = self.mainWindowMinimumSize
         window.isReleasedWhenClosed = false

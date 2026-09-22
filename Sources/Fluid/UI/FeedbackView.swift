@@ -35,7 +35,7 @@ struct FeedbackView: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                     Text("Make FluidVoice better.")
-                        .font(self.theme.typography.displayTitle)
+                        .font(self.theme.typography.title)
                         .foregroundStyle(self.theme.palette.primaryText)
                     Text("Something in your way? Have an idea? Tell us.")
                         .font(self.theme.typography.body)
@@ -51,11 +51,9 @@ struct FeedbackView: View {
 
                 self.footer
             }
-            .frame(maxWidth: 680, alignment: .leading)
-            .padding(self.theme.metrics.spacing.xxl)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .fluidPageContent(width: .form, alignment: .center)
         }
-        .background(self.theme.palette.windowBackground)
+        .background(self.theme.palette.contentBackground)
     }
 
     // MARK: - Category

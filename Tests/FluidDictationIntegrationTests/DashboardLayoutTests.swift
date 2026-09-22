@@ -19,19 +19,19 @@ final class DashboardLayoutTests: XCTestCase {
     }
 
     func testBreakpointsAndCappedWidth() {
-        XCTAssertFalse(DashboardLayout(width: 1023).hasActionColumn)
-        XCTAssertTrue(DashboardLayout(width: 1024).hasActionColumn)
-        XCTAssertEqual(DashboardLayout(width: 625).setupColumns(count: 2), 1)
-        XCTAssertEqual(DashboardLayout(width: 626).setupColumns(count: 2), 2)
-        XCTAssertEqual(DashboardLayout(width: 916).setupColumns(count: 3), 3)
-        XCTAssertFalse(DashboardLayout(width: 675).hasHorizontalActions)
-        XCTAssertTrue(DashboardLayout(width: 676).hasHorizontalActions)
-        XCTAssertFalse(DashboardLayout(width: 1024).hasHorizontalActions)
+        XCTAssertFalse(DashboardLayout(width: 1007).hasActionColumn)
+        XCTAssertTrue(DashboardLayout(width: 1008).hasActionColumn)
+        XCTAssertEqual(DashboardLayout(width: 609).setupColumns(count: 2), 1)
+        XCTAssertEqual(DashboardLayout(width: 610).setupColumns(count: 2), 2)
+        XCTAssertEqual(DashboardLayout(width: 900).setupColumns(count: 3), 3)
+        XCTAssertFalse(DashboardLayout(width: 659).hasHorizontalActions)
+        XCTAssertTrue(DashboardLayout(width: 660).hasHorizontalActions)
+        XCTAssertFalse(DashboardLayout(width: 1008).hasHorizontalActions)
         XCTAssertEqual(DashboardLayout(width: 2000).contentWidth, DashboardLayout(width: 1440).contentWidth)
     }
 
     func testStatisticsDoNotSqueezeFourColumnsBesideActions() {
-        XCTAssertEqual(DashboardLayout(width: 1024).statisticColumns(count: 4), 2)
+        XCTAssertEqual(DashboardLayout(width: 1008).statisticColumns(count: 4), 2)
         XCTAssertEqual(DashboardLayout(width: 1440).statisticColumns(count: 4), 4)
         XCTAssertEqual(DashboardLayout(width: 320).statisticColumns(count: 4), 1)
     }

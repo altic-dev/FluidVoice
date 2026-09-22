@@ -22,13 +22,6 @@ struct StatsView: View {
                     .frame(maxWidth: .infinity, minHeight: 240)
             } else {
                 VStack(spacing: 16) {
-                    HStack {
-                        Spacer()
-                        Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
-                            .fluidGlassAction()
-                            .help("Make an image of your stats to post or send")
-                    }
-
                     self.todayHeaderCard
 
                     StatsActivityView(snapshot: self.stats)
@@ -58,10 +51,15 @@ struct StatsView: View {
                     // Reset Button
                     self.resetSection
                 }
-                .padding(20)
+                .fluidPageContent(width: .overview)
             }
         }
-        .background(self.theme.palette.accent.opacity(0.018))
+        .background(self.theme.palette.contentBackground)
+        .fluidPageActions {
+            Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
+                .disabled(self.statsStore.snapshot == nil)
+                .help("Make an image of your stats to post or send")
+        }
         .sheet(isPresented: self.$showShareSheet) {
             StatsShareSheet(content: self.shareContent) { self.showShareSheet = false }
         }

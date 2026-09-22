@@ -1113,7 +1113,7 @@ extension AIEnhancementSettingsView {
                         } label: {
                             Label("Add instruction", systemImage: "plus")
                         }
-                        .fluidOutlinedButton()
+                        .fluidGlassAction()
                     }
 
                     if customProfiles.isEmpty {
@@ -1217,7 +1217,7 @@ extension AIEnhancementSettingsView {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
                 Button(action.title, action: action.perform)
-                    .fluidOutlinedButton()
+                    .fluidGlassAction(quiet: true)
                     .fixedSize()
                     .disabled(!isEnabled)
                 if let shortcut = assignments.shortcutDisplay {

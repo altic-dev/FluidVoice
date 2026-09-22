@@ -21,7 +21,7 @@ struct VoiceEngineSettingsScreen: View {
             settings: self.viewModel.settings,
             theme: self.theme
         )
-        .padding(14)
+        .fluidPageContent(width: .expanding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -64,7 +64,7 @@ struct AIEnhancementSettingsScreen: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
                 AIEnhancementSettingsView(
                     viewModel: self.viewModel,
                     privateAIController: self.privateAIController,
@@ -76,7 +76,7 @@ struct AIEnhancementSettingsScreen: View {
                     shortcutRecordingMessage: self.$shortcutRecordingMessage
                 )
             }
-            .padding(14)
+            .fluidPageContent(width: .expanding)
         }
         .task(id: self.revealTarget) {
             guard case let .prompt(id) = self.revealTarget,

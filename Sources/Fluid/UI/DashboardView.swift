@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Uses available detail width, not window width (the sidebar can resize independently).
 struct DashboardLayout {
-    static let inset: CGFloat = 28
+    static let inset = FluidPageLayout.inset
     static let gap: CGFloat = 28
     static let maximumWidth: CGFloat = 1440
     static let actionWidth: CGFloat = 300
@@ -91,7 +91,7 @@ struct DashboardView: View {
                     }
                     .padding(DashboardLayout.inset)
                     .frame(maxWidth: DashboardLayout.maximumWidth, alignment: .leading)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

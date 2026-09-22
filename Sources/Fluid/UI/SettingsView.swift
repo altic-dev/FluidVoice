@@ -221,12 +221,6 @@ struct SettingsView: View {
             searchScrollRequest: self.searchScrollRequest
         ) {
             VStack(spacing: 16) {
-                Text(self.selectedSection.title)
-                    .font(.fluidSystem(.title2).weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .settingsSearchTarget(self.selectedSection.searchTarget)
-
                 // App Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -330,6 +324,7 @@ struct SettingsView: View {
                                         .font(self.theme.typography.bodyStrong)
                                         .foregroundStyle(self.settingsTitleText)
                                     Text("Choose the sound cue for recording. Some cues include an end sound.")
+                                        .fixedSize(horizontal: false, vertical: true)
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.settingsSecondaryText)
                                 }
@@ -1620,11 +1615,9 @@ struct SettingsView: View {
                 .settingsSearchTarget(.fasterLongDictation)
                 .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 48)
-            .frame(maxWidth: self.selectedSection == .shortcuts ? 960 : .infinity)
-            .frame(maxWidth: .infinity)
+            .padding(.bottom, 28)
+            .fluidPageContent(width: .expanding)
+            .settingsSearchTarget(self.selectedSection.searchTarget)
             .environment(\.settingsSearchPresentation, self.settingsSearchPresentation)
         }
         .id(self.selectedSection)
@@ -1919,9 +1912,11 @@ struct SettingsView: View {
                     Text(title)
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(self.settingsTitleText)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(description)
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.settingsSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -1937,12 +1932,14 @@ struct SettingsView: View {
                 Text(footnote)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)
                     .font(.fluidSystem(.caption))
                     .foregroundStyle(self.theme.palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

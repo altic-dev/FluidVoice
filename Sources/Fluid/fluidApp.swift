@@ -33,7 +33,8 @@ struct FluidApp: App {
             #endif
         }
         .defaultSize(width: 1000, height: 700)
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {

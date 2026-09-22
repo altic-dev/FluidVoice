@@ -60,8 +60,7 @@ extension AIEnhancementSettingsView {
                 }
                 self.addedExternalProvidersSection
             }
-            .frame(maxWidth: AppTheme.Metrics.Showcase.pageMaxWidth)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             self.legacyAIConfigurationCard
         }
@@ -180,66 +179,15 @@ extension AIEnhancementSettingsView {
     }
 
     private var legacyAIConfigurationCard: some View {
-        VStack(spacing: 14) {
-            ThemedCard(style: .prominent, hoverEffect: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.aiSetupHeader
-
-                    Group {
-                        switch self.selectedConfigurationSection {
-                        case .providers:
-                            self.providerConfigurationContent
-                        case .advancedPrompts:
-                            self.promptsStepContent
-                        }
-                    }
-                    .transition(.opacity)
-                    .animation(.easeOut(duration: 0.12), value: self.selectedConfigurationSection)
+        VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
+            Group {
+                switch self.selectedConfigurationSection {
+                case .providers:
+                    self.providerConfigurationContent
+                case .advancedPrompts:
+                    self.promptsStepContent
                 }
-                .padding(16)
             }
-        }
-    }
-
-    private var aiSetupHeader: some View {
-        let isProviders = self.selectedConfigurationSection == .providers
-
-        return HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(self.theme.palette.contentBackground.opacity(0.82))
-                    .overlay(
-                        LinearGradient(
-                            colors: [.white.opacity(0.1), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(self.theme.palette.accent.opacity(0.35), lineWidth: 1)
-                    )
-
-                Image(systemName: isProviders ? "cpu" : "wand.and.stars")
-                    .font(.fluidSystem(size: 15, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.accent)
-            }
-            .frame(width: 34, height: 34)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(isProviders ? "AI Providers" : "Cleanup Styles")
-                    .font(.fluidSystem(.title3))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text(isProviders
-                    ? "Configure local models and API providers."
-                    : "Choose how FluidVoice cleans up your dictation.")
-                    .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-
-            Spacer()
         }
     }
 

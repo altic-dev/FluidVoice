@@ -19,19 +19,8 @@ extension VoiceEngineSettingsView {
             return model != activeModel
         }
 
-        return ThemedCard(hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Header
-                HStack(spacing: 10) {
-                    Image(systemName: "waveform")
-                        .font(.fluidSystem(.title2))
-                        .foregroundStyle(self.theme.palette.accent)
-                    Text("Voice Engine")
-                        .font(.fluidSystem(.title3))
-                        .fontWeight(.semibold)
-                    Spacer()
-                }
-
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
                 // Stats Panel - Dynamic bars that update based on selected model
                 self.modelStatsPanel
                     .padding(12)
@@ -133,7 +122,6 @@ extension VoiceEngineSettingsView {
                     }
                 }
             }
-            .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -395,11 +383,7 @@ extension VoiceEngineSettingsView {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(Color.fluidGreen)
-                        .fontWeight(.semibold)
-                        .shadow(color: Color.fluidGreen.opacity(0.35), radius: 4, x: 0, y: 1)
+                        .fluidGlassAction(quiet: true)
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
                     }
 
@@ -414,8 +398,9 @@ extension VoiceEngineSettingsView {
                             }
                             .buttonStyle(.plain)
                             .disabled(self.viewModel.areSpeechModelActionsBlocked)
-                            .offset(x: isSelected ? 0 : 12)
                             .opacity(isSelected ? 1 : 0)
+                            .allowsHitTesting(isSelected)
+                            .accessibilityHidden(!isSelected)
                         }
                     }
                 }
@@ -439,13 +424,12 @@ extension VoiceEngineSettingsView {
                                 self.viewModel.previewSpeechModel = model
                                 self.viewModel.downloadSpeechModel(model)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .tint(.blue)
+                            .fluidGlassAction(prominent: true)
                             .disabled(self.viewModel.areSpeechModelActionsBlocked)
                         }
-                        .offset(x: isSelected ? 0 : 16)
                         .opacity(isSelected ? 1 : 0)
+                        .allowsHitTesting(isSelected)
+                        .accessibilityHidden(!isSelected)
                     } else {
                         Text("Not downloaded")
                             .font(self.theme.typography.bodySmall)
@@ -456,12 +440,11 @@ extension VoiceEngineSettingsView {
                             self.viewModel.previewSpeechModel = model
                             self.viewModel.downloadSpeechModel(model)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(.blue)
+                        .fluidGlassAction(prominent: true)
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
-                        .offset(x: isSelected ? 0 : 16)
                         .opacity(isSelected ? 1 : 0)
+                        .allowsHitTesting(isSelected)
+                        .accessibilityHidden(!isSelected)
                     }
                 }
                 .frame(width: model.requiresExternalArtifacts ? 150 : 120, alignment: .trailing)
