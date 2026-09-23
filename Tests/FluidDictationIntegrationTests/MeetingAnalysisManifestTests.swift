@@ -31,7 +31,9 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let session = try decoder.decode(MeetingSession.self, from: original)
         let request = MeetingBackendRequest(
-            attemptID: UUID(), session: session, sessionDirectory: directory,
+            attemptID: UUID(),
+            session: session,
+            sessionDirectory: directory,
             configuration: MeetingFinalProcessingConfiguration()
         )
         let plan = MeetingBackendPlan(request: request, descriptor: MeetingParakeetNemotronBackend.descriptor)

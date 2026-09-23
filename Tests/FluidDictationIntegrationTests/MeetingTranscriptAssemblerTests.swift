@@ -350,7 +350,9 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             plan: plan,
             manifest: manifest,
             evidence: MeetingFinalTranscriptEvidence(
-                backendID: plan.backendID, attemptID: plan.attemptID, units: units,
+                backendID: plan.backendID,
+                attemptID: plan.attemptID,
+                units: units,
                 speakerSlotsContinueAcrossEpochs: true
             ),
             coverageReceipts: self.receipts(for: manifest),
@@ -369,8 +371,12 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             MeetingBackendSpeakerAssignment.assigned(.init(analysisEpochID: spans[0].analysisEpochID, label: label))
         }
         let talker = self.unit(
-            id: "u-0", span: spans[0], text: "one two three four five six seven eight nine ten",
-            analysisStart: 0.5, analysisEnd: 3, speaker: slot("slot-0")
+            id: "u-0",
+            span: spans[0],
+            text: "one two three four five six seven eight nine ten",
+            analysisStart: 0.5,
+            analysisEnd: 3,
+            speaker: slot("slot-0")
         )
         let cough = self.unit(id: "u-1", span: spans[0], text: "hmm", analysisStart: 3.5, analysisEnd: 4, speaker: slot("slot-1"))
         let assemble = { (units: [MeetingFinalTextUnit]) in
@@ -407,7 +413,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let older = try JSONEncoder().encode(
             MeetingFinalTranscriptEvidence(backendID: .parakeetNemotron, attemptID: attemptID, units: [])
         )
-        XCTAssertFalse(String(decoding: older, as: UTF8.self).contains("speakerSlotsContinueAcrossEpochs"))
+        let encodedText = try XCTUnwrap(String(bytes: older, encoding: .utf8))
+        XCTAssertFalse(encodedText.contains("speakerSlotsContinueAcrossEpochs"))
         XCTAssertFalse(try JSONDecoder().decode(MeetingFinalTranscriptEvidence.self, from: older).speakerSlotsContinueAcrossEpochs)
     }
 

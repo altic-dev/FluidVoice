@@ -426,8 +426,11 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             let span = try XCTUnwrap(manifest.allSpans.first)
             let units = words.enumerated().map { index, word in
                 MeetingFinalTextUnit(
-                    id: "unit:\(plan.attemptID.uuidString):\(index)", trackID: span.trackID,
-                    analysisEpochID: span.analysisEpochID, precision: .word, text: word.text,
+                    id: "unit:\(plan.attemptID.uuidString):\(index)",
+                    trackID: span.trackID,
+                    analysisEpochID: span.analysisEpochID,
+                    precision: .word,
+                    text: word.text,
                     analysisStart: span.analysisInterval.start + word.start,
                     analysisEnd: span.analysisInterval.start + word.end,
                     speaker: .assigned(.init(analysisEpochID: span.analysisEpochID, label: "slot-0")),
@@ -517,8 +520,11 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         let artifact = try await Task {
             try await owner.withExclusive(attemptID: transcript.attempt.id, participants: [], acceptsCompletedCancellation: { $0 != nil }) {
                 await registry.process(
-                    sessionID: fixture.session.id, language: "en", result: transcript,
-                    directory: directory, provider: provider
+                    sessionID: fixture.session.id,
+                    language: "en",
+                    result: transcript,
+                    directory: directory,
+                    provider: provider
                 )
             }
         }.value
@@ -558,8 +564,11 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         let result = try await owner.withExclusive(attemptID: transcript.attempt.id, participants: []) {
             var result = transcript
             result.postProcessing = await registry.process(
-                sessionID: fixture.session.id, language: "en", result: result,
-                directory: directory, provider: provider
+                sessionID: fixture.session.id,
+                language: "en",
+                result: result,
+                directory: directory,
+                provider: provider
             )
             return result
         }
@@ -1016,8 +1025,11 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                 session: session, sessionDirectory: sessionDirectory, progress: progress
             )
             result.postProcessing = MeetingPostProcessingArtifact(
-                attemptID: result.attempt.id, transcriptHash: "new-transcript", providerID: "fixture",
-                modelID: "fixture-summary", output: .init(summary: "New summary", sourceSegmentIDs: result.segments.map(\.id)),
+                attemptID: result.attempt.id,
+                transcriptHash: "new-transcript",
+                providerID: "fixture",
+                modelID: "fixture-summary",
+                output: .init(summary: "New summary", sourceSegmentIDs: result.segments.map(\.id)),
                 error: nil
             )
             return result
@@ -1032,8 +1044,12 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         session.endedAt = Date()
         session.recoveryResolvedAt = Date()
         let originalSummary = MeetingPostProcessingArtifact(
-            attemptID: UUID(), transcriptHash: "old-transcript", providerID: "fixture",
-            modelID: "fixture-summary", output: .init(summary: "Old summary", sourceSegmentIDs: []), error: nil
+            attemptID: UUID(),
+            transcriptHash: "old-transcript",
+            providerID: "fixture",
+            modelID: "fixture-summary",
+            output: .init(summary: "Old summary", sourceSegmentIDs: []),
+            error: nil
         )
         session.postProcessing = originalSummary
 

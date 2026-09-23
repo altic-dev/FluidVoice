@@ -49,7 +49,7 @@ struct FileTranscriptionEntry {
         return value
     }
 
-    private static func testRename() {
+    private static func testRename() throws {
         let store = ChatHistoryStore.shared
         let original = ChatSession(title: "Automatic", messages: [.init(role: .user, content: "Original prompt")])
         let other = ChatSession(title: "Other", isArchived: true)
@@ -58,7 +58,7 @@ struct FileTranscriptionEntry {
         let renamed = self.require(store.currentSession, "Rename retains current session")
         self.check(renamed.title == "My project" && renamed.hasCustomTitle, "Trim and persist custom title")
         self.check(renamed.messages == original.messages && renamed.updatedAt == original.updatedAt, "Rename preserves messages and date")
-        self.check(renamed.searchRecord!.revision > original.searchRecord!.revision, "Rename advances search revision")
+        self.check(self.require(renamed.searchRecord, "Renamed session must be indexed").revision > self.require(original.searchRecord, "Original session must be indexed").revision, "Rename advances search revision")
         self.check(store.sessions[1] == other, "Rename leaves unrelated archives unchanged")
         let snapshot = store.sessions
         store.renameChat(id: original.id, to: "  ")
@@ -67,19 +67,20 @@ struct FileTranscriptionEntry {
         self.check(store.sessions == snapshot, "Blank, duplicate and stale renames are no-ops")
         store.updateCurrentChat(messages: [.init(role: .user, content: "New message")])
         self.check(store.currentSession?.title == "My project", "Message autosave never overwrites a custom title")
-        let encoded = try! JSONEncoder().encode(renamed)
-        let decoded = try! JSONDecoder().decode(ChatSession.self, from: encoded)
+        let encoded = try JSONEncoder().encode(renamed)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: encoded)
         self.check(decoded == renamed, "Custom title survives reload")
-        var legacy = try! JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        let legacyObject = try JSONSerialization.jsonObject(with: encoded)
+        var legacy = self.require(legacyObject as? [String: Any], "Encoded session must be a JSON object")
         legacy.removeValue(forKey: "hasCustomTitle")
-        let legacyData = try! JSONSerialization.data(withJSONObject: legacy)
-        self.check(!(try! JSONDecoder().decode(ChatSession.self, from: legacyData)).hasCustomTitle, "Old sessions decode without migration")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        try self.check(!(JSONDecoder().decode(ChatSession.self, from: legacyData)).hasCustomTitle, "Old sessions decode without migration")
         store.renameChat(id: other.id, to: "Archived project")
         self.check(store.sessions[1].isArchived && store.currentChatID == original.id, "Archived rename never restores or selects it")
     }
 
-    static func main() {
-        self.testRename()
+    static func main() throws {
+        try self.testRename()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let active = ChatSession(title: "Active searchable", updatedAt: date, messages: [.init(role: .user, content: "hello")])
         let archived = ChatSession(title: "Archived hidden", updatedAt: date, isArchived: true, messages: [.init(role: .user, content: "hidden")])

@@ -139,7 +139,9 @@ final class MeetingModelResidencyTests: XCTestCase {
         let owner = MeetingModelResidencyCoordinator()
         let attempt = UUID()
         let participant = MeetingModelParticipant(
-            owner: "speech", snapshot: { .init(id: "v3", configuration: "original") }, suspend: {},
+            owner: "speech",
+            snapshot: { .init(id: "v3", configuration: "original") },
+            suspend: {},
             restore: { _ in
                 XCTAssertThrowsError(try owner.beginOperation(owner: "fluid", modelID: "v3"))
                 XCTAssertThrowsError(try owner.beginOperation(owner: "speech", modelID: "v2"))
@@ -160,7 +162,8 @@ final class MeetingModelResidencyTests: XCTestCase {
         let finish = ResidencyLatch()
         let trace = ResidencyTrace()
         let participant = MeetingModelParticipant(
-            owner: "speech", snapshot: { .init(id: "v3", configuration: "original") },
+            owner: "speech",
+            snapshot: { .init(id: "v3", configuration: "original") },
             suspend: { trace.events.append("unload") },
             restore: { _ in entered.release(); await finish.wait() }
         )
@@ -192,10 +195,10 @@ final class MeetingModelResidencyTests: XCTestCase {
             owner: "fluid",
             snapshot: { nil },
             suspend: { throw CocoaError(.fileReadUnknown) },
-            restore: { _ in XCTFail() }
+            restore: { _ in XCTFail("Failed participant must not be restored") }
         )
         do {
-            try await owner.withExclusive(attemptID: UUID(), participants: [trace.participant("speech", loaded: true), failure]) { XCTFail() }
+            try await owner.withExclusive(attemptID: UUID(), participants: [trace.participant("speech", loaded: true), failure]) { XCTFail("Exclusive work must not run after preparation fails") }
             XCTFail("Expected suspension failure")
         } catch {}
         XCTAssertTrue(trace.events.contains("restore:speech"))
@@ -237,15 +240,25 @@ extension MeetingModelResidencyTests {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let participant = MeetingModelParticipant(
-                owner: "speech", snapshot: { .init(id: "speech", configuration: "original") }, suspend: {},
+                owner: "speech",
+                snapshot: { .init(id: "speech", configuration: "original") },
+                suspend: {},
                 restore: { _ in
                     let unloaded = await provider.unloaded
                     XCTAssertGreaterThan(unloaded, 0)
                 }
             )
             let result = MeetingProcessingResult(speakers: [], segments: [], attempt: .init(
-                id: UUID(), startedAt: Date(), completedAt: Date(), stage: .completed, pipelineVersion: 13,
-                asrProvider: nil, asrModel: nil, diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil
+                id: UUID(),
+                startedAt: Date(),
+                completedAt: Date(),
+                stage: .completed,
+                pipelineVersion: 13,
+                asrProvider: nil,
+                asrModel: nil,
+                diarizationModel: nil,
+                lastCompletedTrackID: nil,
+                errorCode: nil
             ))
             let artifact = try await Task {
                 try await owner.withExclusive(attemptID: UUID(), participants: [participant], acceptsCompletedCancellation: { $0 != nil }) {
@@ -268,10 +281,10 @@ extension MeetingModelResidencyTests {
             owner: "fluid",
             snapshot: { throw CocoaError(.fileReadUnknown) },
             suspend: { XCTFail("No unloading before all snapshots succeed") },
-            restore: { _ in XCTFail() }
+            restore: { _ in XCTFail("Failed participant must not be restored") }
         )
         do {
-            try await owner.withExclusive(attemptID: UUID(), participants: [trace.participant("speech", loaded: true), failure]) { XCTFail() }
+            try await owner.withExclusive(attemptID: UUID(), participants: [trace.participant("speech", loaded: true), failure]) { XCTFail("Exclusive work must not run after preparation fails") }
             XCTFail("Expected snapshot failure")
         } catch {}
         XCTAssertEqual(trace.events, ["snapshot:speech", "finish:speech"])
@@ -404,7 +417,8 @@ extension MeetingModelResidencyTests {
             let restore = Task {
                 try await DictionaryTrainingEndpointMonitor.prepareIfCurrent(
                     expectedGeneration: "before-meeting",
-                    isEnabled: { enabled }, generation: { generation },
+                    isEnabled: { enabled },
+                    generation: { generation },
                     prepare: {
                         entered.release()
                         await completed.wait()
@@ -426,7 +440,9 @@ extension MeetingModelResidencyTests {
 
     func testDictionaryRestoreRejectsSnapshotInvalidatedBeforePreparation() async throws {
         let restored = try await DictionaryTrainingEndpointMonitor.prepareIfCurrent(
-            expectedGeneration: "before-meeting", isEnabled: { true }, generation: { "disabled-then-enabled" },
+            expectedGeneration: "before-meeting",
+            isEnabled: { true },
+            generation: { "disabled-then-enabled" },
             prepare: { XCTFail("A new selection must not revive an old snapshot") },
             unload: { XCTFail("No model was loaded") }
         )

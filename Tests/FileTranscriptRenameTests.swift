@@ -35,15 +35,21 @@ final class DebugLogger {
         let defaults = UserDefaults()
         let store = FileTranscriptionHistoryStore(defaults: defaults)
         let result = TranscriptionResult(
-            id: UUID(), text: "Keep the transcript", confidence: 0.9,
-            duration: 12, processingTime: 1, fileName: "original.wav", timestamp: Date(),
-            speakerSegments: [.init(text: "Speaker text")], speakerLabelingNotice: "Notice",
+            id: UUID(),
+            text: "Keep the transcript",
+            confidence: 0.9,
+            duration: 12,
+            processingTime: 1,
+            fileName: "original.wav",
+            timestamp: Date(),
+            speakerSegments: [.init(text: "Speaker text")],
+            speakerLabelingNotice: "Notice",
             speakerLabelingGaps: [.init(text: "Gap")]
         )
         store.addEntry(result)
-        let original = store.selectedEntry!
+        guard let original = store.selectedEntry else { preconditionFailure("Adding a transcript must select it") }
         store.renameEntry(id: original.id, to: "  Weekly review  ")
-        let renamed = store.selectedEntry!
+        guard let renamed = store.selectedEntry else { preconditionFailure("Renaming must retain selection") }
         precondition(renamed.displayTitle == "Weekly review")
         precondition(renamed.fileName == original.fileName && renamed.text == original.text)
         precondition(renamed.speakerSegments == original.speakerSegments && renamed.speakerLabelingGaps == original.speakerLabelingGaps)
@@ -56,7 +62,9 @@ final class DebugLogger {
         precondition(FileTranscriptionHistoryStore(defaults: defaults).entries == [renamed])
         store.renameEntry(id: original.id, to: "Second title")
         precondition(store.selectedEntry?.searchRevision == 3)
-        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(renamed)) as! [String: Any]
+        guard var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(renamed)) as? [String: Any] else {
+            preconditionFailure("Encoded transcript must be a JSON object")
+        }
         legacy.removeValue(forKey: "customTitle")
         legacy.removeValue(forKey: "searchRevision")
         let decoded = try JSONDecoder().decode(FileTranscriptionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))

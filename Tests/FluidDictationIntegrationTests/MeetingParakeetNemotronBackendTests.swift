@@ -789,7 +789,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         )
         XCTAssertEqual(
             runtime.diarizerFactory.diarizedSampleCounts,
-            [2 * 16_000 + 8_000 + 2 * 16_000, 2 * 16_000],
+            [2 * 16_000 + 8000 + 2 * 16_000, 2 * 16_000],
             "a track's epochs are diarized as one stream joined by 0.5 s of silence"
         )
         XCTAssertEqual(runtime.diarizationScopeCount, 1, "one Nemotron residency per attempt")
@@ -806,7 +806,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
         XCTAssertEqual(helloToken, .init(analysisEpochID: micEpochs[0].id, label: "slot-0"))
         XCTAssertEqual(
-            worldToken, .init(analysisEpochID: micEpochs[1].id, label: "slot-0"),
+            worldToken,
+            .init(analysisEpochID: micEpochs[1].id, label: "slot-0"),
             "a segment after the join maps back into the second epoch's own time"
         )
         XCTAssertEqual(remoteToken, .init(analysisEpochID: appEpochs[0].id, label: "slot-0"))
@@ -1395,7 +1396,7 @@ private final nonisolated class FakeDiarizerFactory: MeetingNemotronDiarizerFact
     var segmentsByEpoch: [MeetingAnalysisEpochID: [MeetingNemotronSpeakerSegment]] = [:]
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
     private(set) var createdEpochs: [MeetingAnalysisEpochID] = []
-    fileprivate(set) var diarizedSampleCounts: [Int] = []
+    private(set) var diarizedSampleCounts: [Int] = []
 
     func makeDiarizer(epoch: MeetingAnalysisEpochID) async throws -> any MeetingNemotronDiarizerSession {
         self.createdEpochs.append(epoch)

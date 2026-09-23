@@ -188,7 +188,11 @@ final nonisolated class WholeMeetingMemoryProbe: @unchecked Sendable {
             pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) }
         }
         self.lock.withLock {
-            self.rows.append("\(Date().timeIntervalSince(self.began)),\(self.phase),\(info.resident_size),\(info.phys_footprint),\(helperFootprint),\(helpers.map(String.init).joined(separator: ";")),\(ownUsage.ri_lifetime_max_phys_footprint),\(helperPeak),\(helperReadFailures)")
+            self.rows.append(
+                "\(Date().timeIntervalSince(self.began)),\(self.phase),\(info.resident_size),\(info.phys_footprint),"
+                    + "\(helperFootprint),\(helpers.map(String.init).joined(separator: ";")),"
+                    + "\(ownUsage.ri_lifetime_max_phys_footprint),\(helperPeak),\(helperReadFailures)"
+            )
         }
     }
 
@@ -250,7 +254,12 @@ extension MeetingSpeakerVoiceMatcherTests {
         XCTAssertEqual(helpersBefore.isEmpty, helpersAfter.isEmpty)
         XCTAssertTrue(Set(helpersBefore).isDisjoint(with: helpersAfter))
         XCTAssertTrue(MeetingModelResidencyCoordinator.shared.restorationErrors.isEmpty)
-        let proof = "Speech before: \(before?.id ?? "none")\nSpeech after: \(after?.id ?? "none")\nFluid before: \(fluidBefore?.modelID ?? "none")\nFluid after: \(fluidAfter?.modelID ?? "none")\nHelper PIDs before: \(helpersBefore)\nHelper PIDs after: \(helpersAfter)\n"
+        let proof = "Speech before: \(before?.id ?? "none")\n"
+            + "Speech after: \(after?.id ?? "none")\n"
+            + "Fluid before: \(fluidBefore?.modelID ?? "none")\n"
+            + "Fluid after: \(fluidAfter?.modelID ?? "none")\n"
+            + "Helper PIDs before: \(helpersBefore)\n"
+            + "Helper PIDs after: \(helpersAfter)\n"
         try proof.write(to: output.appendingPathComponent("restoration.txt"), atomically: true, encoding: .utf8)
         probe.mark("restored")
         try await Task.sleep(for: .seconds(30))
