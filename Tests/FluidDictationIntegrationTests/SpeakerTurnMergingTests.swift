@@ -2803,3 +2803,23 @@ private enum MeetingCoordinatorFixture {
         }
     }
 }
+
+final class MeetingSpeakerAccuracyNoteTests: XCTestCase {
+    func testNoSpeakersShowsNoNote() {
+        XCTAssertNil(MeetingResultCanvas.speakerAccuracyNote(speakerCount: 0))
+    }
+
+    func testUpToLimitShowsGentleNoteWithoutCount() throws {
+        for count in [1, MeetingResultCanvas.reliableSpeakerLimit] {
+            let note = try XCTUnwrap(MeetingResultCanvas.speakerAccuracyNote(speakerCount: count))
+            XCTAssertTrue(note.hasPrefix("Speaker labels are automatic"))
+            XCTAssertFalse(note.contains("speakers found"))
+        }
+    }
+
+    func testAboveLimitNamesCountAndLimit() throws {
+        let note = try XCTUnwrap(MeetingResultCanvas.speakerAccuracyNote(speakerCount: 9))
+        XCTAssertTrue(note.hasPrefix("9 speakers found"))
+        XCTAssertTrue(note.contains("Above 8"))
+    }
+}

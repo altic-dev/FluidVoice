@@ -438,7 +438,14 @@ struct MeetingResultCanvas: View {
                         .id("\(self.session.id)-\(self.session.updatedAt)")
                 } else {
                     if !activeSpeakers.isEmpty {
-                        self.speakerStrip(activeSpeakers)
+                        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                            self.speakerStrip(activeSpeakers)
+                            if self.session.state == .completed,
+                               let note = Self.speakerAccuracyNote(speakerCount: self.session.activeSpeakers.count)
+                            {
+                                self.speakerAccuracyNoteView(note, speakerCount: self.session.activeSpeakers.count)
+                            }
+                        }
                     }
 
                     if visibleSegments.isEmpty {
@@ -589,6 +596,29 @@ struct MeetingResultCanvas: View {
             .font(self.theme.typography.caption)
             .foregroundStyle(self.statusColor)
             .fixedSize()
+    }
+
+    /// Diarization stays dependable up to this many voices; beyond it, speakers merge or split.
+    static let reliableSpeakerLimit = 8
+
+    /// Uses the same count as the history row, so both places describe the same number.
+    static func speakerAccuracyNote(speakerCount: Int) -> String? {
+        guard speakerCount > 0 else { return nil }
+        guard speakerCount > self.reliableSpeakerLimit else {
+            return "Speaker labels are automatic and may not be exact. Click a name to fix it."
+        }
+        return "\(speakerCount) speakers found. Above \(self.reliableSpeakerLimit), labels are less reliable: one person may show up twice, or two people as one."
+    }
+
+    private func speakerAccuracyNoteView(_ note: String, speakerCount: Int) -> some View {
+        Label {
+            Text(note).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: speakerCount > Self.reliableSpeakerLimit ? "exclamationmark.circle" : "info.circle")
+        }
+        .font(self.theme.typography.caption)
+        .foregroundStyle(self.theme.palette.tertiaryText)
+        .accessibilityElement(children: .combine)
     }
 
     private func speakerStrip(_ speakers: [MeetingSessionSpeaker]) -> some View {
