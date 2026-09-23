@@ -109,6 +109,22 @@ final class AIEnhancementSettingsViewModel {
         check(vm.cachedAddedProviderItems.isEmpty, "Fresh catalog stays hidden")
         var draft = ProviderSetupDraft(name: "Local", baseURL: "http://localhost:1234/v1", model: "tiny")
         check(draft.isValid && vm.saves == 0, "Editing a valid draft has no persistence effects")
+        var discoveryDraft = draft
+        discoveryDraft.fetchedModels = ["first", "second"]
+        discoveryDraft.model = "second"
+        check(discoveryDraft.modelsToSave(defaults: []) == ["second", "first"], "Selected discovered model is saved first without dropping other models")
+        discoveryDraft.model = "manual"
+        check(discoveryDraft.modelsToSave(defaults: []) == ["manual", "first", "second"], "Manual entry preserves discovered models")
+        discoveryDraft.model = ""
+        check(discoveryDraft.modelsToSave(defaults: ["default"]) == ["first", "second"], "Discovery replaces fallback defaults")
+        discoveryDraft.fetchedModels = []
+        check(discoveryDraft.modelsToSave(defaults: ["default"]) == ["default"], "Empty discovery preserves default fallback")
+        let originalConnection = discoveryDraft.connectionIdentity
+        discoveryDraft.model = "another"
+        check(discoveryDraft.connectionIdentity == originalConnection, "Model selection does not invalidate a connection request")
+        discoveryDraft.apiKey = "changed"
+        check(discoveryDraft.connectionIdentity != originalConnection, "Credential edits invalidate stale discovery")
+        check(vm.saves == 0 && vm.providerAPIKeys.isEmpty && vm.savedProviders.isEmpty, "Model discovery drafts do not persist credentials or providers")
         draft.baseURL = "file:///tmp/model"
         check(!draft.isValid && !vm.addProvider(draft), "Reject non-HTTP endpoints without persistence")
         draft.baseURL = "https://user:secret@example.com"
@@ -121,7 +137,9 @@ final class AIEnhancementSettingsViewModel {
             "Keychain failure keeps records, keys, and model maps unchanged"
         )
         vm.failKeychain = false
+        draft.fetchedModels = ["other", "tiny"]
         check(vm.addProvider(draft) && vm.savedProviders.count == 1, "Explicit Add saves a custom provider")
+        check(vm.savedProviders.first?.models == ["tiny", "other"], "Add persists the selected model and complete discovered list")
         check(vm.settings.selectedProviderID == "fluid" && vm.selectedModelByProvider["fluid"] == "mini", "Adding does not change current route/model")
         check(vm.addProvider(draft) && vm.savedProviders.count == 2, "Same display name cannot overwrite another provider")
         check(vm.cachedAddedProviderItems.count == 2, "Saved custom providers appear without verification")

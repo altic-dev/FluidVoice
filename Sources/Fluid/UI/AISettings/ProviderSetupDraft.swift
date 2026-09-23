@@ -7,6 +7,15 @@ struct ProviderSetupDraft {
     var baseURL = ""
     var apiKey = ""
     var model = ""
+    var fetchedModels: [String] = []
+
+    var connectionIdentity: [String] { [self.providerID, self.trimmedBaseURL, self.apiKey] }
+
+    func modelsToSave(defaults: [String]) -> [String] {
+        let models = self.fetchedModels.isEmpty ? defaults : self.fetchedModels
+        guard !self.trimmedModel.isEmpty else { return models }
+        return [self.trimmedModel] + models.filter { $0 != self.trimmedModel }
+    }
 
     var trimmedName: String { self.name.trimmingCharacters(in: .whitespacesAndNewlines) }
     var trimmedModel: String { self.model.trimmingCharacters(in: .whitespacesAndNewlines) }

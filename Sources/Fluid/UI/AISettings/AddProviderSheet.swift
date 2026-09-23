@@ -8,6 +8,10 @@ struct AddProviderSheet<Logo: View>: View {
     @State private var draft = ProviderSetupDraft()
     @State private var isEditing = false
     @State private var saveFailed = false
+    @State private var modelFetchTask: Task<Void, Never>?
+    @State private var modelFetchID: UUID?
+    @State private var modelFetchError: String?
+    @State private var showingManualModel = false
 
     private var providers: [AIEnhancementSettingsViewModel.ProviderItemData] {
         let added = Set(self.viewModel.cachedAddedProviderItems.map(\.id))
@@ -97,6 +101,12 @@ struct AddProviderSheet<Logo: View>: View {
         .padding(28)
         .frame(width: 720, height: 650)
         .background(self.theme.palette.windowBackground)
+        .onChange(of: self.draft.connectionIdentity) { _, _ in
+            self.cancelModelFetch()
+            self.draft.fetchedModels = []
+            self.modelFetchError = nil
+        }
+        .onDisappear { self.cancelModelFetch() }
     }
 
     private var form: some View {
@@ -115,11 +125,7 @@ struct AddProviderSheet<Logo: View>: View {
                             Link(destination: url) { Label(website.label, systemImage: "arrow.up.right").font(self.theme.typography.caption) }
                         }
                     }
-                    FluidManagementGroup(title: "Model") {
-                        self.field("Model name · Optional") { TextField("Enter a model ID", text: self.$draft.model) }
-                        Text(self.draft.providerID.isEmpty ? "Add a model now, or fetch models from Manage later." : "Leave blank to start with the provider’s default models.")
-                            .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                    }
+                    self.modelSection
                     Label("Your current dictation setup stays unchanged.", systemImage: "info.circle")
                         .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -131,7 +137,7 @@ struct AddProviderSheet<Logo: View>: View {
             }
             Spacer()
             HStack {
-                Button("Back") { self.isEditing = false; self.saveFailed = false }
+                Button("Back") { self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false }
                     .fluidGlassAction()
                 Spacer()
                 Button("Add Provider") {
@@ -139,7 +145,87 @@ struct AddProviderSheet<Logo: View>: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .fluidGlassAction(prominent: true)
-                .disabled(!self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+                .disabled(self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+            }
+        }
+    }
+
+    private var modelSection: some View {
+        FluidManagementGroup(title: "Model") {
+            HStack(spacing: 8) {
+                SearchableModelPicker(
+                    models: self.draft.fetchedModels,
+                    selectedModel: self.$draft.model,
+                    selectionEnabled: !self.draft.fetchedModels.isEmpty,
+                    controlWidth: 430,
+                    controlHeight: 36
+                )
+                Button(action: self.fetchModels) {
+                    if self.modelFetchID != nil {
+                        ProgressView().controlSize(.small).frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .fluidGlassAction()
+                .disabled(!self.draft.isValid || self.modelFetchID != nil)
+                .help("Load models from this provider")
+                .accessibilityLabel("Load models")
+                Button { self.showingManualModel.toggle() } label: {
+                    Image(systemName: "plus")
+                }
+                .fluidGlassAction()
+                .help("Enter a model ID manually")
+                .accessibilityLabel("Enter model ID manually")
+            }
+            if self.showingManualModel {
+                self.field("Model ID") { TextField("Enter a model ID", text: self.$draft.model) }
+            }
+            Text(self.draft.requiresAPIKey && self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Enter your API key, then load models with the reload button."
+                : "Load models with the reload button, or use + to enter a model ID.")
+                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+            if let error = self.modelFetchError {
+                Text(error).font(self.theme.typography.caption).foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func cancelModelFetch() {
+        self.modelFetchTask?.cancel()
+        self.modelFetchTask = nil
+        self.modelFetchID = nil
+    }
+
+    private func fetchModels() {
+        guard self.draft.isValid, self.modelFetchID == nil else { return }
+        let snapshot = self.draft
+        let requestID = UUID()
+        self.modelFetchID = requestID
+        self.modelFetchError = nil
+        self.modelFetchTask = Task { @MainActor in
+            defer {
+                if self.modelFetchID == requestID {
+                    self.modelFetchID = nil
+                    self.modelFetchTask = nil
+                }
+            }
+            do {
+                let models = try await ModelRepository.shared.fetchModels(
+                    for: snapshot.providerID,
+                    baseURL: snapshot.trimmedBaseURL,
+                    apiKey: snapshot.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                guard !Task.isCancelled, self.modelFetchID == requestID,
+                      self.draft.connectionIdentity == snapshot.connectionIdentity else { return }
+                self.draft.fetchedModels = Array(Set(models)).sorted()
+                if self.draft.model.isEmpty { self.draft.model = self.draft.fetchedModels.first ?? "" }
+                if models.isEmpty { self.modelFetchError = "No models returned. Load a model on your server and retry, or enter its ID with +." }
+            } catch {
+                guard !Task.isCancelled, self.modelFetchID == requestID,
+                      self.draft.connectionIdentity == snapshot.connectionIdentity else { return }
+                self.modelFetchError = error.localizedDescription
             }
         }
     }

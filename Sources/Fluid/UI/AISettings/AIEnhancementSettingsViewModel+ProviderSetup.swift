@@ -45,7 +45,7 @@ extension AIEnhancementSettingsViewModel {
         let builtIn = !draft.providerID.isEmpty && ModelRepository.shared.isBuiltIn(draft.providerID)
         guard draft.providerID.isEmpty || builtIn else { return false }
         guard !builtIn || !self.cachedAddedProviderItems.contains(where: { $0.id == draft.providerID }) else { return false }
-        let models = draft.trimmedModel.isEmpty ? (builtIn ? ModelRepository.shared.defaultModels(for: draft.providerID) : []) : [draft.trimmedModel]
+        let models = draft.modelsToSave(defaults: builtIn ? ModelRepository.shared.defaultModels(for: draft.providerID) : [])
         let provider = SettingsStore.SavedProvider(name: draft.trimmedName, baseURL: draft.trimmedBaseURL, models: models)
         let id = builtIn ? draft.providerID : provider.id
         let key = self.providerKey(for: id)
