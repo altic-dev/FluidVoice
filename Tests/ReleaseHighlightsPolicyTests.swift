@@ -22,12 +22,25 @@ struct ReleaseHighlightsPolicyTests {
         precondition(policy.seenVersions == [first.version])
         precondition(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true) == nil)
 
+        // A Help click during refinement survives ineligibility and replays an acknowledged version.
+        policy.requestManual(owner: owner)
+        precondition(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: false) == nil)
+        let deferred = try require(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true))
+        policy.requestManual(owner: owner)
+        precondition(policy.finishDismiss(id: deferred.id, eligible: true) == true)
+        precondition(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true) == nil, "An open-sheet request must not reopen after dismissal")
+        policy.requestManual(owner: owner)
+        policy.abandon(owner: owner)
+        precondition(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true) == nil, "Closing the host cancels deferred manual intent")
+
         // Manual replay, interruption during dismissal, and safe deferred retry.
         let replay = try require(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true, manual: true))
         precondition(policy.beginDismiss(id: replay.id, acknowledge: true))
         policy.interrupt(id: replay.id)
         precondition(policy.finishDismiss(id: replay.id, eligible: false) == false)
         precondition(policy.seenVersions == [first.version])
+        let resumedReplay = try require(policy.request(owner: owner, version: first.version, release: "1.6.10", eligible: true))
+        precondition(policy.finishDismiss(id: resumedReplay.id, eligible: true) == true)
         let next = try require(policy.request(owner: other, version: "1.6.10-beta.8", release: "1.6.10", eligible: true))
         policy.interrupt(id: next.id)
         precondition(policy.finishDismiss(id: next.id, eligible: true) == false, "Recovery before onDismiss must not acknowledge an interruption")

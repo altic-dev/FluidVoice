@@ -9,12 +9,14 @@ struct ReleaseHighlightsPolicy {
         let id = UUID()
         let owner: UUID
         let version: String
+        let manual: Bool
         var dismissing = false
         var acknowledge = false
     }
 
     private(set) var seenVersions: [String]
     private(set) var session: Session?
+    private var manualRequests: Set<UUID> = []
 
     init(seenVersions: [String] = []) {
         var unique: [String] = []
@@ -29,10 +31,18 @@ struct ReleaseHighlightsPolicy {
         !release.isEmpty && (version == release || version.hasPrefix(release + "-"))
     }
 
+    mutating func requestManual(owner: UUID) {
+        // Repeated requests for an already-open sheet must not queue a second popup.
+        guard self.session?.owner != owner else { return }
+        self.manualRequests.insert(owner)
+    }
+
     mutating func request(owner: UUID, version: String, release: String, eligible: Bool, manual: Bool = false) -> Session? {
+        if manual { self.requestManual(owner: owner) }
         guard eligible, self.session == nil, Self.matches(version: version, release: release),
-              manual || !self.seenVersions.contains(version) else { return nil }
-        let session = Session(owner: owner, version: version)
+              self.manualRequests.contains(owner) || !self.seenVersions.contains(version) else { return nil }
+        let session = Session(owner: owner, version: version, manual: self.manualRequests.contains(owner))
+        self.manualRequests.remove(owner)
         self.session = session
         return session
     }
@@ -57,6 +67,7 @@ struct ReleaseHighlightsPolicy {
         guard let session = self.session, session.id == id else { return nil }
         self.session = nil
         let acknowledged = eligible && (!session.dismissing || session.acknowledge)
+        if !acknowledged, session.manual { self.manualRequests.insert(session.owner) }
         if acknowledged {
             self.seenVersions.removeAll { $0 == session.version }
             self.seenVersions.append(session.version)
@@ -66,6 +77,7 @@ struct ReleaseHighlightsPolicy {
     }
 
     mutating func abandon(owner: UUID) {
+        self.manualRequests.remove(owner)
         guard self.session?.owner == owner else { return }
         self.session = nil
     }

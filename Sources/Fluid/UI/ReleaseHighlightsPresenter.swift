@@ -11,6 +11,8 @@ private final class ReleaseHighlightsCoordinator {
         self.policy.request(owner: owner, version: version, release: release, eligible: eligible, manual: manual)
     }
 
+    func requestManual(owner: UUID) { self.policy.requestManual(owner: owner) }
+
     func beginDismiss(id: UUID) -> Bool { self.policy.beginDismiss(id: id, acknowledge: true) }
     func interrupt(id: UUID) { self.policy.interrupt(id: id) }
     func abandon(owner: UUID) { self.policy.abandon(owner: owner) }
@@ -78,8 +80,9 @@ struct ReleaseHighlightsPresenter: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndSheetNotification)) { _ in self.presentIfNeeded() }
             .onChange(of: self.requested) { _, requested in
                 guard requested else { return }
+                self.coordinator.requestManual(owner: self.owner)
                 self.requested = false
-                self.presentIfNeeded(manual: true)
+                self.presentIfNeeded()
             }
     }
 
