@@ -156,9 +156,24 @@ final class DebugLogger {
         restoreStore.restore(from: [legacy[3]])
         try await restoreStore.waitUntilLoaded()
         await restoreStore.finishPendingWrites()
-        precondition(restoreStore.entries == [legacy[3]])
+        guard let restored = restoreStore.entries.first,
+              let revision = restored.searchRevision
+        else { preconditionFailure("Restore must set a search revision") }
+        precondition(revision > (legacy[3].searchRevision ?? 1), "Restore must invalidate the previous search record")
+        var expectedRestore = legacy[3]
+        expectedRestore.searchRevision = revision
+        precondition(restoreStore.entries == [expectedRestore], "Restore must preserve every field except the search revision")
         let afterRestore = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
-        precondition(afterRestore == [legacy[3]])
+        precondition(afterRestore == [expectedRestore], "The new search revision and original content must round-trip")
+        restoreStore.restore(from: [legacy[3]])
+        await restoreStore.finishPendingWrites()
+        guard let nextRevision = restoreStore.entries.first?.searchRevision else {
+            preconditionFailure("Repeated restore must preserve a search revision")
+        }
+        precondition(nextRevision > revision, "Restoring an older backup must advance past the currently indexed revision")
+        expectedRestore.searchRevision = nextRevision
+        let afterRepeatedRestore = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        precondition(afterRepeatedRestore == [expectedRestore], "Repeated restore changes only the persisted search revision")
         print("PASS: restore during loading replaces both memory and disk")
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
     }

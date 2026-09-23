@@ -237,8 +237,16 @@ final class AIEnhancementSettingsViewModel {
         check(!closing.saveManagedProviderBeforeClosing("ollama"), "Busy editor cannot dismiss")
         check(manager.contains(".interactiveDismissDisabled()"), "Interactive dismissal cannot bypass failed persistence")
         let historySource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
-        let audioRequest = historySource.components(separatedBy: "private struct AudioAvailabilityRequest")[1]
-            .components(separatedBy: "private var filteredEntries")[0]
+        // Inspect only the request type and its inputs. Unrelated properties may
+        // legitimately sit between these declarations and the filtered list.
+        func declaration(_ marker: String) -> String {
+            guard let start = historySource.range(of: marker),
+                  let end = historySource.range(of: "\n    }", range: start.upperBound..<historySource.endIndex)
+            else { preconditionFailure("Missing history declaration: \(marker)") }
+            return String(historySource[start.lowerBound..<end.upperBound])
+        }
+        let audioRequest = declaration("private struct AudioAvailabilityRequest")
+            + declaration("private var audioAvailabilityRequest:")
         check(!audioRequest.contains("selectedEntry") && !audioRequest.contains("selectedID"), "Row selection cannot restart audio scans")
         print("Passed \(count) provider setup assertions")
     }
