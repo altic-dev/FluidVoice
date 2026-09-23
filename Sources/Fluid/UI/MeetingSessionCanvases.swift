@@ -646,9 +646,8 @@ struct MeetingResultCanvas: View {
         } label: {
             MeetingDocumentActionLabel(title: "More", disclosure: true)
         }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .meetingGlassAction()
+        .fluidGlassMenuAction()
+        .meetingHoverFeedback()
         .help("More transcript actions")
         .accessibilityLabel("More transcript actions")
     }

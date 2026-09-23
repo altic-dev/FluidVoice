@@ -127,11 +127,9 @@ extension AIEnhancementSettingsView {
     }
 
     private func promptProfileCard(
-        cardKey: String,
         title: String,
         subtitle: String,
         mode: SettingsStore.PromptMode,
-        isSelected: Bool,
         assignments: PromptCardAssignments? = nil,
         notice: String? = nil,
         onManage: (() -> Void)? = nil,
@@ -140,9 +138,6 @@ extension AIEnhancementSettingsView {
         isEnabled: Bool = true
     ) -> some View {
         let tone = Color.fluidGreen
-        let isHovering = self.hoveredPromptCardKey == cardKey
-        let isDefaultRow = assignments?.isDefault == true
-        let isSelectedRow = isDefaultRow || (assignments == nil && isSelected)
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
 
         return VStack(spacing: 10) {
@@ -150,7 +145,6 @@ extension AIEnhancementSettingsView {
                 self.promptCardIcon(
                     title: title,
                     mode: mode,
-                    isSelected: isSelectedRow,
                     tone: tone
                 )
 
@@ -158,7 +152,6 @@ extension AIEnhancementSettingsView {
                     title: title,
                     subtitle: subtitle,
                     mode: mode,
-                    isSelected: isSelected,
                     assignments: assignments,
                     notice: notice,
                     tone: tone
@@ -169,7 +162,7 @@ extension AIEnhancementSettingsView {
                 HStack(spacing: 8) {
                     if let onManage, let manageTitle {
                         Button(manageTitle, action: onManage)
-                            .fluidOutlinedButton()
+                            .fluidGlassAction()
                             .disabled(!isEnabled)
                     } else if let onManage {
                         Button {
@@ -179,7 +172,7 @@ extension AIEnhancementSettingsView {
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
                         }
-                        .buttonStyle(SquareIconButtonStyle())
+                        .fluidGlassAction(circular: true)
                         .disabled(!isEnabled)
                         .help("Configure")
                     }
@@ -192,7 +185,7 @@ extension AIEnhancementSettingsView {
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
                         }
-                        .buttonStyle(SquareIconButtonStyle(foreground: .red, borderColor: .red.opacity(0.5)))
+                        .fluidGlassAction(circular: true, tone: .red)
                         .disabled(!isEnabled)
                         .help("Delete")
                     }
@@ -219,25 +212,16 @@ extension AIEnhancementSettingsView {
                 .overlay(
                     shape
                         .stroke(
-                            isSelectedRow ? Color.fluidGreen : (isHovering ? self.theme.palette.cardBorder.opacity(0.5) : self.theme.palette.cardBorder.opacity(0.3)),
-                            lineWidth: isSelectedRow ? 2 : 1
+                            self.theme.palette.cardBorder,
+                            lineWidth: 1
                         )
                 )
         )
-        .onHover { hovering in
-            if hovering {
-                self.hoveredPromptCardKey = cardKey
-            } else if self.hoveredPromptCardKey == cardKey {
-                self.hoveredPromptCardKey = nil
-            }
-        }
-        .animation(.easeOut(duration: 0.1), value: isHovering)
     }
 
     private func promptCardIcon(
         title: String,
         mode: SettingsStore.PromptMode,
-        isSelected: Bool,
         tone: Color
     ) -> some View {
         let symbol: String
@@ -254,12 +238,12 @@ extension AIEnhancementSettingsView {
                 .fill(self.theme.palette.contentBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(isSelected ? Color.fluidGreen.opacity(0.5) : self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
                 )
 
             Image(systemName: symbol)
                 .font(.fluidSystem(size: 13, weight: .semibold))
-                .foregroundStyle(isSelected ? Color.fluidGreen : self.theme.palette.secondaryText)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
         .frame(width: 34, height: 34)
         .accessibilityHidden(true)
@@ -269,7 +253,6 @@ extension AIEnhancementSettingsView {
         title: String,
         subtitle: String,
         mode: SettingsStore.PromptMode,
-        isSelected: Bool,
         assignments: PromptCardAssignments?,
         notice: String?,
         tone: Color
@@ -284,7 +267,6 @@ extension AIEnhancementSettingsView {
 
                 self.promptStatusTags(
                     assignments: assignments,
-                    isSelected: isSelected,
                     mode: mode,
                     tone: tone
                 )
@@ -403,20 +385,9 @@ extension AIEnhancementSettingsView {
     @ViewBuilder
     private func promptStatusTags(
         assignments: PromptCardAssignments?,
-        isSelected: Bool,
         mode: SettingsStore.PromptMode,
         tone: Color
     ) -> some View {
-        if assignments == nil, isSelected {
-            Text("Selected")
-                .font(.fluidSystem(.caption2))
-                .fontWeight(.semibold)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
-                .foregroundStyle(Color.fluidGreen)
-        }
-
         if mode.normalized == .edit {
             Text("Context: Auto")
                 .font(.fluidSystem(.caption2))
@@ -1075,8 +1046,18 @@ extension AIEnhancementSettingsView {
         let privateAIAvailable = mode.normalized == .dictate && self.viewModel.isPrivateAIPromptAvailable()
         let isSelectedAppsOnly = self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
 
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Switch styles from the dictation overlay", systemImage: "info.circle")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.accent)
+                Text("Manage instructions, models, and shortcuts here.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 16) {
                 FluidGlassControlGroup {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: privateAIAvailable ? 2 : 1), spacing: 16) {
                         if privateAIAvailable {
@@ -1117,22 +1098,21 @@ extension AIEnhancementSettingsView {
                     }
 
                     if customProfiles.isEmpty {
-                        Text("Your own cleanup instructions.")
+                        Text("Create a style for the way you write, then choose it from the overlay.")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.secondaryText)
                     } else {
                         ForEach(customProfiles) { profile in
                             let profileSelection = SettingsStore.DictationPromptSelection.profile(profile.id)
                             self.promptProfileCard(
-                                cardKey: "\(profile.mode.normalized.rawValue)-\(profile.id)",
                                 title: profile.name.isEmpty ? "Untitled Prompt" : profile.name,
                                 subtitle: self.styleConfigurationSummary(self.promptAssignments(selection: profileSelection)),
                                 mode: profile.mode,
-                                isSelected: self.viewModel.selectedPromptID(for: profile.mode) == profile.id,
                                 assignments: profile.mode.normalized == .dictate
                                     ? self.promptAssignments(selection: profileSelection)
                                     : nil,
                                 onManage: { self.viewModel.openEditor(for: profile) },
+                                manageTitle: "Edit style",
                                 onDelete: { self.viewModel.requestDeletePrompt(profile) },
                                 isEnabled: true
                             )
@@ -1217,7 +1197,7 @@ extension AIEnhancementSettingsView {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
                 Button(action.title, action: action.perform)
-                    .fluidGlassAction(quiet: true)
+                    .fluidGlassAction()
                     .fixedSize()
                     .disabled(!isEnabled)
                 if let shortcut = assignments.shortcutDisplay {
@@ -1231,15 +1211,11 @@ extension AIEnhancementSettingsView {
         .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 16)
-                .fill(self.theme.palette.accent.opacity(assignments.isDefault ? 0.1 : 0))
-        }
-        .background {
-            RoundedRectangle(cornerRadius: 16)
                 .fill(self.theme.palette.cardBackground)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(assignments.isDefault ? self.theme.palette.accent : self.theme.palette.cardBorder, lineWidth: 1)
+                .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
                 .allowsHitTesting(false)
         }
     }

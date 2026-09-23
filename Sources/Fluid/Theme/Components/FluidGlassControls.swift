@@ -192,7 +192,34 @@ private struct FluidQuietActionStyle: ButtonStyle {
     }
 }
 
+/// Menus ignore the native glass ButtonStyle on macOS. Style their outer surface instead.
+private struct FluidGlassMenuActionModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.theme) private var theme
+
+    @ViewBuilder func body(content: Content) -> some View {
+        let menu = content
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .fixedSize(horizontal: true, vertical: false)
+        if #available(macOS 26, *), !self.reduceTransparency {
+            menu.glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            menu
+                .background(self.theme.palette.cardBackground, in: Capsule())
+                .overlay { Capsule().strokeBorder(self.theme.palette.cardBorder, lineWidth: 1).allowsHitTesting(false) }
+        }
+    }
+}
+
 extension View {
+    func fluidGlassMenuAction() -> some View {
+        self.modifier(FluidGlassMenuActionModifier())
+    }
+
     func fluidGlassAction(prominent: Bool = false, circular: Bool = false, tone: Color? = nil, spacious: Bool = false, quiet: Bool = false) -> some View {
         self.modifier(FluidGlassActionModifier(prominent: prominent, circular: circular, tone: tone, spacious: spacious, quiet: quiet))
             .fixedSize(horizontal: true, vertical: false)

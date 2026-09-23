@@ -2692,7 +2692,7 @@ struct BottomOverlayView: View {
     private var promptSelectorDisplayLabel: String {
         if self.layout.showsTopControls {
             let label = self.selectedPromptLabel
-            return label.count > 8 ? "\(label.prefix(7))…" : label
+            return label.count > 12 ? "\(label.prefix(11))…" : label
         }
         if self.activePromptMode?.normalized == .dictate {
             let label = self.selectedPromptLabel
@@ -2759,14 +2759,14 @@ struct BottomOverlayView: View {
 
     private var promptSelectorTriggerMaxWidth: CGFloat {
         guard self.layout.showsTopControls else { return 120 }
-        // Reserve the visible bars plus a 16pt clearance, rather than the
-        // waveform's wider transparent canvas. Keep its center and the leading
-        // app control unchanged, with a fixed budget for the trailing controls.
+        // Use 6pt more on each side of the selector while retaining a 6pt
+        // clearance from the visible bars and a 12pt outer trailing inset.
+        // Keep the waveform and leading app control in place.
         let rowWidth = self.layout.containerWidth - self.layout.hPadding * 2
         let barsWidth = CGFloat(self.layout.barCount) * self.layout.barWidth
             + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
         let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
-        return max(0, rowWidth - waveformRight - 16 - 32 - 8)
+        return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4)
     }
 
     private var previewMaxHeight: CGFloat {
@@ -3124,8 +3124,8 @@ struct BottomOverlayView: View {
     }
 
     private var promptSelectorTrigger: some View {
-        HStack(spacing: 5) {
-            if !self.isPillSize, let promptSelectorIconName = self.promptSelectorIconName {
+        HStack(spacing: self.layout.showsTopControls ? 7 : 5) {
+            if !self.isPillSize, !self.layout.showsTopControls, let promptSelectorIconName = self.promptSelectorIconName {
                 Image(systemName: promptSelectorIconName)
                     .font(.fluidSystem(size: max(self.promptSelectorFontSize - 1, 9), weight: .semibold))
                     .foregroundStyle(.white.opacity(0.72))
@@ -3664,10 +3664,11 @@ struct BottomOverlayView: View {
                 }
                 .overlay(alignment: .trailing) {
                     if self.layout.showsTopControls {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 4) {
                             self.promptSelectorView
                             self.actionsSelectorView
                         }
+                        .offset(x: 6)
                     }
                 }
             }
