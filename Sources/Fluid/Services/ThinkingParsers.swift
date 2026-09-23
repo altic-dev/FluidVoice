@@ -189,9 +189,10 @@ nonisolated struct StandardThinkingParser: ThinkingParser {
         // Chat templates that open the think block in the prompt (e.g. Qwen3 Thinking-2507)
         // stream "reasoning</think>answer" with no opening tag. Split on that close the same
         // way stripThinkingTags does for non-streaming responses.
-        if !self.sawOpeningTag,
-           let closeRange = content.range(of: "</think>") ?? content.range(of: "</thinking>")
-        {
+        let firstClose = ["</think>", "</thinking>"]
+            .compactMap { content.range(of: $0) }
+            .min { $0.lowerBound < $1.lowerBound }
+        if !self.sawOpeningTag, let closeRange = firstClose {
             thinking += content[..<closeRange.lowerBound]
             content = String(content[closeRange.upperBound...])
         }
