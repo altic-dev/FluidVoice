@@ -107,6 +107,52 @@ final class AIEnhancementSettingsViewModel {
         let vm = AIEnhancementSettingsViewModel()
         vm.refreshProviderItems()
         check(vm.cachedAddedProviderItems.isEmpty, "Fresh catalog stays hidden")
+        let connectionEdits: [(inout ProviderSetupDraft) -> Void] = [
+            { $0.providerID = "ollama" },
+            { $0.baseURL = "http://localhost:4321/v1" },
+            { $0.apiKey = "replacement-key" },
+        ]
+        for edit in connectionEdits {
+            var fetched = ProviderSetupDraft(name: "Server", baseURL: "http://localhost:1234/v1")
+            let oldIdentity = fetched.connectionIdentity
+            check(fetched.applyFetchedModels(["second", "first", "first"], for: oldIdentity), "Current discovery is accepted")
+            check(fetched.model == "first", "Discovery selects its first sorted result")
+            fetched.selectFetchedModel("second")
+            edit(&fetched)
+            check(fetched.model.isEmpty && fetched.fetchedModels.isEmpty, "Connection edits clear automatic and picker selections immediately")
+            check(fetched.modelsToSave(defaults: []).isEmpty, "Saving a new custom connection cannot retain an old fetched model")
+            check(!fetched.applyFetchedModels(["stale"], for: oldIdentity), "Late discovery from the old connection is rejected")
+            check(fetched.model.isEmpty && fetched.fetchedModels.isEmpty, "Rejected discovery cannot repopulate the cleared selection")
+
+            var manual = ProviderSetupDraft(name: "Server", baseURL: "http://localhost:1234/v1")
+            manual.applyFetchedModels(["first"], for: manual.connectionIdentity)
+            // Typing even the same ID explicitly makes it a manual choice.
+            manual.model = "first"
+            edit(&manual)
+            check(manual.model == "first" && manual.fetchedModels.isEmpty, "Connection edits preserve an explicitly entered ID")
+            check(manual.modelsToSave(defaults: []) == ["first"], "Manual IDs remain available to save")
+            manual.applyFetchedModels([], for: manual.connectionIdentity)
+            check(manual.model == "first", "Empty discovery must not erase manual entry")
+        }
+        var reloaded = ProviderSetupDraft(name: "Server", baseURL: "http://localhost:1234/v1")
+        reloaded.applyFetchedModels(["first", "second"], for: reloaded.connectionIdentity)
+        reloaded.selectFetchedModel("second")
+        reloaded.name = "Renamed server"
+        reloaded.baseURL = " http://localhost:1234/v1 "
+        check(reloaded.model == "second", "Name and URL whitespace edits preserve a valid fetched choice")
+        reloaded.applyFetchedModels(["second", "third"], for: reloaded.connectionIdentity)
+        check(reloaded.model == "second", "Reload preserves a selection still returned by the server")
+        reloaded.applyFetchedModels(["third"], for: reloaded.connectionIdentity)
+        check(reloaded.model == "third", "Reload replaces a fetched selection the server no longer returns")
+        reloaded.applyFetchedModels([], for: reloaded.connectionIdentity)
+        check(reloaded.model.isEmpty, "Empty discovery clears an old fetched selection")
+        reloaded.applyFetchedModels(["old-server-model"], for: reloaded.connectionIdentity)
+        reloaded.baseURL = "http://localhost:4321/v1"
+        reloaded.apiKey = "new-key"
+        let freshVM = AIEnhancementSettingsViewModel()
+        check(freshVM.addProvider(reloaded), "A custom provider can be saved after rapid connection edits")
+        check(freshVM.savedProviders.first?.models == [], "Persistence receives no model from the previous connection")
+        check(freshVM.settings.selectedProviderID == "fluid", "Saving the new connection leaves the current dictation route intact")
         var draft = ProviderSetupDraft(name: "Local", baseURL: "http://localhost:1234/v1", model: "tiny")
         check(draft.isValid && vm.saves == 0, "Editing a valid draft has no persistence effects")
         var discoveryDraft = draft

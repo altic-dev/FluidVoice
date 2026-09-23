@@ -103,7 +103,6 @@ struct AddProviderSheet<Logo: View>: View {
         .background(self.theme.palette.windowBackground)
         .onChange(of: self.draft.connectionIdentity) { _, _ in
             self.cancelModelFetch()
-            self.draft.fetchedModels = []
             self.modelFetchError = nil
         }
         .onDisappear { self.cancelModelFetch() }
@@ -155,7 +154,10 @@ struct AddProviderSheet<Logo: View>: View {
             HStack(spacing: 8) {
                 SearchableModelPicker(
                     models: self.draft.fetchedModels,
-                    selectedModel: self.$draft.model,
+                    selectedModel: Binding(
+                        get: { self.draft.model },
+                        set: { self.draft.selectFetchedModel($0) }
+                    ),
                     selectionEnabled: !self.draft.fetchedModels.isEmpty,
                     controlWidth: 430,
                     controlHeight: 36
@@ -219,8 +221,7 @@ struct AddProviderSheet<Logo: View>: View {
                 )
                 guard !Task.isCancelled, self.modelFetchID == requestID,
                       self.draft.connectionIdentity == snapshot.connectionIdentity else { return }
-                self.draft.fetchedModels = Array(Set(models)).sorted()
-                if self.draft.model.isEmpty { self.draft.model = self.draft.fetchedModels.first ?? "" }
+                self.draft.applyFetchedModels(models, for: snapshot.connectionIdentity)
                 if models.isEmpty { self.modelFetchError = "No models returned. Load a model on your server and retry, or enter its ID with +." }
             } catch {
                 guard !Task.isCancelled, self.modelFetchID == requestID,
