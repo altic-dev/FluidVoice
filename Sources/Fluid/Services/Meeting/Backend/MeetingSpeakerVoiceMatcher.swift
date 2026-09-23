@@ -109,6 +109,22 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
         return true
     }
 
+    /// Links for a diarizer that kept one state per track: each slot label in a track resolves to
+    /// its earliest visible epoch. Tracks never link to each other.
+    static func continuityLinks(allowedTokens: Set<MeetingBackendSpeakerToken>) -> [MeetingSpeakerIdentityLink] {
+        let groups = Dictionary(grouping: allowedTokens) {
+            "\($0.analysisEpochID.trackID.uuidString)\u{0}\($0.label)"
+        }
+        return groups.values.flatMap { tokens -> [MeetingSpeakerIdentityLink] in
+            let ordered = tokens.sorted {
+                ($0.analysisEpochID.ordinal, $0.analysisEpochID.generation)
+                    < ($1.analysisEpochID.ordinal, $1.analysisEpochID.generation)
+            }
+            guard let root = ordered.first else { return [] }
+            return ordered.dropFirst().map { MeetingSpeakerIdentityLink(token: $0, canonicalToken: root) }
+        }
+    }
+
     private static func distance(_ left: MeetingSpeakerVoiceProfile, _ right: MeetingSpeakerVoiceProfile) -> Float? {
         guard left.embeddings.count == 2, right.embeddings.count == 2 else { return nil }
         var worst: Float = 0

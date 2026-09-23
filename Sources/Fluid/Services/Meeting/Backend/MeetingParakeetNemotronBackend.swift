@@ -116,6 +116,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     // MARK: - Orchestration (background context)
 
     /// One epoch's work item: its manifest spans in analysis order.
+    /// Silence placed between a track's epochs when they are diarized as one stream.
+    private nonisolated static let epochJoinSilenceSeconds = 0.5
+
     private nonisolated struct EpochWork: Sendable {
         let track: MeetingAnalysisTrackManifest
         let epoch: MeetingAnalysisEpochRecord
@@ -174,78 +177,87 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         let pcmMaterializations = MaterializationCache()
 
-        // Phase A: Nemotron diarization, one fresh state per epoch, then drained.
+        // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
+        // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;
+        // each epoch still maps its own segments back through its own spans.
         await progress(.identifyingSpeakers)
-        var phaseA = try await runtime.withNemotronDiarization(artifact: artifact) { factory in
+        let phaseA = try await runtime.withNemotronDiarization(artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
-            for work in epochWork {
-                try Task.checkCancellation()
-                let materialized: MeetingMaterializedEpoch
-                do {
-                    materialized = try await Self.materialize(
-                        work: work,
-                        manifest: manifest,
-                        request: request,
-                        materializer: materializer,
-                        cache: pcmMaterializations
-                    )
-                } catch let error as CancellationError {
-                    throw error
-                } catch let error as MeetingEpochMaterializationError where error.isSampleLimitExceeded {
-                    throw error
-                } catch {
-                    result.failures[work.epoch.id] = "epochMaterializationFailed"
-                    continue
-                }
-                try Task.checkCancellation()
-                do {
-                    let diarizer = try await factory.makeDiarizer(epoch: work.epoch.id)
-                    let segments = try await diarizer.diarize(samples: materialized.samples)
-                    if work.track.epochs.count > 1, result.voiceSamples.count < MeetingSpeakerVoiceSamples.maximumProfiles {
-                        let samples = MeetingSpeakerVoiceSamples.collect(
-                            epoch: work.epoch.id, samples: materialized.samples, segments: segments
+            for track in manifest.tracks {
+                var pieces: [(work: EpochWork, materialized: MeetingMaterializedEpoch, offset: Int)] = []
+                var trackSamples: [Float] = []
+                for work in epochWork where work.track.id == track.id {
+                    try Task.checkCancellation()
+                    let materialized: MeetingMaterializedEpoch
+                    do {
+                        materialized = try await Self.materialize(
+                            work: work,
+                            manifest: manifest,
+                            request: request,
+                            materializer: materializer,
+                            cache: pcmMaterializations
                         )
-                        result.voiceSamples.append(contentsOf: samples.prefix(
-                            MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count
-                        ))
+                    } catch let error as CancellationError {
+                        throw error
+                    } catch let error as MeetingEpochMaterializationError where error.isSampleLimitExceeded {
+                        throw error
+                    } catch {
+                        result.failures[work.epoch.id] = "epochMaterializationFailed"
+                        continue
                     }
-                    for segment in segments {
-                        guard let start = Self.analysisTime(
-                            forMaterializedSeconds: segment.start,
-                            boundary: .start,
-                            materialized: materialized,
-                            spans: work.spans
-                        ), let end = Self.analysisTime(
-                            forMaterializedSeconds: segment.end,
-                            boundary: .end,
-                            materialized: materialized,
-                            spans: work.spans
-                        ) else { continue }
-                        guard end > start else { continue }
-                        result.activity.append(MeetingBackendSpeakerActivity(
-                            token: MeetingBackendSpeakerToken(
-                                analysisEpochID: work.epoch.id,
-                                label: "slot-\(segment.slotIndex)"
-                            ),
-                            start: start,
-                            end: end
-                        ))
+                    if !trackSamples.isEmpty {
+                        // Silence keeps a turn from running across the reset boundary.
+                        trackSamples += [Float](repeating: 0, count: Int(Self.epochJoinSilenceSeconds * materialized.sampleRate))
+                    }
+                    pieces.append((work, materialized, trackSamples.count))
+                    trackSamples += materialized.samples
+                }
+                guard let first = pieces.first else { continue }
+                try Task.checkCancellation()
+                do {
+                    let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
+                    let segments = try await diarizer.diarize(samples: trackSamples)
+                    for piece in pieces {
+                        let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
+                        let pieceEnd = pieceStart + piece.materialized.durationSeconds
+                        for segment in segments {
+                            let localStart = max(segment.start, pieceStart) - pieceStart
+                            let localEnd = min(segment.end, pieceEnd) - pieceStart
+                            guard localEnd > localStart,
+                                  let start = Self.analysisTime(
+                                      forMaterializedSeconds: localStart,
+                                      boundary: .start,
+                                      materialized: piece.materialized,
+                                      spans: piece.work.spans
+                                  ), let end = Self.analysisTime(
+                                      forMaterializedSeconds: localEnd,
+                                      boundary: .end,
+                                      materialized: piece.materialized,
+                                      spans: piece.work.spans
+                                  )
+                            else { continue }
+                            guard end > start else { continue }
+                            result.activity.append(MeetingBackendSpeakerActivity(
+                                token: MeetingBackendSpeakerToken(
+                                    analysisEpochID: piece.work.epoch.id,
+                                    label: "slot-\(segment.slotIndex)"
+                                ),
+                                start: start,
+                                end: end
+                            ))
+                        }
                     }
                 } catch let error as CancellationError {
                     throw error
                 } catch {
-                    result.failures[work.epoch.id] = "diarizationFailed"
+                    for piece in pieces {
+                        result.failures[piece.work.epoch.id] = "diarizationFailed"
+                    }
                     continue
                 }
             }
             return result
         }
-        try Task.checkCancellation()
-
-        // Fresh diarizer slots remain independent evidence. Voice similarity is a separate,
-        // conservative identity signal; the assembler applies it only to visible speakers.
-        phaseA.voiceProfiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
-        phaseA.voiceSamples.removeAll()
         try Task.checkCancellation()
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
@@ -389,7 +401,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 attemptID: request.attemptID,
                 units: units,
                 speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
-                voiceProfiles: phaseA.voiceProfiles.filter { failures[$0.token.analysisEpochID] == nil }
+                speakerSlotsContinueAcrossEpochs: true
             ),
             coverageReceipts: receipts
         )

@@ -753,25 +753,22 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         return (bundle, manifest, plan)
     }
 
-    func testPerEpochFreshDiarizerStateAndEpochScopedAssignment() async throws {
+    func testOneDiarizerStatePerTrackKeepsSlotsAcrossEpochs() async throws {
         let fixture = self.makeTwoEpochFixture()
         let runtime = FakeRuntime()
+        runtime.voiceError = NSError(domain: "voice-model-test", code: 1)
         let (backend, plan, manifest) = try await self.plannedManifest(fixture: fixture, runtime: runtime)
         let micEpochs = try XCTUnwrap(manifest.track(fixture.micTrack.id)?.epochs)
         let appEpochs = try XCTUnwrap(manifest.track(fixture.appTrack.id)?.epochs)
         XCTAssertEqual(micEpochs.count, 2, "the 3-second chunk gap must reset the mic epoch")
         XCTAssertEqual(appEpochs.count, 1)
 
-        let embedding = [Float](repeating: 0.0625, count: 256)
-        runtime.voiceProfiles = micEpochs.enumerated().map { index, epoch in
-            MeetingSpeakerVoiceProfile(
-                token: .init(analysisEpochID: epoch.id, label: "slot-\(index)"), embeddings: [embedding, embedding]
-            )
-        }
-
+        // One stream per track: mic epoch 0 (2 s), 0.5 s of joining silence, mic epoch 1 (2 s).
         runtime.diarizerFactory.segmentsByEpoch = [
-            micEpochs[0].id: [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0.2, end: 1.0)],
-            micEpochs[1].id: [MeetingNemotronSpeakerSegment(slotIndex: 1, start: 0.0, end: 1.0)],
+            micEpochs[0].id: [
+                MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0.2, end: 1.0),
+                MeetingNemotronSpeakerSegment(slotIndex: 0, start: 2.5, end: 3.5),
+            ],
             appEpochs[0].id: [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0.0, end: 2.0)],
         ]
         runtime.asrSession.responses = [
@@ -787,42 +784,35 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
         XCTAssertEqual(
             runtime.diarizerFactory.createdEpochs,
-            [micEpochs[0].id, micEpochs[1].id, appEpochs[0].id],
-            "one fresh diarizer state per track epoch, in analysis order"
+            [micEpochs[0].id, appEpochs[0].id],
+            "one diarizer state per track, keyed by its first epoch"
+        )
+        XCTAssertEqual(
+            runtime.diarizerFactory.diarizedSampleCounts,
+            [2 * 16_000 + 8_000 + 2 * 16_000, 2 * 16_000],
+            "a track's epochs are diarized as one stream joined by 0.5 s of silence"
         )
         XCTAssertEqual(runtime.diarizationScopeCount, 1, "one Nemotron residency per attempt")
-        XCTAssertEqual(runtime.asrAttemptIDs.count, 1, "one prepared ASR scope per attempt")
+        XCTAssertEqual(runtime.asrAttemptIDs.count, 1, "the voice encoder is not needed and never runs")
         XCTAssertEqual(runtime.asrSession.callSampleCounts.count, 3)
-
-        XCTAssertEqual(bundle.coverageReceipts.count, manifest.allSpans.count)
         XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
 
         let unitsByText = Dictionary(bundle.evidence.units.map { ($0.text, $0) }, uniquingKeysWith: { first, _ in first })
-        let hello = try XCTUnwrap(unitsByText["hello"])
-        guard case let .assigned(helloToken) = hello.speaker else {
-            return XCTFail("hello must be assigned to the overlapping slot")
+        guard case let .assigned(helloToken) = try XCTUnwrap(unitsByText["hello"]).speaker,
+              case let .assigned(worldToken) = try XCTUnwrap(unitsByText["world"]).speaker,
+              case let .assigned(remoteToken) = try XCTUnwrap(unitsByText["remote"]).speaker
+        else {
+            return XCTFail("every word overlaps one slot")
         }
-        XCTAssertEqual(helloToken.analysisEpochID, micEpochs[0].id)
-        XCTAssertEqual(helloToken.label, "slot-0")
-        XCTAssertEqual(hello.analysisStart, micEpochs[0].analysisInterval.start + 0.3, accuracy: 1e-6)
+        XCTAssertEqual(helloToken, .init(analysisEpochID: micEpochs[0].id, label: "slot-0"))
+        XCTAssertEqual(
+            worldToken, .init(analysisEpochID: micEpochs[1].id, label: "slot-0"),
+            "a segment after the join maps back into the second epoch's own time"
+        )
+        XCTAssertEqual(remoteToken, .init(analysisEpochID: appEpochs[0].id, label: "slot-0"))
+        XCTAssertTrue(bundle.evidence.speakerSlotsContinueAcrossEpochs)
+        XCTAssertTrue(bundle.evidence.voiceProfiles.isEmpty)
 
-        let world = try XCTUnwrap(unitsByText["world"])
-        guard case let .assigned(worldToken) = world.speaker else {
-            return XCTFail("world must be assigned")
-        }
-        XCTAssertEqual(worldToken.analysisEpochID, micEpochs[1].id)
-        XCTAssertNotEqual(worldToken, helloToken, "slots never merge across epochs")
-
-        let remote = try XCTUnwrap(unitsByText["remote"])
-        guard case let .assigned(remoteToken) = remote.speaker else {
-            return XCTFail("remote must be assigned")
-        }
-        XCTAssertEqual(remoteToken.analysisEpochID, appEpochs[0].id)
-        XCTAssertEqual(remoteToken.label, "slot-0")
-        XCTAssertNotEqual(remoteToken, helloToken, "the same slot label on another track is another speaker")
-
-        XCTAssertEqual(bundle.evidence.speakerActivity.count, 3)
-        // The bundle must assemble: exact receipts, epoch-scoped tokens and unit spans all validate.
         let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
             for: bundle.evidence,
             manifest: manifest,
@@ -835,7 +825,12 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: verdicts
         ))
-        XCTAssertEqual(bundle.evidence.voiceProfiles, runtime.voiceProfiles)
+        let speakerByText = Dictionary(
+            assembled.segments.map { ($0.text, $0.speakerID) }, uniquingKeysWith: { first, _ in first }
+        )
+        XCTAssertNotNil(speakerByText["hello"] ?? nil)
+        XCTAssertEqual(speakerByText["hello"], speakerByText["world"], "the same voice keeps one name across the reset")
+        XCTAssertNotEqual(speakerByText["hello"], speakerByText["remote"], "tracks never merge")
         XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .microphone }.count, 1)
         XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .applicationAudio }.count, 1)
         XCTAssertEqual(assembled.sidecar.speakerIdentityLinks.count, 1)
@@ -1229,7 +1224,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(assembly.coverageGaps.filter { $0.reason == .processingFailed }.count, 1)
     }
 
-    func testDiarizationFailureSkipsASRForThatEpochOnly() async throws {
+    func testDiarizationFailureSkipsASRForThatTrackOnly() async throws {
         let fixture = self.makeTwoEpochFixture()
         let runtime = FakeRuntime()
         let directory = try self.makeTempSessionDirectory()
@@ -1238,9 +1233,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let plan = try backend.plan(request)
         let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
         let micEpochs = try XCTUnwrap(manifest.track(fixture.micTrack.id)?.epochs)
+        // The mic track is one diarizer stream, so its failure covers both of its epochs.
         runtime.diarizerFactory.failingEpochs = [micEpochs[0].id]
         runtime.asrSession.responses = [
-            .init(text: "later", words: [ASRWordTiming(text: "later", start: 0.1, end: 0.3)]),
             .init(text: "remote", words: [ASRWordTiming(text: "remote", start: 0.1, end: 0.3)]),
         ]
 
@@ -1248,11 +1243,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         guard case let .canonicalEvidence(bundle) = outcome else {
             return XCTFail("composite must return canonical evidence")
         }
-        XCTAssertEqual(runtime.asrSession.callSampleCounts.count, 2, "the failed epoch is not transcribed")
+        XCTAssertEqual(runtime.asrSession.callSampleCounts.count, 1, "only the healthy track is transcribed")
         let failedReceipts = bundle.coverageReceipts.filter { $0.status == .failed }
-        XCTAssertEqual(Set(failedReceipts.map(\.spanID)), Set(micEpochs[0].spanIDs))
-        XCTAssertEqual(failedReceipts.first?.reasonCode, "diarizationFailed")
-        XCTAssertEqual(Set(bundle.evidence.units.map(\.text)), ["later", "remote"])
+        XCTAssertEqual(Set(failedReceipts.map(\.spanID)), Set(micEpochs.flatMap(\.spanIDs)))
+        XCTAssertTrue(failedReceipts.allSatisfy { $0.reasonCode == "diarizationFailed" })
+        XCTAssertEqual(Set(bundle.evidence.units.map(\.text)), ["remote"])
     }
 
     // MARK: - Utterance fallback
@@ -1363,19 +1358,6 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
-    func testVoiceEncoderFailureAndCancellationDoNotStartASROrPublishEvidence() async throws {
-        for error in [CancellationError(), NSError(domain: "voice-model-test", code: 1)] as [Error] {
-            let fixture = self.makeTwoEpochFixture()
-            let runtime = FakeRuntime()
-            runtime.voiceError = error
-            let (backend, plan, manifest) = try await self.plannedManifest(fixture: fixture, runtime: runtime)
-            await XCTAssertAsyncThrowsError(try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })) { received in
-                XCTAssertEqual(received is CancellationError, error is CancellationError)
-            }
-            XCTAssertTrue(runtime.asrAttemptIDs.isEmpty)
-        }
-    }
-
     // MARK: - Helpers
 }
 
@@ -1402,22 +1384,25 @@ private actor Latch {
 
 private final nonisolated class FakeDiarizerFactory: MeetingNemotronDiarizerFactory, @unchecked Sendable {
     struct Session: MeetingNemotronDiarizerSession {
+        let factory: FakeDiarizerFactory
         let segments: [MeetingNemotronSpeakerSegment]
-        func diarize(samples _: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
-            self.segments
+        func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
+            self.factory.diarizedSampleCounts.append(samples.count)
+            return self.segments
         }
     }
 
     var segmentsByEpoch: [MeetingAnalysisEpochID: [MeetingNemotronSpeakerSegment]] = [:]
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
     private(set) var createdEpochs: [MeetingAnalysisEpochID] = []
+    fileprivate(set) var diarizedSampleCounts: [Int] = []
 
     func makeDiarizer(epoch: MeetingAnalysisEpochID) async throws -> any MeetingNemotronDiarizerSession {
         self.createdEpochs.append(epoch)
         if self.failingEpochs.contains(epoch) {
             throw MeetingEpochMaterializationError.unreadable(spanID: "fake-diarizer-failure")
         }
-        return Session(segments: self.segmentsByEpoch[epoch] ?? [])
+        return Session(factory: self, segments: self.segmentsByEpoch[epoch] ?? [])
     }
 }
 

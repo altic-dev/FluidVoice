@@ -94,9 +94,12 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
             let trackKindByID = Dictionary(uniqueKeysWithValues: sourceSession.audioTracks.map { ($0.id, $0.kind) })
             for segment in result.segments {
                 XCTAssertFalse(segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                guard let speakerID = segment.speakerID,
-                      let speaker = speakerByID[speakerID]
-                else {
+                // Overlapping, timing-uncertain and brief-slot lines are deliberately unnamed.
+                guard let speakerID = segment.speakerID else {
+                    XCTAssertNotEqual(segment.attributionState, .assigned, "\(sourceSession.id) lost an assigned speaker")
+                    continue
+                }
+                guard let speaker = speakerByID[speakerID] else {
                     XCTFail("\(sourceSession.id) emitted a segment with an unknown speaker")
                     continue
                 }

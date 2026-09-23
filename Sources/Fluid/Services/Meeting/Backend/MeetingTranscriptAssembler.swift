@@ -319,7 +319,9 @@ nonisolated struct MeetingTranscriptAssembler {
             guard case let .assigned(token) = item.unit.speaker else { return nil }
             return token
         })
-        let identityLinks = MeetingSpeakerVoiceMatcher.links(profiles: evidence.voiceProfiles, allowedTokens: visibleTokens)
+        let identityLinks = evidence.speakerSlotsContinueAcrossEpochs
+            ? MeetingSpeakerVoiceMatcher.continuityLinks(allowedTokens: visibleTokens)
+            : MeetingSpeakerVoiceMatcher.links(profiles: evidence.voiceProfiles, allowedTokens: visibleTokens)
         let speakers = self.makeSpeakers(
             attemptID: manifest.attemptID,
             manifest: manifest,
@@ -606,9 +608,15 @@ nonisolated struct MeetingTranscriptAssembler {
 
     // MARK: - Product speakers and segments
 
+    /// Beside a substantial speaker on its track, a speaker needs this much evidence, across all
+    /// its linked epochs, to get a name.
+    static let minimumSpeakerWords = 10
+    static let minimumSpeakerSeconds: TimeInterval = 5
+
     /// Only the assembler mints product speaker IDs. The key is attempt + track + epoch + token
-    /// label. Cross-epoch identity requires explicit voice evidence, never equality of slot
-    /// numbers. Recomputed attempts never inherit an old identity. You is never identified here.
+    /// label. Cross-epoch identity requires explicit links: voice evidence, or a diarizer that kept
+    /// one state per track. Recomputed attempts never inherit an old identity. You is never
+    /// identified here.
     private func makeSpeakers(
         attemptID: UUID,
         manifest: MeetingAnalysisManifest,
@@ -626,9 +634,29 @@ nonisolated struct MeetingTranscriptAssembler {
                 < ($1.analysisEpochID.trackID.uuidString, $1.analysisEpochID.ordinal, $1.label)
         }
         let canonicalByToken = Dictionary(uniqueKeysWithValues: identityLinks.map { ($0.token, $0.canonicalToken) })
-        let ordinals = Dictionary(uniqueKeysWithValues: tokens.filter { canonicalByToken[$0] == nil }
+        // A slot heard for a word or two (a cough, crosstalk) next to real speakers on the same
+        // track is not a person. Its lines stay in the transcript without a speaker instead of
+        // minting "Speaker N". A track where every slot is brief keeps them all.
+        var wordsByIdentity: [MeetingBackendSpeakerToken: Int] = [:]
+        var secondsByIdentity: [MeetingBackendSpeakerToken: TimeInterval] = [:]
+        for (unit, presentation) in emitted {
+            guard case let .assigned(token) = unit.speaker else { continue }
+            let identity = canonicalByToken[token] ?? token
+            wordsByIdentity[identity, default: 0] += unit.text.split(whereSeparator: \.isWhitespace).count
+            secondsByIdentity[identity, default: 0] += max(0, presentation.end - presentation.start)
+        }
+        let isSubstantial = { (identity: MeetingBackendSpeakerToken) in
+            wordsByIdentity[identity, default: 0] >= Self.minimumSpeakerWords
+                || secondsByIdentity[identity, default: 0] >= Self.minimumSpeakerSeconds
+        }
+        let tracksWithSubstantialSpeaker = Set(wordsByIdentity.keys.filter(isSubstantial).map(\.analysisEpochID.trackID))
+        let speakingTokens = tokens.filter { token in
+            let identity = canonicalByToken[token] ?? token
+            return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
+        }
+        let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter { canonicalByToken[$0] == nil }
             .enumerated().map { ($0.element, $0.offset + 1) })
-        return tokens.map { token in
+        return speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
             let normalizedLabel = canonical.label.precomposedStringWithCanonicalMapping
             let scopedClusterID = "\(canonical.analysisEpochID):\(normalizedLabel)"

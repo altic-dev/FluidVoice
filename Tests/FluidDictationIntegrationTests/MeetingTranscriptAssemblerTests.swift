@@ -308,6 +308,109 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(micSegment.end.seconds, 2, accuracy: 1e-3)
     }
 
+    private func twoEpochMicrophone() throws -> (plan: MeetingBackendPlan, manifest: MeetingAnalysisManifest, spans: [MeetingAnalysisSpan]) {
+        let first = self.chunk(sequence: 0, start: 100, end: 105)
+        let second = self.chunk(
+            sequence: 1,
+            start: 105,
+            end: 110,
+            discontinuities: [MeetingAudioDiscontinuity(
+                kind: .microphoneDisconnected,
+                presentationTime: self.mediaTime(105),
+                gapSeconds: 0,
+                detail: "fixture"
+            )]
+        )
+        let mic = self.track(
+            kind: .microphone,
+            chunks: [first, second],
+            eras: [self.era(protection: .voiceProcessed, start: 100)]
+        )
+        let plan = self.plan(mode: .onlineCall, tracks: [mic])
+        let manifest = try self.buildManifest(plan: plan, observations: [
+            (mic.id, first, self.observed(first, duration: 5)),
+            (mic.id, second, self.observed(second, duration: 5)),
+        ])
+        let spans = try XCTUnwrap(manifest.track(mic.id)?.spans)
+        XCTAssertEqual(spans.count, 2)
+        return (plan, manifest, spans)
+    }
+
+    func testContinuousDiarizerLinksOnlyTheSameSlotAcrossEpochs() throws {
+        let (plan, manifest, spans) = try self.twoEpochMicrophone()
+        let slot = { (span: MeetingAnalysisSpan, label: String) in
+            MeetingBackendSpeakerAssignment.assigned(.init(analysisEpochID: span.analysisEpochID, label: label))
+        }
+        let units = [
+            self.unit(id: "u-0", span: spans[0], analysisStart: 1, analysisEnd: 2, speaker: slot(spans[0], "slot-0")),
+            self.unit(id: "u-1", span: spans[1], analysisStart: 6, analysisEnd: 7, speaker: slot(spans[1], "slot-0")),
+            self.unit(id: "u-2", span: spans[1], analysisStart: 8, analysisEnd: 9, speaker: slot(spans[1], "slot-1")),
+        ]
+        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: MeetingFinalTranscriptEvidence(
+                backendID: plan.backendID, attemptID: plan.attemptID, units: units,
+                speakerSlotsContinueAcrossEpochs: true
+            ),
+            coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho, "u-2": .notEcho]
+        ))
+        let speakerByUnit = Dictionary(uniqueKeysWithValues: zip(["u-0", "u-1", "u-2"], result.segments.map(\.speakerID)))
+        XCTAssertEqual(result.speakers.count, 2)
+        XCTAssertEqual(speakerByUnit["u-0"], speakerByUnit["u-1"], "slot-0 keeps its name across the reset")
+        XCTAssertNotEqual(speakerByUnit["u-1"], speakerByUnit["u-2"], "a different slot stays a different speaker")
+        XCTAssertEqual(result.sidecar.speakerIdentityLinks.count, 1)
+    }
+
+    func testBriefSpeakerBesideSubstantialSpeakerKeepsTextWithoutName() throws {
+        let (plan, manifest, spans) = try self.twoEpochMicrophone()
+        let slot = { (label: String) in
+            MeetingBackendSpeakerAssignment.assigned(.init(analysisEpochID: spans[0].analysisEpochID, label: label))
+        }
+        let talker = self.unit(
+            id: "u-0", span: spans[0], text: "one two three four five six seven eight nine ten",
+            analysisStart: 0.5, analysisEnd: 3, speaker: slot("slot-0")
+        )
+        let cough = self.unit(id: "u-1", span: spans[0], text: "hmm", analysisStart: 3.5, analysisEnd: 4, speaker: slot("slot-1"))
+        let assemble = { (units: [MeetingFinalTextUnit]) in
+            try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                plan: plan,
+                manifest: manifest,
+                evidence: self.evidence(plan: plan, units: units),
+                coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })
+            ))
+        }
+
+        let result = try assemble([talker, cough])
+
+        XCTAssertEqual(result.speakers.map(\.displayName), ["Speaker 1"])
+        let coughSegment = try XCTUnwrap(result.segments.first { $0.text == "hmm" }, "brief speech stays in the transcript")
+        XCTAssertNil(coughSegment.speakerID)
+        XCTAssertEqual(coughSegment.attributionState, .unassigned)
+        XCTAssertNotNil(result.segments.first { $0.text.hasPrefix("one") }?.speakerID)
+        // A track where every slot is brief keeps its speakers.
+        XCTAssertEqual(try assemble([cough]).speakers.count, 1)
+    }
+
+    func testContinuityFlagRoundTripsAndDefaultsOffForOlderEvidence() throws {
+        let attemptID = UUID()
+        let continuous = MeetingFinalTranscriptEvidence(
+            backendID: .parakeetNemotron, attemptID: attemptID, units: [], speakerSlotsContinueAcrossEpochs: true
+        )
+        let decoded = try JSONDecoder().decode(
+            MeetingFinalTranscriptEvidence.self, from: JSONEncoder().encode(continuous)
+        )
+        XCTAssertTrue(decoded.speakerSlotsContinueAcrossEpochs)
+
+        let older = try JSONEncoder().encode(
+            MeetingFinalTranscriptEvidence(backendID: .parakeetNemotron, attemptID: attemptID, units: [])
+        )
+        XCTAssertFalse(String(decoding: older, as: UTF8.self).contains("speakerSlotsContinueAcrossEpochs"))
+        XCTAssertFalse(try JSONDecoder().decode(MeetingFinalTranscriptEvidence.self, from: older).speakerSlotsContinueAcrossEpochs)
+    }
+
     func testSameLabelAcrossEpochsNeverMerges() throws {
         let first = self.chunk(sequence: 0, start: 100, end: 105)
         let second = self.chunk(

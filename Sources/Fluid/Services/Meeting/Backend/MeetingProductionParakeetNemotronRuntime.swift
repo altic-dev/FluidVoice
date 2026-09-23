@@ -9,7 +9,7 @@ import FluidAudio
 // `MeetingParakeetNemotronRunning`. It owns the model capabilities for one attempt:
 //
 // - Nemotron diarization: one shared weight load per attempt, one *fresh* `SortformerDiarizer`
-//   state per epoch (`initialize(models:)` re-creates streaming state), released before the ASR
+//   state per track (`initialize(models:)` re-creates streaming state), released before the ASR
 //   phase begins — the loaded-set sequence is none -> Nemotron -> drained -> Parakeet -> drained.
 // - Parakeet ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
@@ -31,8 +31,8 @@ nonisolated enum MeetingParakeetNemotronRuntimeError: LocalizedError, Equatable 
 
 #if arch(arm64)
 
-/// Shared-weight Nemotron factory: one `SortformerModels` load, fresh streaming state per
-/// epoch. Slots can never merge across epochs because each epoch's diarizer is a new instance.
+/// Shared-weight Nemotron factory: one `SortformerModels` load, fresh streaming state for each
+/// diarizer it makes. The backend makes one per track, so slots never merge across tracks.
 private final nonisolated class NemotronDiarizerFactory: MeetingNemotronDiarizerFactory, @unchecked Sendable {
     let config: SortformerConfig
     let models: SortformerModels

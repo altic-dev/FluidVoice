@@ -42,8 +42,8 @@ nonisolated enum MeetingTextUnitPrecision: String, Codable {
 
 /// Analysis epoch, scoped to its track. A new epoch starts for missing audio, a real clock
 /// discontinuity, a microphone device replacement or an inadmissible microphone interval, so
-/// speaker state may never be carried across one. Encoding the track here is what makes the
-/// token-scoping check below meaningful.
+/// timing is never mapped across one. Speaker identity crosses an epoch only through an explicit
+/// link. Encoding the track here is what makes the token-scoping check below meaningful.
 nonisolated struct MeetingAnalysisEpochID: Hashable, Codable, CustomStringConvertible {
     let trackID: MeetingAudioTrackID
     let ordinal: Int
@@ -214,19 +214,24 @@ nonisolated struct MeetingFinalTranscriptEvidence: Equatable {
     let units: [MeetingFinalTextUnit]
     let speakerActivity: [MeetingBackendSpeakerActivity]
     let voiceProfiles: [MeetingSpeakerVoiceProfile]
+    /// The diarizer kept one state per track across epoch resets, so an equal slot label in two
+    /// epochs of the same track is the same voice.
+    let speakerSlotsContinueAcrossEpochs: Bool
 
     init(
         backendID: MeetingBackendID,
         attemptID: UUID,
         units: [MeetingFinalTextUnit],
         speakerActivity: [MeetingBackendSpeakerActivity] = [],
-        voiceProfiles: [MeetingSpeakerVoiceProfile] = []
+        voiceProfiles: [MeetingSpeakerVoiceProfile] = [],
+        speakerSlotsContinueAcrossEpochs: Bool = false
     ) {
         self.backendID = backendID
         self.attemptID = attemptID
         self.units = units
         self.speakerActivity = speakerActivity
         self.voiceProfiles = voiceProfiles
+        self.speakerSlotsContinueAcrossEpochs = speakerSlotsContinueAcrossEpochs
     }
 }
 
@@ -241,6 +246,7 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
         case units
         case speakerActivity
         case voiceProfiles
+        case speakerSlotsContinueAcrossEpochs
     }
 
     init(from decoder: Decoder) throws {
@@ -258,7 +264,10 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
             attemptID: container.decode(UUID.self, forKey: .attemptID),
             units: container.decode([MeetingFinalTextUnit].self, forKey: .units),
             speakerActivity: container.decode([MeetingBackendSpeakerActivity].self, forKey: .speakerActivity),
-            voiceProfiles: container.decodeIfPresent([MeetingSpeakerVoiceProfile].self, forKey: .voiceProfiles) ?? []
+            voiceProfiles: container.decodeIfPresent([MeetingSpeakerVoiceProfile].self, forKey: .voiceProfiles) ?? [],
+            speakerSlotsContinueAcrossEpochs: container.decodeIfPresent(
+                Bool.self, forKey: .speakerSlotsContinueAcrossEpochs
+            ) ?? false
         )
     }
 
@@ -270,6 +279,9 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
         try container.encode(self.units, forKey: .units)
         try container.encode(self.speakerActivity, forKey: .speakerActivity)
         if !self.voiceProfiles.isEmpty { try container.encode(self.voiceProfiles, forKey: .voiceProfiles) }
+        if self.speakerSlotsContinueAcrossEpochs {
+            try container.encode(true, forKey: .speakerSlotsContinueAcrossEpochs)
+        }
     }
 }
 
