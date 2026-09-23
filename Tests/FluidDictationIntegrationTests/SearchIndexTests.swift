@@ -225,10 +225,14 @@ final class SearchIndexCoordinatorTests: XCTestCase {
     }
 
     private func indexedIDs(_ index: SearchIndex) async throws -> Set<UUID> {
-        // Check emptiness directly before exercising lexical lookup.
-        let recordCount = try await index.namespace(.history).count().count
-        guard recordCount > 0 else { return [] }
-        return try Set(await index.query(.history, text: "startup", limit: 50).map(\.id))
+        // Inspect membership directly: reconciliation can delete the last record
+        // between a separate count and lexical query, which rejects an empty index.
+        let store = try await index.namespace(.history)
+        var ids = Set<UUID>()
+        for try await document in store.documents(fields: []) {
+            ids.insert(document.id.uuid)
+        }
+        return ids
     }
 
     private func waitForIndexedIDs(_ expected: Set<UUID>, in index: SearchIndex) async throws {
