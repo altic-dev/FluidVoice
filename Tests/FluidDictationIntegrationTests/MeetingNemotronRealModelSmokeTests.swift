@@ -48,6 +48,118 @@ final class MeetingNemotronRealModelSmokeTests: XCTestCase {
         return (url, samples)
     }
 
+    /// Opt-in parity probe: runs the production diarizer on real recordings and writes every
+    /// segment to JSON, so the app can be compared with NVIDIA's NeMo reference on the same audio.
+    /// Set FLUIDVOICE_NEMOTRON_PARITY_AUDIO (comma-separated 16 kHz mono WAVs),
+    /// FLUIDVOICE_NEMOTRON_PARITY_MODEL (.mlpackage) and FLUIDVOICE_NEMOTRON_PARITY_OUT (JSON path).
+    func testProductionDiarizerSegmentsForParity() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let audioList = environment["FLUIDVOICE_NEMOTRON_PARITY_AUDIO"],
+              let modelPath = environment["FLUIDVOICE_NEMOTRON_PARITY_MODEL"],
+              let outputPath = environment["FLUIDVOICE_NEMOTRON_PARITY_OUT"]
+        else {
+            throw XCTSkip("set the FLUIDVOICE_NEMOTRON_PARITY_* variables to run the parity probe")
+        }
+        #if arch(arm64)
+        let locator = MeetingNemotronModelLocator(injectedURL: URL(fileURLWithPath: modelPath))
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { ASRService() }, modelLocator: locator)
+        let audioURLs = audioList.split(separator: ",").map { URL(fileURLWithPath: String($0)) }
+        var report: [String: [[Double]]] = [:]
+        _ = try await runtime.withNemotronDiarization(artifact: try locator.locate()) { factory in
+            for url in audioURLs {
+                let file = try AVAudioFile(forReading: url)
+                XCTAssertEqual(file.processingFormat.sampleRate, 16_000)
+                XCTAssertEqual(file.processingFormat.channelCount, 1)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+                    pcmFormat: file.processingFormat,
+                    frameCapacity: AVAudioFrameCount(file.length)
+                ))
+                try file.read(into: buffer)
+                let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+                let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+                let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+                let segments = try await factory.makeDiarizer(epoch: epoch).diarize(samples: samples)
+                report[url.lastPathComponent] = segments.map { [Double($0.slotIndex), $0.start, $0.end] }
+            }
+            return MeetingNemotronPhaseResult()
+        }
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: outputPath))
+        #else
+        throw XCTSkip("the production runtime is Apple-Silicon only")
+        #endif
+    }
+
+    /// Opt-in threshold probe for the cross-epoch voice matcher: cuts each recording where the app
+    /// cut it, diarizes every piece with fresh state, and writes each slot's voice embeddings.
+    /// FLUIDVOICE_VOICE_PROBE_SPEC is a JSON list of {"audio": path, "cuts": [seconds]};
+    /// FLUIDVOICE_NEMOTRON_PARITY_MODEL is the .mlpackage; FLUIDVOICE_VOICE_PROBE_OUT is the output.
+    func testVoiceProfilesAcrossEpochsForThresholdProbe() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let specPath = environment["FLUIDVOICE_VOICE_PROBE_SPEC"],
+              let modelPath = environment["FLUIDVOICE_NEMOTRON_PARITY_MODEL"],
+              let outputPath = environment["FLUIDVOICE_VOICE_PROBE_OUT"]
+        else {
+            throw XCTSkip("set the FLUIDVOICE_VOICE_PROBE_* variables to run the voice probe")
+        }
+        #if arch(arm64)
+        struct Track: Decodable {
+            let audio: String
+            let cuts: [Double]
+        }
+        let tracks = try JSONDecoder().decode([Track].self, from: Data(contentsOf: URL(fileURLWithPath: specPath)))
+        let locator = MeetingNemotronModelLocator(injectedURL: URL(fileURLWithPath: modelPath))
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { ASRService() }, modelLocator: locator)
+        var report: [[String: Any]] = []
+        for track in tracks {
+            let file = try AVAudioFile(forReading: URL(fileURLWithPath: track.audio))
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: AVAudioFrameCount(file.length)
+            ))
+            try file.read(into: buffer)
+            let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+            let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+            let bounds = [0] + track.cuts.map { Int($0 * 16_000) } + [samples.count]
+            let trackID = UUID()
+            let phase = try await runtime.withNemotronDiarization(artifact: try locator.locate()) { factory in
+                var result = MeetingNemotronPhaseResult()
+                for piece in 0..<(bounds.count - 1) {
+                    let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: piece)
+                    let pieceSamples = Array(samples[bounds[piece]..<bounds[piece + 1]])
+                    let segments = try await factory.makeDiarizer(epoch: epoch).diarize(samples: pieceSamples)
+                    result.voiceSamples += MeetingSpeakerVoiceSamples.collect(
+                        epoch: epoch, samples: pieceSamples, segments: segments
+                    )
+                    let offset = Double(bounds[piece]) / 16_000
+                    result.activity += segments.map {
+                        MeetingBackendSpeakerActivity(
+                            token: MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"),
+                            start: $0.start + offset,
+                            end: $0.end + offset
+                        )
+                    }
+                }
+                return result
+            }
+            let profiles = try await runtime.speakerVoiceProfiles(samples: phase.voiceSamples)
+            report.append([
+                "audio": track.audio,
+                "activity": phase.activity.map {
+                    ["piece": $0.token.analysisEpochID.ordinal, "label": $0.token.label, "start": $0.start, "end": $0.end]
+                },
+                "profiles": profiles.map {
+                    ["piece": $0.token.analysisEpochID.ordinal, "label": $0.token.label, "embeddings": $0.embeddings]
+                },
+            ])
+        }
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+        try data.write(to: URL(fileURLWithPath: outputPath))
+        #else
+        throw XCTSkip("the production runtime is Apple-Silicon only")
+        #endif
+    }
+
     func testRealNemotronModelDiarizesWithFreshStatePerEpoch() async throws {
         guard ProcessInfo.processInfo.environment["FLUIDVOICE_NEMOTRON_SMOKE_TEST"] == "1" else {
             throw XCTSkip("set FLUIDVOICE_NEMOTRON_SMOKE_TEST=1 to run the real-model smoke test")

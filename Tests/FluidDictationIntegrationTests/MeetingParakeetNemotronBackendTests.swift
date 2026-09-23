@@ -677,6 +677,52 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(result.attempt.backendID, MeetingBackendID.parakeetNemotron.rawValue)
     }
 
+    func testCompositeProcessingPreparesDiarizationModelBeforePlanning() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        struct DownloadFailed: Error {}
+        final class Spy {
+            var preparations = 0
+            var runtimes = 0
+        }
+        let spy = Spy()
+        // Planning would throw `modelNotInstalled`; seeing the download error instead proves the
+        // model is prepared before planning, and a failed preparation stops the attempt.
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .parakeetNemotron)
+        registry.register(.parakeetNemotron) { context in
+            MeetingParakeetNemotronBackend(
+                runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                modelLocator: StubModelLocator(error: MeetingNemotronModelReadinessError.modelNotInstalled(path: "/tmp/missing")),
+                materializer: FakeMaterializer()
+            )
+        }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: {
+                XCTFail("Canonical dispatch must not reach ASR readiness")
+                return ASRService()
+            },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            chunkObserver: FixtureObserver(results: fixture.observations),
+            meetingRuntimeFactory: { _ in
+                spy.runtimes += 1
+                return FakeRuntime()
+            },
+            prepareDiarizationModel: {
+                spy.preparations += 1
+                throw DownloadFailed()
+            }
+        )
+        await XCTAssertAsyncThrowsError(
+            try await pipeline.process(session: fixture.session, sessionDirectory: directory) { _ in }
+        ) { error in
+            XCTAssertTrue(error is DownloadFailed, "expected the download error, got \(error)")
+        }
+        XCTAssertEqual(spy.preparations, 1)
+        XCTAssertEqual(spy.runtimes, 0, "no model runtime may be created without the model")
+    }
+
     // MARK: - Epoch isolation and unit assignment
 
     private func plannedManifest(

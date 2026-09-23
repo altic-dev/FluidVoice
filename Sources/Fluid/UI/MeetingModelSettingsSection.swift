@@ -1,12 +1,9 @@
-import AppKit
 import SwiftUI
 
 struct MeetingModelSettingsSection: View {
     let onModelImported: @MainActor () -> Void
     @Environment(\.theme) private var theme
-    @State private var installed: MeetingNemotronModelArtifact?
-    @State private var isBusy = true
-    @State private var message: String?
+    @ObservedObject private var store = MeetingDiarizationModelStore.shared
     @State private var showingDetails = false
 
     var body: some View {
@@ -17,37 +14,23 @@ struct MeetingModelSettingsSection: View {
                         Text("Identify each speaker")
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
-                        if self.isBusy {
-                            HStack(spacing: self.theme.metrics.spacing.sm) {
-                                ProgressView().controlSize(.small)
-                                Text("Checking model…")
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                            }
-                        } else if self.installed != nil {
-                            Label("Ready · runs after recording", systemImage: "checkmark.circle.fill")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.success)
-                        } else {
-                            Text(CPUArchitecture.isAppleSilicon ? "Import a model to get started." : "Apple silicon required.")
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.theme.palette.secondaryText)
-                        }
+                        self.status
                     }
                     Spacer(minLength: self.theme.metrics.spacing.md)
-                    Button(self.installed == nil ? "Import model…" : "Replace…", action: self.choosePackage)
-                        .meetingGlassAction()
-                        .disabled(self.isBusy || !CPUArchitecture.isAppleSilicon)
+                    if case .failed = self.store.state {
+                        Button("Try again") { self.store.prepareInBackground() }
+                            .meetingGlassAction()
+                            .disabled(!CPUArchitecture.isAppleSilicon)
+                    }
                 }
                 DisclosureGroup(isExpanded: self.$showingDetails) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                        if let installed {
-                            Text("Nemotron FP16 · \(ByteCountFormatter.string(fromByteCount: installed.totalByteCount, countStyle: .file))")
+                        if case let .ready(installed) = self.store.state {
+                            Text("Nemotron 3 Diarization · \(ByteCountFormatter.string(fromByteCount: installed.totalByteCount, countStyle: .file))")
                         }
                         Text(CPUArchitecture.isAppleSilicon
-                            ? "Choose the supplied .mlpackage. A copy stays on this Mac and is ready after restarting."
+                            ? "Downloads once (about 200 MB) and stays on this Mac. Recording works while it downloads; transcription waits for it."
                             : "FluidMeet recording currently requires an Apple silicon Mac.")
-                        Text("Model changes are applied immediately, even if you cancel these settings. Importing a model does not start recording.")
                     }
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -59,53 +42,41 @@ struct MeetingModelSettingsSection: View {
                 }
                 .font(self.theme.typography.captionStrong)
                 .foregroundStyle(self.theme.palette.secondaryText)
-                if let message {
-                    Text(message).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
-                }
             }
         }
-        .task {
-            let result = await Task.detached(priority: .utility) {
-                try? MeetingModelInstaller.validate(MeetingNemotronModelLocator().resolvedPackageURL())
-            }.value
-            self.installed = result
-            self.isBusy = false
+        .task { self.store.prepareInBackground() }
+        .onChange(of: self.store.state) { _, state in
+            if case .ready = state { self.onModelImported() }
         }
     }
 
-    private func choosePackage() {
-        guard MeetingNemotronModelLocator().resolvedPackageURL().standardizedFileURL
-            == MeetingNemotronModelLocator.defaultPackageURL().standardizedFileURL
-        else {
-            self.message = "A development model path is active. Remove that override and restart FluidVoice before importing."
-            return
-        }
-        let panel = NSOpenPanel()
-        panel.title = "Load speaker separation model"
-        panel.message = "Choose nemotron_diar_fp16.mlpackage from the beta model download."
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.treatsFilePackagesAsDirectories = false
-        panel.allowsMultipleSelection = false
-        // CoreML package types are not registered on every beta tester's Mac.
-        // Let the installer validate the selection instead of greying out valid packages.
-        panel.begin { response in
-            guard response == .OK, let source = panel.url else { return }
-            self.isBusy = true
-            self.message = nil
-            Task {
-                do {
-                    self.installed = try await Task.detached(priority: .utility) {
-                        try MeetingModelInstaller.install(from: source)
-                    }.value
-                    // This task outlives the sheet. Refresh only model readiness, even if
-                    // the user saved or cancelled settings while the copy was running.
-                    self.onModelImported()
-                } catch {
-                    self.message = error.localizedDescription
-                }
-                self.isBusy = false
+    @ViewBuilder private var status: some View {
+        switch self.store.state {
+        case .idle, .checking:
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                ProgressView().controlSize(.small)
+                Text("Checking model…")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
+        case let .downloading(fraction):
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                ProgressView(value: fraction)
+                    .frame(maxWidth: 220)
+                Text(fraction < 1 ? "Downloading · \(Int(fraction * 100))%" : "Installing…")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .monospacedDigit()
+            }
+        case .ready:
+            Label("Ready · runs after recording", systemImage: "checkmark.circle.fill")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.success)
+        case let .failed(message):
+            Text(message)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.warning)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

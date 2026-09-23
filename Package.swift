@@ -11,7 +11,7 @@ let package = Package(
     dependencies: [
         .package(path: "Vendor/WebRTCAudioProcessing"),
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
-        .package(url: "https://github.com/altic-dev/FluidAudio.git", revision: "75117be7b6fa8c48ec8030e339321069c64b34ad"),
+        .package(url: "https://github.com/altic-dev/FluidAudio.git", revision: "09c23cce76126920b3ff6710cdb154bdf9c126b8"),
         .package(url: "https://github.com/mxcl/PromiseKit", from: "6.0.0"),
         .package(url: "https://github.com/altic-dev/DynamicNotchKit.git", branch: "main"),
         .package(url: "https://github.com/altic-dev/transcribe-cpp-swift.git", exact: "0.1.2"),

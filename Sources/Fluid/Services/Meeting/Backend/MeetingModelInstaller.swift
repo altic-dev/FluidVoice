@@ -2,20 +2,27 @@ import CryptoKit
 import Darwin
 import Foundation
 
-/// Temporary offline beta installer. Checksums identify the shipped FP16 package,
-/// not an arbitrary CoreML model with a matching filename. Run off the main actor.
+/// Installs the Nemotron 3 Diarization package. Checksums identify the exact published package
+/// (fp16 weight storage, fp32 compute), not an arbitrary CoreML model with a matching filename.
+/// Run off the main actor.
 nonisolated enum MeetingModelInstaller {
     private static let installationLock = NSLock()
     private static let expectedFiles = [
-        "Manifest.json": "419130ae729d97aa5eba50abf9439cf01c1d5971821ddc1899b5c54728b3f302",
-        "Data/com.apple.CoreML/model.mlmodel": "c6112ac5ec5e217d2cebaba9e1d961f6df6e3bbb8e063188423c8e1575dca029",
-        "Data/com.apple.CoreML/weights/weight.bin": "d4838b028504ab3f9df8d733380cb1241c6c19896c17142e42fd6396a67de6c5",
+        "Manifest.json": "87c6d992c3300934d6b0205dbcf0a34df93e4b5716e6ccd1de846147b2937705",
+        "Data/com.apple.CoreML/model.mlmodel": "3da7a6f70a632e9079116f9c14bf7afbf5ff69ac5b28e90dd4277a9ce41f8642",
+        "Data/com.apple.CoreML/weights/weight.bin": "b7c50bd483210f206014548c0cc2fc7b3601de012ab86b2e49f8a911db9a7d40",
     ]
+
+    /// The checkpoint's trained silence embedding (`learnable_sil_emb`), published next to the
+    /// package: 512 little-endian float32 values.
+    static let silenceEmbeddingFileName = "learnable_sil_emb.f32"
+    private static let silenceEmbeddingSHA256 = "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7"
+    private static let silenceEmbeddingDimensions = 512
 
     enum InstallError: LocalizedError {
         case wrongPackage
         var errorDescription: String? {
-            "Choose the supplied beta Nemotron FP16 .mlpackage. This package is different or damaged."
+            "The downloaded speaker model is different or damaged. Try the download again."
         }
     }
 
@@ -34,6 +41,29 @@ nonisolated enum MeetingModelInstaller {
             }
         }
         return artifact
+    }
+
+    static func silenceEmbeddingURL(besides package: URL) -> URL {
+        package.deletingLastPathComponent().appendingPathComponent(Self.silenceEmbeddingFileName)
+    }
+
+    /// Reads the silence embedding only when its bytes are exactly the published file.
+    static func validatedSilenceEmbedding(at url: URL) throws -> [Float] {
+        guard let data = try? Data(contentsOf: url),
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == Self.silenceEmbeddingSHA256,
+              data.count == Self.silenceEmbeddingDimensions * MemoryLayout<UInt32>.size
+        else {
+            throw InstallError.wrongPackage
+        }
+        return stride(from: 0, to: data.count, by: MemoryLayout<UInt32>.size).map { offset in
+            Float(bitPattern: UInt32(littleEndian: data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.load(as: UInt32.self) }))
+        }
+    }
+
+    static func installSilenceEmbedding(from source: URL, besides package: URL) throws {
+        _ = try Self.validatedSilenceEmbedding(at: source)
+        let data = try Data(contentsOf: source)
+        try data.write(to: Self.silenceEmbeddingURL(besides: package), options: .atomic)
     }
 
     static func install(from source: URL, to destination: URL = MeetingNemotronModelLocator.defaultPackageURL()) throws -> MeetingNemotronModelArtifact {

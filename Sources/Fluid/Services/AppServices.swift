@@ -115,19 +115,19 @@ final class AppServices: ObservableObject {
             store: MeetingSessionStore.shared,
             capture: MeetingCaptureEngine(),
             processing: MeetingProcessingPipeline(
-                asrServiceProvider: { AppServices.shared.asr }
+                asrServiceProvider: { AppServices.shared.asr },
+                prepareDiarizationModel: { try await MeetingDiarizationModelStore.shared.ensureInstalled() }
             ),
             audioArbiter: self.meetingAudioActivityArbiter,
             preferredMicrophoneUID: { [weak self] in
                 self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
             },
+            // The speaker model is only needed after Stop, so a missing model never blocks
+            // recording; final processing waits for `MeetingDiarizationModelStore` instead.
             validateRecordingModels: {
-                try await Task.detached(priority: .utility) {
-                    guard CPUArchitecture.isAppleSilicon else {
-                        throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
-                    }
-                    _ = try MeetingModelInstaller.validate(MeetingNemotronModelLocator().resolvedPackageURL())
-                }.value
+                guard CPUArchitecture.isAppleSilicon else {
+                    throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
+                }
             }
         )
         self._meetingSessionCoordinator = coordinator

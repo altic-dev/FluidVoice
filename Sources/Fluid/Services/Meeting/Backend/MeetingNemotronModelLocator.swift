@@ -3,9 +3,8 @@ import Foundation
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md` (§5): FluidVoice-side Nemotron model
 // readiness. This locator only resolves and validates a local, already-installed model package.
-// It never downloads, never guesses a hosting URL and never accepts a symlink — the 190 MB
-// weights are delivered by a separate, not-yet-built preparation step, and `execute` performs no
-// downloads.
+// It never downloads and never accepts a symlink — `MeetingDiarizationModelStore` downloads and
+// installs the ~200 MB package, and `execute` performs no downloads.
 //
 // Resolution order: an injected URL (tests), then the development environment override
 // `FLUIDVOICE_NEMOTRON_DIARIZATION_MODEL_PATH`, then the versioned FluidVoice cache location.
@@ -36,7 +35,7 @@ nonisolated enum MeetingNemotronModelReadinessError: LocalizedError, Equatable {
         switch self {
         case let .modelNotInstalled(path):
             return "The Nemotron diarization model is not installed at \(path). "
-                + "Open FluidMeet settings and load the supplied speaker separation model before recording."
+                + "Open FluidMeet settings to download the speaker model."
         case let .invalidModelPackage(reason):
             return "The Nemotron diarization model package is invalid (\(reason))."
         case let .artifactChanged(path):
@@ -54,7 +53,7 @@ nonisolated protocol MeetingNemotronModelLocating: Sendable {
 nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     static let environmentOverrideKey = "FLUIDVOICE_NEMOTRON_DIARIZATION_MODEL_PATH"
     static let cacheVersion = "v1"
-    static let packageFileName = "nemotron_diar_fp16.mlpackage"
+    static let packageFileName = "nemotron_3_diarization.mlpackage"
     private static let maximumFileCount = 64
     private static let maximumTotalByteCount: Int64 = 1_000_000_000
 

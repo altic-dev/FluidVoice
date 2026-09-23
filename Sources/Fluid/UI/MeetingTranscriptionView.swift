@@ -236,6 +236,7 @@ struct MeetingTranscriptionView: View {
         }
         .clipped()
         .task {
+            MeetingDiarizationModelStore.shared.prepareInBackground()
             async let sources: Void = self.refreshSources(requestPermissions: false)
             if self.isMeetingHistoryVisible {
                 await self.loadMeetingHistory()
@@ -456,8 +457,6 @@ struct MeetingTranscriptionView: View {
             blockingMessage = "Free at least \(MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount)) of storage before recording."
         } else if !CPUArchitecture.isAppleSilicon {
             blockingMessage = "FluidMeet requires an Apple silicon Mac."
-        } else if !modelReady {
-            blockingMessage = "Load the supplied speaker separation model in FluidMeet settings before recording."
         } else {
             blockingMessage = nil
         }
@@ -468,7 +467,7 @@ struct MeetingTranscriptionView: View {
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
-            modelStatus: modelReady ? "Speaker model installed · transcription prepares after Stop" : "Load speaker model in Settings",
+            modelStatus: modelReady ? "Speaker model installed · transcription prepares after Stop" : "Speaker model downloads before transcription",
             modelReady: modelReady,
             storageStatus: self.cachedStorageStatus,
             storageReady: self.cachedStorageReady,
@@ -608,7 +607,6 @@ struct MeetingTranscriptionView: View {
         guard !self.isStarting else { return }
         let readiness = self.readiness
         guard readiness.activityReady,
-              readiness.modelReady,
               readiness.storageReady,
               readiness.microphoneReady,
               readiness.meetingAudioReady,
@@ -1892,7 +1890,6 @@ private struct MeetingSetupCanvas: View {
             self.readiness.microphoneReady &&
             self.readiness.storageReady &&
             self.readiness.activityReady &&
-            self.readiness.modelReady &&
             self.readiness.meetingAudioReady
     }
 
@@ -2107,12 +2104,12 @@ private struct MeetingSetupCanvas: View {
         if !self.readiness.isCheckingSources,
            self.readiness.showScreenRecordingSettingsAction ||
            (!self.canStart && (self.readiness.showMicrophoneSettingsAction ||
-                   !self.readiness.modelReady || !self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil))
+                   !self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil))
         {
             Button(
                 self.readiness.showMicrophoneSettingsAction ? "Allow microphone access" :
                     (self.readiness.showScreenRecordingSettingsAction ? "Allow meeting audio access" :
-                        (!self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil ? "Set up microphone…" : "Set up speaker labels…")),
+                        "Set up microphone…"),
                 systemImage: self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction ? "arrow.up.right" : "gearshape",
                 action: self.onRepairSetup
             )

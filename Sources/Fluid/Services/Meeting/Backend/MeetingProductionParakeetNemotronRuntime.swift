@@ -167,12 +167,15 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         // Recheck at open time: the artifact located at plan/readiness time is validated again
         // before CoreML touches it (plan §5).
         let artifact = try self.modelLocator.recheck(artifact)
-        // Reference Nemotron streaming configuration (conversion script cadence, kept exact by
-        // the FluidAudio factory; it validates instead of clamping).
+        // The checkpoint's trained cache settings: one silence frame per speaker, filled with its
+        // learned silence embedding. Anything else splits one voice across several slots.
         let config = try SortformerConfig.nemotron(
             spkcacheUpdatePeriod: 300,
-            spkcacheSilFramesPerSpk: 3,
-            predScoreThreshold: 0.25
+            spkcacheSilFramesPerSpk: 1,
+            predScoreThreshold: 0.25,
+            learnedSilenceEmbedding: MeetingModelInstaller.validatedSilenceEmbedding(
+                at: MeetingModelInstaller.silenceEmbeddingURL(besides: artifact.packageURL)
+            )
         )
         let mlConfiguration = MLModelConfiguration()
         mlConfiguration.computeUnits = .cpuAndGPU

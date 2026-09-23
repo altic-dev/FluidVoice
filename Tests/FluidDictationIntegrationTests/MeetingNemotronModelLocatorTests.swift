@@ -18,21 +18,21 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.deletingLastPathComponent().path), [destination.lastPathComponent])
     }
 
-    func testBetaImportPersistsForFreshLocatorAndReplacement() throws {
+    func testPublishedPackageInstallPersistsForFreshLocatorAndReplacement() throws {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("scratch/nemotron-diar/handoff/nemotron-3-diarization/models/nemotron_diar_fp16.mlpackage")
+            .appendingPathComponent("scratch/nemotron-diar/hf-upload/nemotron_3_diarization.mlpackage")
         guard FileManager.default.fileExists(atPath: source.path) else {
-            throw XCTSkip("Beta model fixture is not available")
+            throw XCTSkip("Published model fixture is not available")
         }
         let root = try self.makeTempDirectory()
         let destination = root.appendingPathComponent("installed/model.mlpackage")
         _ = try MeetingModelInstaller.install(from: source, to: destination)
-        // A fresh locator has no reference to the import task or original download.
-        XCTAssertEqual(try MeetingNemotronModelLocator(injectedURL: destination).locate().totalByteCount, 199_101_327)
+        // A fresh locator has no reference to the install task or original download.
+        XCTAssertEqual(try MeetingNemotronModelLocator(injectedURL: destination).locate().totalByteCount, 199_258_287)
         _ = try MeetingModelInstaller.install(from: source, to: destination)
-        XCTAssertEqual(try MeetingModelInstaller.validate(destination).totalByteCount, 199_101_327)
-        XCTAssertEqual(try MeetingModelInstaller.validate(source).totalByteCount, 199_101_327)
+        XCTAssertEqual(try MeetingModelInstaller.validate(destination).totalByteCount, 199_258_287)
+        XCTAssertEqual(try MeetingModelInstaller.validate(source).totalByteCount, 199_258_287)
     }
 
     private func makeTempDirectory() throws -> URL {
@@ -178,5 +178,137 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
         let artifact = try MeetingNemotronModelLocator(injectedURL: supplied).locate()
         XCTAssertGreaterThan(artifact.fileCount, 0)
         XCTAssertGreaterThan(artifact.totalByteCount, 100_000_000, "the real package carries its weights")
+    }
+}
+
+@MainActor
+final class MeetingDiarizationModelStoreTests: XCTestCase {
+    private static let artifact = MeetingNemotronModelArtifact(
+        packageURL: URL(fileURLWithPath: "/tmp/stub-nemotron.mlpackage"),
+        totalByteCount: 199_258_287,
+        fileCount: 3,
+        manifestSHA256: "stub",
+        entryMetadataSHA256: "stub"
+    )
+
+    private struct Missing: Error {}
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() -> Int {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.value += 1
+            return self.value
+        }
+
+        var count: Int {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.value
+        }
+    }
+
+    override func setUpWithError() throws {
+        guard CPUArchitecture.isAppleSilicon else { throw XCTSkip("Speaker labels require Apple silicon") }
+    }
+
+    func testInstalledModelIsReadyWithoutDownloading() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true },
+            validate: { Self.artifact },
+            install: { _ in
+                _ = installs.increment()
+                return Self.artifact
+            }
+        )
+
+        let installed = try await store.ensureInstalled()
+
+        XCTAssertEqual(installed, Self.artifact)
+        XCTAssertEqual(store.state, .ready(Self.artifact))
+        XCTAssertEqual(installs.count, 0, "an installed model must never be downloaded again")
+    }
+
+    func testConcurrentCallersShareOneDownload() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true },
+            validate: { throw Missing() },
+            install: { progress in
+                _ = installs.increment()
+                progress(0.5)
+                try await Task.sleep(nanoseconds: 50_000_000)
+                return Self.artifact
+            }
+        )
+
+        async let first = store.ensureInstalled()
+        async let second = store.ensureInstalled()
+        let results = try await [first, second]
+
+        XCTAssertEqual(results, [Self.artifact, Self.artifact])
+        XCTAssertEqual(installs.count, 1, "opening FluidMeet and finishing a meeting must not download twice")
+        XCTAssertEqual(store.state, .ready(Self.artifact))
+    }
+
+    func testFailedDownloadShowsPlainMessageAndRetryStartsFresh() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true },
+            validate: { throw Missing() },
+            install: { _ in
+                if installs.increment() == 1 {
+                    throw NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+                }
+                return Self.artifact
+            }
+        )
+
+        do {
+            try await store.ensureInstalled()
+            XCTFail("the first download must fail")
+        } catch let error as MeetingDiarizationModelStore.DownloadError {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Couldn't download the speaker model. Check your internet connection and try again."
+            )
+        }
+        guard case .failed = store.state else { return XCTFail("expected failed state, got \(store.state)") }
+
+        let installed = try await store.ensureInstalled()
+
+        XCTAssertEqual(installed, Self.artifact)
+        XCTAssertEqual(installs.count, 2)
+        XCTAssertEqual(store.state, .ready(Self.artifact))
+    }
+
+    func testDevelopmentOverrideNeverDownloads() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(
+            canDownload: { false },
+            validate: { throw Missing() },
+            install: { _ in
+                _ = installs.increment()
+                return Self.artifact
+            }
+        )
+
+        do {
+            try await store.ensureInstalled()
+            XCTFail("an invalid development path must fail")
+        } catch {}
+
+        XCTAssertEqual(installs.count, 0, "a development override must never be replaced by a download")
+        guard case .failed = store.state else { return XCTFail("expected failed state, got \(store.state)") }
+    }
+
+    func testUnavailableRepositoryMessage() {
+        XCTAssertEqual(
+            MeetingDiarizationModelStore.userMessage(for: NSError(domain: "HF", code: 401)),
+            "The speaker model isn't available for download right now. Try again later."
+        )
     }
 }

@@ -1339,6 +1339,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
     private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
+    /// requires it installed. Production downloads it here when the background download has not
+    /// finished; tests inject nothing and supply the model themselves.
+    private let prepareDiarizationModel: @MainActor () async throws -> Void
     /// Test seam: runs after the canonical sidecar is written and read-back verified, before the
     /// final cancellation check, so "cancelled after sidecar" is deterministically exercisable.
     private let canonicalSidecarVerifiedProbe: (MeetingResultSidecarReference) -> Void
@@ -1353,6 +1357,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
+        prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
@@ -1366,6 +1371,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: MeetingNemotronModelLocator()
             )
         }
+        self.prepareDiarizationModel = prepareDiarizationModel
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
         let resolvedRegistry = backendRegistry ?? MeetingTranscriptionBackendRegistry.makeDefault()
         self.backendRegistry = resolvedRegistry
@@ -1447,6 +1453,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             )
         )
+        if backendID == .parakeetNemotron {
+            try await self.prepareDiarizationModel()
+        }
         let plan = try backend.plan(request)
         if let defect = plan.agreementDefect(with: request, descriptor: backend.descriptor) {
             throw MeetingBackendError.planDisagreesWithRequest(backend: backendID, defect: defect)
