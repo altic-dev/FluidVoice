@@ -1,3 +1,4 @@
+import Combine
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -134,10 +135,17 @@ final class MeetingSummaryActivityTests: XCTestCase {
     func testProcessingBlocksSummaryWithoutTouchingAudioAndStaleReleaseCannotUnlock() async throws {
         let gate = MeetingSummaryActivityCoordinator()
         let activity = Activity()
+        var published: [Bool] = []
+        let observation = gate.$isProcessing.removeDuplicates().sink { published.append($0) }
+        defer { observation.cancel() }
+        XCTAssertFalse(gate.isProcessing)
         let first = try XCTUnwrap(gate.beginProcessing())
+        XCTAssertTrue(gate.isProcessing)
         let second = try XCTUnwrap(gate.beginProcessing())
         gate.endProcessing(first)
+        XCTAssertTrue(gate.isProcessing)
         gate.endProcessing(first)
+        XCTAssertTrue(gate.isProcessing)
         do {
             try await gate.withSummary(activity: activity) { XCTFail("Must not begin") }
             XCTFail("Second processing token must still block")
@@ -145,6 +153,8 @@ final class MeetingSummaryActivityTests: XCTestCase {
         XCTAssertEqual(activity.handoffs, 0)
         XCTAssertNil(activity.active)
         gate.endProcessing(second)
+        XCTAssertFalse(gate.isProcessing)
+        XCTAssertEqual(published, [false, true, false])
         try await gate.withSummary(activity: activity) {}
         XCTAssertEqual(activity.handbacks, 1)
     }

@@ -53,6 +53,7 @@ nonisolated enum MeetingSummaryInput {
 final class MeetingSummaryActivityCoordinator: ObservableObject {
     static let shared = MeetingSummaryActivityCoordinator()
     private var processing: Set<UUID> = []
+    @Published private(set) var isProcessing = false
     private var summary: UUID?
     @Published private(set) var selectionLock: UUID?
 
@@ -73,10 +74,14 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         guard self.summary == nil else { return nil }
         let token = UUID()
         self.processing.insert(token)
+        self.isProcessing = true
         return token
     }
 
-    func endProcessing(_ token: UUID) { self.processing.remove(token) }
+    func endProcessing(_ token: UUID) {
+        self.processing.remove(token)
+        self.isProcessing = !self.processing.isEmpty
+    }
 
     static func presentBusyError() {
         let asr = AppServices.shared.asr

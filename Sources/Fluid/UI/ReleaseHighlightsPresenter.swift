@@ -33,6 +33,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     @State private var host = WindowReference()
     @State private var visible = false
     @State private var processing = false
+    @State private var refining = false
     @State private var isPresented = false
     @State private var session: ReleaseHighlightsPolicy.Session?
     @State private var pendingDestination: ReleaseHighlightsContent.Destination?
@@ -42,7 +43,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
 
     private final class WindowReference { weak var window: NSWindow? }
 
-    private var canExplore: Bool { self.isEligible && !self.processing }
+    private var canExplore: Bool { self.isEligible && !self.processing && !self.refining }
 
     func body(content: Content) -> some View {
         content
@@ -64,6 +65,10 @@ struct ReleaseHighlightsPresenter: ViewModifier {
             .onChange(of: self.isEligible) { _, _ in self.eligibilityChanged() }
             .onReceive(NotchContentState.shared.$isProcessing.removeDuplicates()) { processing in
                 self.processing = processing
+                self.eligibilityChanged()
+            }
+            .onReceive(MeetingSummaryActivityCoordinator.shared.$isProcessing.removeDuplicates()) { refining in
+                self.refining = refining
                 self.eligibilityChanged()
             }
             .onChange(of: self.scenePhase) { _, phase in
