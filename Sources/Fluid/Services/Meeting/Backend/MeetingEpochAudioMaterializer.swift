@@ -65,8 +65,8 @@ nonisolated enum MeetingEpochMaterializationError: LocalizedError, Equatable {
             return "The chunk file for analysis span \"\(spanID)\" no longer decodes to the observed facts (\(detail))."
         case let .emptySlice(spanID):
             return "Analysis span \"\(spanID)\" maps to no decodable audio frames."
-        case let .sampleLimitExceeded(spanID, sampleCount):
-            return "Analysis span \"\(spanID)\" exceeds the PCM materialization safety limit (\(sampleCount) samples)."
+        case .sampleLimitExceeded:
+            return "This meeting is too large to transcribe within the app’s current memory limit. Try processing shorter sections."
         }
     }
 

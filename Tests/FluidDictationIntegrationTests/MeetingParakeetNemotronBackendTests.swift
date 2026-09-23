@@ -8,6 +8,24 @@ import XCTest
 /// materializer and pipeline integration tests use real WAV files on disk.
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
+    func testCombinedTrackLimitIncludesEarlierEpochsAndSeparators() throws {
+        let limit = MeetingEpochAudioMaterializer.conservativeSampleLimit
+        XCTAssertNoThrow(try MeetingParakeetNemotronBackend.validateTrackSampleCount(
+            current: limit - 10, incoming: 8, separator: 2, spanID: "test"
+        ))
+        for (incoming, separator) in [(9, 2), (11, 0), (Int.max, 0)] {
+            XCTAssertThrowsError(try MeetingParakeetNemotronBackend.validateTrackSampleCount(
+                current: limit - 10, incoming: incoming, separator: separator, spanID: "test"
+            )) { error in
+                XCTAssertTrue((error as? MeetingEpochMaterializationError)?.isSampleLimitExceeded == true)
+                XCTAssertEqual(
+                    error.localizedDescription,
+                    "This meeting is too large to transcribe within the app’s current memory limit. Try processing shorter sections."
+                )
+            }
+        }
+    }
+
     // MARK: - Session fixtures
 
     private func makeChunk(

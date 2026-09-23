@@ -1180,7 +1180,8 @@ private enum ScopeBodyTestError: Error {
 @MainActor
 final class ASRServiceMeetingASRScopeTests: XCTestCase {
     @MainActor private final class Harness {
-        let service = ASRService()
+        let residency = MeetingModelResidencyCoordinator()
+        lazy var service = ASRService(meetingModelResidency: self.residency)
         let recorder = OrchestrationRecorder()
         let registry = LeaseRegistry()
         let provider = FakeMeetingTranscriptionProvider()
@@ -1504,6 +1505,9 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         await shutdown.value
 
         XCTAssertTrue(shutdownFinished.value)
+        XCTAssertEqual(harness.residency.phase, .terminating)
+        let ordinary = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "test", modelID: "test")
+        MeetingModelResidencyCoordinator.shared.endOperation(ordinary)
         XCTAssertEqual(harness.recorder.count(of: "drain"), 1)
         XCTAssertFalse(harness.owner.isClaimed)
         XCTAssertFalse(harness.owner.isDraining)

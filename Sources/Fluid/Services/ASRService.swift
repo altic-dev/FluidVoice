@@ -1022,7 +1022,7 @@ final class ASRService: ObservableObject {
     }
 
     func shutdownForTermination() async {
-        MeetingModelResidencyCoordinator.shared.beginTermination()
+        self.meetingModelResidency.beginTermination()
         self.isTerminating = true
         // Give media restoration the same quit window as audio cleanup.
         self.mediaPlaybackService.beginShutdown()
@@ -1260,8 +1260,8 @@ final class ASRService: ObservableObject {
         source: AnalyticsModelDownloadSource = .settings,
         progressHandler: ((Double) -> Void)?
     ) async throws {
-        let admission = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: model.id)
-        defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
+        let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+        defer { self.meetingModelResidency.endOperation(admission) }
         if self.isMeetingASRPreparationClaimed {
             throw MeetingASRPreparationError.preparationInProgress
         }
@@ -1350,7 +1350,7 @@ final class ASRService: ObservableObject {
 
     /// Call this when the transcription provider setting changes to reset state
     func resetTranscriptionProvider() {
-        MeetingModelResidencyCoordinator.shared.vetoRestoration(owner: "speech")
+        self.meetingModelResidency.vetoRestoration(owner: "speech")
         guard !self.recordingBufferHandoffGate.isRecovering else {
             self.resetProviderAfterStreamingRecovery = true
             return
@@ -2001,7 +2001,7 @@ final class ASRService: ObservableObject {
     }
 
     func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
-        try await MeetingModelResidencyCoordinator.shared.withBackgroundOperation(owner: "speech", modelID: evidence.modelKey) {
+        try await self.meetingModelResidency.withBackgroundOperation(owner: "speech", modelID: evidence.modelKey) {
             try await self.performOriginalAudioEnrollment(evidence)
         }
     }
@@ -2132,7 +2132,10 @@ final class ASRService: ObservableObject {
         )
     }()
 
-    init() {
+    private let meetingModelResidency: MeetingModelResidencyCoordinator
+
+    init(meetingModelResidency: MeetingModelResidencyCoordinator = .shared) {
+        self.meetingModelResidency = meetingModelResidency
         // CRITICAL FIX: Do NOT call any framework-triggering APIs here!
         // This includes:
         // - AVCaptureDevice.authorizationStatus (triggers AVFCapture/CoreAudio)
@@ -2306,7 +2309,7 @@ final class ASRService: ObservableObject {
     /// Call this AFTER the app has finished launching to complete ASR initialization.
     /// This must be called from onAppear or later, never during init.
     func initialize() async {
-        let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
+        let warmupGeneration = self.meetingModelResidency.warmupGeneration
         await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
         await AudioStartupGate.shared.waitUntilOpen()
         guard self.isTerminating == false else { return }
@@ -2357,7 +2360,7 @@ final class ASRService: ObservableObject {
             await self.checkIfModelsExistAsync()
 
             // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
-            if self.modelsExistOnDisk, MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) {
+            if self.modelsExistOnDisk, self.meetingModelResidency.canRunWarmup(warmupGeneration) {
                 DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
                 do {
                     try await self.ensureAsrReady()
@@ -3972,7 +3975,7 @@ final class ASRService: ObservableObject {
     }
 
     func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool = { _ in false }, work: () async throws -> T) async throws -> T {
-        try await MeetingModelResidencyCoordinator.shared.withExclusive(
+        try await self.meetingModelResidency.withExclusive(
             attemptID: attemptID,
             participants: [
                 self.meetingResidencyParticipant(),
@@ -6251,10 +6254,10 @@ final class ASRService: ObservableObject {
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         try Task.checkCancellation()
-        let admission = try MeetingModelResidencyCoordinator.shared.beginOperation(
+        let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
-        defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
+        defer { self.meetingModelResidency.endOperation(admission) }
         try self.requireStreamingProviderAvailable()
         guard self.modelDownloadTask == nil else {
             throw NSError(

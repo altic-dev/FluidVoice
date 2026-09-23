@@ -153,6 +153,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
     }
 
+    /// Check the whole track, including separators, before allocating its combined buffer.
+    nonisolated static func validateTrackSampleCount(current: Int, incoming: Int, separator: Int, spanID: String) throws {
+        let limit = MeetingEpochAudioMaterializer.conservativeSampleLimit
+        guard current >= 0, incoming >= 0, separator >= 0,
+              current <= limit, separator <= limit - current,
+              incoming <= limit - current - separator
+        else {
+            throw MeetingEpochMaterializationError.sampleLimitExceeded(spanID: spanID, sampleCount: limit + 1)
+        }
+    }
+
     private nonisolated static func runAttempt(
         request: MeetingBackendRequest,
         manifest: MeetingAnalysisManifest,
@@ -205,9 +216,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         result.failures[work.epoch.id] = "epochMaterializationFailed"
                         continue
                     }
+                    let separatorSamples = trackSamples.isEmpty ? 0 : Int(Self.epochJoinSilenceSeconds * materialized.sampleRate)
+                    try Self.validateTrackSampleCount(
+                        current: trackSamples.count,
+                        incoming: materialized.samples.count,
+                        separator: separatorSamples,
+                        spanID: work.spans.last?.id ?? "unknown"
+                    )
                     if !trackSamples.isEmpty {
                         // Silence keeps a turn from running across the reset boundary.
-                        trackSamples += [Float](repeating: 0, count: Int(Self.epochJoinSilenceSeconds * materialized.sampleRate))
+                        trackSamples += [Float](repeating: 0, count: separatorSamples)
                     }
                     pieces.append((work, materialized, trackSamples.count))
                     trackSamples += materialized.samples
