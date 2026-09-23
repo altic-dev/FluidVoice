@@ -359,6 +359,12 @@ final class CommandModeService: ObservableObject {
 
     /// Process user voice/text command
     func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         AnalyticsService.shared.recordUsage(
@@ -384,6 +390,12 @@ final class CommandModeService: ObservableObject {
 
     /// Process follow-up command from notch input
     func processFollowUpCommand(_ text: String) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         AnalyticsService.shared.recordUsage(
@@ -410,6 +422,12 @@ final class CommandModeService: ObservableObject {
 
     /// Execute pending command (after user confirmation)
     func confirmAndExecute() async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         guard let pending = pendingCommand else { return }
         self.pendingCommand = nil
         self.isProcessing = true

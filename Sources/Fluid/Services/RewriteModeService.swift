@@ -82,6 +82,12 @@ final class RewriteModeService: ObservableObject {
     }
 
     func processRewriteRequest(_ prompt: String) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         let startTime = Date()
         AnalyticsService.shared.recordUsage(
             mode: .edit,
@@ -148,6 +154,12 @@ final class RewriteModeService: ObservableObject {
 
     @MainActor
     func acceptRewrite(_ text: String) async {
+        guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            MeetingSummaryActivityCoordinator.presentBusyError()
+            return
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
+
         // The panel may clear its state before this queued action starts.
         guard !text.isEmpty else { return }
         NSApp.hide(nil)

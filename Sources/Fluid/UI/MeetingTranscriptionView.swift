@@ -211,7 +211,8 @@ struct MeetingTranscriptionView: View {
                         onRepairSetup: self.repairRecordingSetup,
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
-                        onCloseSelection: self.closeCanvasAction
+                        onCloseSelection: self.closeCanvasAction,
+                        summaryASRService: self.asrService
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -1283,6 +1284,8 @@ struct MeetingTranscriptionCanvas: View {
     let isRetrying: Bool
     let onCloseSelection: (() -> Void)?
 
+    var summaryASRService: ASRService? = nil
+
     @Environment(\.theme) private var theme
 
     /// Recording renders outside the ScrollView so the live captions card can fill the height;
@@ -1328,7 +1331,9 @@ struct MeetingTranscriptionCanvas: View {
                     recentSession: recentSession,
                     onStart: self.onStart,
                     onRepairSetup: self.onRepairSetup,
-                    onEditSetup: self.onEditSetup ?? self.onRepairSetup
+                    onEditSetup: self.onEditSetup ?? self.onRepairSetup,
+                    summaryASRService: self.summaryASRService,
+                    isQuiescent: self.isQuiescent
                 )
             case let .recording(session, trackHealth, liveTranscript):
                 MeetingRecordingCanvas(
@@ -1380,7 +1385,8 @@ struct MeetingTranscriptionCanvas: View {
                         onUndo: { self.onUndoCorrection(session.id) },
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
-                        onClose: self.onCloseSelection
+                        onClose: self.onCloseSelection,
+                        summaryASRService: self.summaryASRService
                     )
                 }
             case let .failed(session, message):
@@ -1937,6 +1943,8 @@ private struct MeetingSetupCanvas: View {
     let onStart: () -> Void
     let onRepairSetup: () -> Void
     let onEditSetup: () -> Void
+    var summaryASRService: ASRService? = nil
+    var isQuiescent = true
 
     @Environment(\.theme) private var theme
     @State private var documentSection = MeetingDocumentSection.transcript
@@ -2006,7 +2014,7 @@ private struct MeetingSetupCanvas: View {
             MeetingDocumentTabs(selection: self.$documentSection, primaryTitle: "Meeting home", primaryIcon: "house", isEnabled: !self.isStarting)
 
             if self.documentSection == .summary {
-                MeetingSummaryComingSoon()
+                MeetingSummaryView(asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
             } else {
                 self.recordingSetup
             }

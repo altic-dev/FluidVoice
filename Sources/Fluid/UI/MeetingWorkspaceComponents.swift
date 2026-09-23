@@ -100,18 +100,13 @@ struct MeetingDocumentTabs: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: icon)
                 Text(title)
-                if section == .summary {
-                    Text("Soon")
-                        .font(self.theme.typography.captionSmall)
-                        .opacity(0.7)
-                }
             }
             .font(self.theme.typography.bodySmallStrong)
             .frame(height: 20)
             .contentShape(Rectangle())
         }
         .buttonStyle(MeetingDocumentTabButtonStyle(isSelected: self.selection == section))
-        .accessibilityLabel(section == .summary ? "Meet Summary, coming soon" : title)
+        .accessibilityLabel(title)
         .accessibilityAddTraits(self.selection == section ? .isSelected : [])
     }
 }

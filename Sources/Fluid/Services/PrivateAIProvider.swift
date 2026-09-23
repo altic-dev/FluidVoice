@@ -156,6 +156,7 @@ struct PrivateAIRegisteredModel: Sendable, Codable, Hashable, Identifiable {
 }
 
 enum PrivateAIModelTask: String, Sendable, Codable, Hashable {
+    case meetingSummary
     case dictation
     case edit
     case command
@@ -275,6 +276,7 @@ protocol PrivateAIIntegrationProviding: Sendable {
         maxOutputTokens: Int,
         streamHandler: PrivateAIStreamHandler?
     ) async throws -> PrivateAIIntegrationService.EnhancementResult
+    func summarizeMeeting(_ transcript: String, style: String) async throws -> String
     func rewrite(
         _ inputText: String,
         systemPrompt: String,
@@ -284,6 +286,10 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    func summarizeMeeting(_: String, style _: String) async throws -> String {
+        throw PrivateAIUnavailableError()
+    }
+
     func residencySnapshot() async throws -> MeetingResidentModel? {
         // An older private bridge must not silently lose a loaded model on restoration.
         if let loaded = await self.loadedModelState(), loaded.state == .ready {

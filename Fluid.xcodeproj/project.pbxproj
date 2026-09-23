@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
+		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
+		AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */; };
 		AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */; };
@@ -156,6 +158,8 @@
 
 /* Begin PBXFileReference section */
 		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
+		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
+		AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryInputTests.swift; sourceTree = "<group>"; };
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
@@ -382,6 +386,8 @@
 				C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */,
 				FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */,
 				FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */,
+				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
+				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
 				E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */,
@@ -735,6 +741,8 @@
 				C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */,
 				FEA4AB111222333444555502 /* MeetingSpeakerVoiceMatcherTests.swift in Sources */,
 				FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */,
+				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
+				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
 				E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */,

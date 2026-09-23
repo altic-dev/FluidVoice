@@ -66,6 +66,21 @@ actor PrivateAIIntegrationService {
     }
     #endif
 
+    /// Called only inside the meeting residency scope, after other models are suspended.
+    static func summarizeMeeting(_ transcript: String, style: String) async throws -> String {
+        guard await MeetingModelResidencyCoordinator.shared.phase == .summary else {
+            throw MeetingModelResidencyError.staleGrant
+        }
+        do {
+            let output = try await provider.summarizeMeeting(transcript, style: style)
+            await Task { await self.provider.unloadCachedRuntime(reason: "meeting summary complete") }.value
+            return output
+        } catch {
+            await Task { await self.provider.unloadCachedRuntime(reason: "meeting summary ended") }.value
+            throw error
+        }
+    }
+
     private nonisolated static var provider: any PrivateAIIntegrationProviding {
         PrivateAIProviderFeature.shared.isAvailable
             ? PrivateAIProviderRegistry.integration
