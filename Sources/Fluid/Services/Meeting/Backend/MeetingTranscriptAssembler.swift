@@ -89,7 +89,7 @@ nonisolated struct MeetingAssemblyInput {
 
 nonisolated struct MeetingAssemblyResult: Equatable {
     /// Deterministic product speakers, minted only here, scoped by attempt + track + epoch +
-    /// token label. The same label on another track or epoch is a different speaker, always.
+    /// token label. Cross-epoch identity requires explicit voice matching; tracks never merge.
     let speakers: [MeetingSessionSpeaker]
     /// Emitted and ambiguous-admitted units, once each, in presentation order. Ambiguous text is
     /// one segment with a nil speaker and `.ambiguous` overlap; excluded units never appear.
@@ -314,17 +314,27 @@ nonisolated struct MeetingTranscriptAssembler {
         )
         // Ambiguous-admitted units produce a segment but mint no speaker: their candidates are
         // reported, never resolved into a product identity.
+        let visibleUnits = emitted.filter { dispositionByUnitID[$0.unit.id] == .emitted }
+        let visibleTokens = Set(visibleUnits.compactMap { item -> MeetingBackendSpeakerToken? in
+            guard case let .assigned(token) = item.unit.speaker else { return nil }
+            return token
+        })
+        let identityLinks = MeetingSpeakerVoiceMatcher.links(profiles: evidence.voiceProfiles, allowedTokens: visibleTokens)
         let speakers = self.makeSpeakers(
             attemptID: manifest.attemptID,
             manifest: manifest,
-            emitted: emitted.filter { dispositionByUnitID[$0.unit.id] == .emitted }
+            emitted: visibleUnits,
+            identityLinks: identityLinks
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
             uniquingKeysWith: { first, _ in first }
         )
+        // Word timestamps may tie. Preserve the backend's original word order, not the
+        // lexical unit ID order used for sidecars or the attempt-dependent segment UUID.
+        let sourceOffsets = Dictionary(uniqueKeysWithValues: evidence.units.enumerated().map { ($0.element.id, $0.offset) })
         let segments = emitted
-            .map { unit, presentation -> MeetingTranscriptSegment in
+            .map { unit, presentation -> (offset: Int, segment: MeetingTranscriptSegment) in
                 let disposition = dispositionByUnitID[unit.id]
                 let reasonCode = dispositionReasonByUnitID[unit.id] ?? nil
                 let isSpeakerAmbiguous = disposition == .ambiguousUnassigned
@@ -342,7 +352,7 @@ nonisolated struct MeetingTranscriptAssembler {
                     if isTimingUncertain { return .timingUncertain }
                     return speakerID != nil ? .assigned : .unassigned
                 }()
-                return MeetingTranscriptSegment(
+                let segment = MeetingTranscriptSegment(
                     id: Self.stableUUID("segment:\(manifest.attemptID.uuidString):\(unit.id)"),
                     start: Self.mediaTime(presentation.start),
                     end: Self.mediaTime(max(presentation.start, presentation.end)),
@@ -356,11 +366,13 @@ nonisolated struct MeetingTranscriptAssembler {
                     isLikelyEcho: nil,
                     attributionState: attributionState
                 )
+                return (sourceOffsets[unit.id] ?? 0, segment)
             }
             .sorted {
-                ($0.start, $0.end, $0.sourceTrackID.uuidString, $0.id.uuidString)
-                    < ($1.start, $1.end, $1.sourceTrackID.uuidString, $1.id.uuidString)
+                ($0.segment.start, $0.segment.end, $0.segment.sourceTrackID.uuidString, $0.offset)
+                    < ($1.segment.start, $1.segment.end, $1.segment.sourceTrackID.uuidString, $1.offset)
             }
+            .map(\.segment)
 
         let receiptGaps = self.receiptCoverageGaps(
             manifest: manifest, spansByID: spansByID, receipts: receipts
@@ -379,14 +391,16 @@ nonisolated struct MeetingTranscriptAssembler {
             analysisManifest: manifest,
             units: canonicalUnits,
             dispositions: dispositions,
-            coverageReceipts: receipts
+            coverageReceipts: receipts,
+            speakerIdentityLinks: identityLinks
         ).validated()
 
         let hasQuarantinedUnit = dispositions.contains {
             $0.disposition == .rejectedInvalidTiming
         }
+        var seenSpeakerIDs = Set<SessionSpeakerID>()
         return MeetingAssemblyResult(
-            speakers: speakers.map(\.speaker),
+            speakers: speakers.map(\.speaker).filter { seenSpeakerIDs.insert($0.id).inserted },
             segments: segments,
             sidecar: sidecar,
             skippedChunks: skippedChunks,
@@ -593,12 +607,13 @@ nonisolated struct MeetingTranscriptAssembler {
     // MARK: - Product speakers and segments
 
     /// Only the assembler mints product speaker IDs. The key is attempt + track + epoch + token
-    /// label, so the same backend label on another track or in another epoch never merges, and a
-    /// recomputed epoch never inherits an old speaker. You is never identified here.
+    /// label. Cross-epoch identity requires explicit voice evidence, never equality of slot
+    /// numbers. Recomputed attempts never inherit an old identity. You is never identified here.
     private func makeSpeakers(
         attemptID: UUID,
         manifest: MeetingAnalysisManifest,
-        emitted: [(unit: MeetingFinalTextUnit, presentation: MeetingAnalysisInterval)]
+        emitted: [(unit: MeetingFinalTextUnit, presentation: MeetingAnalysisInterval)],
+        identityLinks: [MeetingSpeakerIdentityLink]
     ) -> [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
@@ -610,16 +625,20 @@ nonisolated struct MeetingTranscriptAssembler {
             ($0.analysisEpochID.trackID.uuidString, $0.analysisEpochID.ordinal, $0.label)
                 < ($1.analysisEpochID.trackID.uuidString, $1.analysisEpochID.ordinal, $1.label)
         }
-        return tokens.enumerated().map { index, token in
-            let normalizedLabel = token.label.precomposedStringWithCanonicalMapping
-            let scopedClusterID = "\(token.analysisEpochID):\(normalizedLabel)"
+        let canonicalByToken = Dictionary(uniqueKeysWithValues: identityLinks.map { ($0.token, $0.canonicalToken) })
+        let ordinals = Dictionary(uniqueKeysWithValues: tokens.filter { canonicalByToken[$0] == nil }
+            .enumerated().map { ($0.element, $0.offset + 1) })
+        return tokens.map { token in
+            let canonical = canonicalByToken[token] ?? token
+            let normalizedLabel = canonical.label.precomposedStringWithCanonicalMapping
+            let scopedClusterID = "\(canonical.analysisEpochID):\(normalizedLabel)"
             return (
                 token,
                 MeetingSessionSpeaker(
                     id: Self.stableUUID(
                         "speaker:\(attemptID.uuidString):\(scopedClusterID)"
                     ),
-                    displayName: "Speaker \(index + 1)",
+                    displayName: "Speaker \(ordinals[canonical] ?? 1)",
                     diarizationClusterID: scopedClusterID,
                     trackKind: manifest.track(token.analysisEpochID.trackID)?.kind ?? .microphone,
                     isLocalUser: false,

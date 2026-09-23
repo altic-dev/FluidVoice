@@ -5,7 +5,7 @@ import Foundation
 // backend owns orchestration — per-epoch materialization, unit construction, slot assignment and
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
-// never merges speaker slots across tracks or epochs, and never invents timing: clamping happens
+// never equates speaker slots across tracks or epochs, and never invents timing: clamping happens
 // only at physical epoch bounds, and text without word timings becomes one epoch-covering
 // utterance rather than fabricated words.
 
@@ -13,7 +13,7 @@ import Foundation
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "3",
+        version: "4",
         execution: .local,
         supportedLanguageCodes: ["en"],
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -21,10 +21,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         resultContract: .canonicalEvidence,
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
-            "Speaker slots are epoch-scoped: no identity is merged across tracks or analysis epochs.",
+            "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
             "English only; the fixed Parakeet TDT v2 meeting policy rejects other requested options.",
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
-            "Local Nemotron model must be installed before planning; execute performs no downloads.",
+            "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
         analysisSampleRate: 16_000
     )
@@ -176,7 +176,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         // Phase A: Nemotron diarization, one fresh state per epoch, then drained.
         await progress(.identifyingSpeakers)
-        let phaseA = try await runtime.withNemotronDiarization(artifact: artifact) { factory in
+        var phaseA = try await runtime.withNemotronDiarization(artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
             for work in epochWork {
                 try Task.checkCancellation()
@@ -201,6 +201,14 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 do {
                     let diarizer = try await factory.makeDiarizer(epoch: work.epoch.id)
                     let segments = try await diarizer.diarize(samples: materialized.samples)
+                    if work.track.epochs.count > 1, result.voiceSamples.count < MeetingSpeakerVoiceSamples.maximumProfiles {
+                        let samples = MeetingSpeakerVoiceSamples.collect(
+                            epoch: work.epoch.id, samples: materialized.samples, segments: segments
+                        )
+                        result.voiceSamples.append(contentsOf: samples.prefix(
+                            MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count
+                        ))
+                    }
                     for segment in segments {
                         guard let start = Self.analysisTime(
                             forMaterializedSeconds: segment.start,
@@ -232,6 +240,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             }
             return result
         }
+        try Task.checkCancellation()
+
+        // Fresh diarizer slots remain independent evidence. Voice similarity is a separate,
+        // conservative identity signal; the assembler applies it only to visible speakers.
+        phaseA.voiceProfiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
+        phaseA.voiceSamples.removeAll()
         try Task.checkCancellation()
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
@@ -374,7 +388,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 backendID: .parakeetNemotron,
                 attemptID: request.attemptID,
                 units: units,
-                speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil }
+                speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
+                voiceProfiles: phaseA.voiceProfiles.filter { failures[$0.token.analysisEpochID] == nil }
             ),
             coverageReceipts: receipts
         )

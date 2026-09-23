@@ -45,6 +45,23 @@ final class BottomOverlayWindowController {
         self.window?.isVisible != true || self.window?.alphaValue == 0
     }
 
+    /// Drops the cached panel so a test can exercise the launch-time prepare path.
+    func destroyWindowForTests() {
+        self.pendingResizeWorkItem?.cancel()
+        self.pendingResizeWorkItem = nil
+        self.pendingIgnoreMouseWorkItem?.cancel()
+        self.pendingIgnoreMouseWorkItem = nil
+        self.audioSubscription?.cancel()
+        self.audioSubscription = nil
+        self.window?.orderOut(nil)
+        self.window = nil
+    }
+
+    var isParkedOffscreenForTests: Bool {
+        guard let window else { return false }
+        return !NSScreen.screens.contains { $0.frame.intersects(window.frame) }
+    }
+
     var windowSizeForTests: NSSize? {
         self.window?.frame.size
     }
@@ -70,6 +87,10 @@ final class BottomOverlayWindowController {
                 self.targetScreen = OverlayScreenResolver.screenForCurrentPointer()
                 if NotchContentState.shared.isBottomOverlayPresented {
                     self.positionWindow()
+                } else {
+                    // macOS drags fully offscreen windows back onto a screen
+                    // after a display change (login, wake, monitor plug).
+                    self.parkWindowOffscreen()
                 }
             }
         }
@@ -83,8 +104,10 @@ final class BottomOverlayWindowController {
         self.targetScreen = OverlayScreenResolver.screenForCurrentPointer()
         guard let window else { return }
 
+        // Alpha 0 like a completed hide: if a later display change pulls the
+        // parked panel back onto a screen, it must stay invisible.
         self.parkWindowOffscreen()
-        window.alphaValue = 1
+        window.alphaValue = 0
         window.orderFrontRegardless()
         CATransaction.flush()
         Self.overlayBench("bottom_prepared")

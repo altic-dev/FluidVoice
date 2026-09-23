@@ -88,10 +88,11 @@ nonisolated protocol MeetingEpochAudioMaterializing: Sendable {
 }
 
 nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing {
-    /// 64M mono Float32 samples is about 256 MiB, enough for a one-hour two-track pre-production
-    /// meeting while still preventing an accidental unbounded allocation. Replace with a scoped
-    /// immutable disk working store before production retention requirements grow further.
-    static let conservativeSampleLimit = 64 * 1024 * 1024
+    /// 256M mono Float32 samples occupies 1 GiB, allowing about 140 minutes across two
+    /// continuous 16 kHz tracks. This bounds retained PCM, not total process memory: decoding
+    /// and conversion need additional buffers. Replace with a scoped immutable disk working
+    /// store before production retention requirements grow further.
+    static let conservativeSampleLimit = 256 * 1024 * 1024
     let sampleRate: Double
 
     init(sampleRate: Double = 16_000) {
@@ -120,7 +121,10 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
             guard let span = spansByID[spanID] else {
                 throw MeetingEpochMaterializationError.unknownSpan(spanID: spanID)
             }
-            try sourceSlices.append(self.readSpanAudio(span, sessionDirectory: sessionDirectory))
+            let slice = try autoreleasepool {
+                try self.readSpanAudio(span, sessionDirectory: sessionDirectory)
+            }
+            sourceSlices.append(slice)
         }
 
         var samples: [Float] = []
@@ -135,7 +139,9 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
                 runEnd += 1
             }
             let run = Array(sourceSlices[runStart..<runEnd])
-            let converted = try self.convert(run)
+            let converted = try autoreleasepool {
+                try self.convert(run)
+            }
             guard samples.count + converted.samples.count <= Self.conservativeSampleLimit else {
                 throw MeetingEpochMaterializationError.sampleLimitExceeded(
                     spanID: run.last?.spanID ?? "unknown",
@@ -203,15 +209,20 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
         else {
             throw MeetingEpochMaterializationError.emptySlice(spanID: run.first?.spanID ?? "unknown")
         }
-        let values = run.flatMap(\.samples)
-        buffer.frameLength = AVAudioFrameCount(values.count)
+        buffer.frameLength = buffer.frameCapacity
         guard let destination = buffer.floatChannelData?[0] else {
             throw MeetingEpochMaterializationError.emptySlice(spanID: first.spanID)
         }
-        values.withUnsafeBufferPointer { source in
-            // Buffer size and channel topology are validated before this synchronous C call.
-            // swiftlint:disable:next force_unwrapping
-            destination.update(from: source.baseAddress!, count: source.count)
+        // Copy directly into the converter input. Flattening first retained another entire
+        // native-rate recording alongside the slices and this PCM buffer.
+        var offset = 0
+        for slice in run {
+            slice.samples.withUnsafeBufferPointer { source in
+                if let base = source.baseAddress {
+                    destination.advanced(by: offset).update(from: base, count: source.count)
+                }
+            }
+            offset += slice.samples.count
         }
         do {
             return try ConvertedRun(samples: AudioBufferConverter.monoSamples(
@@ -293,16 +304,16 @@ nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing
             throw MeetingEpochMaterializationError.unreadable(spanID: span.id)
         }
         file.framePosition = startFrame
-        // `AVAudioFile` may return fewer frames than requested even before EOF. Read into fresh
-        // buffers and append explicitly; reading repeatedly into the same PCM buffer overwrites
-        // its prior contents rather than extending them.
+        // Reuse one bounded read buffer and copy each returned block into its final position.
+        // AVAudioFile can return short reads; never assume a read filled the requested frames.
+        guard let part = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: min(frameCount, 32_768)) else {
+            throw MeetingEpochMaterializationError.unreadable(spanID: span.id)
+        }
         var framesRead: AVAudioFrameCount = 0
         while framesRead < frameCount {
             try Task.checkCancellation()
-            let requested = min(frameCount - framesRead, 32_768)
-            guard let part = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: requested) else {
-                throw MeetingEpochMaterializationError.unreadable(spanID: span.id)
-            }
+            let requested = min(frameCount - framesRead, part.frameCapacity)
+            part.frameLength = 0
             do {
                 try file.read(into: part, frameCount: requested)
             } catch {

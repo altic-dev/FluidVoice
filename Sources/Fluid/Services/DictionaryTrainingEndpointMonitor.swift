@@ -28,6 +28,46 @@ final class DictionaryTrainingEndpointMonitor {
 
     private init() {}
 
+    func meetingResidencyParticipant() -> MeetingModelParticipant {
+        MeetingModelParticipant(
+            owner: "dictionary-vad",
+            snapshot: {
+                let generation = DictionaryMatcherExperiment.generation
+                guard let resident = await self.detector.residencySnapshot() else { return nil }
+                return MeetingResidentModel(id: resident.id, configuration: generation)
+            },
+            suspend: {
+                self.stop()
+                await self.detector.unloadForMeeting()
+            },
+            restore: { snapshot in
+                _ = try await Self.prepareIfCurrent(
+                    expectedGeneration: snapshot.configuration,
+                    prepare: { try await self.detector.prepare() },
+                    unload: { await self.detector.unloadForMeeting() }
+                )
+            }
+        )
+    }
+
+    /// Eligibility must survive the actual load. Disabling and re-enabling changes the
+    /// generation, so neither an old snapshot nor a late model completion can revive it.
+    static func prepareIfCurrent(
+        expectedGeneration: String,
+        isEnabled: () -> Bool = { DictionaryMatcherExperiment.sharedFeaturesEnabled },
+        generation: () -> String = { DictionaryMatcherExperiment.generation },
+        prepare: () async throws -> Void,
+        unload: () async -> Void
+    ) async throws -> Bool {
+        guard isEnabled(), generation() == expectedGeneration, !Task.isCancelled else { return false }
+        try await prepare()
+        guard isEnabled(), generation() == expectedGeneration, !Task.isCancelled else {
+            await unload()
+            return false
+        }
+        return true
+    }
+
     func prepare() async {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
         let generation = DictionaryMatcherExperiment.generation

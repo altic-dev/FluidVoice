@@ -283,10 +283,14 @@ nonisolated struct MeetingAnalysisManifestBuilder {
         let decoded = observed.decoded
         let priming = decoded.primingSeconds ?? 0
         let availableRecordedEnd = chunkInterval.start + max(0, decoded.durationSeconds - priming)
-        let spanRecordedEnd = min(piece.end, availableRecordedEnd)
+        // A sub-sample clock mismatch must not become a gap that erases speaker memory.
+        // Account for the complete recorded piece, but feed only physically backed samples.
+        let tailTolerance = MeetingAnalysisManifestSchema.decodedTailToleranceSeconds(sampleRate: decoded.sampleRate)
+        let spanRecordedEnd = piece.end - availableRecordedEnd <= tailTolerance
+            ? piece.end : min(piece.end, availableRecordedEnd)
         let spanPiece = MeetingAnalysisInterval(start: piece.start, end: spanRecordedEnd)
         let sourceStart = priming + (spanPiece.start - chunkInterval.start)
-        let sourceEnd = priming + (spanPiece.end - chunkInterval.start)
+        let sourceEnd = min(decoded.durationSeconds, priming + (spanPiece.end - chunkInterval.start))
         guard sourceEnd - sourceStart > tolerance, sourceStart >= 0 else {
             self.appendGap(
                 identity: identity,

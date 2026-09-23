@@ -42,6 +42,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
     private var microphoneSubmenu: NSMenu?
+    private var startMeetingRecordingMenuItem: NSMenuItem?
+    private(set) var meetingStartRequested = false
+    private(set) var meetingStartError: String?
     private var stopMeetingRecordingMenuItem: NSMenuItem?
     private var meetingStatusMenuItem: NSMenuItem?
     private var openMeetingTranscriptionMenuItem: NSMenuItem?
@@ -260,6 +263,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         case .idle:
             self.meetingMenuPresentation = MeetingMenuPresentation()
         case .preparing:
+            self.meetingStartError = nil
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .preparing,
                 sourceName: activeSession?.capturedApplication?.displayName,
@@ -913,6 +917,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         menu.removeAllItems()
 
+        let startMeetingItem = NSMenuItem(
+            title: "Start Meeting Recording",
+            action: #selector(startMeetingRecording),
+            keyEquivalent: ""
+        )
+        startMeetingItem.target = self
+        menu.addItem(startMeetingItem)
+        self.startMeetingRecordingMenuItem = startMeetingItem
+
         let stopMeetingItem = NSMenuItem(
             title: "Stop Meeting Recording",
             action: #selector(stopMeetingRecording),
@@ -1060,10 +1073,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     private func updateMeetingMenuItemsText(now: Date = Date()) {
         let activity = self.meetingMenuPresentation.activity
-        let hasMeetingStatus = activity != .inactive
+        let hasMeetingStatus = activity != .inactive || self.meetingStartError != nil
         let isRecording = activity == .recording
         let isStopping = activity == .stopping || self.meetingStopRequested
 
+        self.startMeetingRecordingMenuItem?.isHidden = !self.canStartMeetingRecording && !self.meetingStartRequested
+        self.startMeetingRecordingMenuItem?.isEnabled = self.canStartMeetingRecording &&
+            !self.meetingStartRequested && self.meetingCoordinator != nil
+        self.startMeetingRecordingMenuItem?.title = self.meetingStartRequested
+            ? "Starting Meeting Recording…" : "Start Meeting Recording"
         self.stopMeetingRecordingMenuItem?.isHidden = !isRecording && !isStopping
         self.stopMeetingRecordingMenuItem?.isEnabled = isRecording &&
             !self.meetingStopRequested &&
@@ -1073,11 +1091,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             : "Stop Meeting Recording"
         self.meetingStatusMenuItem?.isHidden = !hasMeetingStatus || activity == .completed
         self.openMeetingTranscriptionMenuItem?.isHidden = !hasMeetingStatus
-        self.meetingMenuSeparator?.isHidden = !hasMeetingStatus
+        self.meetingMenuSeparator?.isHidden = false
 
         switch activity {
         case .inactive:
-            break
+            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
         case .preparing:
             self.meetingStatusMenuItem?.title = "Starting meeting recording…"
             self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
@@ -1100,6 +1118,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
         case .completed:
             self.openMeetingTranscriptionMenuItem?.title = "Open Latest Meeting Transcript"
+        }
+        if let error = self.meetingStartError {
+            self.meetingStatusMenuItem?.isHidden = false
+            self.meetingStatusMenuItem?.title = "Could not start: \(error)"
+            self.meetingStatusMenuItem?.toolTip = error
+        } else {
+            self.meetingStatusMenuItem?.toolTip = nil
         }
     }
 
@@ -1431,6 +1456,43 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     @objc private func openMeetingTranscription() {
         self.openNavigationDestination(.meetingTranscription)
+    }
+
+    private var canStartMeetingRecording: Bool {
+        switch self.meetingMenuPresentation.activity {
+        case .inactive, .completed, .interrupted, .failed:
+            return true
+        case .preparing, .recording, .stopping, .processing:
+            return false
+        }
+    }
+
+    @objc private func startMeetingRecording() {
+        Task { @MainActor in
+            await self.startMeetingRecordingInBackground {
+                try await AppServices.shared.startMeetingRecordingFromMenuBar()
+            }
+        }
+    }
+
+    /// Keep source discovery and permission waits inside the duplicate-click guard.
+    /// Errors stay in the menu; starting must never request main-window navigation.
+    func startMeetingRecordingInBackground(using operation: () async throws -> Void) async {
+        guard self.canStartMeetingRecording, !self.meetingStartRequested else { return }
+        self.meetingStartRequested = true
+        self.meetingStartError = nil
+        self.updateMeetingMenuItemsText()
+        defer {
+            self.meetingStartRequested = false
+            self.updateMeetingMenuItemsText()
+        }
+        do {
+            try await operation()
+        } catch {
+            self.meetingStartError = error.localizedDescription
+            DebugLogger.shared.error("Menu action: Start meeting recording failed: \(error.localizedDescription)", source: "MenuBarManager")
+            AccessibilityNotification.Announcement("Meeting recording could not start. \(error.localizedDescription)").post()
+        }
     }
 
     @objc private func stopMeetingRecording() {

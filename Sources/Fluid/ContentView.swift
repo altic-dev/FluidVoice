@@ -4501,7 +4501,9 @@ struct ContentView: View {
         }
 
         // Pre-load model in background while recording (avoids 10s freeze on stop)
+        let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         Task {
+            guard MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             do {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
                 try await self.asr.ensureAsrReady()
@@ -4541,7 +4543,9 @@ struct ContentView: View {
         // Cancel any prior prewarm so rapid start/stop doesn't queue duplicate
         // actor work on PrivateAIIntegrationService.
         self.prewarmDictationTask?.cancel()
+        let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         self.prewarmDictationTask = Task {
+            guard !Task.isCancelled, MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             DebugLogger.shared.debug(
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"

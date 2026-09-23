@@ -618,6 +618,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 XCTFail("Canonical dispatch must not reach ASR readiness")
                 return ASRService()
             },
+            managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
             chunkObserver: FixtureObserver(results: fixture.observations),
@@ -651,6 +652,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 XCTFail("Canonical dispatch must not reach ASR readiness")
                 return ASRService()
             },
+            managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: compositeRegistry,
             chunkObserver: FixtureObserver(results: fixture.observations),
@@ -714,6 +716,13 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(micEpochs.count, 2, "the 3-second chunk gap must reset the mic epoch")
         XCTAssertEqual(appEpochs.count, 1)
 
+        let embedding = [Float](repeating: 0.0625, count: 256)
+        runtime.voiceProfiles = micEpochs.enumerated().map { index, epoch in
+            MeetingSpeakerVoiceProfile(
+                token: .init(analysisEpochID: epoch.id, label: "slot-\(index)"), embeddings: [embedding, embedding]
+            )
+        }
+
         runtime.diarizerFactory.segmentsByEpoch = [
             micEpochs[0].id: [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0.2, end: 1.0)],
             micEpochs[1].id: [MeetingNemotronSpeakerSegment(slotIndex: 1, start: 0.0, end: 1.0)],
@@ -773,13 +782,17 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             manifest: manifest,
             plan: plan
         )
-        _ = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+        let assembled = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
             evidence: bundle.evidence,
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: verdicts
         ))
+        XCTAssertEqual(bundle.evidence.voiceProfiles, runtime.voiceProfiles)
+        XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .microphone }.count, 1)
+        XCTAssertEqual(assembled.speakers.filter { $0.trackKind == .applicationAudio }.count, 1)
+        XCTAssertEqual(assembled.sidecar.speakerIdentityLinks.count, 1)
     }
 
     func testPCMFirstEpochMaterializesOnceForBothModelPhases() async throws {
@@ -1304,6 +1317,19 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
+    func testVoiceEncoderFailureAndCancellationDoNotStartASROrPublishEvidence() async throws {
+        for error in [CancellationError(), NSError(domain: "voice-model-test", code: 1)] as [Error] {
+            let fixture = self.makeTwoEpochFixture()
+            let runtime = FakeRuntime()
+            runtime.voiceError = error
+            let (backend, plan, manifest) = try await self.plannedManifest(fixture: fixture, runtime: runtime)
+            await XCTAssertAsyncThrowsError(try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })) { received in
+                XCTAssertEqual(received is CancellationError, error is CancellationError)
+            }
+            XCTAssertTrue(runtime.asrAttemptIDs.isEmpty)
+        }
+    }
+
     // MARK: - Helpers
 }
 
@@ -1381,9 +1407,16 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
 private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @unchecked Sendable {
     let diarizerFactory = FakeDiarizerFactory()
     let asrSession = FakeASRSession()
+    var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
+    var voiceError: Error?
     private(set) var diarizationScopeCount = 0
     private(set) var asrAttemptIDs: [UUID] = []
     private(set) var asrConfigurations: [MeetingFinalProcessingConfiguration] = []
+
+    func speakerVoiceProfiles(samples _: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        if let voiceError { throw voiceError }
+        return self.voiceProfiles
+    }
 
     func withNemotronDiarization(
         artifact _: MeetingNemotronModelArtifact,

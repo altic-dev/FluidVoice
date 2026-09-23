@@ -314,3 +314,139 @@ final class PrivateAIDictationTokenBudgetTests: XCTestCase {
         )
     }
 }
+
+final class PrivateAIResidencyEvidenceTests: XCTestCase {
+    func testExplicitNonReadyStatusClearsOnlyMatchingRuntimeEvidence() {
+        var state = PrivateAIConfirmedResidency()
+        let original = state.generation
+        state.confirm(generation: original)
+        state.observe(isResident: false, generation: original)
+        XCTAssertFalse(state.isResident, "A configured or failed helper is no longer confirmed loaded")
+        state.reset()
+        state.confirm(generation: state.generation)
+        state.observe(isResident: false, generation: original)
+        XCTAssertTrue(state.isResident, "Late status from a retired helper cannot clear its replacement")
+        state.observe(isResident: false, generation: state.generation)
+        XCTAssertFalse(state.isResident)
+    }
+
+    func testConfiguredClientIsNotResidentAndRetiredCompletionCannotRestoreIt() {
+        var state = PrivateAIConfirmedResidency()
+        XCTAssertFalse(state.isResident)
+        let original = state.generation
+        state.confirm(generation: original)
+        XCTAssertTrue(state.isResident)
+        state.reset()
+        XCTAssertFalse(state.isResident)
+        state.confirm(generation: original)
+        XCTAssertFalse(state.isResident)
+        state.confirm(generation: state.generation)
+        XCTAssertTrue(state.isResident)
+    }
+}
+
+#if PRIVATE_AI_PROVIDER && canImport(FluidIntelligence)
+import FluidIntelligence
+
+private actor ResidencyDrainTestClient: FluidIntelligenceClient {
+    let delay: Duration
+    private(set) var shutdowns = 0
+    private(set) var statusCalls = 0
+    init(delay: Duration = .zero) { self.delay = delay }
+    func capabilities() -> FluidIntelligenceCapabilities {
+        FluidIntelligenceCapabilities(isAvailable: false, supportedTasks: [], backendKind: nil)
+    }
+
+    func status() -> FluidIntelligenceStatus {
+        self.statusCalls += 1
+        return FluidIntelligenceStatus(state: .ready, message: nil)
+    }
+
+    func warmUp() {}
+    func run(_: FluidIntelligenceRequest) throws -> FluidIntelligenceResponse { throw CancellationError() }
+    func shutdown() async {
+        self.shutdowns += 1
+        try? await Task.sleep(for: self.delay)
+    }
+}
+
+final class PrivateAIRuntimeDrainTests: XCTestCase {
+    func testConcurrentReplacementJoinsDrainAndReusesOneClient() async throws {
+        let runtime = FluidPrivateAIRuntime()
+        let old = ResidencyDrainTestClient(delay: .milliseconds(150))
+        let replacement = ResidencyDrainTestClient()
+        let unexpected = ResidencyDrainTestClient()
+        let (_, originalGeneration) = try await runtime.testingResolveClient(runtime: self.configuration("old")) { old }
+        await runtime.testingConfirmResidency(generation: originalGeneration)
+        async let first = runtime.testingResolveClient(runtime: self.configuration("new")) { replacement }
+        // Wait for actual drain entry, with a bounded failure exit.
+        for _ in 0..<100 {
+            if await old.shutdowns > 0 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let shutdowns = await old.shutdowns
+        XCTAssertEqual(shutdowns, 1)
+        async let second = runtime.testingResolveClient(runtime: self.configuration("new")) { unexpected }
+        let (one, two) = try await (first, second)
+        XCTAssertEqual(one.1, two.1, "Both callers must receive the same owned client generation")
+        let drainedSnapshot = await runtime.residencySnapshot()
+        XCTAssertNil(drainedSnapshot, "Creating a replacement does not load it")
+        let configuredState = await runtime.loadedModelState()
+        XCTAssertEqual(configuredState?.state, .configured)
+        await runtime.testingConfirmResidency(generation: originalGeneration)
+        let staleSnapshot = await runtime.residencySnapshot()
+        XCTAssertNil(staleSnapshot)
+        await runtime.testingConfirmResidency(generation: one.1)
+        let snapshot = await runtime.residencySnapshot()
+        XCTAssertEqual(snapshot?.id, "new")
+        let loadedState = await runtime.loadedModelState()
+        XCTAssertEqual(loadedState?.state, .ready)
+        XCTAssertEqual(loadedState?.modelID, "new")
+        let calls = await replacement.statusCalls
+        let otherCalls = await unexpected.statusCalls
+        XCTAssertEqual(calls + otherCalls, 0, "Neither residency snapshots nor UI loaded-state reads may send status IPC")
+        await runtime.unloadCachedRuntime(reason: "test")
+        let unloadedState = await runtime.loadedModelState()
+        XCTAssertNil(unloadedState)
+        let replacementShutdowns = await replacement.shutdowns
+        let unexpectedShutdowns = await unexpected.shutdowns
+        XCTAssertEqual(replacementShutdowns + unexpectedShutdowns, 1, "Exactly one replacement may be installed and drained")
+    }
+
+    func testCancelledReplacementJoinsDrainWithoutCreatingNewRuntime() async throws {
+        let runtime = FluidPrivateAIRuntime()
+        let old = ResidencyDrainTestClient(delay: .milliseconds(100))
+        _ = try await runtime.testingResolveClient(runtime: self.configuration("old")) { old }
+        let cancelled = Task {
+            try await runtime.testingResolveClient(runtime: self.configuration("new")) {
+                XCTFail("Cancelled replacement must not create another client")
+                return ResidencyDrainTestClient()
+            }
+        }
+        for _ in 0..<100 {
+            if await old.shutdowns > 0 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("Expected cancellation") } catch is CancellationError {} catch { XCTFail("Unexpected: \(error)") }
+        let snapshot = await runtime.residencySnapshot()
+        XCTAssertNil(snapshot)
+        let shutdowns = await old.shutdowns
+        XCTAssertEqual(shutdowns, 1)
+    }
+
+    private func configuration(_ id: String) -> PrivateAIIntegrationService.RuntimeConfiguration {
+        .init(
+            selectedProviderID: "test",
+            providerKey: "test",
+            baseURL: "",
+            model: id,
+            apiKey: "",
+            localModelPath: nil,
+            usesStablePromptPrefixKVCache: false,
+            usesFluid1Boost: false,
+            contextTokenLimit: 4096
+        )
+    }
+}
+#endif

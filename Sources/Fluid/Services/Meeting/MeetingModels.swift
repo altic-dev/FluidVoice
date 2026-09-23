@@ -888,6 +888,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Canonical transcript completeness. `nil` for older and legacy sessions whose existing
     /// completeness semantics remain unchanged.
     var transcriptIsComplete: Bool? = nil
+    var postProcessing: MeetingPostProcessingArtifact? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -1309,7 +1310,8 @@ nonisolated struct MeetingCaptureStopResult: Sendable {
     var stoppedAt: Date
 }
 
-nonisolated struct MeetingProcessingResult: Sendable {
+nonisolated struct MeetingProcessingResult: Codable, Sendable {
+    var postProcessing: MeetingPostProcessingArtifact? = nil
     var speakers: [MeetingSessionSpeaker]
     var segments: [MeetingTranscriptSegment]
     var attempt: MeetingProcessingAttempt

@@ -14,10 +14,6 @@ final class MeetingRecordingPillController: ObservableObject {
 
     // swiftlint:disable:next strict_fileprivate
     fileprivate static let overlayPadding = MeetingOverlayPadding.uniform(24)
-    private static let legacyAutosaveName = "MeetingRecordingPill"
-    private static let anchorCenterXKey = "MeetingRecordingOverlay.visibleAnchor.centerX"
-    private static let anchorBottomYKey = "MeetingRecordingOverlay.visibleAnchor.bottomY"
-    private static let defaultBottomInset: CGFloat = 64
     private static let morphDuration: TimeInterval = 0.55
 
     private var panel: MeetingFloatingCaptionsPanel?
@@ -82,6 +78,11 @@ final class MeetingRecordingPillController: ObservableObject {
     /// `.pill` is the small capsule; `.captions` is the separate scrollable, resizable window.
     /// Exactly one of them is on screen while recording.
     private func show(coordinator: MeetingSessionCoordinator, resetFrameToPresentation: Bool) {
+        // Resolve the first frame before showing the cached panel. A drag belongs to this
+        // meeting only; an old panel frame or saved position must not pick the next screen.
+        if resetFrameToPresentation {
+            self.visibleAnchor = self.defaultAnchor()
+        }
         let panel = self.panelOrCreate(coordinator: coordinator)
         if resetFrameToPresentation {
             self.applyFrame(for: .pill, animated: false)
@@ -155,7 +156,6 @@ final class MeetingRecordingPillController: ObservableObject {
                 panel.animator().setFrame(layout.panelFrame, display: true)
             }
             self.isApplyingProgrammaticFrame = false
-            self.persistAnchor()
             return
         }
 
@@ -171,7 +171,6 @@ final class MeetingRecordingPillController: ObservableObject {
                 self.inFlightTransitionGeneration = nil
                 if let panel = self.panel {
                     self.captureAnchor(from: panel)
-                    self.persistAnchor()
                 }
             }
         }
@@ -188,7 +187,7 @@ final class MeetingRecordingPillController: ObservableObject {
 
         let presentation = self.presentation
         if self.visibleAnchor == nil {
-            self.visibleAnchor = self.loadPersistedAnchor() ?? self.defaultAnchor()
+            self.visibleAnchor = self.defaultAnchor()
         }
         let anchor = self.resolvedAnchor(for: nil)
         let screenVisible = self.screenVisibleFrame(for: anchor, panel: nil)
@@ -211,12 +210,6 @@ final class MeetingRecordingPillController: ObservableObject {
             overlayHitPadding: Self.overlayPadding
         )
 
-        if self.loadPersistedAnchor() == nil, panel.setFrameUsingName(Self.legacyAutosaveName) {
-            let restored = panel.frame
-            self.visibleAnchor = MeetingOverlayVisibleAnchor(centerX: restored.midX, bottomY: restored.minY)
-            self.persistAnchor()
-        }
-
         self.panel = panel
         self.applyFrame(for: presentation, animated: false)
         self.installWindowMoveObserverIfNeeded(for: panel)
@@ -227,9 +220,10 @@ final class MeetingRecordingPillController: ObservableObject {
     private func defaultAnchor() -> MeetingOverlayVisibleAnchor {
         let screen = OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        return MeetingOverlayVisibleAnchor(
-            centerX: visible.midX,
-            bottomY: visible.minY + Self.defaultBottomInset
+        return MeetingOverlayGeometry.initialPillAnchor(
+            screenFrame: screen?.frame ?? visible,
+            screenVisible: visible,
+            bottomOffset: CGFloat(SettingsStore.shared.overlayBottomOffset)
         )
     }
 
@@ -242,14 +236,11 @@ final class MeetingRecordingPillController: ObservableObject {
     }
 
     private func screenVisibleFrame(for anchor: MeetingOverlayVisibleAnchor, panel: NSPanel?) -> CGRect {
-        if let panel, let screen = panel.screen {
-            return screen.visibleFrame
-        }
         let point = NSPoint(x: anchor.centerX, y: anchor.bottomY)
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) || $0.visibleFrame.contains(point) }) {
             return screen.visibleFrame
         }
-        return (OverlayScreenResolver.screenForCurrentPointer() ?? NSScreen.main)?.visibleFrame ?? .zero
+        return (OverlayScreenResolver.screenForCurrentPointer() ?? panel?.screen ?? NSScreen.main)?.visibleFrame ?? .zero
     }
 
     private static func visibleSurfaceFrame(from panelFrame: CGRect) -> CGRect {
@@ -270,24 +261,6 @@ final class MeetingRecordingPillController: ObservableObject {
         self.visibleAnchor = self.anchor(from: Self.visibleSurfaceFrame(from: panel.frame))
     }
 
-    private func loadPersistedAnchor() -> MeetingOverlayVisibleAnchor? {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: Self.anchorCenterXKey) != nil,
-              defaults.object(forKey: Self.anchorBottomYKey) != nil
-        else { return nil }
-        return MeetingOverlayVisibleAnchor(
-            centerX: CGFloat(defaults.double(forKey: Self.anchorCenterXKey)),
-            bottomY: CGFloat(defaults.double(forKey: Self.anchorBottomYKey))
-        )
-    }
-
-    private func persistAnchor() {
-        guard let visibleAnchor else { return }
-        let defaults = UserDefaults.standard
-        defaults.set(Double(visibleAnchor.centerX), forKey: Self.anchorCenterXKey)
-        defaults.set(Double(visibleAnchor.bottomY), forKey: Self.anchorBottomYKey)
-    }
-
     private func installWindowMoveObserverIfNeeded(for panel: NSPanel) {
         guard self.windowMoveObserver == nil else { return }
         self.windowMoveObserver = NotificationCenter.default.addObserver(
@@ -298,7 +271,6 @@ final class MeetingRecordingPillController: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, !self.isApplyingProgrammaticFrame, let panel = self.panel else { return }
                 self.captureAnchor(from: panel)
-                self.persistAnchor()
             }
         }
     }

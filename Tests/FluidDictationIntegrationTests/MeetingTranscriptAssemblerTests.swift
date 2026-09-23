@@ -351,6 +351,30 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertNotEqual(result.speakers[0].id, result.speakers[1].id)
         XCTAssertEqual(Set(result.speakers.compactMap(\.diarizationClusterID)).count, 2)
         XCTAssertEqual(Set(result.segments.compactMap(\.speakerID)).count, 2)
+        let embedding = [Float](repeating: 0.0625, count: 256)
+        let profiles = spans.map {
+            MeetingSpeakerVoiceProfile(
+                token: .init(analysisEpochID: $0.analysisEpochID, label: "slot-0"),
+                embeddings: [embedding, embedding]
+            )
+        }
+        let matched = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: MeetingFinalTranscriptEvidence(
+                backendID: plan.backendID, attemptID: plan.attemptID, units: units, voiceProfiles: profiles
+            ),
+            coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho]
+        ))
+        XCTAssertEqual(matched.speakers.count, 1)
+        XCTAssertEqual(Set(matched.segments.compactMap(\.speakerID)).count, 1)
+        XCTAssertEqual(matched.segments.map(\.text), result.segments.map(\.text))
+        XCTAssertEqual(matched.segments.map(\.start), result.segments.map(\.start))
+        XCTAssertEqual(matched.coverageGaps, result.coverageGaps)
+        XCTAssertEqual(matched.sidecar.speakerIdentityLinks.count, 1)
+        let decoded = try JSONDecoder().decode(MeetingResultSidecar.self, from: JSONEncoder().encode(matched.sidecar))
+        XCTAssertEqual(try decoded.validated(), matched.sidecar)
     }
 
     // MARK: - Mapping

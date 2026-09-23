@@ -1324,6 +1324,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let languagePin: MeetingProviderLanguagePin
     }
 
+    private let managesModelResidency: Bool
     private let asrServiceProvider: @MainActor () -> ASRService
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
@@ -1344,6 +1345,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
     init(
         asrServiceProvider: @escaping @MainActor () -> ASRService,
+        managesModelResidency: Bool = true,
         serializationGate: MeetingProcessingSerializationGate = .shared,
         backendRegistry: MeetingTranscriptionBackendRegistry? = nil,
         backendID: MeetingBackendID? = nil,
@@ -1354,6 +1356,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
+        self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
         self.echoVerdictProvider = echoVerdictProvider
@@ -1455,27 +1458,53 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             // Cancellation that landed while this attempt waited for the lease must not start model
             // work: the lease can be held for a long time, and the caller has already moved on.
             try Task.checkCancellation()
-            switch plan.resultContract {
-            case .legacyResult:
-                // No manifest is built and no sidecar is written on this path: the legacy
-                // workflow keeps its own mapping, checkpoints and byte-identical output.
-                let outcome = try await backend.execute(plan: plan, manifest: nil, progress: progress)
-                // A backend that does not cooperate with cancellation still must not publish. The
-                // caller's generation owns publication and has already been torn down, so a
-                // successful result arriving after cancellation is suppressed rather than returned.
-                try Task.checkCancellation()
-                guard case let .legacyCompatibility(legacyResult) = outcome else {
-                    throw MeetingBackendError.outcomeContractMismatch(
-                        backend: backendID, declared: .legacyResult
+            let summaryProvider = MeetingPostProcessingRegistry.shared.provider
+            let execute: () async throws -> MeetingProcessingResult = {
+                var processed: MeetingProcessingResult
+                switch plan.resultContract {
+                case .legacyResult:
+                    let legacyWork: () async throws -> MeetingProcessingResult = {
+                        let outcome = try await backend.execute(plan: plan, manifest: nil, progress: progress)
+                        try Task.checkCancellation()
+                        guard case let .legacyCompatibility(value) = outcome else {
+                            throw MeetingBackendError.outcomeContractMismatch(backend: backendID, declared: .legacyResult)
+                        }
+                        return value
+                    }
+                    if self.managesModelResidency {
+                        let service = self.asrServiceProvider()
+                        do {
+                            processed = try await MeetingModelResidencyCoordinator.shared.withLegacySpeechModel(
+                                modelID: SettingsStore.shared.selectedSpeechModel.id, work: legacyWork
+                            )
+                        } catch {
+                            await Task { try? await service.meetingResidencyParticipant().suspend() }.value
+                            throw error
+                        }
+                        try await service.meetingResidencyParticipant().suspend()
+                    } else {
+                        processed = try await legacyWork()
+                    }
+                case .canonicalEvidence:
+                    processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
+                }
+                if self.managesModelResidency, summaryProvider != nil {
+                    processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
+                        sessionID: session.id,
+                        language: session.languageCode,
+                        result: processed,
+                        directory: sessionDirectory,
+                        provider: summaryProvider
                     )
                 }
-                result = legacyResult
-            case .canonicalEvidence:
-                result = try await self.processCanonicalAttempt(
-                    plan: plan,
-                    backend: backend,
-                    progress: progress
+                return processed
+            }
+            if self.managesModelResidency {
+                result = try await self.asrServiceProvider().withMeetingModelResidency(
+                    attemptID: request.attemptID, acceptsCompletedCancellation: { $0.postProcessing != nil }, work: execute
                 )
+            } else {
+                result = try await execute()
             }
         } catch {
             await self.serializationGate.release()
@@ -1675,9 +1704,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let byTrack = Dictionary(grouping: segments, by: \.sourceTrackID)
         var merged: [MeetingTranscriptSegment] = []
         for (_, members) in byTrack {
-            let ordered = members.sorted {
-                ($0.start, $0.end, $0.id.uuidString) < ($1.start, $1.end, $1.id.uuidString)
-            }
+            let ordered = members.enumerated().sorted {
+                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+            }.map(\.element)
             guard var current = ordered.first else { continue }
             var currentKey = Self.canonicalSegmentMergeKey(current)
             var memberIDs = [current.id]
@@ -1701,10 +1730,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
             merged.append(current)
         }
-        return merged.sorted {
-            ($0.start, $0.end, $0.sourceTrackID.uuidString, $0.id.uuidString)
-                < ($1.start, $1.end, $1.sourceTrackID.uuidString, $1.id.uuidString)
-        }
+        return merged.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.element.sourceTrackID.uuidString, $0.offset)
+                < ($1.element.start, $1.element.end, $1.element.sourceTrackID.uuidString, $1.offset)
+        }.map(\.element)
     }
 
     private nonisolated static func joinTranscriptText(_ left: String, _ right: String) -> String {

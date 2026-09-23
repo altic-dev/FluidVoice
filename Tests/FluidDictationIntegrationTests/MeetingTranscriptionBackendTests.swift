@@ -273,6 +273,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
                 XCTFail("Backend dispatch must not reach ASR readiness for a fixture backend")
                 return ASRService()
             },
+            managesModelResidency: false,
             serializationGate: gate,
             backendRegistry: registry,
             backendID: backendID
@@ -471,6 +472,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         var selectionReads = 0
         let pipeline = MeetingProcessingPipeline(
             asrServiceProvider: { fatalError("Fixture must not load ASR") },
+            managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
             backendIDProvider: { selectionReads += 1; return selected }
@@ -716,6 +718,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
                     XCTFail("Canonical fixture must not load ASR")
                     return ASRService()
                 },
+                managesModelResidency: false,
                 serializationGate: MeetingProcessingSerializationGate(),
                 backendRegistry: scopeRegistry,
                 backendID: nil,
@@ -747,6 +750,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
                     XCTFail("Canonical fixture must not load ASR")
                     return ASRService()
                 },
+                managesModelResidency: false,
                 serializationGate: MeetingProcessingSerializationGate(),
                 backendRegistry: canonicalRegistry,
                 backendID: nil,

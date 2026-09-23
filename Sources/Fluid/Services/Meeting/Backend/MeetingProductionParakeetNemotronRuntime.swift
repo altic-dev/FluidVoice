@@ -6,13 +6,14 @@ import FluidAudio
 #endif
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the production runtime behind
-// `MeetingParakeetNemotronRunning`. It owns exactly two capabilities for one attempt:
+// `MeetingParakeetNemotronRunning`. It owns the model capabilities for one attempt:
 //
 // - Nemotron diarization: one shared weight load per attempt, one *fresh* `SortformerDiarizer`
 //   state per epoch (`initialize(models:)` re-creates streaming state), released before the ASR
 //   phase begins — the loaded-set sequence is none -> Nemotron -> drained -> Parakeet -> drained.
 // - Parakeet ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
+// - Optional local WeSpeaker encoding between those phases, using bounded voice excerpts.
 //
 // Parakeet does ASR only; Nemotron does diarization only. Neither capability sees anything beyond
 // the request the host froze.
@@ -114,6 +115,49 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.modelLocator = modelLocator
+    }
+
+    /// Runs between Nemotron and ASR, so the additional encoder never overlaps their residency.
+    /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
+    func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        guard !samples.isEmpty else { return [] }
+        try Task.checkCancellation()
+        let models = try await DownloadUtils.loadModels(
+            .diarizer,
+            modelNames: [ModelNames.Diarizer.embeddingFile],
+            directory: DiarizerModels.defaultModelsDirectory().deletingLastPathComponent(),
+            computeUnits: .cpuAndNeuralEngine
+        )
+        try Task.checkCancellation()
+        guard let model = models[ModelNames.Diarizer.embeddingFile],
+              let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?
+              .multiArrayConstraint?.shape.last?.intValue,
+              (1...4096).contains(maskFrames)
+        else {
+            throw NSError(domain: "MeetingSpeakerVoice", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The speaker voice model has an unsupported input format.",
+            ])
+        }
+        let extractor = EmbeddingExtractor(embeddingModel: model)
+        let mask = [Float](repeating: 1, count: maskFrames)
+        var profiles: [MeetingSpeakerVoiceProfile] = []
+        for sample in samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles) {
+            try Task.checkCancellation()
+            guard sample.clips.count == 2 else { continue }
+            var embeddings: [[Float]] = []
+            for clip in sample.clips {
+                try Task.checkCancellation()
+                guard (48_000...160_000).contains(clip.count) else { continue }
+                let output = try extractor.getEmbeddings(audio: clip, masks: [mask])
+                if let embedding = output.first, embedding.count == 256, embedding.allSatisfy(\.isFinite) {
+                    embeddings.append(embedding)
+                }
+            }
+            if embeddings.count == 2 {
+                profiles.append(.init(token: sample.token, embeddings: embeddings))
+            }
+        }
+        return profiles
     }
 
     func withNemotronDiarization(

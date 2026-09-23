@@ -1544,7 +1544,7 @@ private struct MeetingHistoryInspector: View {
                 // so a plain ScrollView replaces List here instead of fighting its native highlight.
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                        LazyVStack(alignment: .leading, spacing: 2) {
                             ForEach(self.groupedSessions, id: \.key) { group in
                                 Section {
                                     ForEach(group.sessions) { session in
@@ -1574,16 +1574,14 @@ private struct MeetingHistoryInspector: View {
                                         }
                                     }
                                 } header: {
+                                    // Matches the Command sidebar: unpinned, aligned with the row icons.
                                     Text(group.key)
-                                        .font(self.theme.typography.captionSmall)
-                                        .tracking(1.1)
-                                        .textCase(.uppercase)
-                                        .foregroundStyle(self.theme.palette.tertiaryText)
+                                        .font(self.theme.typography.caption)
+                                        .foregroundStyle(self.theme.palette.secondaryText)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, self.theme.metrics.spacing.lg)
-                                        .padding(.top, self.theme.metrics.spacing.md)
+                                        .padding(.horizontal, self.theme.metrics.spacing.md)
+                                        .padding(.top, self.theme.metrics.spacing.lg)
                                         .padding(.bottom, self.theme.metrics.spacing.xs)
-                                        .background(self.theme.palette.elevatedCardBackground)
                                 }
                             }
                         }

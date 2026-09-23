@@ -23,10 +23,18 @@ actor DictionaryTrainingEndpointDetector {
     private var hasDetectedSpeech = false
 
     func prepare() async throws {
-        _ = try await self.preparedManager()
+        try await MeetingModelResidencyCoordinator.ordinary(owner: "dictionary-vad", modelID: "silero-vad") {
+            _ = try await self.preparedManager()
+        }
     }
 
     func beginSession() async throws -> Session? {
+        try await MeetingModelResidencyCoordinator.ordinary(owner: "dictionary-vad", modelID: "silero-vad") {
+            try await self.beginPreparedSession()
+        }
+    }
+
+    private func beginPreparedSession() async throws -> Session? {
         let manager = try await self.preparedManager()
         let session = Session(id: UUID())
         self.activeSessionID = session.id
@@ -36,6 +44,12 @@ actor DictionaryTrainingEndpointDetector {
     }
 
     func process(_ samples: [Float], session: Session) async throws -> Event? {
+        try await MeetingModelResidencyCoordinator.ordinary(owner: "dictionary-vad", modelID: "silero-vad") {
+            try await self.processPrepared(samples, session: session)
+        }
+    }
+
+    private func processPrepared(_ samples: [Float], session: Session) async throws -> Event? {
         guard samples.count == Self.chunkSize,
               self.activeSessionID == session.id,
               let manager,
@@ -65,6 +79,23 @@ actor DictionaryTrainingEndpointDetector {
 
     func endSession(_ session: Session) {
         guard self.activeSessionID == session.id else { return }
+        self.activeSessionID = nil
+        self.streamState = nil
+        self.hasDetectedSpeech = false
+    }
+
+    func residencySnapshot() -> MeetingResidentModel? {
+        self.manager == nil ? nil : MeetingResidentModel(id: "silero-vad", configuration: "default")
+    }
+
+    func unloadForMeeting() async {
+        // Admission is closed and all inference operations have returned before suspension.
+        // Join a preparation defensively before dropping its last model reference.
+        let preparation = self.managerTask
+        preparation?.cancel()
+        _ = await preparation?.result
+        self.managerTask = nil
+        self.manager = nil
         self.activeSessionID = nil
         self.streamState = nil
         self.hasDetectedSpeech = false
@@ -102,6 +133,10 @@ actor DictionaryTrainingEndpointDetector {
         }
     }
     #else
+    func residencySnapshot() -> MeetingResidentModel? { nil }
+
+    func unloadForMeeting() async {}
+
     func prepare() async throws {}
 
     func beginSession() async throws -> Session? {

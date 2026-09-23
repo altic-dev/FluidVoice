@@ -110,6 +110,7 @@ nonisolated struct MeetingResultSidecar: Equatable {
     let units: [MeetingFinalTextUnit]
     let dispositions: [MeetingTextUnitDispositionRecord]
     let coverageReceipts: [MeetingSpanCoverageReceipt]
+    let speakerIdentityLinks: [MeetingSpeakerIdentityLink]
 
     init(
         backendID: MeetingBackendID,
@@ -118,7 +119,8 @@ nonisolated struct MeetingResultSidecar: Equatable {
         analysisManifest: MeetingAnalysisManifest,
         units: [MeetingFinalTextUnit],
         dispositions: [MeetingTextUnitDispositionRecord],
-        coverageReceipts: [MeetingSpanCoverageReceipt]
+        coverageReceipts: [MeetingSpanCoverageReceipt],
+        speakerIdentityLinks: [MeetingSpeakerIdentityLink] = []
     ) {
         self.schemaVersion = MeetingResultSidecarSchema.currentVersion
         self.backendID = backendID
@@ -128,6 +130,7 @@ nonisolated struct MeetingResultSidecar: Equatable {
         self.units = units
         self.dispositions = dispositions
         self.coverageReceipts = coverageReceipts
+        self.speakerIdentityLinks = speakerIdentityLinks
     }
 }
 
@@ -141,6 +144,7 @@ nonisolated extension MeetingResultSidecar: Codable {
         case units
         case dispositions
         case coverageReceipts
+        case speakerIdentityLinks
     }
 
     init(from decoder: Decoder) throws {
@@ -160,7 +164,8 @@ nonisolated extension MeetingResultSidecar: Codable {
             analysisManifest: container.decode(MeetingAnalysisManifest.self, forKey: .analysisManifest),
             units: container.decode([MeetingFinalTextUnit].self, forKey: .units),
             dispositions: container.decode([MeetingTextUnitDispositionRecord].self, forKey: .dispositions),
-            coverageReceipts: container.decode([MeetingSpanCoverageReceipt].self, forKey: .coverageReceipts)
+            coverageReceipts: container.decode([MeetingSpanCoverageReceipt].self, forKey: .coverageReceipts),
+            speakerIdentityLinks: container.decodeIfPresent([MeetingSpeakerIdentityLink].self, forKey: .speakerIdentityLinks) ?? []
         )
     }
 
@@ -174,10 +179,12 @@ nonisolated extension MeetingResultSidecar: Codable {
         try container.encode(self.units, forKey: .units)
         try container.encode(self.dispositions, forKey: .dispositions)
         try container.encode(self.coverageReceipts, forKey: .coverageReceipts)
+        if !self.speakerIdentityLinks.isEmpty { try container.encode(self.speakerIdentityLinks, forKey: .speakerIdentityLinks) }
     }
 }
 
 nonisolated enum MeetingResultSidecarError: LocalizedError, Equatable {
+    case invalidSpeakerIdentityLinks
     case emptyBackendID
     case emptyBackendVersion
     case emptyUnitID
@@ -212,6 +219,8 @@ nonisolated enum MeetingResultSidecarError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidSpeakerIdentityLinks:
+            return "Speaker identity links must join visible speakers across epochs of the same track without collisions."
         case .emptyBackendID:
             return "The result sidecar has no backend identifier."
         case .emptyBackendVersion:
@@ -282,6 +291,14 @@ nonisolated extension MeetingResultSidecar {
     /// of units and receipts against the manifest's spans is the assembler's job.
     @discardableResult
     func validated() throws -> Self {
+        let visibleIDs = Set(self.dispositions.filter { $0.disposition == .emitted }.map(\.unitID))
+        let visibleTokens = Set(self.units.compactMap { unit -> MeetingBackendSpeakerToken? in
+            guard visibleIDs.contains(unit.id), case let .assigned(token) = unit.speaker else { return nil }
+            return token
+        })
+        guard MeetingSpeakerVoiceMatcher.validLinks(self.speakerIdentityLinks, allowedTokens: visibleTokens) else {
+            throw MeetingResultSidecarError.invalidSpeakerIdentityLinks
+        }
         guard !self.backendID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw MeetingResultSidecarError.emptyBackendID
         }

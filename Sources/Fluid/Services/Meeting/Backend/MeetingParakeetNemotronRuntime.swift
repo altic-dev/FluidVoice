@@ -2,7 +2,7 @@ import Foundation
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the narrowly scoped runtime
 // capability the host injects into the composite backend. The backend owns orchestration —
-// epoch order, materialization, unit construction, receipts; the runtime owns exactly two model
+// epoch order, materialization, unit construction, receipts; the runtime owns the model
 // capabilities and nothing else. It cannot see the session store, arbitrary directories or global
 // settings: the host binds it to the frozen request before the backend ever runs.
 //
@@ -41,6 +41,8 @@ nonisolated protocol MeetingParakeetASRSession: Sendable {
 nonisolated struct MeetingNemotronPhaseResult: Sendable {
     var activity: [MeetingBackendSpeakerActivity] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
+    var voiceSamples: [MeetingSpeakerVoiceSamples] = []
+    var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
 }
 
 nonisolated struct MeetingParakeetEpochOutput: Sendable {
@@ -60,10 +62,15 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// The composite backend's runtime, one per attempt. `withNemotronDiarization` is the only owner
 /// of Nemotron residency: weights load before the factory is handed out and are released before
 /// it returns. `withPreparedASR` wraps the attempt's single `ASRService.withPreparedMeetingASR`
-/// scope. The two phases never overlap, so at most one local meeting model is resident at a time
+/// scope. Optional voice encoding runs between them. These phases never overlap, so at most
+/// one local meeting model is resident at a time
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated func speakerVoiceProfiles(
+        samples: [MeetingSpeakerVoiceSamples]
+    ) async throws -> [MeetingSpeakerVoiceProfile]
+
     nonisolated func withNemotronDiarization(
         artifact: MeetingNemotronModelArtifact,
         _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult
@@ -74,4 +81,11 @@ protocol MeetingParakeetNemotronRunning: Sendable {
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
     ) async throws -> MeetingParakeetPhaseResult
+}
+
+extension MeetingParakeetNemotronRunning {
+    /// Existing injected runtimes without a voice encoder retain separate speaker identities.
+    nonisolated func speakerVoiceProfiles(
+        samples _: [MeetingSpeakerVoiceSamples]
+    ) async throws -> [MeetingSpeakerVoiceProfile] { [] }
 }

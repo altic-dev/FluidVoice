@@ -210,3 +210,126 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
+
+extension MeetingExistingAudioReplayTests {
+    /// Repeated actual production pipeline, on copied retained audio, in the same app process.
+    /// Includes ordinary speech transcription between meetings; no microphone or history writes.
+    func testOptInRepeatedProductionMeetingsAndDictationMemory() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let paths = environment["FLUIDVOICE_RESIDENCY_REPLAY_DIRS"],
+              let outputPath = environment["FLUIDVOICE_RESIDENCY_REPLAY_OUTPUT"],
+              let dictationPath = environment["FLUIDVOICE_RESIDENCY_DICTATION_AUDIO"]
+        else { throw XCTSkip("Set retained-meeting residency replay inputs to run the memory regression") }
+        let output = URL(fileURLWithPath: outputPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let sources = paths.split(separator: ":").map { URL(fileURLWithPath: String($0), isDirectory: true) }
+        let cycles = max(1, min(5, Int(environment["FLUIDVOICE_RESIDENCY_REPLAY_CYCLES"] ?? "3") ?? 3))
+        let service = AppServices.shared.asr
+        try await Task.sleep(for: .seconds(15)) // Allow ordinary app startup to settle.
+        let probe = WholeMeetingMemoryProbe()
+        probe.start()
+        defer { try? probe.finish(at: output.appendingPathComponent("memory.csv")) }
+        probe.mark("initial_preparation")
+        try await service.ensureAsrReady()
+        if environment["FLUIDVOICE_RESIDENCY_REPLAY_FLUID"] == "1" {
+            await PrivateAIIntegrationService.shared.prewarmDictation()
+            let state = await PrivateAIIntegrationService.shared.loadedModelState()
+            XCTAssertEqual(state?.state, .ready)
+            XCTAssertFalse(WholeMeetingMemoryProbe.helperPIDs().isEmpty)
+        }
+        probe.mark("baseline_settling")
+        try await Task.sleep(for: .seconds(10))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var baselineTexts: [UUID: [String]] = [:]
+        var dictationText: String?
+        var reports: [[String: Any]] = []
+        for cycle in 0..<cycles {
+            for (index, source) in sources.enumerated() {
+                let label = "cycle_\(cycle)_meeting_\(index)"
+                let sourceData = try Data(contentsOf: source.appendingPathComponent("session.json"))
+                let session = try decoder.decode(MeetingSession.self, from: sourceData)
+                let copy = output.appendingPathComponent("copy-\(cycle)-\(index)", isDirectory: true)
+                try await Task.detached(priority: .utility) {
+                    try FileManager.default.copyItem(at: source, to: copy)
+                    try? FileManager.default.removeItem(at: copy.appendingPathComponent("checkpoint.json"))
+                }.value
+                probe.mark("\(label)_dictation_before")
+                let beforeDictation = try await service.transcribeFileForAPI(URL(fileURLWithPath: dictationPath)).result.text
+                XCTAssertFalse(beforeDictation.isEmpty)
+                if let dictationText { XCTAssertEqual(beforeDictation, dictationText) } else { dictationText = beforeDictation }
+                let lease = try service.acquireExclusiveActivity(.meeting)
+                let speechBefore = try await service.meetingResidencyParticipant().snapshot()
+                let fluidBefore = await PrivateAIIntegrationService.shared.loadedModelState()
+                let pidsBefore = WholeMeetingMemoryProbe.helperPIDs()
+                let pipeline = MeetingProcessingPipeline(asrServiceProvider: { service }, backendID: .parakeetNemotron)
+                let started = Date()
+                let result: MeetingProcessingResult
+                probe.mark("\(label)_processing")
+                do {
+                    result = try await pipeline.process(session: session, sessionDirectory: copy) { stage in
+                        probe.mark("\(label)_\(stage.rawValue)")
+                        if MeetingModelResidencyCoordinator.shared.phase == .transcription {
+                            XCTAssertTrue(WholeMeetingMemoryProbe.helperPIDs().isEmpty, "Fluid helper overlapped meeting work")
+                        }
+                    }
+                } catch {
+                    service.releaseExclusiveActivity(lease)
+                    throw error
+                }
+                let speechAfter = try await service.meetingResidencyParticipant().snapshot()
+                let fluidAfter = await PrivateAIIntegrationService.shared.loadedModelState()
+                let pidsAfter = WholeMeetingMemoryProbe.helperPIDs()
+                XCTAssertEqual(speechBefore, speechAfter)
+                XCTAssertEqual(fluidBefore?.modelID, fluidAfter?.modelID)
+                XCTAssertEqual(fluidBefore?.state, fluidAfter?.state)
+                XCTAssertEqual(pidsBefore.isEmpty, pidsAfter.isEmpty)
+                XCTAssertTrue(Set(pidsBefore).isDisjoint(with: pidsAfter))
+                XCTAssertEqual(MeetingModelResidencyCoordinator.shared.phase, .normal)
+                XCTAssertTrue(MeetingModelResidencyCoordinator.shared.restorationErrors.isEmpty)
+                service.releaseExclusiveActivity(lease)
+                XCTAssertNil(service.activeExclusiveActivity)
+                XCTAssertFalse(result.segments.isEmpty)
+                let texts = result.segments.map(\.text)
+                if let baseline = baselineTexts[session.id] {
+                    XCTAssertTrue(texts == baseline, "Transcript text changed across repeated runs; inspect protected result artifacts")
+                } else { baselineTexts[session.id] = texts }
+                let seconds = Date().timeIntervalSince(started)
+                probe.mark("\(label)_dictation_after")
+                let afterDictation = try await service.transcribeFileForAPI(URL(fileURLWithPath: dictationPath)).result.text
+                XCTAssertEqual(afterDictation, dictationText)
+                probe.mark("\(label)_settling")
+                try await Task.sleep(for: .seconds(10))
+                probe.mark("\(label)_settled")
+                XCTAssertEqual(try Data(contentsOf: source.appendingPathComponent("session.json")), sourceData)
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(result)
+                try data.write(to: output.appendingPathComponent("result-\(cycle)-\(index).json"), options: .atomic)
+                reports.append([
+                    "cycle": cycle, "index": index, "sessionID": session.id.uuidString,
+                    "seconds": seconds, "segmentCount": result.segments.count, "speakerCount": result.speakers.count,
+                    "speechBefore": speechBefore?.id ?? "none", "speechAfter": speechAfter?.id ?? "none",
+                    "fluidBefore": fluidBefore?.modelID ?? "none", "fluidAfter": fluidAfter?.modelID ?? "none",
+                    "helperPIDsBefore": pidsBefore, "helperPIDsAfter": pidsAfter,
+                    "dictationCharacters": afterDictation.count,
+                ])
+                try JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: output.appendingPathComponent("runs.json"), options: .atomic)
+                try await Task.detached(priority: .utility) { try FileManager.default.removeItem(at: copy) }.value
+            }
+        }
+        // Explicitly request unload after the repeated run to distinguish intentionally resident
+        // models from leaked resources. This is a test-host action, never changes persisted selections.
+        probe.mark("explicit_unload")
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        try await service.meetingResidencyParticipant().suspend()
+        await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "memory regression complete")
+        service.releaseExclusiveActivity(lease)
+        XCTAssertFalse(service.isAsrReady)
+        XCTAssertTrue(WholeMeetingMemoryProbe.helperPIDs().isEmpty)
+        probe.mark("all_unloaded_settling")
+        try await Task.sleep(for: .seconds(30))
+        probe.mark("all_unloaded_after_30_seconds")
+    }
+}

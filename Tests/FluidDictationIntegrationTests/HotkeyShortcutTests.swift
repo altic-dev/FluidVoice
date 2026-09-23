@@ -281,6 +281,29 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertFalse(NotchContentState.shared.isBottomOverlayPresented)
     }
 
+    @MainActor
+    func testPreparedBottomOverlayStaysInvisibleAcrossScreenChanges() async {
+        let controller = BottomOverlayWindowController.shared
+        let audioPublisher = Just(CGFloat.zero).eraseToAnyPublisher()
+        controller.hideImmediately()
+        controller.destroyWindowForTests()
+        controller.prepare()
+        await Task.yield()
+        XCTAssertTrue(controller.isVisuallyHiddenForTests, "A prepared panel must never be visible before the first show")
+        XCTAssertTrue(controller.isParkedOffscreenForTests)
+
+        // Login, wake and monitor plug post this after the panel was parked.
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertTrue(controller.isVisuallyHiddenForTests, "A display change must not reveal the parked panel")
+        XCTAssertTrue(controller.isParkedOffscreenForTests, "The panel must be re-parked after a display change")
+
+        controller.show(audioPublisher: audioPublisher, mode: .dictation)
+        XCTAssertFalse(controller.isVisuallyHiddenForTests, "Parking at alpha 0 must not break the next show")
+        controller.hideImmediately()
+    }
+
     func testBottomOverlayGrowthUsesASpring() {
         // A spring retargets smoothly when the text keeps growing.
         XCTAssertEqual(BottomOverlayWindowController.growthAnimation, .spring(response: 0.32, dampingFraction: 0.86))

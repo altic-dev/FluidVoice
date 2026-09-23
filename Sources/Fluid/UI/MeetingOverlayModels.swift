@@ -95,6 +95,20 @@ struct MeetingOverlayLayout: Equatable, Sendable {
 }
 
 enum MeetingOverlayGeometry {
+    /// Match bottom dictation placement without changing its position or saved settings.
+    static func initialPillAnchor(
+        screenFrame: CGRect,
+        screenVisible: CGRect,
+        bottomOffset: CGFloat
+    ) -> MeetingOverlayVisibleAnchor {
+        let minY = screenVisible.minY + 10
+        let maxY = screenVisible.maxY - MeetingOverlayPresentation.pill.visibleSize.height - 40
+        return MeetingOverlayVisibleAnchor(
+            centerX: screenFrame.midX,
+            bottomY: max(min(screenVisible.minY + bottomOffset, maxY), minY)
+        )
+    }
+
     static func layout(
         anchor: MeetingOverlayVisibleAnchor,
         visibleSize: CGSize,

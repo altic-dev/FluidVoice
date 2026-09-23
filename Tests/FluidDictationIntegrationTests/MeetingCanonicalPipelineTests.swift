@@ -291,6 +291,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                 XCTFail("Canonical dispatch must not reach ASR readiness")
                 return ASRService()
             },
+            managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
             backendID: nil,
@@ -389,6 +390,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
                 XCTFail("Legacy fixture must not load ASR")
                 return ASRService()
             },
+            managesModelResidency: false,
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
             backendID: nil,
@@ -414,6 +416,167 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     }
 
     // MARK: - Canonical success and retry
+
+    private func orderedWordResult(attemptID: UUID, words: [(text: String, start: Double, end: Double)]) async throws -> MeetingProcessingResult {
+        let fixture = self.makeInRoomFixture()
+        var session = fixture.session
+        session.processingAttempts[session.processingAttempts.count - 1].id = attemptID
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            let standard = self.standardBundle(plan: plan, manifest: manifest)
+            let span = try XCTUnwrap(manifest.allSpans.first)
+            let units = words.enumerated().map { index, word in
+                MeetingFinalTextUnit(
+                    id: "unit:\(plan.attemptID.uuidString):\(index)", trackID: span.trackID,
+                    analysisEpochID: span.analysisEpochID, precision: .word, text: word.text,
+                    analysisStart: span.analysisInterval.start + word.start,
+                    analysisEnd: span.analysisInterval.start + word.end,
+                    speaker: .assigned(.init(analysisEpochID: span.analysisEpochID, label: "slot-0")),
+                    analysisSpanIDs: [span.id]
+                )
+            }
+            return MeetingCanonicalResultBundle(
+                evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units),
+                coverageReceipts: standard.coverageReceipts
+            )
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        return try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
+    }
+
+    func testEqualTimestampWordsPreserveSourceOrderAcrossAttemptIDs() async throws {
+        // More than ten units also catches a lexical unit-ID sort (10 before 2).
+        let words = (0..<12).map { (text: "word\($0)", start: 0.0, end: 0.2) }
+        for ordinal in 1...4 {
+            let attemptID = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", ordinal)))
+            let result = try await self.orderedWordResult(attemptID: attemptID, words: words)
+            XCTAssertEqual(result.segments.count, 1)
+            XCTAssertEqual(result.segments.first?.text, words.map(\.text).joined(separator: " "))
+        }
+    }
+
+    func testDifferentTimestampWordsRemainChronologicalDespiteSourceOrder() async throws {
+        let result = try await self.orderedWordResult(attemptID: UUID(), words: [
+            (text: "third", start: 0.4, end: 0.6),
+            (text: "first", start: 0.0, end: 0.2),
+            (text: "second", start: 0.2, end: 0.4),
+        ])
+        XCTAssertEqual(result.segments.count, 1)
+        XCTAssertEqual(result.segments.first?.text, "first second third")
+    }
+
+    private actor CheckpointFailureSummaryProvider: MeetingPostProcessingProviding {
+        nonisolated let providerID = "checkpoint-fixture"
+        nonisolated let modelID = "summary-fixture"
+        nonisolated let maximumInputCharacters = 100_000
+        let cancelsDuringReadiness: Bool
+        private(set) var readinessCalls = 0
+        private(set) var preparationCalls = 0
+        private(set) var unloadCalls = 0
+
+        init(cancelsDuringReadiness: Bool = false) {
+            self.cancelsDuringReadiness = cancelsDuringReadiness
+        }
+
+        func isReady() async throws -> Bool {
+            self.readinessCalls += 1
+            if self.cancelsDuringReadiness { withUnsafeCurrentTask { $0?.cancel() } }
+            return true
+        }
+
+        func prepare() async throws -> any PreparedMeetingPostProcessor {
+            self.preparationCalls += 1
+            throw MeetingPostProcessingError.notReady
+        }
+
+        func cancelAndUnload() async { self.unloadCalls += 1 }
+    }
+
+    func testCancellationDuringSummaryReadinessSkipsPreparationAndCleansUp() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest)
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        let transcript = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        let owner = MeetingModelResidencyCoordinator()
+        let registry = MeetingPostProcessingRegistry(residency: owner)
+        let provider = CheckpointFailureSummaryProvider(cancelsDuringReadiness: true)
+        let artifact = try await Task {
+            try await owner.withExclusive(attemptID: transcript.attempt.id, participants: [], acceptsCompletedCancellation: { $0 != nil }) {
+                await registry.process(
+                    sessionID: fixture.session.id, language: "en", result: transcript,
+                    directory: directory, provider: provider
+                )
+            }
+        }.value
+        XCTAssertNil(artifact?.output)
+        XCTAssertNotNil(artifact?.error)
+        XCTAssertEqual(artifact?.attemptID, transcript.attempt.id)
+        let readinessCalls = await provider.readinessCalls
+        let preparationCalls = await provider.preparationCalls
+        let unloadCalls = await provider.unloadCalls
+        XCTAssertEqual(readinessCalls, 1)
+        XCTAssertEqual(preparationCalls, 0, "Cancellation during readiness must not load the summary model")
+        XCTAssertEqual(unloadCalls, 1)
+        XCTAssertFalse(owner.isExclusive)
+        XCTAssertFalse(Task.isCancelled, "Fixture cancellation must stay inside its child task")
+    }
+
+    func testSummaryCheckpointFailurePreservesCanonicalTranscriptAndSkipsModelLoad() async throws {
+        let fixture = self.makeInRoomFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let backend = CanonicalFixtureBackend { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest)
+        }
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: fixture.track.id, chunkID: fixture.chunk.id):
+                    self.makeObserved(fixture.chunk, duration: 10),
+            ])
+        )
+        let transcript = try await pipeline.process(session: fixture.session, sessionDirectory: directory, progress: { _ in })
+        XCTAssertFalse(transcript.segments.isEmpty)
+        let checkpointURL = directory.appendingPathComponent("transcript-\(transcript.attempt.id.uuidString).json")
+        try FileManager.default.createDirectory(at: checkpointURL, withIntermediateDirectories: false)
+        let owner = MeetingModelResidencyCoordinator()
+        let registry = MeetingPostProcessingRegistry(residency: owner)
+        let provider = CheckpointFailureSummaryProvider()
+        let result = try await owner.withExclusive(attemptID: transcript.attempt.id, participants: []) {
+            var result = transcript
+            result.postProcessing = await registry.process(
+                sessionID: fixture.session.id, language: "en", result: result,
+                directory: directory, provider: provider
+            )
+            return result
+        }
+        XCTAssertEqual(result.segments, transcript.segments)
+        XCTAssertEqual(result.resultSidecarReference, transcript.resultSidecarReference)
+        XCTAssertEqual(result.postProcessing?.attemptID, transcript.attempt.id)
+        XCTAssertEqual(result.postProcessing?.error, MeetingPostProcessingError.checkpointFailed.localizedDescription)
+        XCTAssertNil(result.postProcessing?.output)
+        let readinessCalls = await provider.readinessCalls
+        let preparationCalls = await provider.preparationCalls
+        XCTAssertEqual(readinessCalls, 0)
+        XCTAssertEqual(preparationCalls, 0)
+        XCTAssertFalse(owner.isExclusive)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("summary-\(transcript.attempt.id.uuidString).json").path
+        ))
+    }
 
     func testCanonicalInRoomSuccessPublishesOnlyAfterVerifiedSidecar() async throws {
         let fixture = self.makeInRoomFixture()
@@ -839,6 +1002,28 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         func release(_: MeetingAudioActivityLease) async {}
     }
 
+    private final class SummaryDecoratingPipeline: MeetingProcessingControlling {
+        let wrapped: any MeetingProcessingControlling
+
+        init(wrapped: any MeetingProcessingControlling) { self.wrapped = wrapped }
+
+        func process(
+            session: MeetingSession,
+            sessionDirectory: URL,
+            progress: @escaping @MainActor (MeetingProcessingStage) -> Void
+        ) async throws -> MeetingProcessingResult {
+            var result = try await self.wrapped.process(
+                session: session, sessionDirectory: sessionDirectory, progress: progress
+            )
+            result.postProcessing = MeetingPostProcessingArtifact(
+                attemptID: result.attempt.id, transcriptHash: "new-transcript", providerID: "fixture",
+                modelID: "fixture-summary", output: .init(summary: "New summary", sourceSegmentIDs: result.segments.map(\.id)),
+                error: nil
+            )
+            return result
+        }
+    }
+
     func testCoordinatorSaveFailurePreservesSidecarAndCheckpointThenRetryPublishes() async throws {
         let chunk = self.makeChunk(sequence: 0, start: 100, end: 110)
         let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
@@ -846,6 +1031,11 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         session.state = .interrupted
         session.endedAt = Date()
         session.recoveryResolvedAt = Date()
+        let originalSummary = MeetingPostProcessingArtifact(
+            attemptID: UUID(), transcriptHash: "old-transcript", providerID: "fixture",
+            modelID: "fixture-summary", output: .init(summary: "Old summary", sourceSegmentIDs: []), error: nil
+        )
+        session.postProcessing = originalSummary
 
         let root = try self.makeTempSessionDirectory()
             .appendingPathComponent("meetings", isDirectory: true)
@@ -861,13 +1051,13 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         let coordinator = MeetingSessionCoordinator(
             store: recording,
             capture: StubCapture(),
-            processing: self.makeCanonicalPipeline(
+            processing: SummaryDecoratingPipeline(wrapped: self.makeCanonicalPipeline(
                 backend: backend,
                 observer: FixtureObserver(results: [
                     MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id):
                         self.makeObserved(chunk, duration: 10),
                 ])
-            ),
+            )),
             audioArbiter: StubArbiter()
         )
 
@@ -893,6 +1083,14 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
             failedRunSaves.contains { $0.state == .completed && $0.persisted },
             "a failed save must not publish a completed session"
         )
+        let savedAfterFailure = try await recording.load(id: session.id)
+        XCTAssertEqual(
+            savedAfterFailure?.postProcessing,
+            originalSummary,
+            "Rolling back a transcript must also roll back its summary"
+        )
+        XCTAssertEqual(savedAfterFailure?.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(coordinator.activeSession?.postProcessing, originalSummary)
 
         // Retry: a fresh attempt publishes; the completed-state save still observed the
         // checkpoint on disk, proving the save ran before checkpoint removal.
@@ -905,6 +1103,10 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         let publishedAttempt = try XCTUnwrap(published.processingAttempts.last {
             $0.backendID == Self.canonicalBackendID.rawValue
         })
+        XCTAssertEqual(published.postProcessing?.attemptID, publishedAttempt.id)
+        XCTAssertEqual(published.postProcessing?.output?.summary, "New summary")
+        let savedAfterRetry = try await recording.load(id: session.id)
+        XCTAssertEqual(savedAfterRetry?.postProcessing, published.postProcessing)
         let verified = try MeetingResultSidecarStore(sessionDirectory: directory).read(
             expectedAttemptID: publishedAttempt.id,
             expectedBackendID: Self.canonicalBackendID,

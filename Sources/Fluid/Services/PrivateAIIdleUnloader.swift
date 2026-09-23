@@ -10,6 +10,7 @@ actor PrivateAIIdleUnloader {
     private let isBusy: @Sendable () async -> Bool
     private let unload: @Sendable () async -> Void
     private let activityEnded: @Sendable () async -> Void
+    private var meetingSuspended = false
     private var inFlight = 0
     private var pending: Task<Void, Never>?
 
@@ -58,7 +59,19 @@ actor PrivateAIIdleUnloader {
         self.schedule()
     }
 
+    func suspendForMeeting() {
+        self.meetingSuspended = true
+        self.pending?.cancel()
+        self.pending = nil
+    }
+
+    func resumeAfterMeeting() {
+        self.meetingSuspended = false
+        if self.inFlight == 0 { self.schedule() }
+    }
+
     private func schedule() {
+        guard !self.meetingSuspended else { return }
         self.pending?.cancel()
         self.pending = Task { [delay] in
             guard let delay = await delay() else { return }
@@ -69,7 +82,7 @@ actor PrivateAIIdleUnloader {
     }
 
     private func fire() async {
-        guard self.inFlight == 0, await self.delay() != nil else { return }
+        guard !self.meetingSuspended, self.inFlight == 0, await self.delay() != nil else { return }
         if await self.isBusy() {
             self.schedule()
             return

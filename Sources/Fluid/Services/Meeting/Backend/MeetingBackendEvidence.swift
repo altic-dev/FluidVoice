@@ -213,17 +213,20 @@ nonisolated struct MeetingFinalTranscriptEvidence: Equatable {
     let attemptID: UUID
     let units: [MeetingFinalTextUnit]
     let speakerActivity: [MeetingBackendSpeakerActivity]
+    let voiceProfiles: [MeetingSpeakerVoiceProfile]
 
     init(
         backendID: MeetingBackendID,
         attemptID: UUID,
         units: [MeetingFinalTextUnit],
-        speakerActivity: [MeetingBackendSpeakerActivity] = []
+        speakerActivity: [MeetingBackendSpeakerActivity] = [],
+        voiceProfiles: [MeetingSpeakerVoiceProfile] = []
     ) {
         self.backendID = backendID
         self.attemptID = attemptID
         self.units = units
         self.speakerActivity = speakerActivity
+        self.voiceProfiles = voiceProfiles
     }
 }
 
@@ -237,6 +240,7 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
         case attemptID
         case units
         case speakerActivity
+        case voiceProfiles
     }
 
     init(from decoder: Decoder) throws {
@@ -253,7 +257,8 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
             backendID: container.decode(MeetingBackendID.self, forKey: .backendID),
             attemptID: container.decode(UUID.self, forKey: .attemptID),
             units: container.decode([MeetingFinalTextUnit].self, forKey: .units),
-            speakerActivity: container.decode([MeetingBackendSpeakerActivity].self, forKey: .speakerActivity)
+            speakerActivity: container.decode([MeetingBackendSpeakerActivity].self, forKey: .speakerActivity),
+            voiceProfiles: container.decodeIfPresent([MeetingSpeakerVoiceProfile].self, forKey: .voiceProfiles) ?? []
         )
     }
 
@@ -264,6 +269,7 @@ nonisolated extension MeetingFinalTranscriptEvidence: Codable {
         try container.encode(self.attemptID, forKey: .attemptID)
         try container.encode(self.units, forKey: .units)
         try container.encode(self.speakerActivity, forKey: .speakerActivity)
+        if !self.voiceProfiles.isEmpty { try container.encode(self.voiceProfiles, forKey: .voiceProfiles) }
     }
 }
 

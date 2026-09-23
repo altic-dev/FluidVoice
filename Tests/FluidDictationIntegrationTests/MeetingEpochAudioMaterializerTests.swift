@@ -38,8 +38,8 @@ final class MeetingEpochAudioMaterializerTests: XCTestCase {
             sampleRate: sampleRate,
             channels: AVAudioChannelCount(channels),
             interleaved: false
-        // Fixed test fixture: missing required audio storage or evidence is a setup failure.
-        // swiftlint:disable:next force_unwrapping
+            // Fixed test fixture: missing required audio storage or evidence is a setup failure.
+            // swiftlint:disable:next force_unwrapping
         )!
         let frameCount = AVAudioFrameCount((seconds * sampleRate).rounded())
         // Fixed test fixture: missing required audio storage or evidence is a setup failure.
@@ -233,6 +233,58 @@ final class MeetingEpochAudioMaterializerTests: XCTestCase {
         XCTAssertLessThan(quietMax, 0.15)
         let resampledMax = materialized.samples[secondRange].map(abs).max() ?? 0
         XCTAssertGreaterThan(resampledMax, 0.15, "the 48k stereo chunk was mixed and resampled")
+    }
+
+    func testContiguousStereoChunksMatchOneUninterruptedConversion() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("materializer-contiguous-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        self.addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let first = try self.writeWAV(
+            into: directory,
+            relativePath: "tracks/first.wav",
+            seconds: 1.1,
+            sampleRate: 48_000,
+            channels: 2,
+            amplitude: 0.4
+        )
+        let second = try self.writeWAV(
+            into: directory,
+            relativePath: "tracks/second.wav",
+            seconds: 1.3,
+            sampleRate: 48_000,
+            channels: 2,
+            amplitude: 0.2
+        )
+        let fixture = try self.makeManifestFixture(directory: directory, chunks: [
+            (self.makeChunk(sequence: 0, start: 0, end: 1.1, written: first), first),
+            (self.makeChunk(sequence: 1, start: 1.1, end: 2.4, written: second), second),
+        ])
+        let track = try XCTUnwrap(fixture.manifest.track(fixture.track.id))
+        let epoch = try XCTUnwrap(track.epochs.first)
+        XCTAssertEqual(track.epochs.count, 1)
+        let actual = try await MeetingEpochAudioMaterializer().materialize(
+            epoch: epoch, track: track, manifest: fixture.manifest, sessionDirectory: directory
+        )
+        // Both files span multiple read blocks. A single reference conversion catches dropped
+        // or repeated blocks, channel corruption and accidental resampler resets at file edges.
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 115_200))
+        buffer.frameLength = buffer.frameCapacity
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<115_200 {
+            let local = index < 52_800 ? index : index - 52_800
+            let amplitude: Float = index < 52_800 ? 0.4 : 0.2
+            channel[index] = amplitude * sin(2 * Float.pi * 440 * Float(local) / 48_000)
+        }
+        let expected = try AudioBufferConverter.monoSamples(from: buffer, targetSampleRate: 16_000)
+        XCTAssertEqual(actual.samples.count, expected.count)
+        let maximumError = zip(actual.samples, expected).map { abs($0 - $1) }.max() ?? 0
+        XCTAssertLessThan(maximumError, 1e-6)
+        XCTAssertEqual(actual.spanSamples.count, 2)
+        XCTAssertEqual(actual.spanSamples.first?.sampleRange.lowerBound, 0)
+        XCTAssertEqual(actual.spanSamples.first?.sampleRange.upperBound, actual.spanSamples.last?.sampleRange.lowerBound)
+        XCTAssertEqual(actual.spanSamples.last?.sampleRange.upperBound, actual.samples.count)
     }
 
     func testChangedBytesFailClosed() async throws {

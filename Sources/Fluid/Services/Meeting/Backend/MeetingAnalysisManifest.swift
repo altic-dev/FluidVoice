@@ -26,6 +26,14 @@ nonisolated enum MeetingAnalysisManifestSchema {
     /// absorbs floating-point error — it is not a licence to disagree with the mapping.
     static let mappingToleranceSeconds: Double = 1e-6
 
+    /// Capture timestamps and PCM frame counts use different clock precision. Reconcile at
+    /// most two source samples at a decoded tail, without extending the actual source audio.
+    /// This is deliberately separate from transform, admission and discontinuity tolerances.
+    static func decodedTailToleranceSeconds(sampleRate: Double) -> Double {
+        guard sampleRate.isFinite, sampleRate > 0 else { return 0 }
+        return 2 / sampleRate + 1e-9 // Nanosecond timestamp quantization at the inclusive boundary.
+    }
+
     /// Default bound for the measured decoded-length-versus-recorded-PTS fit residual. A span whose
     /// residual exceeds its bound is `timingUncertain` (architecture plan §5.1).
     static let defaultResidualBoundSeconds: Double = 0.050
@@ -1462,6 +1470,11 @@ nonisolated extension MeetingAnalysisManifest {
             priming + (span.recordedInterval.end - chunkInterval.start),
             decoded.durationSeconds
         )
+        let tailOverrun = priming + (span.recordedInterval.end - chunkInterval.start)
+            - decoded.durationSeconds
+        guard tailOverrun <= MeetingAnalysisManifestSchema.decodedTailToleranceSeconds(sampleRate: decoded.sampleRate) else {
+            throw MeetingAnalysisManifestError.sourceLocalIntervalDisagreesWithRecordedPiece(spanID: span.id)
+        }
         guard abs(span.sourceLocalInterval.start - expectedStart) <= tolerance,
               abs(span.sourceLocalInterval.end - expectedEnd) <= tolerance
         else {

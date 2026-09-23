@@ -1507,11 +1507,14 @@ final class MeetingSessionCoordinator: ObservableObject {
             ) { [weak self] stage in
                 self?.updateProcessingStage(stage, generation: generation)
             }
-            guard self.operationGeneration == generation, !Task.isCancelled else {
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil
+            else {
                 throw CancellationError()
             }
             session.speakers = result.speakers
             session.transcriptSegments = result.segments
+            session.postProcessing = result.postProcessing
             session.transcriptCoverageGaps = result.coverageGaps.isEmpty ? nil : result.coverageGaps
             // Canonical attempts carry a sidecar that was already written and read-back verified
             // by the pipeline; legacy attempts leave this nil. The reference only becomes durable
@@ -1611,6 +1614,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             if error is CancellationError {
                 session.speakers = inputSession.speakers
                 session.transcriptSegments = inputSession.transcriptSegments
+                session.postProcessing = inputSession.postProcessing
                 session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
                 session.resultSidecarReference = inputSession.resultSidecarReference
                 session.transcriptIsComplete = inputSession.transcriptIsComplete
@@ -1631,6 +1635,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             // for retry/journal reconciliation.
             session.speakers = inputSession.speakers
             session.transcriptSegments = inputSession.transcriptSegments
+            session.postProcessing = inputSession.postProcessing
             session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
             session.resultSidecarReference = inputSession.resultSidecarReference
             session.transcriptIsComplete = inputSession.transcriptIsComplete

@@ -20,6 +20,37 @@ private nonisolated struct ManifestFixtureObserver: MeetingChunkAudioObserving {
 final class MeetingAnalysisManifestTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.analysis-manifest")
 
+    func testOptInSavedRecordingManifestWithoutChangingSession() throws {
+        guard let path = ProcessInfo.processInfo.environment["FLUIDVOICE_MEETING_MANIFEST_SESSION"] else {
+            throw XCTSkip("Set FLUIDVOICE_MEETING_MANIFEST_SESSION for read-only real-recording validation.")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        let sessionURL = directory.appendingPathComponent("session.json")
+        let original = try Data(contentsOf: sessionURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let session = try decoder.decode(MeetingSession.self, from: original)
+        let request = MeetingBackendRequest(
+            attemptID: UUID(), session: session, sessionDirectory: directory,
+            configuration: MeetingFinalProcessingConfiguration()
+        )
+        let plan = MeetingBackendPlan(request: request, descriptor: MeetingParakeetNemotronBackend.descriptor)
+        let manifest = try MeetingAnalysisManifestBuilder(
+            plan: plan, observer: MeetingChunkAudioObserver(sessionDirectory: directory), analysisSampleRate: 16_000
+        ).build()
+        for track in manifest.tracks {
+            print("MEETING_MANIFEST_REAL track=\(track.kind.rawValue) epochs=\(track.epochs.count) gaps=\(track.gaps.count)")
+            for gap in track.gaps where gap.reason == .decodedAudioExhausted {
+                if let interval = gap.recordedInterval,
+                   let span = track.spans.first(where: { $0.chunk == gap.chunk })
+                {
+                    XCTAssertGreaterThan(interval.duration, 2 / span.observed.decoded.sampleRate)
+                }
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: sessionURL), original)
+    }
+
     private func chunk(
         id: UUID = UUID(),
         sequence: Int,
@@ -385,6 +416,67 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         XCTAssertEqual(result.spans.map(\.recordedInterval), [MeetingAnalysisInterval(start: 0, end: 6)])
         XCTAssertEqual(result.gaps.compactMap(\.recordedInterval), [MeetingAnalysisInterval(start: 6, end: 10)])
         XCTAssertEqual(result.gaps.map(\.reason), [.decodedAudioExhausted])
+    }
+
+    func testTwoSampleTimestampTailPreservesSpeakerEpochWithoutInventingAudio() throws {
+        for sampleRate in [16_000.0, 44_100.0, 48_000.0, 96_000.0] {
+            for missingSamples in [0.5, 1.0, 2.0, 2.5, 3.0] {
+                let firstEnd = 60 + missingSamples / sampleRate
+                var first = self.chunk(sequence: 0, start: 0, end: firstEnd)
+                first.presentationEnd = MeetingMediaTime(
+                    value: Int64((firstEnd * 1_000_000_000).rounded()), timescale: 1_000_000_000
+                )
+                var second = self.chunk(sequence: 1, start: firstEnd, end: firstEnd + 60)
+                second.presentationStart = first.presentationEnd
+                second.presentationEnd = MeetingMediaTime(
+                    value: first.presentationEnd.value + 60_000_000_000, timescale: 1_000_000_000
+                )
+                let track = self.track(kind: .applicationAudio, chunks: [first, second])
+                let plan = self.plan(mode: .onlineCall, tracks: [track])
+                let manifest = try MeetingAnalysisManifestBuilder(
+                    plan: plan,
+                    observer: self.observer([
+                        (track.id, first, self.observed(first, duration: 60, sampleRate: sampleRate)),
+                        (track.id, second, self.observed(second, duration: 60, sampleRate: sampleRate)),
+                    ])
+                ).build()
+                _ = try manifest.validated(against: plan)
+                let result = try XCTUnwrap(manifest.track(track.id))
+                let tolerated = missingSamples <= 2
+                XCTAssertEqual(result.epochs.count, tolerated ? 1 : 2, "\(sampleRate) Hz, \(missingSamples) samples")
+                XCTAssertEqual(result.gaps.count, tolerated ? 0 : 1)
+                XCTAssertEqual(result.spans[0].sourceLocalInterval.end, 60, accuracy: 1e-9)
+                XCTAssertEqual(result.spans[0].analysisInterval.duration, 60, accuracy: 1e-9)
+                XCTAssertEqual(result.spans[0].presentationInterval.end, 60, accuracy: 1e-9)
+                XCTAssertEqual(result.spans[1].recordedInterval.start, firstEnd, accuracy: 1e-9)
+                if !tolerated {
+                    XCTAssertEqual(result.epochs.last?.resetReason, .missingOrUnreadableAudio)
+                    XCTAssertEqual(result.gaps.first?.reason, .decodedAudioExhausted)
+                }
+            }
+        }
+    }
+
+    func testTailToleranceDoesNotHideRealCaptureDiscontinuity() throws {
+        var first = self.chunk(sequence: 0, start: 0, end: 60)
+        first.presentationEnd = MeetingMediaTime(value: 60_000_015_000, timescale: 1_000_000_000)
+        var second = self.chunk(sequence: 1, start: 60, end: 120, discontinuities: [
+            MeetingAudioDiscontinuity(kind: .clockDiscontinuity, presentationTime: nil, gapSeconds: nil, detail: "restart"),
+        ])
+        second.presentationStart = first.presentationEnd
+        second.presentationEnd = MeetingMediaTime(value: 120_000_015_000, timescale: 1_000_000_000)
+        let track = self.track(kind: .applicationAudio, chunks: [first, second])
+        let plan = self.plan(mode: .onlineCall, tracks: [track])
+        let manifest = try MeetingAnalysisManifestBuilder(
+            plan: plan,
+            observer: self.observer([
+                (track.id, first, self.observed(first, duration: 60, sampleRate: 48_000)),
+                (track.id, second, self.observed(second, duration: 60, sampleRate: 48_000)),
+            ])
+        ).build()
+        let result = try XCTUnwrap(manifest.track(track.id))
+        XCTAssertTrue(result.gaps.isEmpty)
+        XCTAssertEqual(result.epochs.map(\.resetReason), [.trackStart, .chunkDiscontinuity])
     }
 
     func testValidatorRejectsOriginChunkIdentityAndCoverageMutations() throws {

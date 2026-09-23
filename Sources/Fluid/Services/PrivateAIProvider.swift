@@ -255,6 +255,8 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func shouldHandleDictation(model: String) -> Bool
     func status(for runtime: PrivateAIIntegrationService.RuntimeConfiguration) async -> PrivateAIStatus
     func loadedModelState() async -> PrivateAIIntegrationService.LoadedModelState?
+    func residencySnapshot() async throws -> MeetingResidentModel?
+    func restoreResidency(_ model: MeetingResidentModel) async throws
     func loadModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
     func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
     func prewarmDictation() async
@@ -282,6 +284,16 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    func residencySnapshot() async throws -> MeetingResidentModel? {
+        // An older private bridge must not silently lose a loaded model on restoration.
+        if let loaded = await self.loadedModelState(), loaded.state == .ready {
+            throw MeetingModelResidencyError.unsupportedProvider
+        }
+        return nil
+    }
+
+    func restoreResidency(_: MeetingResidentModel) async throws {}
+
     func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus {
         try await self.loadModel(model)
     }
@@ -528,5 +540,26 @@ private struct UnavailablePrivateAIIntegrationProvider: PrivateAIIntegrationProv
             backendKind: nil,
             latencyMilliseconds: nil
         )
+    }
+}
+
+/// Value-only residency evidence. A late completion from a retired runtime cannot mark its
+/// replacement loaded, and a configured client is never mistaken for a loaded model.
+nonisolated struct PrivateAIConfirmedResidency: Sendable {
+    private(set) var generation = UUID()
+    private(set) var isResident = false
+
+    mutating func reset() {
+        self.generation = UUID()
+        self.isResident = false
+    }
+
+    mutating func confirm(generation: UUID) {
+        self.observe(isResident: true, generation: generation)
+    }
+
+    mutating func observe(isResident: Bool, generation: UUID) {
+        guard generation == self.generation else { return }
+        self.isResident = isResident
     }
 }
