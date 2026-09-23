@@ -44,7 +44,7 @@ nonisolated enum MeetingModelInstaller {
     }
 
     static func silenceEmbeddingURL(besides package: URL) -> URL {
-        package.deletingLastPathComponent().appendingPathComponent(Self.silenceEmbeddingFileName)
+        package.deletingLastPathComponent().appendingPathComponent(self.silenceEmbeddingFileName)
     }
 
     /// Reads the silence embedding only when its bytes are exactly the published file.
@@ -61,7 +61,7 @@ nonisolated enum MeetingModelInstaller {
     }
 
     static func installSilenceEmbedding(from source: URL, besides package: URL) throws {
-        _ = try Self.validatedSilenceEmbedding(at: source)
+        _ = try self.validatedSilenceEmbedding(at: source)
         let data = try Data(contentsOf: source)
         try data.write(to: Self.silenceEmbeddingURL(besides: package), options: .atomic)
     }
