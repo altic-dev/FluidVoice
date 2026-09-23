@@ -113,6 +113,8 @@ nonisolated enum ThinkingParserFactory {
 /// Standard parser for models that use `<think>...</think>` or `<thinking>...</thinking>` tags.
 /// Used by: DeepSeek, Qwen, Claude (when thinking enabled), most open models
 nonisolated struct StandardThinkingParser: ThinkingParser {
+    private var sawOpeningTag = false
+
     mutating func processChunk(
         _ chunk: String,
         currentState: ThinkingParserState,
@@ -136,6 +138,7 @@ nonisolated struct StandardThinkingParser: ThinkingParser {
                 // Remove processed part including open tag
                 tagBuffer = String(tagBuffer[openRange.upperBound...])
                 newState = .inThinking
+                self.sawOpeningTag = true
             }
         }
 
@@ -180,8 +183,18 @@ nonisolated struct StandardThinkingParser: ThinkingParser {
     }
 
     func finalize(thinkingBuffer: [String], contentBuffer: [String], finalState: ThinkingParserState) -> (thinking: String, content: String) {
-        let thinking = thinkingBuffer.joined()
+        var thinking = thinkingBuffer.joined()
         var content = contentBuffer.joined()
+
+        // Chat templates that open the think block in the prompt (e.g. Qwen3 Thinking-2507)
+        // stream "reasoning</think>answer" with no opening tag. Split on that close the same
+        // way stripThinkingTags does for non-streaming responses.
+        if !self.sawOpeningTag,
+           let closeRange = content.range(of: "</think>") ?? content.range(of: "</thinking>")
+        {
+            thinking += content[..<closeRange.lowerBound]
+            content = String(content[closeRange.upperBound...])
+        }
 
         // Strip any remaining stray tags
         content = content.replacingOccurrences(of: "</think>", with: "")
