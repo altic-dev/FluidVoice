@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import CoreGraphics
 import SwiftUI
 
@@ -86,6 +87,51 @@ struct MeetingSetupReadiness: Equatable {
     )
 }
 
+/// Owned by the window, so leaving FluidMeet does not discard its last loaded history.
+@MainActor
+final class MeetingHistorySnapshot: ObservableObject {
+    @Published private(set) var sessions: [MeetingSession] = []
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var hasLoaded = false
+    private let load: @Sendable () async throws -> [MeetingSession]
+    private var refreshTask: Task<Void, Never>?
+    private var refreshRequested = false
+
+    init(load: @escaping @Sendable () async throws -> [MeetingSession] = {
+        try await MeetingSessionStore.shared.loadAll()
+    }) {
+        self.load = load
+    }
+
+    func refresh() async {
+        self.refreshRequested = true
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+        let task = Task { @MainActor in
+            // A mutation during a disk read requests one follow-up, never a competing read.
+            while self.refreshRequested {
+                self.refreshRequested = false
+                do {
+                    let sessions = try await self.load()
+                    guard !self.refreshRequested else { continue }
+                    self.sessions = sessions
+                    self.errorMessage = nil
+                    self.hasLoaded = true
+                } catch {
+                    guard !self.refreshRequested else { continue }
+                    self.errorMessage = "Meeting history could not be loaded."
+                    self.hasLoaded = true
+                }
+            }
+            self.refreshTask = nil
+        }
+        self.refreshTask = task
+        await task.value
+    }
+}
+
 struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
@@ -111,9 +157,8 @@ struct MeetingTranscriptionView: View {
     @State private var modelReadinessRevision = 0
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
-    @State private var meetingHistory: [MeetingSession] = []
+    @ObservedObject var historySnapshot: MeetingHistorySnapshot
     @State private var selectedHistorySessionID: MeetingSessionID?
-    @State private var meetingHistoryError: String?
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -122,10 +167,12 @@ struct MeetingTranscriptionView: View {
     init(
         coordinator: MeetingSessionCoordinator,
         asrService: ASRService,
+        historySnapshot: MeetingHistorySnapshot,
         onOpenVoiceEngine: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.asrService = asrService
+        self.historySnapshot = historySnapshot
         self.onOpenVoiceEngine = onOpenVoiceEngine
 
         let initialDraft = MeetingTranscriptionSetupDraft(settings: .shared)
@@ -181,7 +228,7 @@ struct MeetingTranscriptionView: View {
                             .accessibilityLabel("Close meeting history")
                         }
                         MeetingHistoryInspector(
-                            sessions: self.meetingHistory,
+                            sessions: self.historySnapshot.sessions,
                             selectedSessionID: Binding(
                                 get: { self.selectedHistorySessionID },
                                 set: {
@@ -191,7 +238,8 @@ struct MeetingTranscriptionView: View {
                                     }
                                 }
                             ),
-                            errorMessage: self.meetingHistoryError,
+                            errorMessage: self.historySnapshot.errorMessage,
+                            isLoading: !self.historySnapshot.hasLoaded,
                             isQuiescent: self.coordinator.isQuiescent,
                             onRefresh: { Task { await self.loadMeetingHistory() } },
                             onRetry: { self.retryProcessingSession(id: $0) },
@@ -228,7 +276,7 @@ struct MeetingTranscriptionView: View {
                     withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
                         self.isMeetingHistoryVisible.toggle()
                     }
-                    if willShowHistory, self.meetingHistory.isEmpty {
+                    if willShowHistory, self.historySnapshot.sessions.isEmpty {
                         Task { await self.loadMeetingHistory() }
                     }
                 }
@@ -381,7 +429,7 @@ struct MeetingTranscriptionView: View {
 
     private var selectedHistorySession: MeetingSession? {
         guard let selectedHistorySessionID else { return nil }
-        return self.meetingHistory.first(where: { $0.id == selectedHistorySessionID })
+        return self.historySnapshot.sessions.first(where: { $0.id == selectedHistorySessionID })
     }
 
     /// Closing a history selection returns to whatever is underneath; closing the just-finished
@@ -1021,16 +1069,12 @@ struct MeetingTranscriptionView: View {
 
     @MainActor
     private func loadMeetingHistory() async {
-        do {
-            self.meetingHistory = try await MeetingSessionStore.shared.loadAll()
-            self.meetingHistoryError = nil
-            if let selectedHistorySessionID,
-               !self.meetingHistory.contains(where: { $0.id == selectedHistorySessionID })
-            {
-                self.selectedHistorySessionID = nil
-            }
-        } catch {
-            self.meetingHistoryError = "Meeting history could not be loaded."
+        await self.historySnapshot.refresh()
+        guard self.historySnapshot.errorMessage == nil else { return }
+        if let selectedHistorySessionID,
+           !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID })
+        {
+            self.selectedHistorySessionID = nil
         }
     }
 
@@ -1433,6 +1477,7 @@ private struct MeetingHistoryInspector: View {
     let sessions: [MeetingSession]
     @Binding var selectedSessionID: MeetingSessionID?
     let errorMessage: String?
+    let isLoading: Bool
     let isQuiescent: Bool
     let onRefresh: () -> Void
     let onRetry: (MeetingSessionID) -> Void
@@ -1523,12 +1568,22 @@ private struct MeetingHistoryInspector: View {
 
             Divider()
 
-            if let errorMessage {
+            if let errorMessage, !self.sessions.isEmpty {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(self.theme.metrics.spacing.md)
+            }
+
+            if let errorMessage, self.sessions.isEmpty {
                 ContentUnavailableView(
                     "History unavailable",
                     systemImage: "exclamationmark.triangle",
                     description: Text(errorMessage)
                 )
+            } else if self.isLoading, self.sessions.isEmpty {
+                ProgressView("Loading meetings…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if self.filteredSessions.isEmpty {
                 ContentUnavailableView(
                     self.searchText.isEmpty ? "No meetings yet" : "No matching meetings",
@@ -1597,6 +1652,7 @@ private struct MeetingHistoryInspector: View {
                 }
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(self.theme.materials.sidebar)
         .alert("Rename Meeting", isPresented: Binding(
             get: { self.renameSessionID != nil },

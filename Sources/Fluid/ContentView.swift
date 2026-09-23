@@ -247,6 +247,7 @@ struct ContentView: View {
     }
 
     @EnvironmentObject private var appServices: AppServices
+    @StateObject private var meetingHistorySnapshot = MeetingHistorySnapshot()
     @StateObject private var mouseTracker = MousePositionTracker()
     @StateObject private var commandModeService = CommandModeService()
     @StateObject private var rewriteModeService = RewriteModeService()
@@ -2177,6 +2178,7 @@ struct ContentView: View {
         MeetingTranscriptionView(
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
+            historySnapshot: self.meetingHistorySnapshot,
             onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
         )
     }

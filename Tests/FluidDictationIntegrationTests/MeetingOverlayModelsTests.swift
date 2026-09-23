@@ -447,3 +447,96 @@ final class MeetingMenuBarStartTests: XCTestCase {
         )
     }
 }
+
+@MainActor
+final class MeetingHistorySnapshotTests: XCTestCase {
+    private func session() -> MeetingSession {
+        MeetingSession(
+            configuration: MeetingCaptureConfiguration(mode: .inRoom, title: "History", microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic")),
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        )
+    }
+
+    func testSnapshotKeepsRowsDuringRefreshAndFailureThenRecovers() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        XCTAssertFalse(snapshot.hasLoaded)
+        XCTAssertEqual(loader.calls, 0)
+        let original = self.session()
+        let initial = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        loader.finish(.success([original]))
+        await initial.value
+        XCTAssertEqual(snapshot.sessions.map(\.id), [original.id])
+        XCTAssertTrue(snapshot.hasLoaded)
+
+        let refresh = Task { await snapshot.refresh() }
+        await loader.waitForCall(2)
+        XCTAssertEqual(snapshot.sessions.map(\.id), [original.id])
+        XCTAssertTrue(snapshot.hasLoaded)
+        loader.finish(.failure(NSError(domain: "test", code: 1)))
+        await refresh.value
+        XCTAssertEqual(snapshot.sessions.map(\.id), [original.id])
+        XCTAssertNotNil(snapshot.errorMessage)
+
+        let retry = Task { await snapshot.refresh() }
+        await loader.waitForCall(3)
+        loader.finish(.success([]))
+        await retry.value
+        XCTAssertTrue(snapshot.sessions.isEmpty)
+        XCTAssertNil(snapshot.errorMessage)
+    }
+
+    func testRefreshDuringReadDoesNotPublishStaleRows() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let stale = self.session()
+        let first = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        let secondStarted = self.expectation(description: "Second refresh registered")
+        let second = Task {
+            secondStarted.fulfill()
+            await snapshot.refresh()
+        }
+        await self.fulfillment(of: [secondStarted], timeout: 2)
+        loader.finish(.success([stale]))
+        await loader.waitForCall(2)
+        XCTAssertFalse(snapshot.hasLoaded)
+        XCTAssertTrue(snapshot.sessions.isEmpty)
+        loader.finish(.success([]))
+        await first.value
+        await second.value
+        XCTAssertEqual(loader.calls, 2)
+        XCTAssertTrue(snapshot.hasLoaded)
+        XCTAssertTrue(snapshot.sessions.isEmpty)
+    }
+}
+
+@MainActor
+private final class HistorySnapshotLoader {
+    private(set) var calls = 0
+    private var pending: CheckedContinuation<[MeetingSession], Error>?
+    private var observer: (Int, CheckedContinuation<Void, Never>)?
+
+    func load() async throws -> [MeetingSession] {
+        try await withCheckedThrowingContinuation { continuation in
+            self.pending = continuation
+            self.calls += 1
+            if let observer = self.observer, self.calls >= observer.0 {
+                self.observer = nil
+                observer.1.resume()
+            }
+        }
+    }
+
+    func waitForCall(_ count: Int) async {
+        if self.calls >= count { return }
+        await withCheckedContinuation { self.observer = (count, $0) }
+    }
+
+    func finish(_ result: Result<[MeetingSession], Error>) {
+        let pending = self.pending
+        self.pending = nil
+        pending?.resume(with: result)
+    }
+}
