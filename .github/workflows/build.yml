@@ -91,6 +91,9 @@ jobs:
     - name: Run standalone onboarding regressions
       run: sh Tests/run_onboarding_tests.sh
 
+    - name: Run release highlights regressions
+      run: sh Tests/run_release_highlights_tests.sh
+
     # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
     # Keep this E2E assertion in the suite for local validation, but skip it in CI.
     - name: Build and test (excluding flaky Tiny Whisper E2E)

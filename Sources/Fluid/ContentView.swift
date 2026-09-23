@@ -319,6 +319,7 @@ struct ContentView: View {
     @FocusState private var isSettingsSearchFocused: Bool
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
+    @State private var showsReleaseHighlights = false
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var recordingFocusTarget: TypingService.CapturedFocusTarget? = nil
@@ -460,6 +461,13 @@ struct ContentView: View {
                 self.handleSpokenSendPartialTranscription(text)
             }
             .overlay(alignment: .center) {}
+            .modifier(ReleaseHighlightsPresenter(
+                requested: self.$showsReleaseHighlights,
+                isEligible: !self.settings.shouldShowOnboarding && !self.showsFluidIntelligenceDemo &&
+                    !self.asr.isRunningOrStarting && self.asr.activeExclusiveActivity == nil &&
+                    !self.asr.showError && !self.showRestartPrompt,
+                onExplore: self.navigateToApp
+            ))
             .sheet(isPresented: self.$showsFluidIntelligenceDemo) {
                 FluidIntelligenceDemoView(
                     asr: self.asr,
@@ -1635,6 +1643,8 @@ struct ContentView: View {
     private var helpEntryButton: some View {
         Menu {
             Button("Documentation", systemImage: "book") { self.openHelpDocumentation() }
+            Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
+                .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {
                 Button("Try Fluid Intelligence", systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
                     .disabled(self.asr.isRunningOrStarting || NotchContentState.shared.isProcessing || DictationPromptTestCoordinator.shared.isActive)
@@ -1674,7 +1684,7 @@ struct ContentView: View {
         .onHover { self.isHelpEntryHovered = $0 }
         .help("Open FluidVoice Help")
         .accessibilityLabel("Help")
-        .accessibilityHint("Documentation, Fluid Intelligence demo, and replay onboarding")
+        .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
     }
 
     private var modeTransitionAnimation: Animation {
