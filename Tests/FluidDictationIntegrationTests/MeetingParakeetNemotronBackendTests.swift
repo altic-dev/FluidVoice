@@ -1289,6 +1289,177 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
+    // MARK: - Canonical speaker identity across Nemotron epochs
+
+    private func stitchObservation(
+        speakerID: UUID,
+        trackID: UUID,
+        epoch: Int,
+        slot: Int,
+        embedding: [Float],
+        deviceUID: String? = nil,
+        speechSeconds: TimeInterval = 8
+    ) -> MeetingCanonicalSpeakerStitcher.Observation {
+        MeetingCanonicalSpeakerStitcher.Observation(
+            speakerID: speakerID,
+            token: MeetingBackendSpeakerToken(
+                analysisEpochID: MeetingAnalysisEpochID(trackID: trackID, ordinal: epoch),
+                label: "slot-\(slot)"
+            ),
+            trackID: trackID,
+            deviceUID: deviceUID,
+            embedding: embedding,
+            speechSeconds: speechSeconds
+        )
+    }
+
+    func testCanonicalStitchMatchesRepeatedVoicesAcrossThreeEpochs() {
+        let track = UUID()
+        let a0 = UUID(), b0 = UUID(), a1 = UUID(), b1 = UUID(), a2 = UUID(), b2 = UUID()
+        let observations = [
+            self.stitchObservation(speakerID: a0, trackID: track, epoch: 0, slot: 0, embedding: [1, 0]),
+            self.stitchObservation(speakerID: b0, trackID: track, epoch: 0, slot: 1, embedding: [0, 1]),
+            self.stitchObservation(speakerID: a1, trackID: track, epoch: 1, slot: 0, embedding: [0.98, 0.2]),
+            self.stitchObservation(speakerID: b1, trackID: track, epoch: 1, slot: 1, embedding: [0.2, 0.98]),
+            self.stitchObservation(speakerID: a2, trackID: track, epoch: 2, slot: 0, embedding: [0.97, 0.24]),
+            self.stitchObservation(speakerID: b2, trackID: track, epoch: 2, slot: 1, embedding: [0.24, 0.97]),
+        ]
+
+        let aliases = MeetingCanonicalSpeakerStitcher.aliases(for: observations)
+        XCTAssertEqual(aliases[a1], a0)
+        XCTAssertEqual(aliases[a2], a0)
+        XCTAssertEqual(aliases[b1], b0)
+        XCTAssertEqual(aliases[b2], b0)
+        XCTAssertNil(aliases[a0])
+        XCTAssertNil(aliases[b0])
+    }
+
+    func testCanonicalStitchCannotLinkSameEpochOrAnotherTrack() {
+        let track = UUID(), otherTrack = UUID()
+        let first = UUID(), sameEpoch = UUID(), other = UUID()
+        let aliases = MeetingCanonicalSpeakerStitcher.aliases(for: [
+            self.stitchObservation(speakerID: first, trackID: track, epoch: 0, slot: 0, embedding: [1, 0]),
+            self.stitchObservation(speakerID: sameEpoch, trackID: track, epoch: 0, slot: 1, embedding: [1, 0]),
+            self.stitchObservation(speakerID: other, trackID: otherTrack, epoch: 1, slot: 0, embedding: [1, 0]),
+        ])
+        XCTAssertTrue(aliases.isEmpty)
+    }
+
+    func testCanonicalStitchAbstainsWhenTwoIncompatibleVoicesAreEquallyClose() {
+        let track = UUID()
+        let first = UUID(), second = UUID(), ambiguous = UUID()
+        let aliases = MeetingCanonicalSpeakerStitcher.aliases(for: [
+            self.stitchObservation(speakerID: first, trackID: track, epoch: 0, slot: 0, embedding: [1, 0]),
+            self.stitchObservation(speakerID: second, trackID: track, epoch: 0, slot: 1, embedding: [0.75, 0.66]),
+            self.stitchObservation(speakerID: ambiguous, trackID: track, epoch: 1, slot: 0, embedding: [0.95, 0.31]),
+        ])
+        XCTAssertTrue(aliases.isEmpty)
+    }
+
+    func testCanonicalStitchAbstainsBetweenSimilarVoicesFromDifferentEpochs() {
+        let track = UUID()
+        let first = UUID(), second = UUID(), ambiguous = UUID()
+        let aliases = MeetingCanonicalSpeakerStitcher.aliases(for: [
+            self.stitchObservation(speakerID: first, trackID: track, epoch: 0, slot: 0, embedding: [1, 0]),
+            self.stitchObservation(speakerID: second, trackID: track, epoch: 1, slot: 0, embedding: [0.5, 0.866]),
+            self.stitchObservation(speakerID: ambiguous, trackID: track, epoch: 2, slot: 0, embedding: [0.866, 0.5]),
+        ])
+        XCTAssertTrue(aliases.isEmpty, "a third voice equally close to two incompatible epochs must not inherit either identity")
+    }
+
+    func testCanonicalStitchRequiresLongCleanSpeechAcrossDeviceChange() {
+        let track = UUID()
+        let first = UUID(), second = UUID()
+        let firstObservation = self.stitchObservation(
+            speakerID: first, trackID: track, epoch: 1, slot: 0,
+            embedding: [1, 0], deviceUID: "built-in", speechSeconds: 6
+        )
+        let secondObservation = self.stitchObservation(
+            speakerID: second, trackID: track, epoch: 2, slot: 0,
+            embedding: [0.6, 0.8], deviceUID: "AirPods", speechSeconds: 7
+        )
+        XCTAssertEqual(
+            MeetingCanonicalSpeakerStitcher.aliases(for: [firstObservation, secondObservation])[second],
+            first
+        )
+        let short = self.stitchObservation(
+            speakerID: second, trackID: track, epoch: 2, slot: 0,
+            embedding: [0.6, 0.8], deviceUID: "AirPods", speechSeconds: 2
+        )
+        XCTAssertTrue(MeetingCanonicalSpeakerStitcher.aliases(for: [firstObservation, short]).isEmpty)
+    }
+
+    func testCanonicalStitchAliasesProductSpeakersWithoutMergingTurnsAcrossEpochs() {
+        let track = UUID(), first = UUID(), second = UUID()
+        let firstSegment = self.canonicalSegment(
+            trackID: track, start: 10, end: 11, speakerID: first, text: "first"
+        )
+        let secondSegment = self.canonicalSegment(
+            trackID: track, start: 11.2, end: 12, speakerID: second, text: "second"
+        )
+        var unknownSegment = self.canonicalSegment(
+            trackID: track, start: 12.2, end: 12.6, speakerID: nil, text: "uncertain"
+        )
+        unknownSegment.attributionState = .unassigned
+        var speakers = [first, second].enumerated().map { index, id in
+            MeetingSessionSpeaker(
+                id: id,
+                displayName: "Speaker \(index + 1)",
+                diarizationClusterID: nil,
+                trackKind: .applicationAudio,
+                isLocalUser: false,
+                identityCandidates: []
+            )
+        }
+        speakers[0].displayName = "Alex"
+        let attempt = self.makeSession(mode: .inRoom, tracks: []).processingAttempts[0]
+        let result = MeetingProcessingResult(
+            speakers: speakers,
+            segments: [firstSegment, secondSegment, unknownSegment],
+            attempt: attempt
+        )
+
+        let stitched = MeetingCanonicalSpeakerStitcher.applying([second: first], to: result)
+        XCTAssertEqual(stitched.segments.count, 3, "identity linking must not bridge the epoch gap")
+        XCTAssertEqual(stitched.segments.map(\.id), [firstSegment.id, secondSegment.id, unknownSegment.id])
+        XCTAssertEqual(stitched.segments.map(\.text), ["first", "second", "uncertain"])
+        XCTAssertEqual(stitched.segments.map(\.speakerID), [first, first, nil])
+        XCTAssertEqual(stitched.segments.last?.attributionState, .unassigned)
+        XCTAssertEqual(stitched.speakers.first { $0.id == second }?.mergedIntoSpeakerID, first)
+        XCTAssertEqual(stitched.speakers.first { $0.id == first }?.displayName, "Alex")
+    }
+
+    func testCanonicalRetryDetectsPersistedManualSpeakerCorrections() {
+        var session = self.makeSession(mode: .inRoom, tracks: [])
+        session.resultSidecarReference = MeetingResultSidecarReference(
+            formatVersion: 1,
+            fileName: "result-\(UUID().uuidString).sidecar.json",
+            sha256: String(repeating: "0", count: 64),
+            byteCount: 1
+        )
+        let speakerID = UUID()
+        session.speakers = [MeetingSessionSpeaker(
+            id: speakerID,
+            displayName: "Speaker 1",
+            diarizationClusterID: "epoch-0:slot-0",
+            trackKind: .microphone,
+            isLocalUser: false,
+            identityCandidates: []
+        )]
+        XCTAssertFalse(session.hasManualTranscriptCorrections)
+
+        session.speakers[0].displayName = "Alex"
+        XCTAssertTrue(session.hasManualTranscriptCorrections)
+        session.speakers[0].displayName = "Speaker 1"
+
+        var corrected = self.canonicalSegment(
+            trackID: UUID(), start: 1, end: 2, speakerID: speakerID, text: "corrected"
+        )
+        corrected.revision = 1
+        session.transcriptSegments = [corrected]
+        XCTAssertTrue(session.hasManualTranscriptCorrections)
+    }
+
     // MARK: - Helpers
 }
 

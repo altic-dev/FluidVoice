@@ -684,6 +684,9 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
         var session = inputSession
+        guard !session.hasManualTranscriptCorrections else {
+            throw MeetingCoordinatorError.manualCorrectionsWouldBeLost
+        }
         if self.activityLease == nil {
             self.activityLease = try await self.audioArbiter.acquireMeetingCapture()
         }
@@ -2019,6 +2022,7 @@ enum MeetingCoordinatorError: LocalizedError {
     case dictationActive
     case noCorrectionToUndo
     case maintenanceInProgress
+    case manualCorrectionsWouldBeLost
 
     var errorDescription: String? {
         switch self {
@@ -2036,6 +2040,8 @@ enum MeetingCoordinatorError: LocalizedError {
             return "There is nothing to undo."
         case .maintenanceInProgress:
             return "FluidVoice is tidying up meeting storage. Try again in a moment."
+        case .manualCorrectionsWouldBeLost:
+            return "Retry would replace your speaker edits. Export or duplicate this transcript before retrying."
         }
     }
 }

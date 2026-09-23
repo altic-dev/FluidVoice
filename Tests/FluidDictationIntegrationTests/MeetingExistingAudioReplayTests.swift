@@ -94,9 +94,14 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
             let trackKindByID = Dictionary(uniqueKeysWithValues: sourceSession.audioTracks.map { ($0.id, $0.kind) })
             for segment in result.segments {
                 XCTAssertFalse(segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                guard let speakerID = segment.speakerID,
-                      let speaker = speakerByID[speakerID] else {
-                    XCTFail("\(sourceSession.id) emitted a segment with an unknown speaker")
+                guard let speakerID = segment.speakerID else {
+                    // Canonical evidence deliberately keeps ambiguous and timing-uncertain text
+                    // visible without inventing a speaker identity.
+                    XCTAssertNotEqual(segment.attributionState, .assigned)
+                    continue
+                }
+                guard let speaker = speakerByID[speakerID] else {
+                    XCTFail("\(sourceSession.id) emitted a segment referencing a missing speaker")
                     continue
                 }
                 XCTAssertEqual(
@@ -106,12 +111,13 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
                 )
             }
 
-            let speakerSummary = result.speakers
+            let activeSpeakers = result.speakers.filter { $0.mergedIntoSpeakerID == nil }
+            let speakerSummary = activeSpeakers
                 .sorted { $0.displayName < $1.displayName }
                 .map { "\($0.displayName)[\($0.trackKind.rawValue)]" }
                 .joined(separator: ", ")
             let summary = "id=\(sourceSession.id) chunks=\(sourceSession.audioTracks.flatMap(\.chunks).count) "
-                    + "segments=\(result.segments.count) speakers=\(result.speakers.count) "
+                    + "segments=\(result.segments.count) speakers=\(activeSpeakers.count) "
                     + "skipped=\(result.skippedChunkIDs.count) wall=\(String(format: "%.3f", wallTimeSeconds))s "
                     + "{\(speakerSummary)}"
             reportLines.append(summary)
@@ -153,6 +159,22 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
                 to: fixtureDirectory.appendingPathComponent("hypothesis-speaker-text.json")
             )
 
+            let readableTranscript = result.segments.map { segment in
+                let speakerName = segment.speakerID.flatMap { speakerByID[$0]?.displayName }
+                    ?? "Unknown speaker"
+                return String(
+                    format: "[%.3f–%.3f] %@: %@",
+                    segment.start.seconds,
+                    segment.end.seconds,
+                    speakerName,
+                    segment.text
+                )
+            }.joined(separator: "\n\n") + "\n"
+            try Self.writeProtected(
+                Data(readableTranscript.utf8),
+                to: fixtureDirectory.appendingPathComponent("transcript.txt")
+            )
+
             let fixtureReport: [String: Any] = [
                 "schemaVersion": 1,
                 "sessionID": sourceSession.id.uuidString,
@@ -161,11 +183,23 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
                 "asrModel": result.attempt.asrModel ?? "unknown",
                 "languageCode": result.attempt.languageCode ?? "unknown",
                 "diarizationFingerprint": result.attempt.diarizationModel ?? "unsupported",
+                "speakerIdentityStatus": result.attempt.speakerIdentityStatus ?? "notRecorded",
+                "speakerIdentityModelFingerprint": result.attempt.speakerIdentityModelFingerprint ?? "absent",
                 "sourceChunkSHA256": sourceSession.audioTracks.flatMap(\.chunks).map(\.sha256).sorted(),
                 "sourceChunkCount": sourceSession.audioTracks.flatMap(\.chunks).count,
-                "speakerCount": result.speakers.count,
+                "speakerCount": activeSpeakers.count,
+                "speakerRecordCount": result.speakers.count,
+                "speakerAliases": result.speakers.compactMap { speaker -> [String: String]? in
+                    guard let targetID = speaker.mergedIntoSpeakerID,
+                          let target = speakerByID[targetID]
+                    else { return nil }
+                    return [
+                        "from": speaker.diarizationClusterID ?? speaker.id.uuidString,
+                        "to": target.diarizationClusterID ?? target.id.uuidString,
+                    ]
+                },
                 "speakerCountByTrack": Dictionary(
-                    grouping: result.speakers,
+                    grouping: activeSpeakers,
                     by: { $0.trackKind.rawValue }
                 ).mapValues(\.count),
                 "segmentCount": result.segments.count,

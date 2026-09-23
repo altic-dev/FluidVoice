@@ -5,7 +5,7 @@ import Foundation
 // backend owns orchestration — per-epoch materialization, unit construction, slot assignment and
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
-// never merges speaker slots across tracks or epochs, and never invents timing: clamping happens
+// keeps backend speaker slots scoped to their tracks and epochs, and never invents timing: clamping happens
 // only at physical epoch bounds, and text without word timings becomes one epoch-covering
 // utterance rather than fabricated words.
 
@@ -13,7 +13,7 @@ import Foundation
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "3",
+        version: "4",
         execution: .local,
         supportedLanguageCodes: ["en"],
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -21,7 +21,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         resultContract: .canonicalEvidence,
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
-            "Speaker slots are epoch-scoped: no identity is merged across tracks or analysis epochs.",
+            "Speaker slots are epoch-scoped; a later product stage links only confident, clean-speech matches within one track when the local embedding model is available.",
             "English only; the fixed Parakeet TDT v2 meeting policy rejects other requested options.",
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning; execute performs no downloads.",

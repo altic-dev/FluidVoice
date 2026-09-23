@@ -1544,6 +1544,25 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         try Task.checkCancellation()
 
+        let stitchResult: MeetingCanonicalSpeakerStitcher.Result
+        if plan.backendID == .parakeetNemotron {
+            let stitchTask = Task.detached(priority: .userInitiated) {
+                await MeetingCanonicalSpeakerStitcher().stitch(
+                    assembly: assembly,
+                    evidence: bundle.evidence,
+                    sessionDirectory: request.sessionDirectory
+                )
+            }
+            stitchResult = await withTaskCancellationHandler {
+                await stitchTask.value
+            } onCancel: {
+                stitchTask.cancel()
+            }
+        } else {
+            stitchResult = .init(aliases: [:], status: "notApplicable", modelFingerprint: nil)
+        }
+        try Task.checkCancellation()
+
         let sidecar = assembly.sidecar
         let attemptID = plan.attemptID
         let backendID = plan.backendID
@@ -1564,7 +1583,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         try Task.checkCancellation()
 
         progress(.completed)
-        return Self.canonicalResult(from: assembly, plan: plan, sidecarReference: reference)
+        // Preserve the raw assembler's epoch-local speaker keys while merging word rows into
+        // turns. Remapping product IDs afterward cannot merge text across a capture discontinuity.
+        var product = Self.canonicalResult(from: assembly, plan: plan, sidecarReference: reference)
+        product.attempt.speakerIdentityStatus = stitchResult.status
+        product.attempt.speakerIdentityModelFingerprint = stitchResult.modelFingerprint
+        return MeetingCanonicalSpeakerStitcher.applying(stitchResult.aliases, to: product)
     }
 
     /// Turns the validated assembly into the normal result. Attempt identity comes from the

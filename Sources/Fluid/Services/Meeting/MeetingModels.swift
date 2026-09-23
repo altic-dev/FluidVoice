@@ -804,6 +804,10 @@ nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, S
     /// backend abstraction existed decode unchanged; legacy attempts leave these nil.
     var backendID: String? = nil
     var backendVersion: String? = nil
+    /// Canonical speaker reconciliation used only local, attempt-scoped voice evidence. Optional
+    /// fields keep older processing-attempt records readable without implying a match occurred.
+    var speakerIdentityStatus: String? = nil
+    var speakerIdentityModelFingerprint: String? = nil
 }
 
 nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
@@ -930,6 +934,22 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Speakers not merged away into another speaker — the set the UI should render.
     var activeSpeakers: [MeetingSessionSpeaker] {
         self.speakers.filter { $0.mergedIntoSpeakerID == nil }
+    }
+
+    /// Canonical retry currently replaces product speakers and segments. Detect user corrections
+    /// from persisted state before permitting that replacement; the in-memory undo stack is not
+    /// durable and cannot be used as the only signal after relaunch.
+    var hasManualTranscriptCorrections: Bool {
+        guard self.resultSidecarReference != nil else { return false }
+        if self.transcriptSegments.contains(where: { $0.revision > 0 }) { return true }
+        return self.speakers.contains { speaker in
+            let prefix = "Speaker "
+            guard speaker.displayName.hasPrefix(prefix),
+                  let ordinal = Int(speaker.displayName.dropFirst(prefix.count)),
+                  ordinal > 0
+            else { return true }
+            return false
+        }
     }
 
     mutating func renameSpeaker(id: SessionSpeakerID, to displayName: String) throws {
