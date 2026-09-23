@@ -7,6 +7,40 @@ import XCTest
 /// location, and fail-closed structure validation. No network and no bundled 190 MB weights.
 @MainActor
 final class MeetingNemotronModelLocatorTests: XCTestCase {
+    func testSilenceEmbeddingInstallCreatesFreshParentAndPreservesExistingFiles() throws {
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("scratch/nemotron-diar/hf-upload/learnable_sil_emb.f32")
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw XCTSkip("Published silence embedding fixture is not available")
+        }
+        let root = try self.makeTempDirectory()
+        let destination = root.appendingPathComponent("fresh/v1/model.mlpackage")
+        let parent = destination.deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parent.path))
+        try MeetingModelInstaller.installSilenceEmbedding(from: source, besides: destination)
+        let installed = MeetingModelInstaller.silenceEmbeddingURL(besides: destination)
+        XCTAssertEqual(try Data(contentsOf: installed), try Data(contentsOf: source))
+        XCTAssertEqual(try MeetingModelInstaller.validatedSilenceEmbedding(at: installed).count, 512)
+        let marker = parent.appendingPathComponent("existing-model-marker")
+        try Data("keep".utf8).write(to: marker)
+        try MeetingModelInstaller.installSilenceEmbedding(from: source, besides: destination)
+        XCTAssertEqual(try Data(contentsOf: marker), Data("keep".utf8))
+        let invalid = root.appendingPathComponent("invalid.f32")
+        try Data("invalid".utf8).write(to: invalid)
+        XCTAssertThrowsError(try MeetingModelInstaller.installSilenceEmbedding(from: invalid, besides: destination))
+        XCTAssertEqual(try Data(contentsOf: installed), try Data(contentsOf: source))
+    }
+
+    func testInvalidSilenceEmbeddingDoesNotCreateDestinationDirectory() throws {
+        let root = try self.makeTempDirectory()
+        let source = root.appendingPathComponent("invalid.f32")
+        try Data("invalid".utf8).write(to: source)
+        let destination = root.appendingPathComponent("fresh/v1/model.mlpackage")
+        XCTAssertThrowsError(try MeetingModelInstaller.installSilenceEmbedding(from: source, besides: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.deletingLastPathComponent().path))
+    }
+
     func testInvalidImportPreservesInstalledPackage() throws {
         let root = try self.makeTempDirectory()
         let source = try self.makeFakePackage(at: root.appendingPathComponent("source"))

@@ -50,10 +50,24 @@ nonisolated enum MeetingSummaryInput {
 /// Keeps summary admission separate from ordinary processing, including cloud calls that
 /// do not own a local-model residency token. Tokens survive cancellation until work drains.
 @MainActor
-final class MeetingSummaryActivityCoordinator {
+final class MeetingSummaryActivityCoordinator: ObservableObject {
     static let shared = MeetingSummaryActivityCoordinator()
     private var processing: Set<UUID> = []
     private var summary: UUID?
+    @Published private(set) var selectionLock: UUID?
+
+    /// Acquired synchronously by the button action, before generation's task starts.
+    func lockSelection() -> UUID? {
+        guard self.selectionLock == nil else { return nil }
+        let token = UUID()
+        self.selectionLock = token
+        return token
+    }
+
+    func unlockSelection(_ token: UUID) {
+        guard self.selectionLock == token else { return }
+        self.selectionLock = nil
+    }
 
     func beginProcessing() -> UUID? {
         guard self.summary == nil else { return nil }
@@ -190,12 +204,16 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService) {
-        guard !self.busy, self.installed, let model else { return }
+        guard !self.busy, self.installed, let model,
+              let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
-        self.operation = Task { [weak self] in
-            guard let self else { return }
-            defer { self.generating = false; self.operation = nil }
+        self.operation = Task {
+            defer {
+                self.generating = false
+                self.operation = nil
+                MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
+            }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
                     let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value

@@ -63,6 +63,7 @@ nonisolated enum MeetingModelInstaller {
     static func installSilenceEmbedding(from source: URL, besides package: URL) throws {
         _ = try self.validatedSilenceEmbedding(at: source)
         let data = try Data(contentsOf: source)
+        try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: Self.silenceEmbeddingURL(besides: package), options: .atomic)
     }
 

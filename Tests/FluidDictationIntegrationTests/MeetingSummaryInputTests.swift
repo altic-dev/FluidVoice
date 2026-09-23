@@ -152,7 +152,12 @@ final class MeetingSummaryActivityTests: XCTestCase {
     func testSummaryBlocksProcessingAndDictationThroughHandback() async throws {
         let gate = MeetingSummaryActivityCoordinator()
         let activity = Activity()
+        let selectionLock = try XCTUnwrap(gate.lockSelection())
+        XCTAssertNil(gate.lockSelection(), "A second summary cannot replace the selected meeting's lock")
+        gate.unlockSelection(UUID())
+        XCTAssertEqual(gate.selectionLock, selectionLock, "An unrelated completion cannot unlock selection")
         activity.onHandback = {
+            XCTAssertEqual(gate.selectionLock, selectionLock, "Selection stays locked until model restoration drains")
             XCTAssertNil(gate.beginProcessing())
             do {
                 _ = try activity.acquireExclusiveActivity(.dictation)
@@ -168,6 +173,12 @@ final class MeetingSummaryActivityTests: XCTestCase {
             } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
         }
         XCTAssertNil(activity.active)
+        gate.unlockSelection(selectionLock)
+        XCTAssertNil(gate.selectionLock)
+        let nextLock = try XCTUnwrap(gate.lockSelection())
+        gate.unlockSelection(selectionLock)
+        XCTAssertEqual(gate.selectionLock, nextLock, "A late old completion cannot unlock a new summary")
+        gate.unlockSelection(nextLock)
         XCTAssertNotNil(gate.beginProcessing())
         XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
     }
@@ -188,11 +199,14 @@ final class MeetingSummaryActivityTests: XCTestCase {
     func testCancellationUsesUncancelledJoinedHandback() async {
         let gate = MeetingSummaryActivityCoordinator()
         let activity = Activity()
+        let selectionLock = gate.lockSelection()
         activity.onHandback = {
+            XCTAssertNotNil(gate.selectionLock, "Cancel retains the meeting selection while work drains")
             XCTAssertFalse(Task.isCancelled)
             XCTAssertNil(gate.beginProcessing())
         }
         let task = Task {
+            defer { if let selectionLock { gate.unlockSelection(selectionLock) } }
             try await gate.withSummary(activity: activity) {
                 withUnsafeCurrentTask { $0?.cancel() }
                 try Task.checkCancellation()
@@ -203,6 +217,7 @@ final class MeetingSummaryActivityTests: XCTestCase {
             XCTFail("Expected cancellation")
         } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(activity.handbacks, 1)
+        XCTAssertNil(gate.selectionLock, "Cancellation eventually unlocks meeting selection")
         XCTAssertNil(activity.active)
         XCTAssertNotNil(gate.beginProcessing())
     }

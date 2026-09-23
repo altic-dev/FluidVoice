@@ -136,6 +136,7 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
     @ObservedObject private var appServices = AppServices.shared
+    @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
     let onOpenVoiceEngine: () -> Void
 
     @Environment(\.theme) private var theme
@@ -207,7 +208,7 @@ struct MeetingTranscriptionView: View {
                         onRenameSession: self.renameMeetingSession,
                         onAssignSpeakers: self.assignSpeakers,
                         canUndoCorrection: { self.coordinator.canUndoCorrection(sessionID: $0) },
-                        isQuiescent: self.coordinator.isQuiescent,
+                        isQuiescent: self.coordinator.isQuiescent && self.summaryActivity.selectionLock == nil,
                         onRepairSetup: self.repairRecordingSetup,
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
@@ -233,7 +234,7 @@ struct MeetingTranscriptionView: View {
                             selectedSessionID: Binding(
                                 get: { self.selectedHistorySessionID },
                                 set: {
-                                    if self.canBrowseMeetingHistory {
+                                    if self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
                                         self.selectedHistorySessionID = $0
                                         if geometry.size.width < 900 { self.isMeetingHistoryVisible = false }
                                     }
@@ -253,6 +254,8 @@ struct MeetingTranscriptionView: View {
                             onRecordAgain: self.recordAgain
                         )
                         .frame(width: min(272, geometry.size.width))
+                        .disabled(self.summaryActivity.selectionLock != nil)
+                        .help(self.summaryActivity.selectionLock == nil ? "Meeting history" : "Finish or cancel the summary before switching meetings.")
                         .overlay(alignment: .leading) {
                             Rectangle()
                                 .fill(self.theme.palette.separator)
@@ -436,8 +439,12 @@ struct MeetingTranscriptionView: View {
     /// Closing a history selection returns to whatever is underneath; closing the just-finished
     /// meeting's own result/failure returns to the new-meeting screen.
     private var closeCanvasAction: (() -> Void)? {
+        guard self.summaryActivity.selectionLock == nil else { return nil }
         if self.selectedHistorySessionID != nil {
-            return { self.selectedHistorySessionID = nil }
+            return {
+                guard self.summaryActivity.selectionLock == nil else { return }
+                self.selectedHistorySessionID = nil
+            }
         }
         switch self.coordinator.state {
         case .completed, .failed, .interrupted:
@@ -730,7 +737,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func retryProcessingSession(id: MeetingSessionID) {
-        guard !self.isRetrying else { return }
+        guard !self.isRetrying, self.summaryActivity.selectionLock == nil else { return }
         self.isRetrying = true
         self.actionErrorMessage = nil
         self.selectedHistorySessionID = nil
@@ -838,6 +845,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func deleteSession(id: MeetingSessionID) {
+        guard self.summaryActivity.selectionLock == nil else { return }
         self.pendingDeleteSessionID = nil
         self.actionErrorMessage = nil
         Task {
@@ -852,6 +860,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func deleteAudio(id: MeetingSessionID) {
+        guard self.summaryActivity.selectionLock == nil else { return }
         self.pendingDeleteAudioSessionID = nil
         self.actionErrorMessage = nil
         Task {
@@ -865,6 +874,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func recordAgain(_ session: MeetingSession) {
+        guard self.summaryActivity.selectionLock == nil else { return }
         guard let configuration = self.recordAgainConfiguration(from: session) else { return }
         self.actionErrorMessage = nil
         Task {
@@ -1056,6 +1066,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func startNewMeeting() {
+        guard self.summaryActivity.selectionLock == nil else { return }
         do {
             try self.coordinator.resetForNewMeeting()
             self.selectedHistorySessionID = nil
