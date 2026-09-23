@@ -12,6 +12,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
+    @ObservedObject private var pillSettings = SettingsStore.shared
     private struct ShortcutRowContent {
         let icon: String
         let iconColor: Color
@@ -1417,6 +1418,21 @@ struct SettingsView: View {
                             .settingsSearchTarget(.overlayPosition)
 
                             Divider().padding(.vertical, 8)
+
+                            HStack {
+                                Text("Pill bars")
+                                    .font(self.theme.typography.bodyStrong)
+                                Spacer()
+                                Picker("Pill bars", selection: Binding(
+                                    get: { self.pillSettings.pillBarCount },
+                                    set: { SettingsStore.shared.pillBarCount = $0 }
+                                )) {
+                                    ForEach(3...8, id: \.self) { count in Text("\(count)").tag(count) }
+                                }
+                                .labelsHidden()
+                                .frame(width: 90)
+                                .help("Number of live frequency bars in the Pill")
+                            }
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {

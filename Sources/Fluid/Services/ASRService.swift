@@ -7617,6 +7617,7 @@ private extension ASRService {
 
 private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private let audioBuffer: ThreadSafeAudioBuffer
+    private let pillSpectrum: PillSpectrumPipeline
     private let onFirstAudio: (Int, UInt64, Int, Int, Double, Int, Int) -> Void
     private let onLevel: (CGFloat) -> Void
     private let onCaptureHealth: (Int, UInt64, Int, Int, Float, Float) -> Void
@@ -7656,8 +7657,10 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         audioBuffer: ThreadSafeAudioBuffer,
         onFirstAudio: @escaping (Int, UInt64, Int, Int, Double, Int, Int) -> Void,
         onLevel: @escaping (CGFloat) -> Void,
-        onCaptureHealth: @escaping (Int, UInt64, Int, Int, Float, Float) -> Void
+        onCaptureHealth: @escaping (Int, UInt64, Int, Int, Float, Float) -> Void,
+        pillSpectrum: PillSpectrumPipeline = .shared
     ) {
+        self.pillSpectrum = pillSpectrum
         self.audioBuffer = audioBuffer
         self.onFirstAudio = onFirstAudio
         self.onLevel = onLevel
@@ -7681,8 +7684,10 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.lastInputSampleEnd = nil
             self.resetCaptureHealthLocked()
             self.recordingEnabled = true
+            self.pillSpectrum.begin(session: sessionID, attempt: attemptID)
         }
         if enabled == false {
+            self.pillSpectrum.end()
             self.recordingEnabled = false
             self.recordingSessionID = 0
             self.recordingAttemptID = 0
@@ -7794,7 +7799,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         }
         if recordingEnabled == false {
             self.lock.unlock()
-            AudioSpectrumMeter.shared.ingest(samples)
+            AudioSpectrumMeter.shared.ingest(samples, sampleRate: sampleRate)
             self.onLevel(self.measureAudioLevel(samples).level)
             return
         }
@@ -7828,6 +7833,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.lock.unlock()
             return
         }
+        var visualizationDiscontinuity = false
         if inputSampleTime >= 0 {
             let acceptedSampleStart = inputSampleTime + Int64(acceptedRange.lowerBound)
             if let lastInputSampleEnd = self.lastInputSampleEnd,
@@ -7836,6 +7842,7 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
                 // Do not interpolate across a hardware discontinuity or a
                 // packet dropped under extreme consumer backpressure.
                 self.resetResamplerLocked()
+                visualizationDiscontinuity = true
             }
             self.lastInputSampleEnd = inputSampleTime + Int64(acceptedRange.upperBound)
         }
@@ -7856,6 +7863,12 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         // Disabling an attempt therefore returns only after every accepted
         // callback has committed its PCM and queued its attempt-scoped signal.
         self.audioBuffer.append(mono16k)
+        self.pillSpectrum.offer(
+            mono16k,
+            sampleRate: 16_000,
+            hostTime: Self.hostTime(inputHostTime, advancedByFrames: acceptedRange.lowerBound, sampleRate: sampleRate),
+            discontinuity: visualizationDiscontinuity
+        )
         if shouldReportFirstAudio {
             let acceptedHostTime = Self.hostTime(
                 inputHostTime,
@@ -7882,7 +7895,9 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         }
         self.lock.unlock()
         let measurement = self.measureAudioLevel(mono16k)
-        AudioSpectrumMeter.shared.ingest(mono16k)
+        if !self.pillSpectrum.isVisible {
+            AudioSpectrumMeter.shared.ingest(mono16k)
+        }
         self.onLevel(measurement.level)
         if let health = self.captureHealthDiagnostic(
             sampleCount: mono16k.count,
@@ -8115,3 +8130,53 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         return mono
     }
 }
+
+#if DEBUG
+extension ASRService {
+    /// Feeds the actual accepted-PCM pipeline, including native-rate resampling and
+    /// both callback entry points. No microphone or recognition provider is involved.
+    static func acceptedPCMForPillTesting(
+        _ packets: [[Float]], sampleRate: Double, fallback: Bool, visualization: Bool
+    ) -> [Float] {
+        let buffer = ThreadSafeAudioBuffer()
+        let meter = PillSpectrumPipeline()
+        meter.setVisible(visualization)
+        let capture = AudioCapturePipeline(
+            audioBuffer: buffer,
+            onFirstAudio: { _, _, _, _, _, _, _ in },
+            onLevel: { _ in },
+            onCaptureHealth: { _, _, _, _, _, _ in },
+            pillSpectrum: meter
+        )
+        capture.setRecordingEnabled(true, sessionID: 1, attemptID: 1)
+        var cursor: Int64 = 0
+        for packet in packets {
+            if fallback {
+                guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
+                      let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(packet.count)),
+                      let channels = pcm.floatChannelData else { return [] }
+                pcm.frameLength = AVAudioFrameCount(packet.count)
+                packet.withUnsafeBufferPointer { samples in
+                    guard let base = samples.baseAddress else { return }
+                    channels[0].update(from: base, count: samples.count)
+                }
+                capture.handle(buffer: pcm, time: AVAudioTime(sampleTime: cursor, atRate: sampleRate))
+            } else {
+                packet.withUnsafeBufferPointer { samples in
+                    guard let base = samples.baseAddress else { return }
+                    capture.handle(
+                        samples: base,
+                        frameCount: samples.count,
+                        sampleRate: sampleRate,
+                        inputHostTime: 0,
+                        inputSampleTime: cursor
+                    )
+                }
+            }
+            cursor += Int64(packet.count)
+        }
+        capture.finishRecording()
+        return buffer.getAll()
+    }
+}
+#endif

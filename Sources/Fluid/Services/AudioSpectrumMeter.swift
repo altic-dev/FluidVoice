@@ -51,9 +51,9 @@ final class AudioSpectrumMeter: @unchecked Sendable {
         if let setup { vDSP_destroy_fftsetup(setup) }
     }
 
-    /// Feed 16 kHz mono samples. Called from the capture pipeline.
-    func ingest(_ samples: [Float]) {
-        guard let setup, samples.isEmpty == false else { return }
+    /// Feed mono samples at their actual rate. Accepted recordings default to 16 kHz.
+    func ingest(_ samples: [Float], sampleRate: Double = 16_000) {
+        guard let setup, samples.isEmpty == false, sampleRate.isFinite, sampleRate > 0 else { return }
         self.lock.lock()
         defer { self.lock.unlock() }
 
@@ -84,8 +84,9 @@ final class AudioSpectrumMeter: @unchecked Sendable {
         // zrip output is scaled by 2; the normalized Hann window halves amplitude again.
         let amplitudeScale = 2 / Float(Self.frameSize)
         for band in 0..<Self.bandCount {
-            let lower = min(self.bandEdges[band], halfSize - 1)
-            let upper = min(max(self.bandEdges[band + 1], lower + 1), halfSize)
+            let rateScale = Double(Self.sampleRate) / sampleRate
+            let lower = min(max(1, Int(Double(self.bandEdges[band]) * rateScale)), halfSize - 1)
+            let upper = min(max(Int(Double(self.bandEdges[band + 1]) * rateScale), lower + 1), halfSize)
             var peak: Float = 0
             self.magnitudes.withUnsafeBufferPointer { pointer in
                 guard let base = pointer.baseAddress else { return }

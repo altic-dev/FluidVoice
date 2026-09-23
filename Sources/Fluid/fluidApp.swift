@@ -18,7 +18,8 @@ struct FluidApp: App {
     var body: some Scene {
         WindowGroup(id: "main") {
             #if DEBUG
-            if MeetingExternalReferenceTrialAGate.autorunEnabled(environment: ProcessInfo.processInfo.environment)
+            if ProcessInfo.processInfo.environment["FLUIDVOICE_PILL_DEMO"] == "1"
+                || MeetingExternalReferenceTrialAGate.autorunEnabled(environment: ProcessInfo.processInfo.environment)
                 || MeetingSCKPairedDiagnosticGate.autorunEnabled()
                 || MeetingStage05EvidenceAutorun.requested()
                 || ProcessInfo.processInfo.environment["FLUIDVOICE_MIC_PHASE1"] != nil

@@ -2240,6 +2240,20 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.microphoneSelectionMigrationVersion) }
     }
 
+    /// Invalid and absent legacy values use six; explicit 3...8 selections survive upgrades.
+    var pillBarCount: Int {
+        get { Self.validPillBarCount(self.defaults.object(forKey: Keys.pillBarCount) as? Int) }
+        set {
+            self.defaults.set(Self.validPillBarCount(newValue), forKey: Keys.pillBarCount)
+            self.objectWillChange.send()
+        }
+    }
+
+    static func validPillBarCount(_ value: Int?) -> Int {
+        guard let value, (3...8).contains(value) else { return 6 }
+        return value
+    }
+
     var visualizerNoiseThreshold: Double {
         get {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
@@ -3602,6 +3616,7 @@ final class SettingsStore: ObservableObject {
             // Current builds always resolve microphones from the priority list.
             microphoneSelectionMode: .manual,
             visualizerNoiseThreshold: self.visualizerNoiseThreshold,
+            pillBarCount: self.pillBarCount,
             overlayPosition: self.overlayPosition,
             overlayBottomOffset: self.overlayBottomOffset,
             overlaySize: self.overlaySize,
@@ -3773,6 +3788,9 @@ final class SettingsStore: ObservableObject {
             self.microphoneSelectionMode = .manual
         }
         self.visualizerNoiseThreshold = payload.visualizerNoiseThreshold
+        if let pillBarCount = payload.pillBarCount {
+            self.pillBarCount = pillBarCount
+        }
         self.overlayPosition = payload.overlayPosition
         self.overlayBottomOffset = payload.overlayBottomOffset
         self.overlaySize = payload.overlaySize
@@ -5796,6 +5814,7 @@ private extension SettingsStore {
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
         static let showMicrophoneChangeAlerts = "ShowMicrophoneChangeAlerts"
         static let showPasteCheckAlerts = "ShowPasteCheckAlerts"
+        static let pillBarCount = "PillBarCount"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
