@@ -270,11 +270,7 @@ final class DictationPostProcessingService {
         }
 
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
-        let systemPrompt = ""
-        let userMessageContent = SettingsStore.renderDictationUserMessage(
-            promptText: promptText,
-            transcript: trimmed
-        )
+        let request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
 
         guard !resolved.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIProcessingError.missingModel(provider: resolved.providerKey)
@@ -292,14 +288,8 @@ final class DictationPostProcessingService {
                 : config.parameterValue
         }
 
-        var messages: [[String: Any]] = []
-        if !systemPrompt.isEmpty {
-            messages.append(["role": "system", "content": systemPrompt])
-        }
-        messages.append(["role": "user", "content": userMessageContent])
-
         var config = LLMClient.Config(
-            messages: messages,
+            messages: request.messages,
             model: resolved.model,
             baseURL: resolved.baseURL,
             apiKey: resolved.apiKey,

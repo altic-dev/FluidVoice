@@ -2731,23 +2731,13 @@ struct ContentView: View {
             return self.buildSystemPrompt(appInfo: appInfo, dictationSlot: dictationSlot)
         }()
 
-        // Dictation enhancement folds the prompt + transcript into a single user
-        // turn (substituting `${transcript}` when present, otherwise appending
-        // the transcript after a blank line). Non-dictation callers — the AI
-        // chat tab specifically — keep the legacy two-message layout where
-        // the prompt is the system turn and the input is the user turn.
-        let systemPrompt: String
-        let userMessageContent: String
-        if isDictationCall {
-            systemPrompt = ""
-            userMessageContent = SettingsStore.renderDictationUserMessage(
-                promptText: promptText,
-                transcript: inputText
-            )
-        } else {
-            systemPrompt = promptText
-            userMessageContent = inputText
-        }
+        // Keep cleanup instructions separate from transcript data. Explicit
+        // ${transcript} templates retain their authored single-turn layout.
+        let request = isDictationCall
+            ? DictationPromptRequest(promptText: promptText, transcript: inputText)
+            : DictationPromptRequest(systemPrompt: promptText, userContent: inputText)
+        let systemPrompt = request.systemPrompt
+        let userMessageContent = request.userContent
 
         // Skip API key validation for local endpoints
         let isLocal = self.isLocalEndpoint(derivedBaseURL)
@@ -2817,15 +2807,7 @@ struct ContentView: View {
             )
         }
 
-        // Build messages array. For dictation enhancement the whole prompt +
-        // transcript is folded into a single user message, so we omit the
-        // (empty) system role. Non-dictation callers keep the legacy
-        // system + user shape.
-        var messages: [[String: Any]] = []
-        if !systemPrompt.isEmpty {
-            messages.append(["role": "system", "content": systemPrompt])
-        }
-        messages.append(["role": "user", "content": userMessageContent])
+        let messages = request.messages
 
         let enableStreaming = streamHandler != nil
 
