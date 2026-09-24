@@ -33,7 +33,7 @@ final class TemperatureSupportTests: XCTestCase {
     }
 
     func testTemperatureUnsupported_openAIReasoningModels() {
-        for model in ["o1", "o3-mini", "gpt-5", "openai/gpt-oss-120b"] {
+        for model in ["o1", "o3-mini", "gpt-5", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-oss-120b"] {
             XCTAssertTrue(
                 SettingsStore.shared.isTemperatureUnsupported(model),
                 "\(model) is a reasoning model and must not receive `temperature`"

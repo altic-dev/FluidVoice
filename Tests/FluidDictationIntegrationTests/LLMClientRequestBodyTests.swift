@@ -109,6 +109,62 @@ final class LLMClientRequestBodyTests: XCTestCase {
         XCTAssertEqual(messages[0]["content"] as? String, "Clean <text>hello</text>")
     }
 
+    // Regression: GPT-6 fell through to Chat Completions with legacy max_tokens (#1010).
+    func testGPT6RequestsUseResponsesAndOutputTokenLimit() throws {
+        for model in ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna-2026-09-22"] {
+            for baseURL in ["https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"] {
+                let config = LLMClient.Config(
+                    messages: [["role": "user", "content": "test"]],
+                    model: model,
+                    baseURL: baseURL,
+                    apiKey: "",
+                    streaming: false,
+                    maxTokens: 50
+                )
+                let request = try LLMClient.shared.buildRequest(config)
+                XCTAssertEqual(request.url?.path, "/v1/responses", model)
+                let data = try XCTUnwrap(request.httpBody)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                XCTAssertEqual(body["max_output_tokens"] as? Int, 50, model)
+                XCTAssertNil(body["max_tokens"], model)
+                XCTAssertNil(body["max_completion_tokens"], model)
+                XCTAssertNotNil(body["input"], model)
+                XCTAssertNil(body["temperature"], model)
+            }
+        }
+    }
+
+    func testGPT6CompatibleProvidersKeepChatCompletionsWithModernTokenLimit() throws {
+        for model in ["gpt-6-luna", "openai/gpt-6-luna", "OPENAI/GPT-6-SOL"] {
+            let config = LLMClient.Config(
+                messages: [["role": "user", "content": "test"]],
+                model: model,
+                baseURL: "https://openrouter.ai/api/v1",
+                apiKey: "",
+                streaming: false,
+                maxTokens: 50
+            )
+            let request = try LLMClient.shared.buildRequest(config)
+            XCTAssertEqual(request.url?.path, "/api/v1/chat/completions", model)
+            let data = try XCTUnwrap(request.httpBody)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(body["max_completion_tokens"] as? Int, 50, model)
+            XCTAssertNil(body["max_tokens"], model)
+            XCTAssertNil(body["max_output_tokens"], model)
+        }
+    }
+
+    func testResponsesRoutingPreservesExistingModelsAndExplicitEndpoints() {
+        for model in ["gpt-5", "o1", "o3-mini", "o4-mini"] {
+            XCTAssertTrue(LLMClient.shouldUseResponsesAPI(baseURL: "https://api.openai.com/v1", model: model))
+        }
+        for model in ["gpt-4o", "gpt-4.1", "llama3"] {
+            XCTAssertFalse(LLMClient.shouldUseResponsesAPI(baseURL: "https://api.openai.com/v1", model: model))
+        }
+        XCTAssertTrue(LLMClient.shouldUseResponsesAPI(baseURL: "https://example.com/v1/responses", model: "custom"))
+        XCTAssertFalse(LLMClient.shouldUseResponsesAPI(baseURL: "https://api.openai.com.example.com/v1", model: "gpt-6-luna"))
+    }
+
     // MARK: - Dictation custom prompt resolution
 
     func testCustomPromptOnly_omitsBasePromptFromEffectivePromptAndRequestBody() {

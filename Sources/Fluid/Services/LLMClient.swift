@@ -241,7 +241,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Request Building
 
-    private func buildRequest(_ config: Config) throws -> URLRequest {
+    func buildRequest(_ config: Config) throws -> URLRequest {
         // Build endpoint URL
         let baseURL = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !baseURL.isEmpty else {
@@ -249,7 +249,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             throw LLMError.invalidURL
         }
 
-        let useResponsesAPI = self.shouldUseResponsesAPI(for: config, baseURL: baseURL)
+        let useResponsesAPI = Self.shouldUseResponsesAPI(baseURL: baseURL, model: config.model)
         let endpoint = self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
 
         guard let url = URL(string: endpoint) else {
@@ -308,7 +308,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return self.appendingPath("chat/completions", to: baseURL)
     }
 
-    private func shouldUseResponsesAPI(for config: Config, baseURL: String) -> Bool {
+    static func shouldUseResponsesAPI(baseURL: String, model: String) -> Bool {
         if baseURL.contains("/responses") {
             return true
         }
@@ -317,8 +317,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
               url.host?.lowercased() == "api.openai.com"
         else { return false }
 
-        let modelLower = config.model.lowercased()
-        return modelLower.hasPrefix("gpt-5") ||
+        let modelLower = model.lowercased()
+        return modelLower.hasPrefix("gpt-6") ||
+            modelLower.hasPrefix("gpt-5") ||
             modelLower.hasPrefix("o1") ||
             modelLower.hasPrefix("o3") ||
             modelLower.hasPrefix("o4")
@@ -376,7 +377,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         if let slash = modelLower.firstIndex(of: "/") {
             modelLower = String(modelLower[modelLower.index(after: slash)...])
         }
-        return modelLower.hasPrefix("gpt-5") ||
+        return modelLower.hasPrefix("gpt-6") ||
+            modelLower.hasPrefix("gpt-5") ||
             modelLower.contains("gpt-5.") ||
             modelLower.hasPrefix("o1") ||
             modelLower.hasPrefix("o3") ||

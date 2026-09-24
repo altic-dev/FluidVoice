@@ -3340,7 +3340,8 @@ final class SettingsStore: ObservableObject {
         if let slash = modelLower.firstIndex(of: "/") {
             modelLower = String(modelLower[modelLower.index(after: slash)...])
         }
-        return modelLower.hasPrefix("gpt-5") ||
+        return modelLower.hasPrefix("gpt-6") ||
+            modelLower.hasPrefix("gpt-5") ||
             modelLower.contains("gpt-5.") ||
             modelLower.hasPrefix("o1") ||
             modelLower.hasPrefix("o3") ||

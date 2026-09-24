@@ -839,7 +839,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
             return
         }
-        let usesResponsesAPI = self.shouldVerifyWithResponsesAPI(baseURL: baseURL, model: trimmedModel)
+        let usesResponsesAPI = LLMClient.shouldUseResponsesAPI(
+            baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: trimmedModel
+        )
 
         let verificationIdentity = ProviderModelVerificationStore.identity(
             providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel
@@ -1056,22 +1059,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return "HTTP \(statusCode): \(responseBody)"
         }
         return "HTTP \(statusCode)"
-    }
-
-    private func shouldVerifyWithResponsesAPI(baseURL: String, model: String) -> Bool {
-        if baseURL.contains("/responses") {
-            return true
-        }
-
-        guard let url = URL(string: baseURL),
-              url.host?.lowercased() == "api.openai.com"
-        else { return false }
-
-        let modelLower = model.lowercased()
-        return modelLower.hasPrefix("gpt-5") ||
-            modelLower.hasPrefix("o1") ||
-            modelLower.hasPrefix("o3") ||
-            modelLower.hasPrefix("o4")
     }
 
     /// Interprets network errors with actionable guidance
