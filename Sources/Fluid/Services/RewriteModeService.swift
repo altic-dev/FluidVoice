@@ -5,6 +5,7 @@ import Foundation
 
 @MainActor
 final class RewriteModeService: ObservableObject {
+    static let shared = RewriteModeService()
     @Published var originalText: String = ""
     @Published var selectedContextText: String = ""
     @Published var rewrittenText: String = ""

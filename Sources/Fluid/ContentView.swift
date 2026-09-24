@@ -173,15 +173,35 @@ enum ShortcutRecordingTarget: Hashable {
 
 // NOTE: Streaming and AI response parsing is now handled by LLMClient
 
+private enum ActiveRecordingMode: String {
+    case none
+    case dictate
+    case promptMode
+    case edit
+    case command
+}
+
+/// Recording state must outlive any one Settings window. A new ContentView can
+/// appear while the shared ASRService is already capturing audio.
+@MainActor
+private final class RecordingSessionState: ObservableObject {
+    static let shared = RecordingSessionState()
+
+    @Published var mode: ActiveRecordingMode = .none
+    @Published var isRecordingForRewrite = false
+    @Published var isRecordingForCommand = false
+    @Published var promptModeOverrideText: String?
+    @Published var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot?
+    @Published var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)?
+    @Published var recordingPrecedingText = ""
+    var prewarmDictationTask: Task<Void, Never>?
+    var overlayLifecycleID: UInt64 = 0
+
+    private init() {}
+}
+
 // swiftlint:disable type_body_length file_length
 struct ContentView: View {
-    private enum ActiveRecordingMode: String {
-        case none
-        case dictate
-        case promptMode
-        case edit
-        case command
-    }
 
     private enum DictationOutputRoute: String {
         case normal
@@ -190,8 +210,9 @@ struct ContentView: View {
 
     @EnvironmentObject private var appServices: AppServices
     @StateObject private var mouseTracker = MousePositionTracker()
-    @StateObject private var commandModeService = CommandModeService()
-    @StateObject private var rewriteModeService = RewriteModeService()
+    @ObservedObject private var commandModeService = CommandModeService.shared
+    @ObservedObject private var rewriteModeService = RewriteModeService.shared
+    @ObservedObject private var recordingSession = RecordingSessionState.shared
     @EnvironmentObject private var menuBarManager: MenuBarManager
     @ObservedObject private var settings = SettingsStore.shared
 
@@ -222,11 +243,26 @@ struct ContentView: View {
     @State private var isPromptModeShortcutEnabled: Bool = SettingsStore.shared.promptModeShortcutEnabled
     @State private var isCommandModeShortcutEnabled: Bool = SettingsStore.shared.commandModeShortcutEnabled
     @State private var isRewriteModeShortcutEnabled: Bool = SettingsStore.shared.rewriteModeShortcutEnabled
-    @State private var isRecordingForRewrite: Bool = false // Track if current recording is for rewrite mode
-    @State private var isRecordingForCommand: Bool = false // Track if current recording is for command mode
-    @State private var promptModeOverrideText: String? // System prompt text to use when in prompt mode
-    @State private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
-    @State private var activeRecordingMode: ActiveRecordingMode = .none
+    private var isRecordingForRewrite: Bool {
+        get { self.recordingSession.isRecordingForRewrite }
+        nonmutating set { self.recordingSession.isRecordingForRewrite = newValue }
+    }
+    private var isRecordingForCommand: Bool {
+        get { self.recordingSession.isRecordingForCommand }
+        nonmutating set { self.recordingSession.isRecordingForCommand = newValue }
+    }
+    private var promptModeOverrideText: String? {
+        get { self.recordingSession.promptModeOverrideText }
+        nonmutating set { self.recordingSession.promptModeOverrideText = newValue }
+    }
+    private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? {
+        get { self.recordingSession.activeDictationShortcutSlot }
+        nonmutating set { self.recordingSession.activeDictationShortcutSlot = newValue }
+    }
+    private var activeRecordingMode: ActiveRecordingMode {
+        get { self.recordingSession.mode }
+        nonmutating set { self.recordingSession.mode = newValue }
+    }
     @State private var pendingAIReprocessText: String? = nil
     @State private var activeShortcutRecordingTarget: ShortcutRecordingTarget? = nil
     @State private var currentRecordingModifierKeyCodes: Set<UInt16> = []
@@ -241,8 +277,14 @@ struct ContentView: View {
     @State private var selectedSidebarItem: SidebarItem?
     @State private var previousSidebarItem: SidebarItem? = nil // Track previous for mode transitions
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
-    @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
-    @State private var recordingPrecedingText: String = ""
+    private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? {
+        get { self.recordingSession.recordingAppInfo }
+        nonmutating set { self.recordingSession.recordingAppInfo = newValue }
+    }
+    private var recordingPrecedingText: String {
+        get { self.recordingSession.recordingPrecedingText }
+        nonmutating set { self.recordingSession.recordingPrecedingText = newValue }
+    }
 
     // Command Mode State
     // @State private var showCommandMode: Bool = false
@@ -278,8 +320,14 @@ struct ContentView: View {
     @State private var accessibilityGuidePanel: NSPanel?
     @State private var accessibilityGuideMonitorTask: Task<Void, Never>?
     @State private var accessibilityGuideRequestID: UUID?
-    @State private var prewarmDictationTask: Task<Void, Never>?
-    @State private var overlayLifecycleID: UInt64 = 0
+    private var prewarmDictationTask: Task<Void, Never>? {
+        get { self.recordingSession.prewarmDictationTask }
+        nonmutating set { self.recordingSession.prewarmDictationTask = newValue }
+    }
+    private var overlayLifecycleID: UInt64 {
+        get { self.recordingSession.overlayLifecycleID }
+        nonmutating set { self.recordingSession.overlayLifecycleID = newValue }
+    }
 
     private var isRecordingAnyShortcutCapture: Bool {
         self.activeShortcutRecordingTarget != nil
@@ -393,8 +441,10 @@ struct ContentView: View {
                 self.refreshInputDevices()
             }
             .onDisappear {
-                Task { await self.asr.stopWithoutTranscription() }
-                self.cancelPrewarmDictationIfNeeded()
+                // A Settings window may close while dictation is active. Window
+                // disappearance is not an explicit cancel request.
+                // Prewarming and post-processing also belong to the recording
+                // session, not to the lifetime of this window.
                 // Note: Overlay lifecycle is now managed by MenuBarManager
                 // Note: NotchContentState handlers capture self (a struct value copy) and are
                 // intentionally kept alive so the overlay remains fully functional when the
@@ -3240,7 +3290,8 @@ struct ContentView: View {
 
         guard self.hotkeyManager == nil else { return }
 
-        self.hotkeyManager = GlobalHotkeyManager(
+        let existingManager = self.appServices.hotkeyManager
+        self.hotkeyManager = existingManager ?? GlobalHotkeyManager(
             asrService: self.asr,
             primaryShortcuts: self.primaryDictationShortcuts,
             promptModeShortcut: self.promptModeHotkeyShortcut,
@@ -3368,6 +3419,12 @@ struct ContentView: View {
                 self.isRecordingAnyShortcutCapture
             }
         )
+        if existingManager != nil {
+            DebugLogger.shared.info("Reusing global hotkey manager; mode=\(self.activeRecordingMode.rawValue), recording=\(self.asr.isRunning)", source: "ContentView")
+        } else if let manager = self.hotkeyManager {
+            self.appServices.installHotkeyManager(manager)
+            DebugLogger.shared.info("Installed global hotkey manager", source: "ContentView")
+        }
 
         self.hotkeyManagerInitialized = self.hotkeyManager?.validateEventTapHealth() ?? false
 

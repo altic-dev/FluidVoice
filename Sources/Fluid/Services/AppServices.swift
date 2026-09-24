@@ -26,6 +26,15 @@ final class AppServices: ObservableObject {
     /// Shared singleton instance
     static let shared = AppServices()
 
+    /// The event tap is process-wide. A Settings window must reuse this manager
+    /// instead of installing a second tap with callbacks into fresh view state.
+    private(set) var hotkeyManager: GlobalHotkeyManager?
+
+    func installHotkeyManager(_ manager: GlobalHotkeyManager) {
+        precondition(self.hotkeyManager == nil, "Only one global hotkey manager may own the event tap")
+        self.hotkeyManager = manager
+    }
+
     // MARK: - Startup Gate
 
     /// Flag indicating the UI has completed its initial render.

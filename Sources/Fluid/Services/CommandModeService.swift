@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class CommandModeService: ObservableObject {
+    static let shared = CommandModeService()
     @Published var conversationHistory: [Message] = []
     @Published var isProcessing = false
     @Published var pendingCommand: PendingCommand? = nil
