@@ -48,6 +48,17 @@ final class TypingService {
         case caretMovedExpectedDistance = "caret_moved_expected_distance"
         case timeout
         case unavailable
+        case clipboardChanged = "clipboard_changed"
+
+        var confirmsDelivery: Bool {
+            switch self {
+            case .appScriptContainsText, .appScriptCaretMovedExpectedDistance,
+                 .fieldContainsText, .caretMovedExpectedDistance:
+                true
+            case .timeout, .unavailable, .clipboardChanged:
+                false
+            }
+        }
     }
 
     private static let focusSnapshotQueue = DispatchQueue(label: "TypingService.FocusSnapshot")
@@ -674,11 +685,14 @@ final class TypingService {
         releasesPasteboardSessionOnReturn = false
         Self.pasteboardRestoreQueue.async {
             defer { Self.pasteboardSessionSemaphore.signal() }
-            _ = self.waitForFocusedTextVerification(
+            let verificationStartedAt = ProcessInfo.processInfo.systemUptime
+            let verification = self.waitForFocusedTextVerification(
                 from: focusedTextSnapshot,
                 expectedText: text,
-                timeoutMicros: restoreDelayMicros
+                timeoutMicros: restoreDelayMicros,
+                temporaryChangeCount: temporaryChangeCount
             )
+            self.log("[TypingService] Paste verification result: \(verification.rawValue), confirmed: \(verification.confirmsDelivery), elapsedMs: \(Int((ProcessInfo.processInfo.systemUptime - verificationStartedAt) * 1000))")
             let pasteboard = NSPasteboard.general
 
             // Avoid clobbering user clipboard changes that happened after our insertion.
@@ -1110,21 +1124,29 @@ final class TypingService {
     private func waitForFocusedTextVerification(
         from snapshot: FocusedTextSnapshot?,
         expectedText: String,
-        timeoutMicros: useconds_t
+        timeoutMicros: useconds_t,
+        temporaryChangeCount: Int
     ) -> PasteVerificationResult {
-        guard let snapshot else {
-            usleep(timeoutMicros)
-            return .unavailable
-        }
-
-        let pollMicros: useconds_t = 50_000
+        let deadline = ProcessInfo.processInfo.systemUptime + Double(timeoutMicros) / 1_000_000
         let expectedLength = max(1, (expectedText as NSString).length)
         let tolerance = max(2, expectedLength / 5)
-        var waited: useconds_t = 0
 
-        while waited < timeoutMicros {
+        while true {
+            // Once the temporary clipboard has been replaced, a later paste
+            // cannot consume it. Release the session so a new dictation does
+            // not wait behind verification that can no longer help.
+            if NSPasteboard.general.changeCount != temporaryChangeCount {
+                return .clipboardChanged
+            }
+
+            let pollMicros = Self.pasteVerificationPollDelayMicros(
+                deadlineUptime: deadline,
+                nowUptime: ProcessInfo.processInfo.systemUptime
+            )
+            guard pollMicros > 0 else { break }
             usleep(pollMicros)
-            waited += pollMicros
+
+            guard let snapshot else { continue }
 
             guard let current = self.captureFocusedTextSnapshot(),
                   current.pid == snapshot.pid
@@ -1169,7 +1191,14 @@ final class TypingService {
             }
         }
 
-        return .timeout
+        return snapshot == nil ? .unavailable : .timeout
+    }
+
+    /// A wall-clock deadline, rather than a sum of sleeps: Accessibility reads
+    /// inside each poll can take longer than the sleep itself.
+    static func pasteVerificationPollDelayMicros(deadlineUptime: TimeInterval, nowUptime: TimeInterval) -> useconds_t {
+        let remainingMicros = max(0, (deadlineUptime - nowUptime) * 1_000_000)
+        return useconds_t(min(50_000, remainingMicros))
     }
 
     private func captureAppScriptTextSnapshot(forBundleIdentifier bundleIdentifier: String?) -> AppScriptTextSnapshot? {

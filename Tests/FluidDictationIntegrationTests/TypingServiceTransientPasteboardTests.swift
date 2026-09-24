@@ -79,4 +79,21 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
             "Restoring focus must not raise every window of the target app (issue #748)"
         )
     }
+
+    func testPasteVerificationUsesWallClockDeadline() {
+        XCTAssertEqual(
+            TypingService.pasteVerificationPollDelayMicros(deadlineUptime: 15, nowUptime: 10),
+            50_000
+        )
+        XCTAssertTrue(
+            (12_900...13_100).contains(
+                TypingService.pasteVerificationPollDelayMicros(deadlineUptime: 15, nowUptime: 14.987)
+            )
+        )
+        XCTAssertEqual(
+            TypingService.pasteVerificationPollDelayMicros(deadlineUptime: 15, nowUptime: 15.001),
+            0,
+            "slow Accessibility polling must not extend the verification limit"
+        )
+    }
 }
