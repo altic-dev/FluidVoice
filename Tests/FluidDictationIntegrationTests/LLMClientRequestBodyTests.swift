@@ -112,7 +112,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
     // Regression: GPT-6 fell through to Chat Completions with legacy max_tokens (#1010).
     func testGPT6RequestsUseResponsesAndOutputTokenLimit() throws {
         for model in ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna-2026-09-22"] {
-            for baseURL in ["https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"] {
+            for baseURL in ["https://api.openai.com/v1", "https://api.openai.com/v1/", "https://api.openai.com/v1/chat/completions"] {
                 let config = LLMClient.Config(
                     messages: [["role": "user", "content": "test"]],
                     model: model,
@@ -151,6 +151,24 @@ final class LLMClientRequestBodyTests: XCTestCase {
             XCTAssertEqual(body["max_completion_tokens"] as? Int, 50, model)
             XCTAssertNil(body["max_tokens"], model)
             XCTAssertNil(body["max_output_tokens"], model)
+        }
+    }
+
+    func testSharedEndpointBuilderHandlesTrailingSlashesAndExplicitEndpoints() {
+        let cases: [(baseURL: String, responses: Bool, expected: String)] = [
+            ("https://api.openai.com/v1/", true, "https://api.openai.com/v1/responses"),
+            ("https://example.com/v1/", false, "https://example.com/v1/chat/completions"),
+            ("https://api.openai.com/v1/chat/completions", true, "https://api.openai.com/v1/responses"),
+            ("https://example.com/v1/responses", true, "https://example.com/v1/responses"),
+            ("https://example.com/v1/chat/completions", false, "https://example.com/v1/chat/completions"),
+            ("http://localhost:11434/api/chat", false, "http://localhost:11434/api/chat"),
+            ("http://localhost:11434/api/generate", false, "http://localhost:11434/api/generate"),
+        ]
+        for testCase in cases {
+            XCTAssertEqual(
+                LLMClient.endpoint(for: testCase.baseURL, useResponsesAPI: testCase.responses),
+                testCase.expected
+            )
         }
     }
 

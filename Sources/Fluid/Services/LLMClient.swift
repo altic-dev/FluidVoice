@@ -250,7 +250,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         let useResponsesAPI = Self.shouldUseResponsesAPI(baseURL: baseURL, model: config.model)
-        let endpoint = self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
+        let endpoint = Self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
 
         guard let url = URL(string: endpoint) else {
             throw LLMError.invalidURL
@@ -284,11 +284,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return request
     }
 
-    private func appendingPath(_ path: String, to baseURL: String) -> String {
+    private static func appendingPath(_ path: String, to baseURL: String) -> String {
         baseURL.hasSuffix("/") ? "\(baseURL)\(path)" : "\(baseURL)/\(path)"
     }
 
-    private func endpoint(for baseURL: String, useResponsesAPI: Bool) -> String {
+    static func endpoint(for baseURL: String, useResponsesAPI: Bool) -> String {
         if useResponsesAPI {
             if baseURL.contains("/responses") {
                 return baseURL
@@ -296,7 +296,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             if baseURL.contains("/chat/completions") {
                 return baseURL.replacingOccurrences(of: "/chat/completions", with: "/responses")
             }
-            return self.appendingPath("responses", to: baseURL)
+            return Self.appendingPath("responses", to: baseURL)
         }
 
         if baseURL.contains("/chat/completions") ||
@@ -305,7 +305,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         {
             return baseURL
         }
-        return self.appendingPath("chat/completions", to: baseURL)
+        return Self.appendingPath("chat/completions", to: baseURL)
     }
 
     static func shouldUseResponsesAPI(baseURL: String, model: String) -> Bool {

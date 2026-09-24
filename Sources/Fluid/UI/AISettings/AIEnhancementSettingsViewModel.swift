@@ -856,25 +856,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullURL: String
 
-        if usesResponsesAPI {
-            if endpoint.contains("/responses") {
-                fullURL = endpoint
-            } else if endpoint.contains("/chat/completions") {
-                fullURL = endpoint.replacingOccurrences(of: "/chat/completions", with: "/responses")
-            } else {
-                fullURL = endpoint + "/responses"
-            }
-        } else if isAnthropic {
+        if isAnthropic && !usesResponsesAPI {
             // Anthropic uses /messages endpoint, not /chat/completions
             if endpoint.contains("/messages") {
                 fullURL = endpoint
             } else {
                 fullURL = endpoint + "/messages"
             }
-        } else if endpoint.contains("/chat/completions") || endpoint.contains("/api/chat") || endpoint.contains("/api/generate") {
-            fullURL = endpoint
         } else {
-            fullURL = endpoint + "/chat/completions"
+            fullURL = LLMClient.endpoint(for: endpoint, useResponsesAPI: usesResponsesAPI)
         }
 
         // Debug logging
