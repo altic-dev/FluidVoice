@@ -10,9 +10,10 @@ struct BottomWaveformView: View {
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var audioLevel = OverlayAudioLevelState.shared
     private var isWaitingForMicrophone: Bool {
-        !self.audioLevel.isLive && !self.contentState.isProcessing && !self.isReleaseAnimationActive
+        !self.audioLevel.isLive && !self.isProcessingVisualActive
     }
 
+    @ObservedObject private var settings = SettingsStore.shared
     @State private var simulation = WaveformSimulation()
     @State private var noiseThreshold: CGFloat = .init(SettingsStore.shared.visualizerNoiseThreshold)
 
@@ -41,7 +42,7 @@ struct BottomWaveformView: View {
     }
 
     private var isProcessingVisualActive: Bool {
-        self.contentState.isProcessing || self.isReleaseAnimationActive
+        self.contentState.isProcessing || self.isReleaseAnimationActive || (self.isPillStyle && self.audioLevel.isFrozenForStop)
     }
 
     private var currentGlowIntensity: CGFloat {
@@ -71,8 +72,16 @@ struct BottomWaveformView: View {
 
     var body: some View {
         ZStack {
-            self.barsView
-                .foregroundStyle(self.barFillColor)
+            if self.isPillStyle && !self.isProcessingVisualActive && self.contentState.isBottomOverlayPresented {
+                PillLiveMeterView(
+                    count: self.settings.pillBarCount,
+                    sensitivity: Double(self.noiseThreshold),
+                    ready: self.audioLevel.isLive
+                )
+            } else {
+                self.barsView
+                    .foregroundStyle(self.barFillColor)
+            }
 
             if self.isProcessingVisualActive {
                 CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
@@ -97,7 +106,7 @@ struct BottomWaveformView: View {
     @ViewBuilder
     private var barsView: some View {
         // The panel stays alive while hidden; never tick the simulation unless it is on screen.
-        if !self.contentState.isBottomOverlayPresented || self.isReleaseAnimationActive || self.contentState.isProcessing {
+        if !self.contentState.isBottomOverlayPresented || self.isProcessingVisualActive {
             self.bars(heights: Array(repeating: self.minHeight, count: self.barCount))
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 50.0)) { timeline in

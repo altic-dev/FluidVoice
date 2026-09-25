@@ -48,6 +48,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
+        if PillMeterDebugDemo.startIfRequested() {
+            return
+        }
         // Stage 0.5, Trial A, and C2 autoruns must return before Core Audio observers,
         // logging, AppServices, and UI startup. Each owns one bounded diagnostic stream.
         if MeetingStage05EvidenceAutorun.startIfRequested() {
