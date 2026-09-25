@@ -532,6 +532,58 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertEqual(decision.activeModifierOnlyShortcut, leftOption)
     }
 
+    func testTapReplacementDiscardsOrphanedModifierPressAndAllowsNextPress() {
+        let shortcut = HotkeyShortcut(keyCode: 58, modifierFlags: .option, modifierKeyCodes: [58])
+        let state = HotkeyState()
+        state.withLock {
+            state.isKeyPressed = true
+            state.modifierOnlyKeyDown = true
+            state.activeModifierOnlyType = .transcription
+            state.activeModifierOnlyShortcut = shortcut
+            state.pressedModifierKeyCodes = [58]
+            state.otherKeyPressedDuringModifier = true
+            state.automaticPressStartTimes[.transcription] = Date()
+            state.automaticPressWasTargetActive[.transcription] = true
+        }
+
+        XCTAssertNil(state.resetAfterTapReplacement())
+        XCTAssertFalse(state.isKeyPressed)
+        XCTAssertFalse(state.modifierOnlyKeyDown)
+        XCTAssertNil(state.activeModifierOnlyType)
+        XCTAssertNil(state.activeModifierOnlyShortcut)
+        XCTAssertTrue(state.pressedModifierKeyCodes.isEmpty)
+        XCTAssertFalse(state.otherKeyPressedDuringModifier)
+        XCTAssertTrue(state.automaticPressStartTimes.isEmpty)
+        XCTAssertTrue(state.automaticPressWasTargetActive.isEmpty)
+
+        func decision(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> ModifierOnlyShortcutFlagsDecision {
+            ModifierOnlyShortcutFlagsDecision.evaluate(
+                shortcut: shortcut,
+                holdModeType: .transcription,
+                isEnabled: true,
+                keyCode: keyCode,
+                modifiers: modifiers,
+                state: ModifierOnlyShortcutTrackingState(
+                    pressedModifierKeyCodes: state.pressedModifierKeyCodes,
+                    activeModifierOnlyType: state.activeModifierOnlyType,
+                    activeModifierOnlyShortcut: state.activeModifierOnlyShortcut,
+                    otherKeyPressedDuringModifier: state.otherKeyPressedDuringModifier,
+                    isModeKeyPressed: state.isKeyPressed
+                )
+            )
+        }
+
+        // An orphaned release cannot stop recording; a new complete press can.
+        XCTAssertEqual(decision(keyCode: 58, modifiers: []).outcome, .ignore)
+        state.pressedModifierKeyCodes = [58]
+        let freshDown = decision(keyCode: 58, modifiers: .option)
+        XCTAssertEqual(freshDown.outcome, .start)
+        state.activeModifierOnlyType = freshDown.activeModifierOnlyType
+        state.activeModifierOnlyShortcut = freshDown.activeModifierOnlyShortcut
+        state.pressedModifierKeyCodes = []
+        XCTAssertEqual(decision(keyCode: 58, modifiers: []).outcome, .finish(wasCleanPress: true))
+    }
+
     func testPrimaryDictationShortcutsFallbackToLegacyShortcut() throws {
         try self.withRestoredDefaults(keys: [self.legacyHotkeyShortcutKey, self.primaryDictationShortcutsKey]) {
             let legacyShortcut = HotkeyShortcut(keyCode: 12, modifierFlags: [.option])

@@ -9,7 +9,7 @@ nonisolated enum HotkeyHoldModeType: Hashable {
     case promptAssignment
 }
 
-private nonisolated enum ActivePrimaryShortcutPress: Equatable {
+nonisolated enum ActivePrimaryShortcutPress: Equatable {
     case keyboard(UInt16)
     case mouse(Int)
 }
@@ -198,7 +198,7 @@ struct ModifierOnlyShortcutFlagsDecision: Equatable {
     }
 }
 
-private final nonisolated class HotkeyState: @unchecked Sendable {
+final nonisolated class HotkeyState: @unchecked Sendable {
     private let lock = NSLock()
     var isKeyPressed = false
     var isPromptModeKeyPressed = false
@@ -223,6 +223,34 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
         self.lock.lock()
         defer { self.lock.unlock() }
         return block()
+    }
+
+    /// Replacing an event tap can lose a key-up. Discard the incomplete press without
+    /// canceling the active recording; a later complete press can then be recognized.
+    func resetAfterTapReplacement() -> Task<Void, Never>? {
+        self.withLock {
+            let hadPrimaryPress = self.activePrimaryShortcutPress != nil || self.isKeyPressed
+            self.activePrimaryShortcutPress = nil
+            self.isKeyPressed = false
+            self.isPromptModeKeyPressed = false
+            self.isCommandModeKeyPressed = false
+            self.isRewriteKeyPressed = false
+            self.isPromptAssignmentKeyPressed = false
+            self.pressedModifierKeyCodes.removeAll()
+            self.modifierOnlyKeyDown = false
+            self.activeModifierOnlyType = nil
+            self.activeModifierOnlyShortcut = nil
+            self.otherKeyPressedDuringModifier = false
+            self.modifierPressStartTime = nil
+            self.holdModeStartTriggeredTypes.removeAll()
+            self.automaticPressStartTimes.removeAll()
+            self.automaticPressWasTargetActive.removeAll()
+            self.automaticPressStartedTypes.removeAll()
+
+            guard hadPrimaryPress else { return nil }
+            _ = self.pendingReleaseStopTokens.removeValue(forKey: .transcription)
+            return self.pendingReleaseStopTasks.removeValue(forKey: .transcription)
+        }
     }
 }
 
@@ -695,22 +723,11 @@ final class GlobalHotkeyManager: NSObject {
 
         self.eventTap = nil
         self.runLoopSource = nil
-        self.clearPrimaryShortcutPressState()
+        self.resetPressTrackingAfterTapReplacement()
     }
 
-    private nonisolated func clearPrimaryShortcutPressState() {
-        let task = self.state.withLock { () -> Task<Void, Never>? in
-            guard self.state.activePrimaryShortcutPress != nil || self.state.isKeyPressed else { return nil }
-            self.state.activePrimaryShortcutPress = nil
-            self.state.isKeyPressed = false
-            self.state.holdModeStartTriggeredTypes.remove(.transcription)
-            self.state.automaticPressStartTimes.removeValue(forKey: .transcription)
-            self.state.automaticPressWasTargetActive.removeValue(forKey: .transcription)
-            self.state.automaticPressStartedTypes.remove(.transcription)
-            _ = self.state.pendingReleaseStopTokens.removeValue(forKey: .transcription)
-            return self.state.pendingReleaseStopTasks.removeValue(forKey: .transcription)
-        }
-        task?.cancel()
+    private nonisolated func resetPressTrackingAfterTapReplacement() {
+        self.state.resetAfterTapReplacement()?.cancel()
     }
 
     private func markOtherInputDuringModifierOnly() {
@@ -1522,6 +1539,7 @@ final class GlobalHotkeyManager: NSObject {
         self.pressedModifierKeyCodes = []
         self.modifierOnlyKeyDown = false
         self.activeModifierOnlyType = nil
+        self.activeModifierOnlyShortcut = nil
         self.otherKeyPressedDuringModifier = false
         self.modifierPressStartTime = nil
         self.clearAutomaticPressTracking()
