@@ -555,6 +555,7 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertFalse(state.otherKeyPressedDuringModifier)
         XCTAssertTrue(state.automaticPressStartTimes.isEmpty)
         XCTAssertTrue(state.automaticPressWasTargetActive.isEmpty)
+        XCTAssertTrue(state.suppressModifierOnlyUntilRelease)
 
         func decision(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> ModifierOnlyShortcutFlagsDecision {
             ModifierOnlyShortcutFlagsDecision.evaluate(
@@ -573,8 +574,13 @@ final class HotkeyShortcutTests: XCTestCase {
             )
         }
 
-        // An orphaned release cannot stop recording; a new complete press can.
+        // A mid-press event and the orphaned release cannot start or stop recording.
+        XCTAssertTrue(state.shouldIgnoreModifierOnlyFlagsChanged(modifiers: .option))
+        XCTAssertTrue(state.shouldIgnoreModifierOnlyFlagsChanged(modifiers: []))
+        XCTAssertFalse(state.suppressModifierOnlyUntilRelease)
+        XCTAssertFalse(state.shouldIgnoreModifierOnlyFlagsChanged(modifiers: .option))
         XCTAssertEqual(decision(keyCode: 58, modifiers: []).outcome, .ignore)
+        // A new complete press can stop the still-running recording.
         state.pressedModifierKeyCodes = [58]
         let freshDown = decision(keyCode: 58, modifiers: .option)
         XCTAssertEqual(freshDown.outcome, .start)
@@ -582,6 +588,14 @@ final class HotkeyShortcutTests: XCTestCase {
         state.activeModifierOnlyShortcut = freshDown.activeModifierOnlyShortcut
         state.pressedModifierKeyCodes = []
         XCTAssertEqual(decision(keyCode: 58, modifiers: []).outcome, .finish(wasCleanPress: true))
+    }
+
+    func testTapReplacementWithoutAnActivePressDoesNotQuarantineModifiers() {
+        let state = HotkeyState()
+
+        XCTAssertNil(state.resetAfterTapReplacement())
+        XCTAssertFalse(state.suppressModifierOnlyUntilRelease)
+        XCTAssertFalse(state.shouldIgnoreModifierOnlyFlagsChanged(modifiers: .option))
     }
 
     func testPrimaryDictationShortcutsFallbackToLegacyShortcut() throws {

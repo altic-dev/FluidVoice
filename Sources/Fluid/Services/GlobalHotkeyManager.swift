@@ -207,6 +207,7 @@ final nonisolated class HotkeyState: @unchecked Sendable {
     var isPromptAssignmentKeyPressed = false
     var pressedModifierKeyCodes: Set<UInt16> = []
     var modifierOnlyKeyDown = false
+    var suppressModifierOnlyUntilRelease = false
     var activeModifierOnlyType: HotkeyHoldModeType?
     var activeModifierOnlyShortcut: HotkeyShortcut?
     var otherKeyPressedDuringModifier = false
@@ -230,6 +231,9 @@ final nonisolated class HotkeyState: @unchecked Sendable {
     func resetAfterTapReplacement() -> Task<Void, Never>? {
         self.withLock {
             let hadPrimaryPress = self.activePrimaryShortcutPress != nil || self.isKeyPressed
+            self.suppressModifierOnlyUntilRelease = self.modifierOnlyKeyDown
+                || self.activeModifierOnlyType != nil
+                || !self.pressedModifierKeyCodes.isEmpty
             self.activePrimaryShortcutPress = nil
             self.isKeyPressed = false
             self.isPromptModeKeyPressed = false
@@ -250,6 +254,18 @@ final nonisolated class HotkeyState: @unchecked Sendable {
             guard hadPrimaryPress else { return nil }
             _ = self.pendingReleaseStopTokens.removeValue(forKey: .transcription)
             return self.pendingReleaseStopTasks.removeValue(forKey: .transcription)
+        }
+    }
+
+    /// Ignore events from an interrupted press until all modifiers have been released.
+    /// The next complete press can then start from a known state.
+    func shouldIgnoreModifierOnlyFlagsChanged(modifiers: NSEvent.ModifierFlags) -> Bool {
+        self.withLock {
+            guard self.suppressModifierOnlyUntilRelease else { return false }
+            if modifiers.intersection(HotkeyShortcut.relevantModifierMask).isEmpty {
+                self.suppressModifierOnlyUntilRelease = false
+            }
+            return true
         }
     }
 }
@@ -727,7 +743,12 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private nonisolated func resetPressTrackingAfterTapReplacement() {
-        self.state.resetAfterTapReplacement()?.cancel()
+        let pendingStop = self.state.resetAfterTapReplacement()
+        pendingStop?.cancel()
+        DebugLogger.shared.info(
+            "Event tap press state reset [modifierQuarantined=\(self.state.withLock { self.state.suppressModifierOnlyUntilRelease }) pendingPrimaryStopCancelled=\(pendingStop != nil)]",
+            source: "GlobalHotkeyManager"
+        )
     }
 
     private func markOtherInputDuringModifierOnly() {
@@ -1099,6 +1120,14 @@ final class GlobalHotkeyManager: NSObject {
             }
 
         case .flagsChanged:
+            if self.state.shouldIgnoreModifierOnlyFlagsChanged(modifiers: eventModifiers) {
+                let stillQuarantined = self.state.withLock { self.state.suppressModifierOnlyUntilRelease }
+                DebugLogger.shared.info(
+                    "Ignoring modifier event after tap replacement [allModifiersReleased=\(!stillQuarantined)]",
+                    source: "GlobalHotkeyManager"
+                )
+                return Unmanaged.passUnretained(event)
+            }
             if HotkeyShortcut.modifierFlag(forKeyCode: keyCode) != nil {
                 self.pressedModifierKeyCodes = self.synchronizedPressedModifierKeyCodes(
                     changedKeyCode: keyCode,
