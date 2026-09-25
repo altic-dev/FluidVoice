@@ -3,6 +3,10 @@ import Foundation
 /// Simple terminal command execution service
 /// All responses are JSON-parsable for easy AI processing
 final class TerminalService {
+    nonisolated static let maxCapturedOutputBytes = 1 * 1024 * 1024
+
+    nonisolated private static let pipeReadChunkBytes = 32 * 1024
+
     // MARK: - JSON Response Types
 
     struct CommandResult: Codable {
@@ -108,11 +112,26 @@ final class TerminalService {
                 }
             }
 
+            // Drain stdout and stderr concurrently while the process is still
+            // running. A child that writes more than the pipe buffer (~64KB)
+            // blocks on write() until its output is read, so reading only after
+            // waitUntilExit() would deadlock until the timeout fired and return
+            // truncated output. Background reads keep both pipes drained so the
+            // process can run to completion.
+            let outputHandle = outputPipe.fileHandleForReading
+            let errorHandle = errorPipe.fileHandleForReading
+            async let pendingOutput = Task.detached {
+                Self.readCapturedOutput(from: outputHandle, streamName: "stdout")
+            }.value
+            async let pendingError = Task.detached {
+                Self.readCapturedOutput(from: errorHandle, streamName: "stderr")
+            }.value
+
+            let outputData = await pendingOutput
+            let errorData = await pendingError
+
             process.waitUntilExit()
             timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
 
             let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -167,5 +186,59 @@ final class TerminalService {
 
         // If serialization fails for any reason, return minimal safe JSON
         return #"{"success":false,"output":"<json-serialization-failed>","exitCode":-1}"#
+    }
+
+    nonisolated private static func readCapturedOutput(from handle: FileHandle, streamName: String) -> Data {
+        var capturedData = Data()
+        var didTruncate = false
+
+        while true {
+            let chunk: Data
+            do {
+                guard let nextChunk = try handle.read(upToCount: Self.pipeReadChunkBytes),
+                      !nextChunk.isEmpty
+                else {
+                    break
+                }
+                chunk = nextChunk
+            } catch {
+                break
+            }
+
+            if capturedData.count < Self.maxCapturedOutputBytes {
+                let remainingBytes = Self.maxCapturedOutputBytes - capturedData.count
+                if chunk.count <= remainingBytes {
+                    capturedData.append(chunk)
+                } else {
+                    capturedData.append(contentsOf: chunk.prefix(remainingBytes))
+                    didTruncate = true
+                }
+            } else {
+                didTruncate = true
+            }
+        }
+
+        if didTruncate {
+            Self.trimTrailingIncompleteUTF8Sequence(in: &capturedData)
+            capturedData.append(Self.truncationNotice(for: streamName))
+        }
+
+        return capturedData
+    }
+
+    nonisolated private static func trimTrailingIncompleteUTF8Sequence(in data: inout Data) {
+        for _ in 0 ..< 4 {
+            if String(data: data, encoding: .utf8) != nil {
+                return
+            }
+            if data.isEmpty {
+                return
+            }
+            data.removeLast()
+        }
+    }
+
+    nonisolated private static func truncationNotice(for streamName: String) -> Data {
+        Data("\n[\(streamName) truncated after \(Self.maxCapturedOutputBytes) bytes]".utf8)
     }
 }
