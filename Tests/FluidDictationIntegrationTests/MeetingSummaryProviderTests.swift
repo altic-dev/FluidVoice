@@ -1,3 +1,4 @@
+import Darwin
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -88,6 +89,58 @@ final class MeetingSummaryProviderTests: XCTestCase {
             XCTFail("Expected cancellation")
         } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertLessThan(Date().timeIntervalSince(start), 8)
+    }
+
+    func testCLICancellationAndTimeoutStopWrapperAndChild() async throws {
+        let (directory, route) = try self.cliFixture(.claude, script: #"""
+        #!/bin/sh
+        trap '' TERM
+        /bin/sh -c 'trap - TERM; exec /bin/sleep 30' &
+        child=$!
+        printf '%s %s' "$$" "$child" > "$(/usr/bin/dirname "$0")/pids"
+        wait "$child"
+        """#)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidFile = directory.appendingPathComponent("pids")
+        for cancel in [true, false] {
+            try? FileManager.default.removeItem(at: pidFile)
+            let task = Task {
+                try await MeetingSummaryCLIService.generate(transcript: "Meeting", kind: .executive, route: route, timeout: cancel ? 240 : 1)
+            }
+            defer { task.cancel() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            var pids: [Int32] = []
+            while pids.count != 2, ContinuousClock.now < deadline {
+                if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
+                    pids = text.split(separator: " ").compactMap { Int32($0) }
+                }
+                if pids.count != 2 { try await Task.sleep(for: .milliseconds(25)) }
+            }
+            XCTAssertEqual(pids.count, 2, "Wait for a real wrapper and child before cancelling")
+            guard pids.count == 2 else { task.cancel(); _ = try? await task.value; return }
+            defer {
+                // Cleanup still runs if a regression leaves either fixture process alive.
+                for pid in pids where kill(pid, 0) == 0 {
+                    kill(pid, SIGKILL)
+                }
+            }
+            XCTAssertNotEqual(pids[0], pids[1])
+            if cancel { task.cancel() }
+            do {
+                _ = try await task.value
+                XCTFail("Expected cancellation or timeout")
+            } catch {
+                if cancel {
+                    XCTAssertTrue(error is CancellationError)
+                } else {
+                    XCTAssertTrue(error.localizedDescription.contains("timed out"))
+                }
+            }
+            for pid in pids {
+                XCTAssertEqual(kill(pid, 0), -1, "Both the wrapper and its child must exit before generation returns")
+                XCTAssertEqual(errno, ESRCH)
+            }
+        }
     }
 
     private func cliFixture(_ cli: MeetingSummaryCLI, script: String) throws -> (URL, MeetingSummaryRoute) {
@@ -195,6 +248,30 @@ final class MeetingSummaryProviderTests: XCTestCase {
         } catch { XCTAssertTrue(error is MeetingPostProcessingError) }
     }
 
+    func testIncompleteRemoteResponsesAreRejectedBeforeReturningSummary() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let service = MeetingSummaryRemoteService(session: session)
+        for endpoint in [
+            "https://length.example/v1",
+            "https://filtered.example/v1",
+            "https://incomplete.example/v1/responses",
+            "https://partial-item.example/v1/responses",
+            "https://details.example/v1/responses",
+        ] {
+            do {
+                _ = try await service.generate(transcript: "Discuss release", kind: .executive, route: self.route(baseURL: endpoint))
+                XCTFail("Partial content must not reach the controller's save path: \(endpoint)")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("incomplete summary"), "\(endpoint): \(error)")
+            }
+        }
+        let complete = try await service.generate(transcript: "Discuss release", kind: .executive, route: self.route(baseURL: "https://complete.example/v1/responses"))
+        XCTAssertEqual(complete, "Release agreed")
+    }
+
     func testOversizedInputFailsBeforeNetworkRequest() async {
         do {
             _ = try await MeetingSummaryRemoteService().generate(transcript: String(repeating: "a", count: 512_001), kind: .executive, route: self.route())
@@ -240,7 +317,27 @@ private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
         guard let url = self.request.url,
               let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"]) else { return }
         let text = url.host == "empty.example" ? "" : "Release agreed"
-        let data = Data("{\"choices\":[{\"message\":{\"content\":\"\(text)\"},\"finish_reason\":\"stop\"}]}".utf8)
+        let json: [String: Any]
+        if url.path.contains("/responses") {
+            json = [
+                "status": url.host == "incomplete.example" ? "incomplete" : "completed",
+                "incomplete_details": url.host == "details.example" ? ["reason": "max_output_tokens"] : NSNull(),
+                "output": [[
+                    "type": "message",
+                    "status": url.host == "partial-item.example" ? "incomplete" : "completed",
+                    "content": [["type": "output_text", "text": text]],
+                ]],
+            ]
+        } else {
+            let reason: String
+            switch url.host {
+            case "length.example": reason = "length"
+            case "filtered.example": reason = "content_filter"
+            default: reason = "stop"
+            }
+            json = ["choices": [["message": ["content": text], "finish_reason": reason]]]
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
         self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         self.client?.urlProtocol(self, didLoad: data)
         self.client?.urlProtocolDidFinishLoading(self)

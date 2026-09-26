@@ -183,7 +183,11 @@ final nonisolated class MeetingSummaryRemoteService: @unchecked Sendable {
             }
             text = try Self.anthropicText(data)
         } else {
-            text = try await self.client.call(self.configuration(transcript: transcript, kind: kind, route: route)).content
+            let response = try await self.client.call(self.configuration(transcript: transcript, kind: kind, route: route))
+            guard !response.isIncomplete else {
+                throw LLMError.invalidRequest("The provider returned an incomplete summary. Try a shorter summary type or a model with a larger output limit. Your previous summary has been kept.")
+            }
+            text = response.content
         }
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
