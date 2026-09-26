@@ -186,8 +186,8 @@ struct MeetingSummaryView: View {
                 Text("On-device · Fluid Intelligence").tag(MeetingSummarySelection.onDevice)
                 Text("Use AI Settings").tag(MeetingSummarySelection.useAISettings)
                 Divider()
-                Text("Claude Code · claude -p").tag(MeetingSummaryCLI.claude.rawValue)
-                Text("Codex · codex exec").tag(MeetingSummaryCLI.codex.rawValue)
+                Text("Claude Code (CLI)").tag(MeetingSummaryCLI.claude.rawValue)
+                Text("Codex (CLI)").tag(MeetingSummaryCLI.codex.rawValue)
                 Divider()
                 ForEach(self.providers) { provider in Text(provider.providerName).tag(provider.providerID) }
                 if !self.onDevice, !self.linked, self.cli == nil, !self.providers.contains(where: { $0.providerID == self.providerID }) {
