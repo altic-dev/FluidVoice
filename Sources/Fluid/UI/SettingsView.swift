@@ -11,6 +11,49 @@ import PromiseKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Shown only once the recording overlay has been dragged, so there is always a
+/// way back if it was dragged past a screen edge.
+private struct OverlayCustomPositionRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.theme) private var theme
+    @ObservedObject private var settings = SettingsStore.shared
+
+    private var titleText: Color {
+        Color(nsColor: .labelColor)
+    }
+
+    private var secondaryText: Color {
+        self.colorScheme == .light
+            ? Color(nsColor: .labelColor).opacity(0.90)
+            : self.theme.palette.primaryText.opacity(0.82)
+    }
+
+    var body: some View {
+        if self.settings.overlayCustomOrigin != nil {
+            Divider().padding(.vertical, 4)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Custom Position")
+                        .font(self.theme.typography.bodyStrong)
+                        .foregroundStyle(self.titleText)
+                    Text("The overlay stays where you dragged it. Reset to use Bottom Offset again.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.secondaryText)
+                }
+
+                Spacer()
+
+                Button("Reset Position") {
+                    self.settings.resetOverlayCustomOrigin()
+                }
+                .controlSize(.small)
+                .frame(width: 170, alignment: .trailing)
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     private struct ShortcutRowContent {
         let icon: String
@@ -1365,7 +1408,7 @@ struct SettingsView: View {
                                         Text("Bottom Offset")
                                             .font(self.theme.typography.bodyStrong)
                                             .foregroundStyle(self.settingsTitleText)
-                                        Text("Distance from bottom of screen")
+                                        Text("Distance from bottom of screen. Drag the overlay itself to place it anywhere.")
                                             .font(self.theme.typography.bodySmall)
                                             .foregroundStyle(self.settingsSecondaryText)
                                     }
@@ -1385,6 +1428,8 @@ struct SettingsView: View {
                                     .frame(width: 170, alignment: .trailing)
                                 }
                                 .settingsSearchTarget(.bottomOffset)
+
+                                OverlayCustomPositionRow()
                             }
 
                             Divider().padding(.vertical, 12)
