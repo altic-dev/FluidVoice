@@ -1342,9 +1342,7 @@ struct MeetingTranscriptionCanvas: View {
                     recentSession: recentSession,
                     onStart: self.onStart,
                     onRepairSetup: self.onRepairSetup,
-                    onEditSetup: self.onEditSetup ?? self.onRepairSetup,
-                    summaryASRService: self.summaryASRService,
-                    isQuiescent: self.isQuiescent
+                    onEditSetup: self.onEditSetup ?? self.onRepairSetup
                 )
             case let .recording(session, trackHealth, liveTranscript):
                 MeetingRecordingCanvas(
@@ -1954,11 +1952,8 @@ private struct MeetingSetupCanvas: View {
     let onStart: () -> Void
     let onRepairSetup: () -> Void
     let onEditSetup: () -> Void
-    var summaryASRService: ASRService? = nil
-    var isQuiescent = true
 
     @Environment(\.theme) private var theme
-    @State private var documentSection = MeetingDocumentSection.transcript
 
     private var systemsReady: Bool {
         !self.readiness.isCheckingSources &&
@@ -2022,13 +2017,7 @@ private struct MeetingSetupCanvas: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            MeetingDocumentTabs(selection: self.$documentSection, primaryTitle: "Meeting home", primaryIcon: "house", isEnabled: !self.isStarting)
-
-            if self.documentSection == .summary {
-                MeetingSummaryView(asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
-            } else {
-                self.recordingSetup
-            }
+            self.recordingSetup
         }
     }
 
