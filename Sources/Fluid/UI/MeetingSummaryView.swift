@@ -28,12 +28,8 @@ struct MeetingSummaryView: View {
         MeetingSummaryCLI(rawValue: self.providerID)
     }
 
-    private var linked: Bool {
-        self.preferences.selection.providerID == MeetingSummarySelection.useAISettings
-    }
-
     private var providerID: String {
-        self.linked ? self.settings.selectedProviderID : self.preferences.selection.providerID
+        self.preferences.selection.providerID
     }
 
     private var providerKey: String {
@@ -51,7 +47,6 @@ struct MeetingSummaryView: View {
 
     private var modelID: String {
         if self.onDevice { return self.controller.model?.id ?? "" }
-        if self.linked { return self.route?.modelID ?? "" }
         return self.preferences.selection.modelsByProvider[self.providerKey] ?? ""
     }
 
@@ -152,8 +147,7 @@ struct MeetingSummaryView: View {
             return self.controller.installed ? "LFM is ready for on-device meeting summaries."
                 : "Download LFM once to summarize meetings on your Mac with Fluid Intelligence."
         }
-        return self.linked ? "Follows the provider and model selected in AI Settings."
-            : "Uses your saved provider settings · Independent of dictation"
+        return "Uses your saved provider settings · Independent of dictation"
     }
 
     private var cliModelField: some View {
@@ -184,13 +178,12 @@ struct MeetingSummaryView: View {
                 set: { self.selectProvider($0) }
             )) {
                 Text("On-device · Fluid Intelligence").tag(MeetingSummarySelection.onDevice)
-                Text("Use AI Settings").tag(MeetingSummarySelection.useAISettings)
                 Divider()
                 Text("Claude Code (CLI)").tag(MeetingSummaryCLI.claude.rawValue)
                 Text("Codex (CLI)").tag(MeetingSummaryCLI.codex.rawValue)
                 Divider()
                 ForEach(self.providers) { provider in Text(provider.providerName).tag(provider.providerID) }
-                if !self.onDevice, !self.linked, self.cli == nil, !self.providers.contains(where: { $0.providerID == self.providerID }) {
+                if !self.onDevice, self.cli == nil, !self.providers.contains(where: { $0.providerID == self.providerID }) {
                     Text("Unavailable provider").tag(self.providerID)
                 }
             }
@@ -216,7 +209,7 @@ struct MeetingSummaryView: View {
                 }
             }
             .labelsHidden().pickerStyle(.menu).fluidDropdownStyle()
-            .disabled(self.onDevice || self.linked)
+            .disabled(self.onDevice)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -305,6 +298,12 @@ struct MeetingSummaryView: View {
     }
 
     private func reloadProviders() {
+        let provider = self.settings.selectedProviderID
+        let key = ModelRepository.shared.providerKey(for: provider)
+        self.preferences.selection.detachAISettings(
+            providerID: provider,
+            modelID: self.settings.selectedModelByProvider[key] ?? self.settings.selectedModel ?? ""
+        )
         self.catalog = self.settings.commandModeModelCatalog()
         self.resolveRoute()
     }

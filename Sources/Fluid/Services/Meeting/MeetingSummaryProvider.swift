@@ -3,9 +3,17 @@ import Foundation
 
 nonisolated struct MeetingSummarySelection: Codable, Equatable {
     static let onDevice = "meeting:on-device"
+    // Retained only to migrate selections saved by earlier builds.
     static let useAISettings = "meeting:ai-settings"
     var providerID = Self.onDevice
     var modelsByProvider: [String: String] = [:]
+
+    @MainActor
+    mutating func detachAISettings(providerID: String, modelID: String) {
+        guard self.providerID == Self.useAISettings else { return }
+        self.providerID = providerID
+        self.modelsByProvider[ModelRepository.shared.providerKey(for: providerID)] = modelID
+    }
 }
 
 @MainActor
@@ -83,8 +91,7 @@ nonisolated struct MeetingSummaryRoute {
                 supportsTemperature: false
             )
         }
-        let linked = selection.providerID == MeetingSummarySelection.useAISettings
-        let providerID = linked ? settings.selectedProviderID : selection.providerID
+        let providerID = selection.providerID
         let repository = ModelRepository.shared
         let key = repository.providerKey(for: providerID)
         let saved = settings.savedProviders.first { repository.providerKey(for: $0.id) == key }
@@ -93,7 +100,7 @@ nonisolated struct MeetingSummaryRoute {
         else {
             throw LLMError.invalidRequest("Choose a configured summary provider in AI Providers.")
         }
-        let model = linked ? (settings.selectedModelByProvider[key] ?? settings.selectedModel ?? "") : (selection.modelsByProvider[key] ?? "")
+        let model = selection.modelsByProvider[key] ?? ""
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMError.invalidRequest("Choose a summary model.")
         }

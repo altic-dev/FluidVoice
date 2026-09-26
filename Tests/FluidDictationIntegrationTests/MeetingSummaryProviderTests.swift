@@ -160,6 +160,16 @@ final class MeetingSummaryProviderTests: XCTestCase {
         ))
     }
 
+    func testLegacyAISettingsSelectionBecomesIndependent() {
+        var selection = MeetingSummarySelection(providerID: MeetingSummarySelection.useAISettings)
+        selection.detachAISettings(providerID: "openai", modelID: "summary-model")
+        XCTAssertEqual(selection.providerID, "openai")
+        XCTAssertEqual(selection.modelsByProvider["openai"], "summary-model")
+        selection.detachAISettings(providerID: "anthropic", modelID: "different-model")
+        XCTAssertEqual(selection.providerID, "openai")
+        XCTAssertEqual(selection.modelsByProvider["openai"], "summary-model")
+    }
+
     func testMeetingSelectionPersistsWithoutChangingGlobalSelections() throws {
         let suite = "MeetingSummaryTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
