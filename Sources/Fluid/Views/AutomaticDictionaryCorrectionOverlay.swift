@@ -336,17 +336,37 @@ final class MicrophoneChangeOverlayController {
         let hideGeneration = self.generation
         self.dismissTask?.cancel()
         self.dismissTask = nil
-        guard let panel, panel.isVisible else { return }
+        guard let panel else { return }
+        guard panel.isVisible else {
+            self.releasePanel()
+            return
+        }
         self.animate(duration: 0.1) {
             panel.animator().alphaValue = 0
         } completion: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.generation == hideGeneration else { return }
-                self.panel?.orderOut(nil)
-                self.panel?.alphaValue = 1
-                DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+                self?.finishHide(generation: hideGeneration)
             }
         }
+        // AppKit can reach alpha=0 without delivering the animation completion
+        // (notably for an inactive nonactivating panel). Bound the hosted timeline.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            self?.finishHide(generation: hideGeneration)
+        }
+    }
+
+    private func finishHide(generation: UInt64) {
+        guard self.generation == generation, self.panel != nil else { return }
+        self.releasePanel()
+        DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+    }
+
+    private func releasePanel() {
+        self.panel?.orderOut(nil)
+        self.panel?.contentView = nil
+        self.hostingView = nil
+        self.panel = nil
     }
 
     func topEdge(on screen: NSScreen) -> CGFloat? {
