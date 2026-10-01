@@ -268,8 +268,23 @@ final class MicrophoneChangeOverlayController {
     private var hostingView: NSHostingView<MicrophoneChangeOverlayView>?
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
+    private let animationOverride: ((TimeInterval, @escaping () -> Void, (() -> Void)?) -> Void)?
+    private let scheduleHideFallback: (Duration, @escaping @MainActor () -> Void) -> Void
 
-    private init() {}
+    init(
+        animationOverride: ((TimeInterval, @escaping () -> Void, (() -> Void)?) -> Void)? = nil,
+        scheduleHideFallback: @escaping (Duration, @escaping @MainActor () -> Void) -> Void = { delay, action in
+            Task { @MainActor in
+                try? await Task.sleep(for: delay)
+                action()
+            }
+        }
+    ) {
+        self.animationOverride = animationOverride
+        self.scheduleHideFallback = scheduleHideFallback
+    }
+
+    var hostedContentView: NSView? { self.panel?.contentView }
 
     func show(_ notice: MicrophoneChangeNotice) {
         guard Self.supportsAlerts(bundleIdentifier: Bundle.main.bundleIdentifier),
@@ -350,8 +365,7 @@ final class MicrophoneChangeOverlayController {
         }
         // AppKit can reach alpha=0 without delivering the animation completion
         // (notably for an inactive nonactivating panel). Bound the hosted timeline.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
+        self.scheduleHideFallback(.milliseconds(200)) { [weak self] in
             self?.finishHide(generation: hideGeneration)
         }
     }
@@ -419,9 +433,13 @@ final class MicrophoneChangeOverlayController {
 
     private func animate(
         duration: TimeInterval,
-        changes: () -> Void,
+        changes: @escaping () -> Void,
         completion: (() -> Void)? = nil
     ) {
+        if let animationOverride {
+            animationOverride(duration, changes, completion)
+            return
+        }
         guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion == false else {
             changes()
             completion?()

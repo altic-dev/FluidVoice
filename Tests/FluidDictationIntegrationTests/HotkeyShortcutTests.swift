@@ -245,6 +245,57 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: nil))
     }
 
+    @MainActor
+    func testMicrophoneNoticeFallbackReleasesHostedViewWithoutFadeCompletion() {
+        let previous = SettingsStore.shared.showMicrophoneChangeAlerts
+        SettingsStore.shared.showMicrophoneChangeAlerts = true
+        defer { SettingsStore.shared.showMicrophoneChangeAlerts = previous }
+
+        var fallbacks: [(delay: Duration, run: @MainActor () -> Void)] = []
+        let controller = MicrophoneChangeOverlayController(
+            animationOverride: { _, changes, _ in changes() },
+            scheduleHideFallback: { delay, run in fallbacks.append((delay, run)) }
+        )
+        controller.show(.init(previousName: nil, currentName: "Test microphone", presentation: .startupSelection))
+        weak var hostedView = controller.hostedContentView
+        XCTAssertNotNil(hostedView)
+
+        controller.hide()
+        XCTAssertNotNil(controller.hostedContentView, "The fade completion was deliberately withheld")
+        XCTAssertEqual(fallbacks.count, 1)
+        XCTAssertEqual(fallbacks[0].delay, .milliseconds(200))
+
+        fallbacks[0].run()
+        XCTAssertNil(controller.hostedContentView)
+        XCTAssertNil(hostedView, "The countdown's NSHostingView must be released")
+    }
+
+    @MainActor
+    func testMicrophoneNoticeStaleFallbackKeepsNewNotice() {
+        let previous = SettingsStore.shared.showMicrophoneChangeAlerts
+        SettingsStore.shared.showMicrophoneChangeAlerts = true
+        defer { SettingsStore.shared.showMicrophoneChangeAlerts = previous }
+
+        var fallbacks: [(Duration, @MainActor () -> Void)] = []
+        let controller = MicrophoneChangeOverlayController(
+            animationOverride: { _, changes, _ in changes() },
+            scheduleHideFallback: { delay, run in fallbacks.append((delay, run)) }
+        )
+        controller.show(.init(previousName: nil, currentName: "First microphone", presentation: .startupSelection))
+        controller.hide()
+        controller.show(.init(previousName: "First microphone", currentName: "Second microphone", presentation: .selectionChange))
+        weak var secondHostedView = controller.hostedContentView
+        XCTAssertNotNil(secondHostedView)
+
+        fallbacks[0].1()
+        XCTAssertTrue(controller.hostedContentView === secondHostedView)
+
+        controller.hide()
+        XCTAssertEqual(fallbacks.count, 2)
+        fallbacks[1].1()
+        XCTAssertNil(secondHostedView)
+    }
+
     func testInterruptedMousePressForceStopsHoldAndAutomaticModes() {
         XCTAssertTrue(GlobalHotkeyManager.shouldForceStopInterruptedPrimaryPress(activationMode: .hold))
         XCTAssertTrue(GlobalHotkeyManager.shouldForceStopInterruptedPrimaryPress(activationMode: .automatic))
