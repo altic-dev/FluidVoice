@@ -129,6 +129,32 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 | Apple Speech | Zero-download native macOS speech | [System languages](#apple-speech-languages) | Built-in | Apple Silicon + Intel |
 | Whisper Tiny / Base / Small / Medium / Large | Broad compatibility, including Intel Macs | [99 languages](#whisper-language-support) | ~75 MB to ~2.9 GB | Apple Silicon + Intel |
 
+### Optional 60db cloud transcription
+
+Select **60db — Cloud Transcription** in Voice Engine settings to use the
+[60db speech-to-text API](https://docs.60db.ai/api-reference/stt/speech-to-text).
+This is an explicit cloud opt-in: recording audio leaves your Mac and is sent to
+`https://api.60db.ai/stt`. Local models remain the default.
+
+Launch FluidVoice with `SIXTYDB_API_KEY` in its process environment. For example,
+after quitting the app, run this in Terminal to enter the key without saving it
+in shell history (zsh):
+
+```zsh
+read -s 'sixtydb_key?60db API key: '
+echo
+SIXTYDB_API_KEY="$sixtydb_key" /Applications/FluidVoice.app/Contents/MacOS/FluidVoice
+unset sixtydb_key
+```
+
+The key stays in the process environment; it is not written to preferences or
+logs. Use the actual executable path for a Debug build. The cloud engine uses
+language auto-detection and returns the final transcript after recording stops;
+it has no live preview. File transcription uses the existing app chunking and
+speaker labeling pipeline. Each encoded 16 kHz mono PCM WAV must fit within
+10 MB (roughly five minutes). API errors are surfaced without silently switching
+providers or retrying billable requests. This does not add a live meeting backend.
+
 ### Parakeet TDT v3 Languages
 
 Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, and Ukrainian.

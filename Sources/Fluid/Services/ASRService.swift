@@ -1103,6 +1103,8 @@ final class ASRService: ObservableObject {
         #endif
 
         switch model {
+        case .sixtyDB:
+            return SixtyDBProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return self.getAppleSpeechAnalyzerProvider()
@@ -1236,6 +1238,8 @@ final class ASRService: ObservableObject {
         if let injected = self.modelProvidersForTesting[model] { return injected }
         #endif
         switch model {
+        case .sixtyDB:
+            return SixtyDBProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return AppleSpeechAnalyzerProvider()

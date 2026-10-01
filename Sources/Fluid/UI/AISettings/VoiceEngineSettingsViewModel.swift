@@ -175,6 +175,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     var modelDescriptionText: String {
         let model = self.settings.selectedSpeechModel
         switch model {
+        case .sixtyDB:
+            return model.cardDescription
         case .appleSpeech:
             return "Apple Speech (Legacy) uses built-in macOS speech recognition. No model download required, works on Intel and Apple Silicon."
         case .appleSpeechAnalyzer:

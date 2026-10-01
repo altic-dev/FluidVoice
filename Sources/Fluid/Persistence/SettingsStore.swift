@@ -5022,6 +5022,10 @@ final class SettingsStore: ObservableObject {
         case nemotronStreaming = "nemotron-3.5-streaming"
         case nemotronStreaming320 = "nemotron-3.5-streaming-320"
 
+        // MARK: - Optional Cloud ASR
+
+        case sixtyDB = "sixtydb-stt"
+
         // MARK: - Apple Native
 
         case appleSpeech = "apple-speech"
@@ -5044,6 +5048,7 @@ final class SettingsStore: ObservableObject {
 
         var displayName: String {
             switch self {
+            case .sixtyDB: return "60db (Cloud)"
             case .parakeetTDT: return "Parakeet TDT v3 (Multilingual)"
             case .parakeetTDTv2: return "Parakeet TDT v2 (English Only)"
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
@@ -5065,6 +5070,7 @@ final class SettingsStore: ObservableObject {
 
         var languageSupport: String {
             switch self {
+            case .sixtyDB: return "Automatic Language Detection"
             case .parakeetTDT:
                 return "25 Languages"
             case .parakeetTDTv2: return "English Only (Higher Accuracy)"
@@ -5081,6 +5087,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
+            case .sixtyDB: return "No download — cloud API"
             case .parakeetTDT: return "~460.9 MiB"
             case .parakeetTDTv2: return "~442.9 MiB"
             case .parakeetRealtime: return "~428.4 MiB"
@@ -5102,6 +5109,7 @@ final class SettingsStore: ObservableObject {
 
         var expectedDownloadBytes: Int64 {
             switch self {
+            case .sixtyDB: return 0
             case .parakeetTDT: return 483_288_717
             case .parakeetTDTv2: return 464_421_712
             case .parakeetRealtime: return 449_190_189
@@ -5128,6 +5136,7 @@ final class SettingsStore: ObservableObject {
 
         var isWhisperModel: Bool {
             switch self {
+            case .sixtyDB: return false
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
@@ -5244,6 +5253,7 @@ final class SettingsStore: ObservableObject {
         /// Human-readable marketing name for the card UI
         var humanReadableName: String {
             switch self {
+            case .sixtyDB: return "60db — Cloud Transcription"
             case .parakeetTDT: return "Blazing Fast - Multilingual"
             case .parakeetTDTv2: return "Blazing Fast - English"
             case .parakeetRealtime: return "Flash Dictation"
@@ -5266,6 +5276,7 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
+            case .sixtyDB: return "Sends audio to api.60db.ai after explicit activation. Requires SIXTYDB_API_KEY. Final transcription only."
             case .parakeetTDT:
                 return "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
                     "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
@@ -5307,6 +5318,7 @@ final class SettingsStore: ObservableObject {
         /// Minimum recommended RAM in GB for this model to run safely
         var requiredMemoryGB: Double {
             switch self {
+            case .sixtyDB: return 2.0
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
                 return 4.0
             case .qwen3Asr:
@@ -5351,6 +5363,7 @@ final class SettingsStore: ObservableObject {
         /// Speed rating (1-5, higher is faster)
         var speedRating: Int {
             switch self {
+            case .sixtyDB: return 0
             case .parakeetTDT: return 5
             case .parakeetTDTv2: return 5
             case .parakeetRealtime: return 5
@@ -5372,6 +5385,7 @@ final class SettingsStore: ObservableObject {
         /// Accuracy rating (1-5, higher is more accurate)
         var accuracyRating: Int {
             switch self {
+            case .sixtyDB: return 0
             case .parakeetTDT: return 5
             case .parakeetTDTv2: return 5
             case .parakeetRealtime: return 4
@@ -5393,6 +5407,7 @@ final class SettingsStore: ObservableObject {
         /// Exact speed percentage (0.0 - 1.0) for the liquid bars
         var speedPercent: Double {
             switch self {
+            case .sixtyDB: return 0.0
             case .parakeetTDT: return 1.0
             case .parakeetTDTv2: return 1.0
             case .parakeetRealtime: return 1.0
@@ -5414,6 +5429,7 @@ final class SettingsStore: ObservableObject {
         /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
         var accuracyPercent: Double {
             switch self {
+            case .sixtyDB: return 0.0
             case .parakeetTDT: return 0.92
             case .parakeetTDTv2: return 0.96
             case .parakeetRealtime: return 0.75
@@ -5460,6 +5476,7 @@ final class SettingsStore: ObservableObject {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
+            case .sixtyDB: return false
             case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return false // Too slow for real-time chunk processing
             default:
@@ -5512,6 +5529,7 @@ final class SettingsStore: ObservableObject {
 
         /// Provider category for tab grouping
         enum Provider: String, CaseIterable {
+            case sixtyDB = "60db"
             case nvidia = "NVIDIA"
             case apple = "Apple"
             case openai = "OpenAI"
@@ -5522,6 +5540,7 @@ final class SettingsStore: ObservableObject {
         /// Which provider this model belongs to
         var provider: Provider {
             switch self {
+            case .sixtyDB: return .sixtyDB
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
@@ -5543,6 +5562,7 @@ final class SettingsStore: ObservableObject {
         /// Whether this model is built-in or already downloaded on disk
         var isInstalled: Bool {
             switch self {
+            case .sixtyDB: return true
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
             case .parakeetTDT:
@@ -5651,6 +5671,7 @@ final class SettingsStore: ObservableObject {
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {
             switch self {
+            case .sixtyDB: return "60db"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "NVIDIA"
             case .qwen3Asr:
@@ -5675,6 +5696,7 @@ final class SettingsStore: ObservableObject {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
+            case .sixtyDB: return "#10A37F"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "#76B900"
             case .qwen3Asr:
