@@ -1095,6 +1095,8 @@ final class ASRService: ObservableObject {
         let model = SettingsStore.shared.selectedSpeechModel
 
         switch model {
+        case .sixtyDB:
+            return SixtyDBProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return self.getAppleSpeechAnalyzerProvider()
@@ -1225,6 +1227,8 @@ final class ASRService: ObservableObject {
     /// Used for downloading models without switching the active model.
     private func getProvider(for model: SettingsStore.SpeechModel) -> TranscriptionProvider {
         switch model {
+        case .sixtyDB:
+            return SixtyDBProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return AppleSpeechAnalyzerProvider()

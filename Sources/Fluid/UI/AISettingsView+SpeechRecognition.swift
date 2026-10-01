@@ -21,23 +21,25 @@ extension VoiceEngineSettingsView {
 
         return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: FluidPageLayout.sectionSpacing) {
-                // Stats Panel - Dynamic bars that update based on selected model
-                self.modelStatsPanel
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(self.theme.palette.contentBackground.opacity(0.6))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(self.theme.palette.cardBorder.opacity(0.3), lineWidth: 1)
-                            )
-                            .shadow(
-                                color: self.theme.metrics.cardShadow.color.opacity(self.theme.metrics.cardShadow.opacity),
-                                radius: self.theme.metrics.cardShadow.radius,
-                                x: self.theme.metrics.cardShadow.x,
-                                y: self.theme.metrics.cardShadow.y
-                            )
-                    )
+                if selectedModel != .sixtyDB {
+                    // Stats Panel - Dynamic bars that update based on selected model
+                    self.modelStatsPanel
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(self.theme.palette.contentBackground.opacity(0.6))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(self.theme.palette.cardBorder.opacity(0.3), lineWidth: 1)
+                                )
+                                .shadow(
+                                    color: self.theme.metrics.cardShadow.color.opacity(self.theme.metrics.cardShadow.opacity),
+                                    radius: self.theme.metrics.cardShadow.radius,
+                                    x: self.theme.metrics.cardShadow.x,
+                                    y: self.theme.metrics.cardShadow.y
+                                )
+                        )
+                }
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -263,22 +265,28 @@ extension VoiceEngineSettingsView {
                     .foregroundStyle(self.voiceEngineSecondaryText)
 
                 HStack(spacing: 12) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.fluidSystem(size: 11))
-                            .foregroundStyle(.yellow)
-                        Text("Speed \(Int(model.speedPercent * 100))%")
+                    if model == .sixtyDB {
+                        Text("Cloud · final transcription only")
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.voiceEngineSecondaryText)
-                    }
+                    } else {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bolt.fill")
+                                .font(.fluidSystem(size: 11))
+                                .foregroundStyle(.yellow)
+                            Text("Speed \(Int(model.speedPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
 
-                    HStack(spacing: 4) {
-                        Image(systemName: "target")
-                            .font(.fluidSystem(size: 11))
-                            .foregroundStyle(Color.fluidGreen)
-                        Text("Acc \(Int(model.accuracyPercent * 100))%")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
+                        HStack(spacing: 4) {
+                            Image(systemName: "target")
+                                .font(.fluidSystem(size: 11))
+                                .foregroundStyle(Color.fluidGreen)
+                            Text("Acc \(Int(model.accuracyPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
                     }
 
                     if isSelected && !isActive {
@@ -387,7 +395,7 @@ extension VoiceEngineSettingsView {
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
                     }
 
-                    if !model.usesAppleLogo {
+                    if !model.usesAppleLogo && model != .sixtyDB {
                         if isSelected {
                             Button {
                                 self.viewModel.deleteSpeechModel(model)
@@ -620,6 +628,8 @@ extension VoiceEngineSettingsView {
 
     private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
         switch model {
+        case .sixtyDB:
+            return model.cardDescription
         case .nemotronStreaming, .nemotronStreaming320:
             return "Nemotron Speech 3.5 - Streaming Capable"
         default:
