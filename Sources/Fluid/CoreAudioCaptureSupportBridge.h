@@ -3,4 +3,6 @@
 
 #include "../CoreAudioCaptureSupport/include/CoreAudioCaptureSupport.h"
 
+#include "../CoreAudioCaptureSupport/include/PillPCMTransport.h"
+
 #endif

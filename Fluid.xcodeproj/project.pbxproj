@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F61300000000000000000001 /* PillTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61300000000000000000002 /* PillTransportTests.swift */; };
+		F61200000000000000000001 /* PillSpectrumTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61200000000000000000002 /* PillSpectrumTests.swift */; };
+		F61100000000000000000001 /* PillLoadingContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61100000000000000000002 /* PillLoadingContinuityTests.swift */; };
 		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
 		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
 		AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */; };
@@ -157,6 +160,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F61300000000000000000002 /* PillTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillTransportTests.swift; sourceTree = "<group>"; };
+		F61200000000000000000002 /* PillSpectrumTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillSpectrumTests.swift; sourceTree = "<group>"; };
+		F61100000000000000000002 /* PillLoadingContinuityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillLoadingContinuityTests.swift; sourceTree = "<group>"; };
 		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryInputTests.swift; sourceTree = "<group>"; };
@@ -364,6 +370,9 @@
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
+				F61100000000000000000002 /* PillLoadingContinuityTests.swift */,
+				F61200000000000000000002 /* PillSpectrumTests.swift */,
+				F61300000000000000000002 /* PillTransportTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
 				FEB700000000000000000002 /* FeedbackClientTests.swift */,
@@ -719,6 +728,9 @@
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
+				F61100000000000000000001 /* PillLoadingContinuityTests.swift in Sources */,
+				F61200000000000000000001 /* PillSpectrumTests.swift in Sources */,
+				F61300000000000000000001 /* PillTransportTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
 				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,

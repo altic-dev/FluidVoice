@@ -18,6 +18,7 @@ final class OverlayAudioLevelState: ObservableObject {
     @Published var level: CGFloat = 0
     /// False from show until the microphone delivers its first buffer.
     @Published var isLive = false
+    @Published var isFrozenForStop = false
 }
 
 // MARK: - Bottom Overlay Window Controller
@@ -74,6 +75,11 @@ final class BottomOverlayWindowController {
         }
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlaySizeChanged"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
+                let state = NotchContentState.shared
+                PillSpectrumPipeline.shared.setVisible(
+                    SettingsStore.shared.overlaySize == .pill && state.isBottomOverlayPresented
+                        && !state.isProcessing && !OverlayAudioLevelState.shared.isFrozenForStop
+                )
                 self?.scheduleSizeAndPositionUpdate(after: 0)
             }
         }
@@ -135,6 +141,8 @@ final class BottomOverlayWindowController {
         }
         self.cancelExitAnimation()
         OverlayAudioLevelState.shared.isLive = false
+        OverlayAudioLevelState.shared.isFrozenForStop = false
+        PillSpectrumPipeline.shared.setVisible(SettingsStore.shared.overlaySize == .pill)
         // Keep the previous content invisible while state changes. Parking
         // offscreen instead costs two WindowServer fences (the frame change
         // and the window-moved echo event).
@@ -196,6 +204,7 @@ final class BottomOverlayWindowController {
     }
 
     func hide() {
+        PillSpectrumPipeline.shared.setVisible(false)
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return
@@ -258,6 +267,12 @@ final class BottomOverlayWindowController {
     /// committed while final transcription runs. Each commit blocks the main
     /// thread on WindowServer and delays the result hop back to the main actor.
     func freezeForStop() {
+        OverlayAudioLevelState.shared.isFrozenForStop = NotchContentState.shared.isBottomOverlayPresented
+        PillSpectrumPipeline.shared.setVisible(false)
+        // Use the upstream release bridge synchronously, even before processing is set.
+        if SettingsStore.shared.overlaySize == .pill, NotchContentState.shared.isBottomOverlayPresented {
+            self.beginReleaseTransition()
+        }
         self.audioSubscription?.cancel()
         self.audioSubscription = nil
         self.pendingResizeWorkItem?.cancel()
@@ -272,6 +287,7 @@ final class BottomOverlayWindowController {
     /// parked rather than destroyed so the next presentation keeps its warm
     /// SwiftUI and WindowServer surface.
     func hideImmediately() {
+        PillSpectrumPipeline.shared.setVisible(false)
         var trace = OverlayCloseTrace("bottom.hide")
         defer { trace.finish() }
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -365,6 +381,7 @@ final class BottomOverlayWindowController {
     /// Returns whether the panel finished hiding or a newer presentation
     /// superseded this request.
     func hideAndWait() async -> RecordingOverlayHideOutcome {
+        PillSpectrumPipeline.shared.setVisible(false)
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return .hidden
@@ -476,6 +493,8 @@ final class BottomOverlayWindowController {
     }
 
     private func clearPresentationResources() {
+        OverlayAudioLevelState.shared.isFrozenForStop = false
+        PillSpectrumPipeline.shared.setVisible(false)
         var trace = OverlayCloseTrace("bottom.resources")
         defer { trace.finish() }
         self.audioSubscription?.cancel()
@@ -507,6 +526,9 @@ final class BottomOverlayWindowController {
     }
 
     func setProcessing(_ processing: Bool) {
+        if processing {
+            PillSpectrumPipeline.shared.setVisible(false)
+        }
         Self.overlayBench("bottom_set_processing processing=\(processing)")
         NotchContentState.shared.setProcessing(processing)
     }
