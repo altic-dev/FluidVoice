@@ -341,21 +341,19 @@ final class WhisperProvider: TranscriptionProvider {
 
     func clearCache() async throws {
         self.unloadModel()
-
-        if FileManager.default.fileExists(atPath: self.modelURL.path) {
-            try FileManager.default.removeItem(at: self.modelURL)
-        }
-        if let legacyModelURL, FileManager.default.fileExists(atPath: legacyModelURL.path) {
-            try FileManager.default.removeItem(at: legacyModelURL)
-        }
-        self.removeLegacyModelIfNeeded()
-
-        if FileManager.default.fileExists(atPath: self.modelDirectory.path) {
-            let contents = try FileManager.default.contentsOfDirectory(atPath: self.modelDirectory.path)
-            if contents.isEmpty {
-                try FileManager.default.removeItem(at: self.modelDirectory)
+        let files = [self.modelURL, self.legacyModelURL].compactMap { $0 }
+        let directory = self.modelDirectory
+        try await Task.detached(priority: .userInitiated) {
+            let manager = FileManager.default
+            for file in files where manager.fileExists(atPath: file.path) {
+                try manager.removeItem(at: file)
             }
-        }
+            if manager.fileExists(atPath: directory.path),
+               try manager.contentsOfDirectory(atPath: directory.path).isEmpty
+            {
+                try manager.removeItem(at: directory)
+            }
+        }.value
     }
 
     private func downloadModel(progressHandler: ((Double) -> Void)?) async throws {

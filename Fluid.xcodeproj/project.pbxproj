@@ -44,6 +44,7 @@
 		C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* MeetingResultSidecarTests.swift */; };
 		C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */; };
 		FEA4AB111222333444555502 /* MeetingSpeakerVoiceMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */; };
+		D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B100000000000000000001 /* VoiceModelDeletionTests.swift */; };
 		C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */; };
 		C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */; };
 		E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */; };
@@ -176,6 +177,7 @@
 		C1A000000000000000000001 /* MeetingResultSidecarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingResultSidecarTests.swift; sourceTree = "<group>"; };
 		C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAnalysisManifestTests.swift; sourceTree = "<group>"; };
 		FEA4AB111222333444555501 /* MeetingSpeakerVoiceMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSpeakerVoiceMatcherTests.swift; sourceTree = "<group>"; };
+		D9B100000000000000000001 /* VoiceModelDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModelDeletionTests.swift; sourceTree = "<group>"; };
 		C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptAssemblerTests.swift; sourceTree = "<group>"; };
 		C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCanonicalPipelineTests.swift; sourceTree = "<group>"; };
 		E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingParakeetNemotronBackendTests.swift; sourceTree = "<group>"; };
@@ -389,6 +391,7 @@
 				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
 				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
+				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
 				E3A000000000000000000001 /* MeetingParakeetNemotronBackendTests.swift */,
 				E3A000000000000000000011 /* MeetingTextOverlapEchoVerdictProviderTests.swift */,
@@ -744,6 +747,7 @@
 				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
+				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
 				E3A000000000000000000002 /* MeetingParakeetNemotronBackendTests.swift in Sources */,
 				E3A000000000000000000012 /* MeetingTextOverlapEchoVerdictProviderTests.swift in Sources */,
@@ -968,7 +972,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -996,7 +1000,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.10-beta.7";
+				MARKETING_VERSION = "1.6.10-beta.8";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
 				PRODUCT_NAME = "FluidVoice Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1023,7 +1027,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1051,7 +1055,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.10-beta.7";
+				MARKETING_VERSION = "1.6.10-beta.8";
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
 				PRODUCT_NAME = FluidVoice;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1321,8 +1325,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/altic-dev/DynamicNotchKit.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				revision = 50dc8565469cc80bbbe3c0d5dd902585a2d67986;
+				kind = revision;
 			};
 		};
 		7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */ = {

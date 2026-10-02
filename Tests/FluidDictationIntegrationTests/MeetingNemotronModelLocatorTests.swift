@@ -90,6 +90,35 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
         return package
     }
 
+    func testHomeDirectoryCapitalizationDoesNotLookLikeASymlink() throws {
+        let root = try self.makeTempDirectory()
+        let home = root.appendingPathComponent("gabriel/Library/Application Support/FluidVoice/MeetingModels")
+        let package = try self.makeFakePackage(at: home)
+        let alternate = root.appendingPathComponent("Gabriel/Library/Application Support/FluidVoice/MeetingModels")
+            .appendingPathComponent(package.lastPathComponent, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: alternate.path) else {
+            throw XCTSkip("Capitalization aliases require a case-insensitive volume")
+        }
+        XCTAssertNotEqual(alternate, alternate.resolvingSymlinksInPath().standardizedFileURL)
+        let locator = MeetingNemotronModelLocator(injectedURL: alternate)
+        let artifact = try locator.locate()
+        XCTAssertEqual(artifact.fileCount, 3)
+        XCTAssertEqual(try locator.recheck(artifact), artifact)
+        XCTAssertEqual(artifact.manifestSHA256, try MeetingNemotronModelLocator(injectedURL: package).locate().manifestSHA256)
+    }
+
+    func testSymlinkedParentRemainsRejected() throws {
+        let root = try self.makeTempDirectory()
+        let real = root.appendingPathComponent("real")
+        let package = try self.makeFakePackage(at: real)
+        let link = root.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let alternate = link.appendingPathComponent(package.lastPathComponent, isDirectory: true)
+        XCTAssertThrowsError(try MeetingNemotronModelLocator(injectedURL: alternate).locate()) {
+            XCTAssertEqual($0 as? MeetingNemotronModelReadinessError, .invalidModelPackage(reason: "packagePathContainsSymlink"))
+        }
+    }
+
     func testInjectedURLValidatesStructureAndRechecks() throws {
         let root = try self.makeTempDirectory()
         let package = try self.makeFakePackage(at: root)

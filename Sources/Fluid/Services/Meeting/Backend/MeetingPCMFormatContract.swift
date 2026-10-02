@@ -141,6 +141,12 @@ nonisolated enum MeetingPCMFormatResolver {
     }
 }
 
-nonisolated enum MeetingPCMFormatContractError: Error, Equatable, Sendable {
+nonisolated enum MeetingPCMFormatContractError: LocalizedError, Equatable, Sendable {
     case unsupported(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupported(reason): return "Unsupported PCM format: \(reason)."
+        }
+    }
 }

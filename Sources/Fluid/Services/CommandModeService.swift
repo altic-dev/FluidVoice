@@ -13,6 +13,7 @@ final class CommandModeService: ObservableObject {
 
     private let terminalService = TerminalService()
     private let chatStore = ChatHistoryStore.shared
+    private var pendingVoiceCommandCancellation: (commandID: String, requestStartIndex: Int, isOutputValid: @MainActor () -> Bool)?
     private var currentTurnCount = 0
     private let maxTurns = 20
 
@@ -115,6 +116,7 @@ final class CommandModeService: ObservableObject {
     func clearHistory() {
         self.conversationHistory.removeAll()
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.currentTurnCount = 0
 
         // Clear in store as well
@@ -228,6 +230,7 @@ final class CommandModeService: ObservableObject {
 
     private func resetChatTransientState() {
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.currentTurnCount = 0
         self.currentStep = nil
         self.streamingText = ""
@@ -358,7 +361,11 @@ final class CommandModeService: ObservableObject {
     }
 
     /// Process user voice/text command
-    func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
+    func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false, isOutputValid: (@MainActor () -> Bool)? = nil) async {
+        let voiceOutputValidity = isOutputValid
+        let isOutputValid: @MainActor () -> Bool = voiceOutputValidity ?? { true }
+        guard isOutputValid(), !self.isProcessing, self.pendingCommand == nil else { return }
+        self.pendingVoiceCommandCancellation = nil
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return
@@ -372,7 +379,20 @@ final class CommandModeService: ObservableObject {
             aiModel: SettingsStore.shared.analyticsAIModelDescriptor(for: .command)
         )
 
+        let requestStartIndex = self.conversationHistory.count
         self.isProcessing = true
+        defer {
+            if !isOutputValid() {
+                self.discardUndispatchedMessages(from: requestStartIndex)
+                self.saveCurrentChat()
+                self.isProcessing = false
+                self.resetChatTransientState()
+                if self.shouldSyncCommandNotchState {
+                    NotchContentState.shared.setCommandProcessing(false)
+                    NotchContentState.shared.updateCommandStreamingText("")
+                }
+            }
+        }
         self.currentTurnCount = 0
         self.conversationHistory.append(Message(role: .user, content: text))
 
@@ -385,18 +405,24 @@ final class CommandModeService: ObservableObject {
             NotchContentState.shared.setCommandProcessing(true)
         }
 
-        await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest)
+        await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest, isOutputValid: isOutputValid)
+        if isOutputValid(), let pending = self.pendingCommand, let voiceOutputValidity {
+            self.pendingVoiceCommandCancellation = (pending.id, requestStartIndex, voiceOutputValidity)
+        }
     }
 
     /// Process follow-up command from notch input
-    func processFollowUpCommand(_ text: String) async {
+    @discardableResult
+    func processFollowUpCommand(_ text: String) async -> Bool {
+        guard !self.isProcessing, self.pendingCommand == nil else { return false }
+        self.pendingVoiceCommandCancellation = nil
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
-            return
+            return false
         }
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
         AnalyticsService.shared.recordUsage(
             mode: .command,
@@ -418,10 +444,13 @@ final class CommandModeService: ObservableObject {
         }
 
         await self.processNextTurn()
+        return true
     }
 
     /// Execute pending command (after user confirmation)
     func confirmAndExecute() async {
+        guard !self.isProcessing else { return }
+        guard !self.cancelInvalidPendingCommand() else { return }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return
@@ -430,6 +459,7 @@ final class CommandModeService: ObservableObject {
 
         guard let pending = pendingCommand else { return }
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.isProcessing = true
 
         await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
@@ -438,6 +468,7 @@ final class CommandModeService: ObservableObject {
     /// Cancel pending command
     func cancelPendingCommand() {
         self.pendingCommand = nil
+        self.pendingVoiceCommandCancellation = nil
         self.conversationHistory.append(Message(
             role: .assistant,
             content: "Command cancelled.",
@@ -447,9 +478,38 @@ final class CommandModeService: ObservableObject {
         self.currentStep = nil
     }
 
+    /// Escape invalidates the voice owner before canceling its deferred confirmation.
+    @discardableResult
+    func cancelInvalidPendingCommand() -> Bool {
+        guard !self.isProcessing,
+              let cancellation = self.pendingVoiceCommandCancellation,
+              self.pendingCommand?.id == cancellation.commandID,
+              !cancellation.isOutputValid() else { return false }
+        self.discardUndispatchedMessages(from: cancellation.requestStartIndex)
+        self.saveCurrentChat()
+        self.resetChatTransientState()
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.setCommandProcessing(false)
+            NotchContentState.shared.updateCommandStreamingText("")
+        }
+        return true
+    }
+
+    private func discardUndispatchedMessages(from requestStartIndex: Int) {
+        guard requestStartIndex < self.conversationHistory.count else { return }
+        // Actual terminal completions remain paired with their tool calls. Remove
+        // the undispatched tail, including a later deferred destructive command.
+        let lastCompletion = self.conversationHistory[requestStartIndex...].lastIndex(where: { $0.role == .tool })
+        let discardStart = lastCompletion.map { $0 + 1 } ?? requestStartIndex
+        guard discardStart < self.conversationHistory.count else { return }
+        self.conversationHistory.removeSubrange(discardStart...)
+        self.syncToNotchState()
+    }
+
     // MARK: - Agent Loop
 
-    private func processNextTurn(notifyInvalidRequest: Bool = false) async {
+    private func processNextTurn(notifyInvalidRequest: Bool = false, isOutputValid: @escaping @MainActor () -> Bool = { true }) async {
+        guard isOutputValid() else { return }
         if self.currentTurnCount >= self.maxTurns {
             let errorMsg = "Reached maximum steps limit. Please review the progress and continue if needed."
             self.conversationHistory.append(Message(
@@ -481,7 +541,8 @@ final class CommandModeService: ObservableObject {
         }
 
         do {
-            let response = try await callLLM()
+            let response = try await callLLM(isOutputValid: isOutputValid)
+            guard isOutputValid() else { return }
 
             if let tc = response.toolCall {
                 // Determine step type based on command purpose
@@ -529,7 +590,7 @@ final class CommandModeService: ObservableObject {
                 }
 
                 // Auto-execute
-                await self.executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose)
+                await self.executeCommand(tc.command, workingDirectory: tc.workingDirectory, callId: tc.id, purpose: tc.purpose, isOutputValid: isOutputValid)
 
             } else {
                 // Just a text response - check if it's a final summary
@@ -560,6 +621,7 @@ final class CommandModeService: ObservableObject {
             }
 
         } catch {
+            guard isOutputValid() else { return }
             let errorMsg: String
             if case LLMError.invalidRequest = error {
                 errorMsg = error.localizedDescription
@@ -674,7 +736,8 @@ final class CommandModeService: ObservableObject {
         return false
     }
 
-    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil) async {
+    private func executeCommand(_ command: String, workingDirectory: String?, callId: String, purpose: String? = nil, isOutputValid: @escaping @MainActor () -> Bool = { true }) async {
+        guard isOutputValid() else { return }
         self.currentStep = .executing(command)
 
         let result = await terminalService.execute(
@@ -682,6 +745,8 @@ final class CommandModeService: ObservableObject {
             workingDirectory: workingDirectory
         )
 
+        // A command already dispatched cannot be undone. Record its actual outcome
+        // even if Escape suppresses every subsequent agent turn and visible output.
         // Create enhanced result with context
         let enhancedResult = EnhancedCommandResult(
             result: result,
@@ -700,8 +765,13 @@ final class CommandModeService: ObservableObject {
             stepType: resultStepType
         ))
 
+        guard isOutputValid() else {
+            self.saveCurrentChat()
+            return
+        }
+
         // Continue the loop - let the AI see the result and decide what to do next
-        await self.processNextTurn()
+        await self.processNextTurn(isOutputValid: isOutputValid)
     }
 
     // MARK: - Enhanced Result
@@ -754,7 +824,8 @@ final class CommandModeService: ObservableObject {
         }
     }
 
-    private func callLLM() async throws -> LLMResponse {
+    private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
+        guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
         if let issue = settings.commandModeReadinessIssue {
             throw LLMError.invalidRequest(issue)
@@ -954,6 +1025,7 @@ final class CommandModeService: ObservableObject {
             config.onThinkingChunk = { [weak self] (chunk: String) in
                 guard let self = self else { return }
                 Task { @MainActor in
+                    guard isOutputValid() else { return }
                     self.thinkingBuffer.append(chunk)
 
                     // 60fps UI update throttle for thinking
@@ -969,6 +1041,7 @@ final class CommandModeService: ObservableObject {
             config.onContentChunk = { [weak self] (chunk: String) in
                 guard let self = self else { return }
                 Task { @MainActor in
+                    guard isOutputValid() else { return }
                     self.streamingBuffer.append(chunk)
 
                     // 60fps UI update throttle
@@ -990,6 +1063,7 @@ final class CommandModeService: ObservableObject {
         DebugLogger.shared.info("Using LLMClient for Command Mode (streaming=\(enableStreaming), messages=\(messages.count), history=\(self.conversationHistory.count))", source: "CommandModeService")
 
         let response = try await LLMClient.shared.call(config)
+        guard isOutputValid() else { throw CancellationError() }
 
         // Final UI update - ensure all content is displayed
         let fullContent = self.streamingBuffer.joined()
@@ -1002,6 +1076,7 @@ final class CommandModeService: ObservableObject {
 
         // Small delay to let the final content render, then clear
         try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        guard isOutputValid() else { throw CancellationError() }
 
         // Capture final thinking before clearing (for message storage)
         let finalThinking = response.thinking ?? (self.thinkingBuffer.isEmpty ? nil : self.thinkingBuffer.joined())

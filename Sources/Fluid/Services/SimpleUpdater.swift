@@ -125,7 +125,7 @@ final class SimpleUpdater {
     }
 
     static let shared = SimpleUpdater()
-    private init() {}
+    init() {}
 
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
@@ -469,7 +469,7 @@ final class SimpleUpdater {
 
     // MARK: - Helpers
 
-    private func showUpdateInstallStatus(version: String) {
+    func showUpdateInstallStatus(version: String) {
         guard self.updateStatusWindow == nil else { return }
 
         let panel = NSPanel(
@@ -479,6 +479,7 @@ final class SimpleUpdater {
             defer: false
         )
         panel.title = "Installing FluidVoice \(version)"
+        panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -528,6 +529,11 @@ final class SimpleUpdater {
 
     private func resetUpdateOperation() {
         self.updateOperationGate.finish()
+        self.dismissUpdateInstallStatus()
+    }
+
+    func dismissUpdateInstallStatus() {
+        self.updateStatusWindow?.orderOut(nil)
         self.updateStatusWindow?.close()
         self.updateStatusWindow = nil
     }
@@ -890,6 +896,11 @@ final class SimpleUpdater {
             finalAppURL = installedAppURL
         }
 
+        // Installation is finished. Do not leave the floating progress window owned by
+        // the old process until it exits: quitting may be delayed or cancelled by AppKit.
+        // Keep the operation gate active so that old process cannot start another install.
+        self.dismissUpdateInstallStatus()
+
         // Use modern NSWorkspace API for more reliable app launching
         DispatchQueue.main.async {
             DebugLogger.shared.info("SimpleUpdater: Attempting to relaunch app at: \(finalAppURL.path)", source: "SimpleUpdater")
@@ -919,7 +930,7 @@ final class SimpleUpdater {
                 DebugLogger.shared.info("SimpleUpdater: Successfully relaunched app, terminating old instance", source: "SimpleUpdater")
                 // Give the new instance time to fully start before terminating
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    NSApp.terminate(nil)
+                    UpdateTerminationScheduler.requestTermination()
                 }
             }
         }

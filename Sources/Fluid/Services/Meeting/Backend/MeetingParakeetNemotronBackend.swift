@@ -1,7 +1,7 @@
 import Foundation
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the local composite backend.
-// Parakeet TDT v2 produces word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
+// Parakeet TDT v2/v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
 // backend owns orchestration — per-epoch materialization, unit construction, slot assignment and
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
@@ -13,16 +13,16 @@ import Foundation
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "4",
+        version: "5",
         execution: .local,
-        supportedLanguageCodes: ["en"],
+        supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
         supportedFinalPrecisions: [.word, .utterance],
         resultContract: .canonicalEvidence,
         knownLimits: [
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
-            "English only; the fixed Parakeet TDT v2 meeting policy rejects other requested options.",
+            "Parakeet TDT v2 handles English; v3 handles the supported European languages.",
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
@@ -55,7 +55,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 languageCode: request.session.languageCode
             )
         }
-        // The fixed meeting Parakeet v2 policy rejects unsupported requested options explicitly
+        guard request.configuration.languageCode == request.session.languageCode else {
+            throw MeetingProviderOptionsError.unsupportedLanguageCode(request.configuration.languageCode)
+        }
+        // The pinned meeting provider policy rejects unsupported requested options explicitly
         // (plan §5): no coercion of another model or feature into this backend.
         _ = try MeetingProviderOptions.resolve(request.configuration)
         // Model readiness is a precondition of planning; execute performs no downloads.

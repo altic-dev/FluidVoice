@@ -179,47 +179,27 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        guard let spec = model.externalCoreMLSpec,
-              let directory = Self.artifactsDirectory(for: model, spec: spec)
-        else {
-            self.isReady = false
-            self.cohereManager = nil
-            return
-        }
-
-        let compiledDirectory = CohereTranscribeAsrModels.compiledArtifactsDirectory(for: directory)
-
-        if FileManager.default.fileExists(atPath: compiledDirectory.path) {
-            DebugLogger.shared.info(
-                "ExternalCoreML: clearing compiled cache at \(compiledDirectory.path)",
-                source: "ExternalCoreML"
-            )
-            try FileManager.default.removeItem(at: compiledDirectory)
-        }
-
-        if FileManager.default.fileExists(atPath: directory.path), spec.isAppManagedArtifactsDirectory(directory) {
-            DebugLogger.shared.info(
-                "ExternalCoreML: removing downloaded artifacts at \(directory.path)",
-                source: "ExternalCoreML"
-            )
-            try FileManager.default.removeItem(at: directory)
-        } else if FileManager.default.fileExists(atPath: directory.path) {
-            DebugLogger.shared.warning(
-                "ExternalCoreML: skipping deletion for non-managed artifacts directory at \(directory.path)",
-                source: "ExternalCoreML"
-            )
-        }
-
         self.isReady = false
         self.cohereManager = nil
         self.loadedManifest = nil
         self.coherePromptTemplate = []
         self.cohereLanguageTokenIDs = [:]
-        DebugLogger.shared.info(
-            "ExternalCoreML: provider reset after cache clear",
-            source: "ExternalCoreML"
-        )
+        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        guard let spec = model.externalCoreMLSpec,
+              let directory = Self.artifactsDirectory(for: model, spec: spec)
+        else { return }
+        let compiledDirectory = CohereTranscribeAsrModels.compiledArtifactsDirectory(for: directory)
+        let isManaged = spec.isAppManagedArtifactsDirectory(directory)
+        try await Task.detached(priority: .userInitiated) {
+            let manager = FileManager.default
+            if manager.fileExists(atPath: compiledDirectory.path) {
+                try manager.removeItem(at: compiledDirectory)
+            }
+            if isManaged, manager.fileExists(atPath: directory.path) {
+                try manager.removeItem(at: directory)
+            }
+        }.value
+        DebugLogger.shared.info("ExternalCoreML: cleared app-managed cache for \(model.displayName)", source: "ExternalCoreML")
     }
 
     private func ensureArtifactsPresent(

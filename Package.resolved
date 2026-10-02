@@ -14,8 +14,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/altic-dev/DynamicNotchKit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "708f31da5319436c64059ee7ae566953407063d7"
+        "revision" : "50dc8565469cc80bbbe3c0d5dd902585a2d67986"
       }
     },
     {

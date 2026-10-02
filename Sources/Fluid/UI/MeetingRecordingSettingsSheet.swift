@@ -18,7 +18,7 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .recording: "Choose your audio sources. Transcripts are currently in English."
+        case .recording: "Choose your audio sources and transcript language."
         case .automation: "Choose when to see a recording prompt and how long to keep audio."
         case .integrations: "Connect your meeting notes to the AI assistants you already use."
         }
@@ -81,6 +81,7 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var canSave: Bool {
+        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.draft.languageCode) else { return false }
         guard self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) else { return false }
         return self.draft.mode == .inRoom
             || self.draft.usesAutomaticApplication
@@ -274,6 +275,26 @@ struct MeetingRecordingSettingsSheet: View {
                     .disabled(self.readiness.isCheckingSources)
                     .help("Rescan meeting apps and microphones.")
                     .accessibilityLabel("Refresh audio sources")
+            }
+
+            FluidManagementGroup(title: "Transcript language") {
+                MeetingAdaptiveSetupRow(
+                    title: "Language",
+                    detail: "Final transcripts support 25 languages. Live captions are English-only."
+                ) {
+                    Menu {
+                        Picker("Meeting language", selection: self.$draft.languageCode) {
+                            ForEach(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])) { language in
+                                Text(language.displayName).tag(language.id)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.displayName ?? "Choose language…")
+                    }
+                    .fluidDropdownStyle(fillsWidth: true)
+                    .accessibilityLabel("Meeting transcript language")
+                }
             }
 
             MeetingModelSettingsSection(onModelImported: self.onModelImported)

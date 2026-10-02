@@ -111,7 +111,7 @@ struct CustomDictionaryView: View {
             return true
         }
         guard !self.trainingStopRequestedDuringStart, !self.isTrainingProcessing else { return false }
-        return self.isTrainingRecording || (self.pronunciationEnabled && (self.canRecordTrainingSample || self.canRetryTrainingAfterMaximum))
+        return self.isTrainingRecording || (self.canRecordTrainingSample || self.canRetryTrainingAfterMaximum)
     }
 
     private var trainingRecorderIsStop: Bool {
@@ -125,20 +125,24 @@ struct CustomDictionaryView: View {
         return self.canRetryTrainingAfterMaximum ? "Try Again" : "Start"
     }
 
+    private var trainingProgress: DictionaryTrainingProgress {
+        DictionaryTrainingProgress(
+            spellingCount: self.trainingSampleCount,
+            pronunciationCount: self.trainingPronunciationEnrollments.count,
+            pronunciationEnabled: self.activePronunciationMatching
+        )
+    }
+
     private var trainingFinalOutputIsReady: Bool {
-        if self.activePronunciationMatching {
-            return self.trainingPronunciationEnrollments.count >= CustomDictionaryTrainingMerge.readyCoveredCount
-        }
-        return self.trainingSampleCount >= CustomDictionaryTrainingMerge.readyCoveredCount
+        self.trainingProgress.spellingReady
     }
 
     private var trainingAlreadyCorrectWithoutReplacement: Bool {
-        if self.activePronunciationMatching { return false }
-        return self.trainingVariants.isEmpty &&
-            self.trainingOutputIsCovered &&
-            !self.lastTrainingOutput.isEmpty &&
-            self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
-            self.consecutiveCoveredCaptures >= CustomDictionaryTrainingMerge.readyCoveredCount
+        !self.trainingProgress.pronunciationReady && self.trainingProgress.spellingAlreadyCorrect(
+            variants: self.trainingVariants,
+            lastOutput: self.lastTrainingOutput,
+            target: self.normalizedTrainingReplacement
+        )
     }
 
     private var trainingReadinessProgress: Int {
@@ -153,10 +157,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingOutputIsCovered: Bool {
-        if self.activePronunciationMatching {
-            return !self.trainingPronunciationEnrollments.isEmpty
-        }
-        return self.lastTrainingOutputIsCovered
+        self.lastTrainingOutputIsCovered || (self.activePronunciationMatching && !self.trainingPronunciationEnrollments.isEmpty)
     }
 
     private var trainingFinalOutputText: String {
@@ -165,7 +166,7 @@ struct CustomDictionaryView: View {
     }
 
     private var canRecordTrainingSample: Bool {
-        self.pronunciationEnabled && !self.normalizedTrainingReplacement.isEmpty &&
+        !self.normalizedTrainingReplacement.isEmpty &&
             !self.isTrainingProcessing &&
             !self.asr.isRunning &&
             self.trainingSampleCount < CustomDictionaryTrainingMerge.maxSamples
@@ -183,7 +184,7 @@ struct CustomDictionaryView: View {
 
     private var canAddTrainedReplacement: Bool {
         !self.normalizedTrainingReplacement.isEmpty &&
-            (!self.trainingVariants.isEmpty || !self.trainingPronunciationEnrollments.isEmpty) &&
+            (!self.trainingVariants.isEmpty || self.trainingProgress.pronunciationReady) &&
             !self.isTrainingRecording &&
             !self.isTrainingProcessing &&
             self.trainingFinalOutputIsReady
@@ -358,19 +359,12 @@ struct CustomDictionaryView: View {
         }
         .onChange(of: self.pronunciationEnabled) { _, enabled in
             guard !enabled else { return }
-            self.isAutomaticTrainingEnabled = false
-            DictionaryTrainingEndpointMonitor.shared.stop()
             self.trainingPronunciationEnrollments = []
-            self.trainingSaveID = nil
-            self.isTrainingProcessing = false
-            if self.isTrainingRecording {
-                Task {
-                    if self.isTrainingStarting {
-                        await self.asr.cancelPendingPronunciationTrainingStart()
-                    } else {
-                        await self.stopTrainingSample()
-                    }
-                }
+            if self.trainingSaveID != nil {
+                self.trainingSaveID = nil
+                self.isTrainingProcessing = false
+                self.trainingHasError = true
+                self.trainingStatusMessage = "Pronunciation learning was turned off. Try saving your spelling corrections again."
             }
         }
         .onDisappear {
@@ -579,7 +573,7 @@ struct CustomDictionaryView: View {
                 DictionaryWordWizard(
                     word: self.$trainingReplacement,
                     step: self.wizardStep,
-                    count: self.activePronunciationMatching ? self.trainingPronunciationEnrollments.count : self.trainingSampleCount,
+                    count: self.trainingSampleCount,
                     heard: self.lastTrainingOutput,
                     variants: self.trainingVariants,
                     busy: self.isTrainingRecording || self.isTrainingProcessing || self.isTrainingStarting,
@@ -591,7 +585,7 @@ struct CustomDictionaryView: View {
                     alreadyCorrect: self.trainingAlreadyCorrectWithoutReplacement,
                     savedWord: self.wizardSavedWord,
                     onContinue: {
-                        let captures = self.activePronunciationMatching ? self.trainingPronunciationEnrollments.count : self.trainingSampleCount
+                        let captures = self.trainingSampleCount
                         self.wizardStep = captures >= 3 ? .review : .recording
                     },
                     onRecord: {
@@ -628,7 +622,9 @@ struct CustomDictionaryView: View {
                         self.wizardStep = .recording
                     },
                     automaticCaptureActive: self.isAutomaticTrainingEnabled,
-                    audioLevels: self.asr.audioLevelPublisher
+                    audioLevels: self.asr.audioLevelPublisher,
+                    pronunciationNotice: self.trainingProgress.pronunciationNotice,
+                    pronunciationIncomplete: self.activePronunciationMatching && !self.trainingProgress.pronunciationReady
                 )
                 .onChange(of: self.trainingReplacement) { oldValue, newValue in
                     self.handleTrainingReplacementChange(oldValue: oldValue, newValue: newValue)
@@ -2233,7 +2229,7 @@ struct CustomDictionaryView: View {
     }
 
     private func startTrainingSample() async {
-        guard self.pronunciationEnabled, self.isAutomaticTrainingEnabled, self.canRecordTrainingSample else {
+        guard self.isAutomaticTrainingEnabled, self.canRecordTrainingSample else {
             self.isAutomaticTrainingEnabled = false
             return
         }
@@ -2244,7 +2240,7 @@ struct CustomDictionaryView: View {
         self.isTrainingStarting = true
         self.isTrainingRecording = true
 
-        await self.asr.start(forDictionaryTraining: true)
+        await self.asr.start(forDictionaryTraining: true, requiresPronunciation: false)
         self.isTrainingStarting = false
         if !self.asr.isRunning {
             self.isTrainingRecording = false
@@ -2297,8 +2293,6 @@ struct CustomDictionaryView: View {
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let transcript = await self.asr.stop(forDictionaryTraining: true, captureDictionaryPronunciation: self.activePronunciationMatching)
         self.isTrainingProcessing = false
-        guard self.pronunciationEnabled,
-              DictionaryMatcherExperiment.generation == pronunciationGeneration else { return }
         guard !CustomDictionaryTrainingMerge.isOversizedResponse(transcript, intendedReplacement: self.normalizedTrainingReplacement) else {
             self.isAutomaticTrainingEnabled = false
             self.trainingHasError = true
@@ -2306,6 +2300,7 @@ struct CustomDictionaryView: View {
             return
         }
         if self.activePronunciationMatching,
+           DictionaryMatcherExperiment.generation == pronunciationGeneration,
            CustomDictionaryTrainingMerge.normalizedTrigger(transcript) != nil,
            let enrollment = self.asr.lastDictionaryTrainingResult?.pronunciationEnrollment
         {
@@ -2347,13 +2342,6 @@ struct CustomDictionaryView: View {
     }
 
     private func addTrainingVariant(from transcript: String) {
-        if self.activePronunciationMatching,
-           self.asr.lastDictionaryTrainingResult?.pronunciationEnrollment == nil
-        {
-            self.trainingHasError = true
-            self.trainingStatusMessage = "Couldn't capture a voice profile. Try again with one clear word."
-            return
-        }
         guard let detected = CustomDictionaryTrainingMerge.normalizedTrigger(transcript) else {
             self.lastTrainingOutput = ""
             self.lastTrainingOutputIsCovered = false
@@ -2429,10 +2417,10 @@ struct CustomDictionaryView: View {
         }
         let replacementText = self.normalizedTrainingReplacement
         let enrollments = self.trainingPronunciationEnrollments
-        let savePronunciation = self.activePronunciationMatching
+        let savePronunciation = self.trainingProgress.pronunciationReady
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants)
-        guard self.trainingSaveID == saveID, !Task.isCancelled, self.pronunciationEnabled else { return }
+        guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
         DebugLogger.shared.info(
             "VOICE_TRAINING_ALIAS_FILTER accepted=\(filtered.accepted.count) rejected=\(filtered.rejected.count) available=\(filtered.lookupAvailable)",
             source: "CustomDictionary"
@@ -2470,7 +2458,7 @@ struct CustomDictionaryView: View {
                     }
                 )
             } catch {
-                guard self.trainingSaveID == saveID, !Task.isCancelled, self.pronunciationEnabled else { return }
+                guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
                 self.trainingHasError = true
                 self.trainingStatusMessage = SettingsStore.shared.customDictionaryEntries == originalEntries
                     ? "Couldn't save the voice profile. Try again."
@@ -2482,7 +2470,7 @@ struct CustomDictionaryView: View {
                 return
             }
         }
-        guard self.trainingSaveID == saveID, !Task.isCancelled, self.pronunciationEnabled else { return }
+        guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
         // Profile persistence suspends this view. Never publish a snapshot over a newer
         // manual edit, import, or deletion; keep the recordings available for a retry.
         guard SettingsStore.shared.customDictionaryEntries == originalEntries else {
@@ -3206,6 +3194,35 @@ enum CustomDictionaryManualEntry {
 enum PronunciationProfileEditPolicy {
     static func shouldDiscardProfile(previousReplacement: String, updatedReplacement: String) -> Bool {
         previousReplacement.caseInsensitiveCompare(updatedReplacement) != .orderedSame
+    }
+}
+
+/// Spelling examples are useful even when voice enrollment is missing or incomplete.
+struct DictionaryTrainingProgress {
+    let spellingCount: Int
+    let pronunciationCount: Int
+    let pronunciationEnabled: Bool
+
+    var spellingReady: Bool { self.spellingCount >= CustomDictionaryTrainingMerge.readyCoveredCount }
+    var pronunciationReady: Bool {
+        self.pronunciationEnabled && self.pronunciationCount >= CustomDictionaryTrainingMerge.readyCoveredCount
+    }
+
+    func spellingAlreadyCorrect(variants: [String], lastOutput: String, target: String) -> Bool {
+        self.spellingReady && variants.isEmpty && !lastOutput.isEmpty
+            && lastOutput.caseInsensitiveCompare(target) == .orderedSame
+    }
+
+    var pronunciationNotice: String? {
+        guard self.pronunciationEnabled else { return nil }
+        let count = min(self.pronunciationCount, CustomDictionaryTrainingMerge.readyCoveredCount)
+        if self.spellingReady, !self.pronunciationReady {
+            if self.spellingCount >= CustomDictionaryTrainingMerge.maxSamples {
+                return "Spelling examples are ready. Pronunciation needs more voice examples. Save spelling corrections only, or redo recordings to try voice learning again."
+            }
+            return "Spelling examples are ready. Pronunciation has \(count) of 3 voice examples. Record more to finish voice learning, or save spelling corrections only."
+        }
+        return "Pronunciation: \(count) of 3 voice examples"
     }
 }
 

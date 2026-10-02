@@ -126,8 +126,28 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             }
             throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageNotDirectory")
         }
-        guard url.resolvingSymlinksInPath().standardizedFileURL == url else {
-            throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packagePathContainsSymlink")
+        // URL resolution also restores on-disk capitalization on case-insensitive volumes.
+        // A home path such as /Users/Gabriel may legitimately resolve to /Users/gabriel.
+        // Allow only case changes in real directory entries, not links whose targets happen
+        // to differ only by case. Preserve Foundation's handling of system aliases like /var.
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        if resolved != url {
+            let components = url.pathComponents
+            let resolvedComponents = resolved.pathComponents
+            guard components.count == resolvedComponents.count else {
+                throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packagePathContainsSymlink")
+            }
+            var prefix = URL(fileURLWithPath: "/", isDirectory: true)
+            for (component, resolvedComponent) in zip(components.dropFirst(), resolvedComponents.dropFirst()) {
+                prefix.appendPathComponent(component, isDirectory: true)
+                guard component != resolvedComponent else { continue }
+                let attributes = try manager.attributesOfItem(atPath: prefix.path)
+                guard component.caseInsensitiveCompare(resolvedComponent) == .orderedSame,
+                      attributes[.type] as? FileAttributeType == .typeDirectory
+                else {
+                    throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packagePathContainsSymlink")
+                }
+            }
         }
 
         var totalByteCount: Int64 = 0

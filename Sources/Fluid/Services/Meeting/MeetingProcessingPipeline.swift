@@ -1328,7 +1328,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let asrServiceProvider: @MainActor () -> ASRService
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
-    private let backendIDProvider: @MainActor () -> MeetingBackendID
+    private let backendIDProvider: @MainActor (String) -> MeetingBackendID
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1380,14 +1380,18 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // otherwise the user preference. An unknown selection is rejected in `process`, never
         // quietly replaced.
         if let backendID {
-            self.backendIDProvider = { backendID }
+            self.backendIDProvider = { _ in backendID }
         } else if let backendIDProvider {
-            self.backendIDProvider = backendIDProvider
+            self.backendIDProvider = { _ in backendIDProvider() }
         } else if let backendRegistry {
             let registryDefault = backendRegistry.defaultBackendID
-            self.backendIDProvider = { registryDefault }
+            self.backendIDProvider = { _ in registryDefault }
         } else {
-            self.backendIDProvider = { SettingsStore.shared.meetingTranscriptionBackendID }
+            self.backendIDProvider = { languageCode in
+                let saved = SettingsStore.shared.meetingTranscriptionBackendID
+                // Preserve English rollback settings; non-English recordings need the current backend.
+                return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+            }
         }
     }
 
@@ -1396,7 +1400,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        guard session.languageCode == "en" else {
+        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(session.languageCode) else {
             throw MeetingProcessingError.unsupportedLanguage
         }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
@@ -1406,7 +1410,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
         // two backends — planning under one, failing the legacy callback against another.
-        let backendID = self.backendIDProvider()
+        let backendID = self.backendIDProvider(session.languageCode)
         DebugLogger.shared.info(
             "Meeting final processing selected backend=\(backendID.rawValue)",
             source: "MeetingProcessingPipeline"
@@ -3155,7 +3159,7 @@ nonisolated enum MeetingProcessingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedLanguage:
-            return "Meeting transcription currently supports English only."
+            return "Choose a supported meeting language from Recording settings."
         case .noRecoverableAudio:
             return "No finalized meeting audio is available to transcribe."
         case .dictationActive:

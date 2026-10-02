@@ -900,6 +900,128 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertEqual(result, .timedOut)
     }
 
+    @MainActor
+    func testReadyPCMDoesNotOverrideConsumerTaskCancellation() async {
+        let gate = AudioCaptureReadinessGate()
+        gate.arm(sessionID: 41, attemptID: 1)
+        gate.signalFirstPCM(sessionID: 41, attemptID: 1)
+        var resumeAfterReady: CheckedContinuation<Void, Never>?
+        let task = Task { @MainActor in
+            let result = await gate.wait(sessionID: 41, attemptID: 1, timeoutNanoseconds: 1_000_000)
+            XCTAssertEqual(result, .ready)
+            await withCheckedContinuation { resumeAfterReady = $0 }
+            do {
+                try Task.checkCancellation()
+                return true
+            } catch { return false }
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertNotNil(resumeAfterReady)
+        task.cancel()
+        resumeAfterReady?.resume()
+        let publishedCapture = await task.value
+        XCTAssertFalse(publishedCapture, "The capture consumer must check cancellation even after a ready result")
+    }
+
+    func testASRRechecksCaptureCancellationAfterFirstPCMWait() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repositoryRoot.appendingPathComponent("Sources/Fluid/Services/ASRService.swift"), encoding: .utf8)
+        let postWait = try XCTUnwrap(source.components(separatedBy: "let readiness = await self.audioCaptureReadinessGate.wait(").dropFirst().first)
+        let readinessBranch = try XCTUnwrap(postWait.range(of: "if readiness == .ready"))
+        let cancellationCheck = try XCTUnwrap(postWait.range(of: "try self.checkCaptureStartGeneration(startGeneration)"))
+        XCTAssertLessThan(cancellationCheck.lowerBound, readinessBranch.lowerBound, "Do not publish ready PCM before checking task cancellation")
+    }
+
+    func testHistoryOnlyOutputWiringSeparatesPersistenceFromDelivery() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let pipeline = try XCTUnwrap(source.components(separatedBy: "private func processStoppedTranscription(").last?.components(separatedBy: "private func processDictationPromptTest(").first)
+        XCTAssertTrue(pipeline.contains("let shouldPersistOutputs = outputRoute.savesHistory"))
+        XCTAssertTrue(pipeline.contains("let shouldDeliverOutputs = outputRoute.deliversText"))
+        XCTAssertTrue(pipeline.contains("if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory"))
+        XCTAssertTrue(pipeline.contains("let shouldCopyToClipboard = shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("let shouldTypeExternally = shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("if isFluidFrontmost, shouldDeliverOutputs"))
+        XCTAssertTrue(pipeline.contains("if outputRoute.publishesEditorResult"))
+        XCTAssertTrue(pipeline.contains("shouldPersistOutputs: shouldDeliverOutputs"), "Recovery must not offer a retry that later pastes")
+        XCTAssertTrue(pipeline.contains("if wasRewriteMode {"))
+        XCTAssertTrue(pipeline.contains("if wasCommandMode {"))
+        XCTAssertTrue(pipeline.contains("!cancelledAtASRStop, await self.routePromptTestResult"))
+        XCTAssertTrue(pipeline.contains("!cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled"))
+        XCTAssertTrue(pipeline.contains("guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else"))
+    }
+
+    func testCancelHistoryWiringSharesHandlerAndKeepsDisposableCapturesPrivate() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let callback = try XCTUnwrap(source.components(separatedBy: "self.hotkeyManager?.setCancelCallback {").last?.components(separatedBy: "// Re-insert").first)
+        XCTAssertTrue(callback.contains("self.handleCancelShortcutResult()"))
+        XCTAssertFalse(callback.contains("clearActiveRecordingMode()"), "Keep the selected style until the History pipeline snapshots it")
+        let cancel = try XCTUnwrap(source.components(separatedBy: "private func handleCancelShortcutResult() -> GlobalHotkeyManager.CancelHandlingResult {").last?
+            .components(separatedBy: "// MARK: - Model Management Helpers").first)
+        XCTAssertTrue(cancel.contains("if self.isSavingCancelledRecording { return .cancelled }"))
+        XCTAssertTrue(cancel.contains("DictionaryCorrectionOverlayController.shared.dismiss()\n            return .dismissedOverlay"))
+        XCTAssertTrue(cancel.contains("self.settings.saveTranscriptionHistory"))
+        XCTAssertTrue(cancel.contains("!self.asr.isDictionaryTrainingCaptureActive"))
+        XCTAssertTrue(cancel.contains("!= .onboardingSandbox"))
+        XCTAssertTrue(cancel.contains("!DictationPromptTestCoordinator.shared.isActive"))
+        XCTAssertTrue(cancel.contains("stopAndProcessTranscription(route: .historyOnly)"))
+        XCTAssertTrue(cancel.contains("self.isSavingCancelledRecording = false"))
+        XCTAssertTrue(cancel.contains("manager?.traceStopUnlocked(since: stopLockStartedAt)"))
+        XCTAssertTrue(cancel.contains("resetModifierOnlyShortcutTracking(reason: .cancel)"))
+        XCTAssertTrue(cancel.contains("self.menuBarManager.beginProcessingCompletionAndHideOverlay()"))
+        XCTAssertTrue(cancel.contains("self.spokenSendAutoStopTask?.cancel()"))
+        XCTAssertTrue(cancel.contains("self.stopSpokenSendVoiceActivityMonitoring()"))
+    }
+
+    func testEscapeCancelsVoiceEditAndCommandWithoutAddingThemToDictationHistory() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("processingAllowsHistoryCancellation"))
+        XCTAssertTrue(source.contains("if wasRewriteMode {\n            guard !cancelledAtASRStop else {\n                self.rewriteModeService.clearState()"))
+        XCTAssertTrue(source.contains("if wasCommandMode {\n            guard !cancelledAtASRStop else { return }"))
+        let start = try XCTUnwrap(source.range(of: "private func handleCancelShortcutResult("))
+        let end = try XCTUnwrap(source.range(of: "// MARK: - Model Management Helpers", range: start.upperBound..<source.endIndex))
+        let cancel = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(cancel.contains("self.cancelledOutputLifecycleID = lifecycleID"))
+        XCTAssertTrue(cancel.contains("(self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode)"))
+        XCTAssertTrue(cancel.contains("!self.isRecordingForRewrite && !self.isRecordingForCommand"))
+        let edit = try XCTUnwrap(source.components(separatedBy: "private func processRewriteWithVoiceInstruction(").last?.components(separatedBy: "private func setActiveRecordingMode(").first)
+        XCTAssertTrue(edit.contains("self.cancelledOutputLifecycleID != lifecycleID"))
+        XCTAssertEqual(edit.components(separatedBy: "isOutputValid: isOutputValid").count - 1, 2)
+        XCTAssertTrue(edit.contains("if !isOutputValid() { self.rewriteModeService.clearState() }"))
+        XCTAssertTrue(edit.contains("await self.rewriteModeService.processRewriteRequest(instruction)\n        guard isOutputValid() else { return }"))
+        let command = try XCTUnwrap(source.components(separatedBy: "private func processCommandWithVoice(").last?.components(separatedBy: "/// Capture app context").first)
+        XCTAssertTrue(command.contains("processUserCommand(command, notifyInvalidRequest: true, isOutputValid: isOutputValid)"))
+        XCTAssertTrue(command.contains("self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID"))
+        XCTAssertTrue(cancel.contains("self.commandModeService.cancelInvalidPendingCommand()"))
+        XCTAssertTrue(command.contains("self.pendingVoiceCommandLifecycleID = self.commandModeService.pendingCommand == nil ? nil : lifecycleID"))
+    }
+
+    func testCommandFollowUpAcceptanceReachesNotchWithoutDroppingDraft() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("let accepted = await commandModeService.processFollowUpCommand(text)"))
+        XCTAssertTrue(source.contains("if !accepted, commandModeService.pendingCommand != nil"))
+        XCTAssertTrue(source.contains("self.asr.errorTitle = \"Command Awaiting Approval\""))
+        let overlay = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/Services/NotchOverlayManager.swift"), encoding: .utf8)
+        XCTAssertTrue(overlay.contains("return await self.onCommandFollowUp?(text) ?? false"))
+        let command = try XCTUnwrap(source.components(separatedBy: "private func processCommandWithVoice(").last?.components(separatedBy: "/// Capture app context").first)
+        XCTAssertTrue(command.contains("guard isOutputValid() else {\n            self.commandModeService.cancelInvalidPendingCommand()"))
+    }
+
+    func testCancelledProcessingCannotPublishDelayedOverlayOrPracticeResult() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
+        let status = try XCTUnwrap(source.components(separatedBy: "let onFinalTranscriptionStarted: @MainActor () -> Void = {").last?
+            .components(separatedBy: "return (false, onFinalTranscriptionStarted)").first)
+        XCTAssertTrue(status.contains("self.cancelledOutputLifecycleID != lifecycleID"))
+        let prompt = try XCTUnwrap(source.components(separatedBy: "private func processDictationPromptTest(").last?.components(separatedBy: "private func routePromptTestResult(").first)
+        XCTAssertTrue(prompt.contains("guard promptTest.acceptsResult(for: sessionID), self.cancelledOutputLifecycleID != lifecycleID"))
+    }
+
     func testReadinessWaitRespondsPromptlyToTaskCancellation() async {
         let gate = AudioCaptureReadinessGate()
         gate.arm(sessionID: 41, attemptID: 1)

@@ -68,8 +68,11 @@ final class AIEnhancementSettingsViewModel {
     var verificationCount = 0
     var resetCount = 0
     var verified = true
+    var verificationMessage = "test failure"
     var smartSelectionCount = 0
     var smartSelected = false
+    var routesDictationThroughPrivateAI: Bool { self.smartSelected }
+    func turnOffPrivateAIDictationSlots() { self.smartSelected = false }
     func selectPrivateAIPromptIfAvailable() {
         guard self.verified else { return }
         self.smartSelectionCount += 1
@@ -78,7 +81,7 @@ final class AIEnhancementSettingsViewModel {
 
     func providerKey(for id: String) -> String { id }
     func refreshProviderItems() {}
-    func connectionErrorMessage(for id: String) -> String { "test failure" }
+    func connectionErrorMessage(for id: String) -> String { self.verificationMessage }
     func resetVerification(for id: String) { self.resetCount += 1 }
     func updateConnectionStatus(_ status: ConnectionStatus, for id: String) {}
     func verifyPrivateAIProvider(model: PrivateAIRegisteredModel) async -> Bool {
@@ -97,6 +100,7 @@ struct DebugLogger {
 final class PrivateAIIntegrationService {
     struct LoadedModelState { var state: PrivateAIStatus.State; var modelID: String }
     static let shared = PrivateAIIntegrationService()
+    static let runtimeDidChangeNotification = Notification.Name("TestPrivateAIRuntimeDidChange")
     static var configuredModelID = "mini"
     static let selectedModelDefaultsKey = "test-selection"
     static let localModelPathDefaultsKey = "test-path"
@@ -310,5 +314,42 @@ enum PrivateAIControllerChecks {
         controller.usePreviewModel(isInstalled: true) {}
         await self.eventually { !controller.isBusy }
         check(vm.smartSelected && vm.smartSelectionCount == 2, "Another explicit activation switches Basic back to Smart")
+        vm.verified = false
+        vm.verificationMessage = "Missing local model: model.safetensors."
+        let resetsBeforeMissing = vm.resetCount
+        let downloadsBeforeMissing = PrivateAIIntegrationService.downloads
+        let removalsBeforeMissing = PrivateAIIntegrationService.removals
+        controller.verifyPrivateAIConnection(.init(id: "mini"), onCompletion: { reportedError = $0 })
+        await self.eventually { !controller.isBusy }
+        check(controller.privateAILoadState.needsDownload("mini"), "Missing weights becomes a recoverable download state")
+        check(!controller.privateAILoadState.needsDownload("pico"), "Recovery belongs only to the affected model")
+        check(controller.privateAILoadState.failureMessage(for: "mini") == nil, "Missing files do not display a raw failure")
+        check(reportedError == "Model files are missing. Download again to repair.", "Explicit verification explains recovery")
+        check(vm.resetCount == resetsBeforeMissing + 1, "Missing files clear stale verification")
+        check(PrivateAIIntegrationService.downloads == downloadsBeforeMissing, "Recovery never silently starts a download")
+        check(PrivateAIIntegrationService.removals == removalsBeforeMissing, "Recovery never deletes model files")
+        vm.verificationMessage = PrivateAIModelLoadState.missingModelMessage
+        controller.verifyPrivateAIConnection(.init(id: "mini"), onCompletion: { reportedError = $0 })
+        await self.eventually { !controller.isBusy }
+        check(controller.privateAILoadState.needsDownload("mini"), "Missing installation during Verify uses the same recovery as Load")
+        check(reportedError == "Model files are missing. Download again to repair.", "Missing installation explains recovery")
+        check(vm.resetCount == resetsBeforeMissing + 2, "Missing installation clears stale verification")
+        check(
+            PrivateAIIntegrationService.downloads == downloadsBeforeMissing && PrivateAIIntegrationService.removals == removalsBeforeMissing,
+            "Verification recovery does not download or remove files"
+        )
+        controller.refreshPrivateAILoadState()
+        check(controller.privateAILoadState.needsDownload("mini"), "Passive refresh retains recovery state")
+        vm.verified = true
+        controller.usePreviewModel(isInstalled: false) {}
+        await self.eventually { !controller.isBusy }
+        check(controller.privateAILoadState.isLoaded("mini"), "Explicit repair verifies and clears recovery state")
+        check(PrivateAIIntegrationService.downloads == downloadsBeforeMissing + 1, "Repair uses the existing download path once")
+        for message in ["Network connection lost", "Not enough disk space", "Model checksum mismatch", "Failed to load local model: model.safetensors."] {
+            check(
+                PrivateAIModelLoadState.failure(modelID: "mini", message: message).failureMessage(for: "mini") == message,
+                "Non-missing failures retain their actual diagnostic"
+            )
+        }
     }
 }

@@ -23,7 +23,183 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         super.tearDown()
     }
 
+    func testIncompletePronunciationNoticeRendersWithoutRecordingOrSaving() async throws {
+        var actions = 0
+        for width in [420.0, 760.0] {
+            for scheme in [ColorScheme.light, .dark] {
+                let progress = DictionaryTrainingProgress(spellingCount: 3, pronunciationCount: 1, pronunciationEnabled: true)
+                let view = DictionaryWordWizard(
+                    word: .constant("Palermo"),
+                    step: .review,
+                    count: 3,
+                    heard: "pal ermo",
+                    variants: ["pal ermo"],
+                    busy: false,
+                    recording: false,
+                    processing: false,
+                    starting: false,
+                    error: nil,
+                    voiceSupported: true,
+                    alreadyCorrect: false,
+                    savedWord: "",
+                    onContinue: { actions += 1 },
+                    onRecord: { actions += 1 },
+                    onSave: { actions += 1 },
+                    onBack: { actions += 1 },
+                    onNewWord: { actions += 1 },
+                    onManual: { actions += 1 },
+                    onPracticeMore: { actions += 1 },
+                    pronunciationNotice: progress.pronunciationNotice,
+                    pronunciationIncomplete: true
+                )
+                .padding(20).frame(width: width)
+                .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
+                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
+                .environment(\.colorScheme, scheme)
+                let host = NSHostingView(rootView: view)
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 1050), styleMask: [.titled], backing: .buffered, defer: false)
+                window.contentView = host
+                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                window.orderFrontRegardless()
+                try await Task.sleep(for: .milliseconds(150))
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: URL(fileURLWithPath: "/tmp/dictionary-wizard-review-\(Int(width))-\(scheme).png"))
+                window.orderOut(nil)
+            }
+        }
+        XCTAssertEqual(actions, 0)
+    }
+
+    func testSpellingAndPronunciationReadinessAreIndependent() {
+        for spellingCount in 0...4 {
+            for pronunciationCount in 0...3 {
+                for enabled in [false, true] {
+                    let progress = DictionaryTrainingProgress(
+                        spellingCount: spellingCount, pronunciationCount: pronunciationCount, pronunciationEnabled: enabled
+                    )
+                    XCTAssertEqual(progress.spellingReady, spellingCount >= 3)
+                    XCTAssertEqual(progress.pronunciationReady, enabled && pronunciationCount >= 3)
+                    XCTAssertEqual(progress.pronunciationNotice == nil, !enabled)
+                    if enabled, spellingCount >= 3, pronunciationCount < 3 {
+                        XCTAssertTrue(progress.pronunciationNotice?.contains("save spelling corrections only") == true)
+                    }
+                }
+            }
+        }
+    }
+
+    func testAlreadyCorrectSpellingsCanFinishAfterAnEmptyAttempt() {
+        // Empty attempts reset the consecutive streak, but do not erase successful examples.
+        let progress = DictionaryTrainingProgress(spellingCount: 3, pronunciationCount: 1, pronunciationEnabled: true)
+        XCTAssertTrue(progress.spellingAlreadyCorrect(variants: [], lastOutput: "palermo", target: "Palermo"))
+        XCTAssertFalse(progress.pronunciationReady)
+        XCTAssertFalse(progress.spellingAlreadyCorrect(variants: ["pal ermo"], lastOutput: "palermo", target: "Palermo"))
+        XCTAssertFalse(progress.spellingAlreadyCorrect(variants: [], lastOutput: "", target: "Palermo"))
+        XCTAssertFalse(progress.spellingAlreadyCorrect(variants: [], lastOutput: "different", target: "Palermo"))
+        let incomplete = DictionaryTrainingProgress(spellingCount: 2, pronunciationCount: 0, pronunciationEnabled: false)
+        XCTAssertFalse(incomplete.spellingAlreadyCorrect(variants: [], lastOutput: "palermo", target: "Palermo"))
+    }
+
+    func testIncompletePronunciationAtLimitOffersABoundedRecovery() {
+        let progress = DictionaryTrainingProgress(spellingCount: 20, pronunciationCount: 2, pronunciationEnabled: true)
+        XCTAssertTrue(progress.spellingReady)
+        XCTAssertFalse(progress.pronunciationReady)
+        XCTAssertTrue(progress.pronunciationNotice?.contains("redo recordings") == true)
+    }
+
+    func testSpeechMonitorDeadlineStopsSilenceOnceAndCancelsOldDeadline() async {
+        let monitor = DictionaryTrainingEndpointMonitor()
+        let stale = expectation(description: "Old deadline cannot stop new capture")
+        stale.isInverted = true
+        let stopped = expectation(description: "Silence reaches bounded stop")
+        monitor.start(isCurrent: { true }, audioGeneration: { 0 }, readChunk: { _ in [] }, maximumDuration: .milliseconds(20)) {
+            stale.fulfill()
+        }
+        monitor.start(isCurrent: { true }, audioGeneration: { 0 }, readChunk: { _ in [] }, maximumDuration: .milliseconds(80)) {
+            stopped.fulfill()
+        }
+        await fulfillment(of: [stopped, stale], timeout: 0.3)
+        monitor.stop()
+    }
+
     #if arch(arm64)
+    func testAutomaticSpeechEndWorksWithPronunciationOffAndAcrossToggles() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Resources/dictation_fixture.wav")
+        let samples = try AudioConverter().resampleAudioFile(path: fixture.path) + [Float](repeating: 0, count: 32_000)
+        for toggleDuringCapture in [false, true] {
+            DictionaryMatcherExperiment.setEnabled(toggleDuringCapture)
+            let monitor = DictionaryTrainingEndpointMonitor()
+            let stopped = expectation(description: "Speech ends independently of pronunciation")
+            var callbacks = 0
+            monitor.start(
+                isCurrent: { true },
+                audioGeneration: { 0 },
+                readChunk: { offset in
+                    if toggleDuringCapture, offset > 0 {
+                        DictionaryMatcherExperiment.setEnabled(false)
+                    }
+                    let end = offset + DictionaryTrainingEndpointDetector.chunkSize
+                    return end <= samples.count ? Array(samples[offset..<end]) : []
+                },
+                onSpeechEnded: { callbacks += 1; stopped.fulfill() }
+            )
+            await fulfillment(of: [stopped], timeout: 10)
+            monitor.stop()
+            XCTAssertEqual(callbacks, 1)
+            XCTAssertFalse(DictionaryMatcherExperiment.sharedFeaturesEnabled)
+        }
+    }
+
+    func testCancelledSpeechMonitorCannotStopReplacementCapture() async throws {
+        let monitor = DictionaryTrainingEndpointMonitor()
+        var current = true
+        let read = expectation(description: "Old capture read")
+        let staleCallback = expectation(description: "No callback for stale capture")
+        staleCallback.isInverted = true
+        monitor.start(
+            isCurrent: { current },
+            audioGeneration: { 0 },
+            readChunk: { _ in
+                current = false
+                read.fulfill()
+                return [Float](repeating: 0, count: DictionaryTrainingEndpointDetector.chunkSize)
+            },
+            onSpeechEnded: { staleCallback.fulfill() }
+        )
+        await fulfillment(of: [read], timeout: 10)
+        monitor.stop()
+        await fulfillment(of: [staleCallback], timeout: 0.2)
+    }
+    #endif
+
+    #if arch(arm64)
+    func testTrainingTranscribesSpellingsAcrossPronunciationToggle() async throws {
+        let provider = FluidAudioProvider(modelOverride: .parakeetTDTv2, configureWordBoosting: false)
+        try await provider.prepare()
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Resources/dictation_fixture.wav")
+        let samples = try AudioConverter().resampleAudioFile(path: fixture.path)
+        for enabled in [false, true, false] {
+            DictionaryMatcherExperiment.setEnabled(enabled)
+            let result = try await provider.transcribeDictionaryTraining(samples, capturePronunciation: enabled)
+            XCTAssertFalse(result.text.isEmpty, "Spelling transcription must work with either toggle value")
+            if enabled {
+                XCTAssertNotNil(result.pronunciationEnrollment, "On must capture pronunciation alongside spellings")
+            } else {
+                XCTAssertNil(result.pronunciationEnrollment)
+            }
+            let entries = CustomDictionaryTrainingMerge.mergedEntries(
+                current: [], replacement: "Correct spelling", triggers: [result.text], savePronunciation: false
+            )
+            XCTAssertEqual(entries.first?.replacement, "Correct spelling")
+            XCTAssertEqual(entries.first?.triggers, try [XCTUnwrap(CustomDictionaryTrainingMerge.normalizedTrigger(result.text))])
+        }
+    }
+
     func testLegacyEdgePreparationOnlyUsesReadyCachedReferences() {
         let ids = (0..<3).map { _ in UUID() }
         let enrollments = ids.map { id in
@@ -47,7 +223,9 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         let frames = [DictionaryMatchFrames(hiddenSize: 2, values: [1, 0])]
         let entryBytes = 2 * MemoryLayout<Float>.size
         var cache = FluidAudioProvider.TemporalReferenceCache(byteLimit: 9 * entryBytes)
-        for index in 0..<9 { XCTAssertTrue(cache.insert(frames, for: String(index))) }
+        for index in 0..<9 {
+            XCTAssertTrue(cache.insert(frames, for: String(index)))
+        }
         XCTAssertEqual(cache.byteCount, 9 * entryBytes)
         XCTAssertEqual(cache["0"], frames, "Adding a ninth word must preserve earlier references")
         XCTAssertFalse(cache.insert(frames, for: "overflow"))

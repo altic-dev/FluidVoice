@@ -296,7 +296,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             if baseURL.contains("/chat/completions") {
                 return baseURL.replacingOccurrences(of: "/chat/completions", with: "/responses")
             }
-            return Self.appendingPath("responses", to: baseURL)
+            return self.appendingPath("responses", to: baseURL)
         }
 
         if baseURL.contains("/chat/completions") ||
@@ -305,7 +305,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         {
             return baseURL
         }
-        return Self.appendingPath("chat/completions", to: baseURL)
+        return self.appendingPath("chat/completions", to: baseURL)
     }
 
     static func shouldUseResponsesAPI(baseURL: String, model: String) -> Bool {

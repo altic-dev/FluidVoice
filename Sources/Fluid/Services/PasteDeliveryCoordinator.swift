@@ -40,6 +40,7 @@ enum TextDeliveryFailure: String, Equatable {
 }
 
 enum TextDeliveryResult: Equatable {
+    case cancelled
     case commandPosted
     case recoverableFailure(TextDeliveryFailure)
 
@@ -617,6 +618,7 @@ final class PasteDeliveryCoordinator {
         let text: String
         let generation: UInt64
         let shouldKeepTranscript: Bool
+        let isOutputValid: @MainActor () -> Bool
         var settlementTask: Task<Void, Never>?
     }
 
@@ -642,8 +644,10 @@ final class PasteDeliveryCoordinator {
     func deliver(
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
+        isOutputValid: @escaping @MainActor () -> Bool = { true },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
+        guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
         await self.acquireDeliverySlot()
@@ -653,6 +657,7 @@ final class PasteDeliveryCoordinator {
             if !settlementOwnsSlot { self.releaseDeliverySlot() }
         }
 
+        guard isOutputValid() else { return .cancelled }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
         let generation = self.generation
@@ -681,11 +686,16 @@ final class PasteDeliveryCoordinator {
         )
 
         self.pasteboard.recordAudit("command_before", detail: "session=\(sessionID)")
+        guard isOutputValid() else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
+            return .cancelled
+        }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime
         self.pasteboard.recordAudit("command_after", detail: "session=\(sessionID) success=\(commandPosted)")
         guard commandPosted else {
-            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard && isOutputValid())
+            if !isOutputValid() { return .cancelled }
             self.log("delivery_failed generation=\(generation) reason=paste_command_failed")
             return .recoverableFailure(.pasteCommandFailed)
         }
@@ -701,6 +711,7 @@ final class PasteDeliveryCoordinator {
             text: text,
             generation: generation,
             shouldKeepTranscript: preserveTranscriptOnClipboard,
+            isOutputValid: isOutputValid,
             settlementTask: nil
         )
         // Return immediately to finish delivery UI, but retain exclusive clipboard use
@@ -714,24 +725,28 @@ final class PasteDeliveryCoordinator {
     func prepareForDelivery(
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
+        isOutputValid: @escaping @MainActor () -> Bool = { true },
         prepare: () async -> Bool
     ) async -> Bool {
+        guard isOutputValid() else { return false }
         let changeCount = self.pasteboard.changeCount
         let generation = self.generation
         let ready = await prepare()
+        guard isOutputValid() else { return false }
         if !ready, self.generation == generation {
-            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount)
+            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount, isOutputValid: isOutputValid)
         }
         return ready
     }
 
     /// Serialize standalone copies with active paste leases so cleanup cannot undo the backup.
     @discardableResult
-    func copyBackup(_ text: String, enabled: Bool, expectedChangeCount: Int? = nil) async -> Bool {
-        guard enabled, !text.isEmpty else { return false }
+    func copyBackup(_ text: String, enabled: Bool, expectedChangeCount: Int? = nil, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
+        guard enabled, isOutputValid(), !text.isEmpty else { return false }
         let requestedChangeCount = expectedChangeCount ?? self.pasteboard.changeCount
         await self.acquireDeliverySlot()
         defer { self.releaseDeliverySlot() }
+        guard isOutputValid() else { return false }
         guard self.pasteboard.changeCount == requestedChangeCount ||
             self.pasteboard.changeCount == self.lastWrittenChangeCount
         else {
@@ -807,7 +822,7 @@ final class PasteDeliveryCoordinator {
         }
 
         let restoreStartedAt = ProcessInfo.processInfo.systemUptime
-        if lease.shouldKeepTranscript {
+        if lease.shouldKeepTranscript, lease.isOutputValid() {
             let didWrite = self.writeBackup(lease.text)
             self.log("intentional_copy_settled generation=\(generation) success=\(didWrite) elapsedMs=\((ProcessInfo.processInfo.systemUptime - restoreStartedAt) * 1000)")
         } else {

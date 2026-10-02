@@ -156,13 +156,15 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
-        let cacheRoot = Self.cacheRootDirectory()
-        if FileManager.default.fileExists(atPath: cacheRoot.path) {
-            try FileManager.default.removeItem(at: cacheRoot)
-        }
         self.isReady = false
         self.streamedSampleCount = 0
         self.engine = nil
+        let cacheRoot = Self.cacheRootDirectory()
+        try await Task.detached(priority: .userInitiated) {
+            if FileManager.default.fileExists(atPath: cacheRoot.path) {
+                try FileManager.default.removeItem(at: cacheRoot)
+            }
+        }.value
     }
 
     private func requireEngine() throws -> StreamingEouAsrManager {

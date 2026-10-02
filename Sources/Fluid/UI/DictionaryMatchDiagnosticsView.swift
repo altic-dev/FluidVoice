@@ -100,7 +100,11 @@ struct DictionaryMatchDiagnosticsView: View {
                     Text("Load an older recording into the textbox.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
-                    Picker("Recording", selection: self.$historyID) {
+                    FluidDropdownPicker(
+                        "Recording",
+                        selectedTitle: self.history.first(where: { $0.id == self.historyID }).map { "\($0.timestamp.formatted(date: .omitted, time: .shortened)) · \(String(($0.clipboardText ?? $0.rawText).prefix(60)))" } ?? "Choose a recording",
+                        selection: self.$historyID
+                    ) {
                         Text("Choose a recording").tag(UUID?.none)
                         ForEach(self.history) { entry in
                             Text("\(entry.timestamp.formatted(date: .omitted, time: .shortened)) · \(String((entry.clipboardText ?? entry.rawText).prefix(60)))")

@@ -59,31 +59,12 @@ private struct FluidDropdownControlStyle: ViewModifier {
     var appearance: FluidDropdownAppearance = .standard
     var tone: Color?
 
-    @Environment(\.theme) private var theme
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if self.fillsWidth {
-            content
-                .menuStyle(.button)
-                .buttonStyle(FluidDropdownButtonStyle(fillsWidth: true, appearance: self.appearance, tone: self.tone))
-                .menuIndicator(.hidden)
-                .labelsHidden()
-        } else {
-            content
-                .menuStyle(.borderlessButton)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .labelsHidden()
-                .font(self.appearance == .inline ? self.theme.typography.statement : self.theme.typography.bodySmall)
-                .foregroundStyle(self.tone ?? self.theme.palette.primaryText)
-                .padding(.leading, self.appearance == .inline ? 8 : 12)
-                .padding(.trailing, self.appearance == .inline ? 24 : 30)
-                .padding(.vertical, self.appearance == .inline ? 8 : 9)
-                .fluidDropdownSurface(appearance: self.appearance)
-                .overlay(alignment: .trailing) {
-                    FluidDropdownChevron().padding(.trailing, self.appearance == .inline ? 8 : 12).allowsHitTesting(false)
-                }
-        }
+    func body(content: Content) -> some View {
+        content
+            .menuStyle(.button)
+            .buttonStyle(FluidDropdownButtonStyle(fillsWidth: self.fillsWidth, appearance: self.appearance, tone: self.tone))
+            .menuIndicator(.hidden)
+            .labelsHidden()
     }
 }
 
@@ -113,8 +94,8 @@ private struct FluidDropdownButtonStyle: ButtonStyle {
 extension View {
     /// Apply outside a native menu/picker, rather than inside its label:
     /// macOS may flatten label styling when building the native control.
-    /// Full-width selectors use a Menu containing an inline Picker. Native
-    /// menu Pickers and borderless menus ignore custom ButtonStyle hit geometry.
+    /// Use FluidDropdownPicker for selections. Native menu Pickers and
+    /// borderless menus ignore custom ButtonStyle hit geometry.
     func fluidDropdownStyle(fillsWidth: Bool = false, appearance: FluidDropdownAppearance = .standard, tone: Color? = nil) -> some View {
         modifier(FluidDropdownControlStyle(fillsWidth: fillsWidth, appearance: appearance, tone: tone))
     }
@@ -134,5 +115,32 @@ struct FluidDropdown<Content: View>: View {
         Menu(content: self.content) { Text(self.title) }
             .fluidDropdownStyle()
             .frame(width: self.width)
+    }
+}
+
+/// Native menu pickers ignore custom button hit geometry. Keep the native
+/// selection/checkmark behavior inside a Menu whose entire label is clickable.
+struct FluidDropdownPicker<Selection: Hashable, Options: View>: View {
+    let title: String
+    let selectedTitle: String
+    @Binding var selection: Selection
+    @ViewBuilder let options: () -> Options
+
+    init(_ title: String, selectedTitle: String, selection: Binding<Selection>, @ViewBuilder content: @escaping () -> Options) {
+        self.title = title
+        self.selectedTitle = selectedTitle
+        self._selection = selection
+        self.options = content
+    }
+
+    var body: some View {
+        Menu {
+            Picker(self.title, selection: self.$selection, content: self.options)
+                .pickerStyle(.inline)
+        } label: {
+            Text(self.selectedTitle)
+        }
+        .accessibilityLabel(self.title.isEmpty ? self.selectedTitle : self.title)
+        .accessibilityValue(self.selectedTitle)
     }
 }

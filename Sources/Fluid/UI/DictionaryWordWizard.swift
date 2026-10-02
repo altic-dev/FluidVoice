@@ -38,6 +38,8 @@ struct DictionaryWordWizard: View {
     var onRedo: () -> Void = {}
     var automaticCaptureActive = false
     var audioLevels: AnyPublisher<CGFloat, Never> = Empty().eraseToAnyPublisher()
+    var pronunciationNotice: String?
+    var pronunciationIncomplete = false
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -161,7 +163,7 @@ struct DictionaryWordWizard: View {
 
     private var captureStage: some View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
-            Text(self.step == .review ? "Your word is ready" : "Let’s hear your word")
+            Text(self.step == .review ? (self.pronunciationIncomplete ? "Your spellings are ready" : "Your word is ready") : "Let’s hear your word")
                 .font(self.theme.typography.body)
                 .foregroundStyle(self.theme.palette.accent)
             Text("“\(self.word)”")
@@ -301,6 +303,13 @@ struct DictionaryWordWizard: View {
             self.stableInstruction("We’ll stop automatically and let you know when to speak again.", review: "Add it now, or record another example.")
                 .font(self.theme.typography.body)
                 .foregroundStyle(self.theme.palette.secondaryText)
+            if let pronunciationNotice {
+                Text(pronunciationNotice)
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
             ZStack(alignment: .top) {
                 if self.step == .review {
                     self.captureRecordActions.hidden().accessibilityHidden(true)
@@ -372,7 +381,7 @@ struct DictionaryWordWizard: View {
         Button(action: self.onSave) {
             ZStack {
                 Text("Add “\(self.word)” to dictionary").hidden().accessibilityHidden(true)
-                Text(self.busy ? "Saving…" : "Add “\(self.word)” to dictionary")
+                Text(self.busy ? "Saving…" : (self.pronunciationIncomplete ? "Save spelling corrections" : "Add “\(self.word)” to dictionary"))
             }
         }
         .buttonStyle(FluidRecordInvitationStyle(inviting: self.step == .review && !self.busy, recording: false, fillsWidth: true))
@@ -382,7 +391,7 @@ struct DictionaryWordWizard: View {
                 Button("Record more", action: self.onRecord)
                     .buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: false, prominent: false, fillsWidth: true))
                     .disabled(self.busy)
-                Text("Optional · Recommended for tricky words")
+                Text(self.pronunciationIncomplete ? "Needed to finish pronunciation learning" : "Optional · Recommended for tricky words")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(maxWidth: 190)

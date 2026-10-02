@@ -31,6 +31,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var usesAutomaticApplication = true
     var selectedMicrophoneID: String?
     /// Once true, the default title stops following the selected application/mode.
+    var languageCode: String
     var titleWasEdited = false
     var autoDetectEnabled: Bool
     var browserDetectionEnabled: Bool
@@ -39,6 +40,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
+        self.languageCode = defaults.languageCode ?? "en"
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
@@ -163,7 +165,8 @@ struct MeetingTranscriptionView: View {
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
-    @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
+    // Reopen history on each visit; narrow-window selection must not hide it permanently.
+    @State private var isMeetingHistoryVisible = true
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -201,6 +204,7 @@ struct MeetingTranscriptionView: View {
                         onCopyTranscript: self.copyTranscript,
                         onExportTranscript: self.exportTranscript,
                         onReassignSegment: self.reassignSegment,
+                        onEditTranscriptSegment: self.editTranscriptSegment,
                         onNameUnknownSegment: self.nameUnknownSegment,
                         onRenameSpeaker: self.renameSpeaker,
                         onMergeSpeakers: self.mergeSpeakers,
@@ -712,11 +716,13 @@ struct MeetingTranscriptionView: View {
         return MeetingCaptureConfiguration(
             mode: application == nil ? .inRoom : .onlineCall,
             title: title,
+            languageCode: self.setupDraft.languageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
             application: application,
-            microphone: microphone
+            microphone: microphone,
+            timestampDefaultTitle: !self.setupDraft.titleWasEdited
         )
     }
 
@@ -793,6 +799,16 @@ struct MeetingTranscriptionView: View {
                 self.actionErrorMessage = error.localizedDescription
             }
             await self.loadMeetingHistory()
+        }
+    }
+
+    private func editTranscriptSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
+        do {
+            _ = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
+            await self.loadMeetingHistory()
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 
@@ -906,10 +922,12 @@ struct MeetingTranscriptionView: View {
         }
         return MeetingCaptureConfiguration(
             mode: session.mode,
-            title: session.title,
+            title: session.defaultTitleBase ?? session.title,
+            languageCode: session.languageCode,
             platform: session.platform,
             application: application,
-            microphone: microphone
+            microphone: microphone,
+            timestampDefaultTitle: session.defaultTitleBase != nil
         )
     }
 
@@ -1138,7 +1156,8 @@ struct MeetingTranscriptionView: View {
             applicationDisplayName: previousDefaults.applicationDisplayName,
             microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
             microphoneCoreAudioUID: microphone.identity.coreAudioUID,
-            microphoneRole: .unknown
+            microphoneRole: .unknown,
+            languageCode: self.setupDraft.languageCode
         )
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
@@ -1282,6 +1301,7 @@ struct MeetingTranscriptionCanvas: View {
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
     let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    var onEditTranscriptSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in "Transcript editing is unavailable." }
     let onNameUnknownSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String) -> Void
     let onRenameSpeaker: (MeetingSessionID, SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
@@ -1342,9 +1362,7 @@ struct MeetingTranscriptionCanvas: View {
                     recentSession: recentSession,
                     onStart: self.onStart,
                     onRepairSetup: self.onRepairSetup,
-                    onEditSetup: self.onEditSetup ?? self.onRepairSetup,
-                    summaryASRService: self.summaryASRService,
-                    isQuiescent: self.isQuiescent
+                    onEditSetup: self.onEditSetup ?? self.onRepairSetup
                 )
             case let .recording(session, trackHealth, liveTranscript):
                 MeetingRecordingCanvas(
@@ -1383,6 +1401,9 @@ struct MeetingTranscriptionCanvas: View {
                         onExportTranscript: self.onExportTranscript,
                         onReassignSegment: { segmentID, speakerID in
                             self.onReassignSegment(session.id, segmentID, speakerID)
+                        },
+                        onEditTranscriptSegment: { segmentID, text, revision in
+                            await self.onEditTranscriptSegment(session.id, segmentID, text, revision)
                         },
                         onNameUnknownSegment: { segmentID, name in
                             self.onNameUnknownSegment(session.id, segmentID, name)
@@ -1954,8 +1975,6 @@ private struct MeetingSetupCanvas: View {
     let onStart: () -> Void
     let onRepairSetup: () -> Void
     let onEditSetup: () -> Void
-    var summaryASRService: ASRService? = nil
-    var isQuiescent = true
 
     @Environment(\.theme) private var theme
     @State private var documentSection = MeetingDocumentSection.transcript
@@ -2025,7 +2044,7 @@ private struct MeetingSetupCanvas: View {
             MeetingDocumentTabs(selection: self.$documentSection, primaryTitle: "Meeting home", primaryIcon: "house", isEnabled: !self.isStarting)
 
             if self.documentSection == .summary {
-                MeetingSummaryView(asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
+                MeetingSummaryView()
             } else {
                 self.recordingSetup
             }

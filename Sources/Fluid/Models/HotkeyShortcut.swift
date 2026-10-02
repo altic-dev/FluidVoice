@@ -277,6 +277,22 @@ extension HotkeyShortcut {
         return self.relevantModifierFlags.union(triggerFlag)
     }
 
+    /// Physical letter/digit and editing keys need a modifier; punctuation and modifier-only keys remain available.
+    var requiresModifierForRecording: Bool {
+        guard !self.isMouseShortcut, !self.isModifierOnlyShortcut, self.relevantModifierFlags.isEmpty else { return false }
+        switch self.keyCode {
+        case 0...9, 11...23, 25, 26, 28, 29, 31, 32, 34...38, 40, 45, 46,
+             48, 49, 51, 53, 76, 82...89, 91, 92, 117:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func matchesRecordingShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        !self.requiresModifierForRecording && self.matches(keyCode: keyCode, modifiers: modifiers)
+    }
+
     func matches(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
         guard !self.isMouseShortcut else { return false }
         return keyCode == self.keyCode && modifiers.intersection(Self.relevantModifierMask) == self.relevantModifierFlags

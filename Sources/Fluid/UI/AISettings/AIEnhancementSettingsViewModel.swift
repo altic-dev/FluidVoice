@@ -389,7 +389,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         guard PrivateAIIntegrationService.isModelInstalled(currentModel) else {
             self.updateConnectionStatus(.failed, for: providerID)
-            self.setConnectionError("\(currentModel.displayName) is not installed.", for: providerID)
+            self.setConnectionError(PrivateAIModelLoadState.missingModelMessage, for: providerID)
             return false
         }
 
@@ -823,7 +823,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
 
-        if !isLocal && apiKey.isEmpty {
+        if !isLocal, apiKey.isEmpty {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("API key is required for \(providerName). Enter your API key above.", for: providerID)
@@ -856,7 +856,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullURL: String
 
-        if isAnthropic && !usesResponsesAPI {
+        if isAnthropic, !usesResponsesAPI {
             // Anthropic uses /messages endpoint, not /chat/completions
             if endpoint.contains("/messages") {
                 fullURL = endpoint

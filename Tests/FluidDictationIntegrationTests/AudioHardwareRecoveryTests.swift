@@ -876,6 +876,56 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testSpellingTrainingStartsWithPronunciationOffAndKeepsSettings() async throws {
+        UserDefaults.standard.set(false, forKey: "DictionarySharedFeatureMatcherEnabled")
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let outcome = await fixture.service.start(forDictionaryTraining: true, requiresPronunciation: false)
+            XCTAssertEqual(outcome, .started)
+            XCTAssertTrue(fixture.service.isRunning)
+            XCTAssertFalse(DictionaryMatcherExperiment.sharedFeaturesEnabled)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
+    func testPronunciationOnlyTrainingStillRejectsDisabledSwitch() async throws {
+        UserDefaults.standard.set(false, forKey: "DictionarySharedFeatureMatcherEnabled")
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let outcome = await fixture.service.start(forDictionaryTraining: true)
+            XCTAssertEqual(outcome, .failed)
+            XCTAssertFalse(fixture.service.isRunning)
+            XCTAssertFalse(fixture.service.isStarting)
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
+    func testSpellingTrainingSurvivesPronunciationSwitchDuringStartup() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0.2) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let starting = Task { await fixture.service.start(forDictionaryTraining: true, requiresPronunciation: false) }
+            for _ in 0..<200 {
+                if fixture.service.isStarting { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(fixture.service.isStarting)
+            DictionaryMatcherExperiment.setEnabled(false)
+            await fixture.service.cancelPendingPronunciationTrainingStart()
+            let outcome = await starting.value
+            XCTAssertEqual(outcome, .started)
+            XCTAssertTrue(fixture.service.isRunning)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
     func testStartupTriesNewMicrophoneMissingFromDeviceCache() async throws {
         try await withASRRecoveryFixture(queryDelay: 0) { fixture in
             await fixture.service.stopWithoutTranscription()

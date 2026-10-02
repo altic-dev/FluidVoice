@@ -344,9 +344,11 @@ struct MeetingResultCanvas: View {
     let isQuiescent: Bool
     let canUndo: Bool
     @State private var showsProbableEchoes = false
+    @StateObject private var playback = MeetingSegmentPlayback()
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
     let onReassignSegment: (MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    var onEditTranscriptSegment: (MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _ in "Transcript editing is unavailable." }
     let onNameUnknownSegment: (MeetingTranscriptSegmentID, String) -> Void
     let onRenameSpeaker: (SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
@@ -358,6 +360,7 @@ struct MeetingResultCanvas: View {
     var summaryASRService: ASRService? = nil
 
     @Environment(\.theme) private var theme
+    @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
     @State private var pendingRenameText = ""
     @State private var pendingNameUnknownSegmentID: MeetingTranscriptSegmentID?
@@ -449,6 +452,11 @@ struct MeetingResultCanvas: View {
                         }
                     }
 
+                    if let errorMessage = self.playback.errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle")
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.warning)
+                    }
                     if visibleSegments.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                             Text("No transcript text")
@@ -481,10 +489,15 @@ struct MeetingResultCanvas: View {
                                         }
                                     },
                                     isLocalUser: row.isLocal,
-                                    showsSpeakerLabel: row.showsLabel,
                                     reassignTargets: activeSpeakers.filter { $0.id != row.segment.speakerID },
                                     isQuiescent: self.isQuiescent,
-                                    onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) }
+                                    onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
+                                    canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
+                                    isAudioExpanded: self.playback.activeSegmentID == row.segment.id,
+                                    playback: self.playback,
+                                    isLoadingAudio: self.playback.activeSegmentID == row.segment.id && self.playback.isLoading,
+                                    onPlayAudio: { self.playback.toggle(sessionID: self.session.id, segmentID: row.segment.id) },
+                                    onEditText: { if self.isQuiescent { self.pendingEditedSegment = row.segment } }
                                 )
                             }
                         }
@@ -496,6 +509,23 @@ struct MeetingResultCanvas: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .id(self.session.id)
+        .sheet(item: self.$pendingEditedSegment) { segment in
+            MeetingTranscriptTextEditor(
+                text: segment.text,
+                onSave: { text in
+                    let error = await self.onEditTranscriptSegment(segment.id, text, segment.revision)
+                    if error == nil { self.pendingEditedSegment = nil }
+                    return error
+                },
+                onCancel: { self.pendingEditedSegment = nil }
+            )
+        }
+        .onDisappear { self.playback.stop() }
+        .onChange(of: self.session.id) { _, _ in self.playback.stop() }
+        .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
+        .onChange(of: self.isQuiescent) { _, value in if !value { self.playback.stop() } }
+        .onChange(of: self.documentSection) { _, _ in self.playback.stop() }
+        .onChange(of: self.showsProbableEchoes) { _, _ in self.playback.stop() }
         .task(id: self.copyRevision) {
             guard self.copied else { return }
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -1021,10 +1051,15 @@ private struct MeetingTranscriptSegmentRow: View {
     let speakerTint: Color?
     let onRenameSpeakerTapped: (() -> Void)?
     let isLocalUser: Bool
-    let showsSpeakerLabel: Bool
     let reassignTargets: [MeetingSessionSpeaker]
     let isQuiescent: Bool
     let onReassign: (SessionSpeakerID) -> Void
+    let canPlayAudio: Bool
+    let isAudioExpanded: Bool
+    let playback: MeetingSegmentPlayback
+    let isLoadingAudio: Bool
+    let onPlayAudio: () -> Void
+    let onEditText: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -1034,17 +1069,42 @@ private struct MeetingTranscriptSegmentRow: View {
                 .font(self.theme.typography.codeCaption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .frame(width: 58, alignment: .leading)
-                .padding(.top, 2)
+                .frame(height: 28)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                if self.showsSpeakerLabel { self.speakerLabel }
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    self.speakerLabel
+                    Spacer(minLength: self.theme.metrics.spacing.md)
+                    Button("Edit", systemImage: "pencil", action: self.onEditText)
+                        .fluidGlassAction()
+                        .disabled(!self.isQuiescent)
+                        .help("Edit text, or double-click this paragraph")
+                    Button {
+                        if self.isAudioExpanded { self.playback.stop() } else { self.onPlayAudio() }
+                    } label: {
+                        Label(self.isAudioExpanded ? "Close" : "Audio", systemImage: self.isAudioExpanded ? "xmark" : "play.fill")
+                            .frame(minWidth: 54)
+                    }
+                    .fluidGlassAction()
+                    .disabled(!self.canPlayAudio && !self.isAudioExpanded)
+                    .help(self.isAudioExpanded ? "Close audio player" : (self.canPlayAudio ? "Play this speaker chunk" : "Audio unavailable"))
+                    .accessibilityLabel(self.isAudioExpanded ? "Close audio player" : "Play audio chunk for \(self.speakerName)")
+                }
+                .frame(minHeight: 28)
                 Text(self.segment.text)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineSpacing(5)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { if self.isQuiescent { self.onEditText() } })
+                    .accessibilityAction(named: Text("Edit text")) { if self.isQuiescent { self.onEditText() } }
                 if self.segment.isEcho {
                     Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                }
+                if self.isAudioExpanded {
+                    MeetingSegmentAudioPlayer(playback: self.playback, isLoading: self.isLoadingAudio)
+                        .frame(maxWidth: 360)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
         }
@@ -1059,7 +1119,7 @@ private struct MeetingTranscriptSegmentRow: View {
             }
             .disabled(!self.isQuiescent || self.reassignTargets.isEmpty)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(
             "\(MeetingTranscriptExporter.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
         )
@@ -1098,5 +1158,69 @@ private struct MeetingTranscriptSegmentRow: View {
     private var nameColor: Color {
         if self.isLocalUser { return self.theme.palette.accent }
         return self.speakerTint ?? self.theme.palette.tertiaryText
+    }
+}
+
+struct MeetingTranscriptTextEditor: View {
+    let onSave: (String) async -> String?
+    let onCancel: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var text: String
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    init(text: String, onSave: @escaping (String) async -> String?, onCancel: @escaping () -> Void) {
+        self._text = State(initialValue: text)
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+            Text("Edit transcript")
+                .font(self.theme.typography.title)
+                .accessibilityAddTraits(.isHeader)
+            Text("Correct this paragraph. Its timestamps, speaker, and recording stay the same.")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.theme.palette.secondaryText)
+            TextEditor(text: self.$text)
+                .font(self.theme.typography.body)
+                .scrollContentBackground(.hidden)
+                .padding(self.theme.metrics.spacing.sm)
+                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                .frame(minHeight: 200)
+                .disabled(self.isSaving)
+                .accessibilityLabel("Transcript text")
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.warning)
+            }
+            FluidGlassControlGroup {
+                HStack {
+                    Button("Cancel", action: self.onCancel)
+                        .meetingGlassAction()
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(self.isSaving)
+                    Spacer()
+                    Button(self.isSaving ? "Saving…" : "Save") {
+                        guard !self.isSaving else { return }
+                        self.isSaving = true
+                        Task { @MainActor in
+                            self.errorMessage = await self.onSave(self.text)
+                            self.isSaving = false
+                        }
+                    }
+                    .meetingGlassAction(prominent: true)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(self.isSaving || self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(self.theme.metrics.spacing.xl)
+        .frame(width: 560)
+        .frame(minHeight: 400)
+        .background(self.theme.palette.windowBackground)
+        .interactiveDismissDisabled(self.isSaving)
     }
 }

@@ -344,7 +344,7 @@ final class MeetingASRPreparationOwnerTests: XCTestCase {
             _ = try await harness.owner.prepare(
                 lease: lease,
                 attemptID: UUID(),
-                configuration: MeetingFinalProcessingConfiguration(languageCode: "de")
+                configuration: MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", languageCode: "de")
             )
             XCTFail("Expected unsupported policy rejection")
         } catch let error as MeetingProviderOptionsError {

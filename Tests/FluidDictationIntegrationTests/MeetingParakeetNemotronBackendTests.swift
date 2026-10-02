@@ -285,7 +285,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(backend.descriptor.resultContract, .canonicalEvidence)
         XCTAssertEqual(backend.descriptor.supportedFinalPrecisions, [.word, .utterance])
         XCTAssertEqual(backend.descriptor.supportedTrackKinds, Set(MeetingAudioTrackKind.allCases))
-        XCTAssertEqual(backend.descriptor.supportedLanguageCodes, ["en"])
+        XCTAssertEqual(backend.descriptor.supportedLanguageCodes, VoiceEngineLanguageCatalog.parakeetV3LanguageIDs)
         XCTAssertEqual(backend.descriptor.execution, .local)
         XCTAssertEqual(backend.descriptor.analysisSampleRate, 16_000)
 
@@ -512,16 +512,16 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             )
         }
 
-        let german = self.makeSession(
+        let unsupported = self.makeSession(
             mode: .inRoom,
             tracks: [self.makeMicTrack(chunks: [self.makeChunk(sequence: 0, start: 0, end: 1)], eraStart: 0)],
-            languageCode: "de"
+            languageCode: "zh"
         )
         let backend = self.makeBackend(runtime: FakeRuntime())
-        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: german, directory: directory))) {
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: unsupported, directory: directory))) {
             XCTAssertEqual(
                 $0 as? MeetingBackendError,
-                .unsupportedLanguage(backend: .parakeetNemotron, languageCode: "de")
+                .unsupportedLanguage(backend: .parakeetNemotron, languageCode: "zh")
             )
         }
 
@@ -548,6 +548,32 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(plan.resultContract, .canonicalEvidence)
         XCTAssertEqual(plan.declaredFinalPrecisions, [.word, .utterance])
         XCTAssertEqual(Set(plan.chunkIDsByTrackID.keys), [fixture.micTrack.id, fixture.appTrack.id])
+    }
+
+    func testMultilingualPlanAndExecutionKeepV3LanguageAndWordEvidence() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "de"
+        let runtime = FakeRuntime()
+        let backend = self.makeBackend(runtime: runtime)
+        let configuration = MeetingFinalProcessingConfiguration(languageCode: "de")
+        let request = self.makeRequest(session: session, directory: try self.makeTempSessionDirectory(), configuration: configuration)
+        let plan = try backend.plan(request)
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        runtime.asrSession.responses = [
+            .init(text: "Guten", words: [.init(text: "Guten", start: 0.2, end: 0.4)]),
+            .init(text: "Morgen", words: [.init(text: "Morgen", start: 0.2, end: 0.4)]),
+            .init(text: "Hallo", words: [.init(text: "Hallo", start: 0.2, end: 0.4)]),
+        ]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(runtime.asrConfigurations, [configuration])
+        XCTAssertEqual(configuration.asrModel, "parakeet-tdt")
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Guten", "Morgen", "Hallo"])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+        XCTAssertEqual(runtime.diarizationScopeCount, 1)
+        XCTAssertEqual(session.languageCode, "de")
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: session, directory: request.sessionDirectory)))
     }
 
     func testExecuteRechecksTheExactArtifactFrozenDuringPlan() async throws {

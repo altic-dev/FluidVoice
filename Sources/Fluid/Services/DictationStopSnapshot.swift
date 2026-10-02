@@ -71,10 +71,10 @@ struct DictationStopSnapshot {
     }
 
     @MainActor
-    func prepareDelivery(_ text: String, keepBackup: Bool) async -> Bool {
+    func prepareDelivery(_ text: String, keepBackup: Bool, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
         guard let target else { return false }
-        return await PasteDeliveryCoordinator.shared.prepareForDelivery(text, preserveTranscriptOnClipboard: keepBackup) {
-            await TypingService.prepareTargetForDelivery(target).isReady
+        return await PasteDeliveryCoordinator.shared.prepareForDelivery(text, preserveTranscriptOnClipboard: keepBackup, isOutputValid: isOutputValid) {
+            await TypingService.prepareTargetForDelivery(target, isOutputValid: isOutputValid).isReady
         }
     }
 }

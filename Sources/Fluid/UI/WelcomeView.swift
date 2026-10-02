@@ -2461,8 +2461,9 @@ private struct OnboardingMicrophoneSetupPanel: View {
                         .font(.fluidSystem(size: 12, weight: .semibold))
                         .foregroundStyle(Color.orange.opacity(0.9))
                 } else {
-                    Picker(
+                    FluidDropdownPicker(
                         "Input microphone",
+                        selectedTitle: self.devices.first(where: { $0.uid == self.selectedUID })?.name ?? "Choose microphone",
                         selection: Binding(
                             get: { self.selectedUID },
                             set: self.onSelect
@@ -2473,7 +2474,6 @@ private struct OnboardingMicrophoneSetupPanel: View {
                         }
                     }
                     .labelsHidden()
-                    .pickerStyle(.menu)
                     .fluidDropdownStyle()
                     .frame(width: 248)
                     .tint(.white)

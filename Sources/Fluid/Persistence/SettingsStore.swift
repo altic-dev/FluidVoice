@@ -565,7 +565,9 @@ final class SettingsStore: ObservableObject {
         guard let key = self.dictationPromptConfigurationKey(for: selection) else {
             return DictationPromptConfiguration()
         }
-        return self.dictationPromptConfigurations[key] ?? DictationPromptConfiguration()
+        var configuration = self.dictationPromptConfigurations[key] ?? DictationPromptConfiguration()
+        if configuration.shortcut?.requiresModifierForRecording == true { configuration.shortcut = nil }
+        return configuration
     }
 
     func setDictationPromptConfiguration(_ configuration: DictationPromptConfiguration, for selection: DictationPromptSelection) {
@@ -594,7 +596,7 @@ final class SettingsStore: ObservableObject {
 
     func dictationPromptShortcutAssignments() -> [(selection: DictationPromptSelection, shortcut: HotkeyShortcut)] {
         self.dictationPromptConfigurations.compactMap { key, configuration in
-            guard let shortcut = configuration.shortcut else { return nil }
+            guard let shortcut = configuration.shortcut, !shortcut.requiresModifierForRecording else { return nil }
             if key == "__default__" {
                 return (.default, shortcut)
             }
@@ -1858,7 +1860,7 @@ final class SettingsStore: ObservableObject {
             {
                 return Self.normalizedPrimaryDictationShortcuts(shortcuts)
             }
-            return [fallback]
+            return Self.normalizedPrimaryDictationShortcuts([fallback])
         }
         set {
             objectWillChange.send()
@@ -1885,7 +1887,7 @@ final class SettingsStore: ObservableObject {
         _ shortcuts: [HotkeyShortcut]
     ) -> [HotkeyShortcut] {
         var unique: [HotkeyShortcut] = []
-        for shortcut in shortcuts where !unique.contains(shortcut) {
+        for shortcut in shortcuts where !shortcut.requiresModifierForRecording && !unique.contains(shortcut) {
             unique.append(shortcut)
         }
         return unique
@@ -3041,7 +3043,7 @@ final class SettingsStore: ObservableObject {
     var promptModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.promptModeShortcutEnabled)
-            return value as? Bool ?? false
+            return (value as? Bool ?? false) && !self.promptModeHotkeyShortcut.requiresModifierForRecording
         }
         set {
             objectWillChange.send()
@@ -3096,7 +3098,7 @@ final class SettingsStore: ObservableObject {
     var commandModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.commandModeShortcutEnabled)
-            return value as? Bool ?? false
+            return (value as? Bool ?? false) && self.commandModeHotkeyShortcut?.requiresModifierForRecording != true
         }
         set {
             objectWillChange.send()
@@ -3322,7 +3324,7 @@ final class SettingsStore: ObservableObject {
     var rewriteModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
-            return value as? Bool ?? true
+            return (value as? Bool ?? true) && !self.rewriteModeHotkeyShortcut.requiresModifierForRecording
         }
         set {
             objectWillChange.send()

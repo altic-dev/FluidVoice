@@ -5,6 +5,95 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testCancelledFocusPreparationDoesNotCopyBackup() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        var valid = true
+        var resumeFocus: CheckedContinuation<Bool, Never>?
+        let preparation = Task { @MainActor in
+            await coordinator.prepareForDelivery("cancelled", preserveTranscriptOnClipboard: true, isOutputValid: { valid }) {
+                await withCheckedContinuation { resumeFocus = $0 }
+            }
+        }
+        await self.waitUntil { resumeFocus != nil }
+        valid = false
+        resumeFocus?.resume(returning: false)
+        let ready = await preparation.value
+        XCTAssertFalse(ready)
+        XCTAssertEqual(pasteboard.text, "before")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(poster.postCount, 0)
+        let next = await coordinator.deliver("next", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(next, .commandPosted)
+        coordinator.runPendingSettlementForTesting()
+        XCTAssertEqual(pasteboard.text, "before")
+    }
+
+    func testCancelledQueuedBackupDoesNotWriteAndReleasesSlot() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        var valid = true
+        var queued = false
+        let backup = Task { @MainActor in
+            queued = true
+            return await coordinator.copyBackup("cancelled", enabled: true, isOutputValid: { valid })
+        }
+        await self.waitUntil { queued }
+        valid = false
+        coordinator.runPendingSettlementForTesting()
+        let copied = await backup.value
+        XCTAssertFalse(copied)
+        XCTAssertEqual(pasteboard.text, "before")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1)
+        let next = await coordinator.deliver("next", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(next, .commandPosted)
+        XCTAssertEqual(poster.postCount, 2)
+        coordinator.runPendingSettlementForTesting()
+    }
+
+    func testCancelledQueuedPasteDoesNotWriteOrPostAndNextDeliveryWorks() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        var valid = true
+        var queued = false
+        let delivery = Task { @MainActor in
+            queued = true
+            return await coordinator.deliver("cancelled", preserveTranscriptOnClipboard: true, isOutputValid: { valid })
+        }
+        await self.waitUntil { queued }
+        valid = false
+        coordinator.runPendingSettlementForTesting()
+        let result = await delivery.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(pasteboard.text, "before")
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(poster.postCount, 1)
+        let next = await coordinator.deliver("next", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(next, .commandPosted)
+        XCTAssertEqual(poster.postCount, 2)
+        coordinator.runPendingSettlementForTesting()
+    }
+
+    func testCancelledPostedPasteRestoresInsteadOfKeepingTranscript() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: FakePasteCommandPoster(), settlementDelayNanoseconds: .max)
+        var valid = true
+        let result = await coordinator.deliver("posted", preserveTranscriptOnClipboard: true, isOutputValid: { valid })
+        XCTAssertEqual(result, .commandPosted)
+        valid = false
+        coordinator.runPendingSettlementForTesting()
+        XCTAssertEqual(pasteboard.text, "before")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(pasteboard.restoreCount, 1)
+    }
+
     func testPasteCheckAlertsDefaultOffAndRoundTripThroughBackup() {
         let settings = SettingsStore.shared
         let original = settings.showPasteCheckAlerts

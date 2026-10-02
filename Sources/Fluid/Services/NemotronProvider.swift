@@ -331,15 +331,17 @@ final class NemotronProvider: TranscriptionProvider {
         if let manager = self.manager {
             await self.stopComponentProfilingIfNeeded(on: manager)
         }
-        if let dir = self.cacheDirectory {
-            if FileManager.default.fileExists(atPath: dir.path) {
-                try FileManager.default.removeItem(at: dir)
-            }
-        }
         self.manager = nil
         self.isReady = false
         self.streamedSampleCount = 0
         self.activeLanguageCode = nil
+        if let directory = self.cacheDirectory {
+            try await Task.detached(priority: .userInitiated) {
+                if FileManager.default.fileExists(atPath: directory.path) {
+                    try FileManager.default.removeItem(at: directory)
+                }
+            }.value
+        }
     }
 
     private func transcribeBatched(_ samples: [Float]) async throws -> ASRTranscriptionResult {

@@ -121,9 +121,10 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
     private func cardControls(_ model: PrivateAIRegisteredModel) -> some View {
         let files = self.snapshots[model.id]
         let selected = model.id == self.controller.privateAISelectedModelID
+        let needsDownload = self.controller.privateAILoadState.needsDownload(model.id)
         // Active = dictation will use this model. Whether it is in memory right now is shown
         // separately, because the idle unloader frees it and the next dictation reloads it.
-        let active = selected && self.isVerified && self.controller.routesDictationThroughPrivateAI
+        let active = !needsDownload && files?.installed == true && selected && self.isVerified && self.controller.routesDictationThroughPrivateAI
         let inMemory = self.controller.privateAILoadState.isLoaded(model.id)
         let realUpdate = files?.installed == true && self.controller.privateAIModelUpdateStatusByID[model.id]?.state == .updateAvailable
         return VStack(alignment: .leading, spacing: 8) {
@@ -133,6 +134,11 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                     .font(self.theme.typography.caption).lineLimit(2)
             } else if self.controller.privateAILoadState.isLoading(model.id) {
                 Text("Preparing model…").font(self.theme.typography.caption)
+            } else if needsDownload {
+                Text("Model files are missing. Download again to repair.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             } else if let failure = self.controller.privateAILoadState.failureMessage(for: model.id) {
                 Text(failure).font(self.theme.typography.caption).foregroundStyle(.red).lineLimit(2).help(failure)
             } else if active {
@@ -152,14 +158,14 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                         Button {
                             guard let files else { return }
                             self.controller.previewModel(model.id)
-                            self.controller.usePreviewModel(isInstalled: files.installed, onReady: {})
+                            self.controller.usePreviewModel(isInstalled: files.installed && !needsDownload, onReady: {})
                         } label: {
-                            Text(files?.installed == false ? "Download" : "Activate")
+                            Text(needsDownload ? "Download again" : files?.installed == false ? "Download" : "Activate")
                                 .font(self.theme.typography.bodyStrong)
                                 .frame(minWidth: 76, minHeight: 24)
                         }
                         .fluidGlassAction(prominent: true)
-                        .disabled(self.controller.isBusy || files == nil || (files?.installed == false && !model.canDownload))
+                        .disabled(self.controller.isBusy || files == nil || ((needsDownload || files?.installed == false) && !model.canDownload))
                         if files?.installed == false, let bytes = model.artifact.byteCount, bytes > 0 {
                             Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
                                 .font(self.theme.typography.caption)
@@ -184,7 +190,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                             self.showsVerificationResult = true
                         })
                     }
-                    .disabled(!selected || files?.installed != true || self.controller.isBusy)
+                    .disabled(!selected || files?.installed != true || needsDownload || self.controller.isBusy)
                     Button("Deactivate model") {
                         self.controller.deactivateSelectedModel()
                     }

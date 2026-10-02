@@ -8,8 +8,8 @@ nonisolated enum MeetingProviderOptionsError: Error, Equatable {
 }
 
 /// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
-/// Parakeet TDT v2 English policy is supported; `resolve` rejects anything else instead of
-/// silently coercing it (e.g. labelling a v3 model "v2" or dropping a requested feature).
+/// Parakeet TDT v2 handles English; v3 handles its supported multilingual languages.
+/// Unsupported model/language combinations and enhancement features are rejected.
 nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     let model: SettingsStore.SpeechModel
     let vocabularyBoostingEnabled: Bool
@@ -20,11 +20,14 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     static func resolve(
         _ configuration: MeetingFinalProcessingConfiguration
     ) throws -> MeetingProviderOptions {
-        let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel)
-        guard model == .parakeetTDTv2 else {
+        guard let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel),
+              model == .parakeetTDTv2 || model == .parakeetTDT
+        else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
-        guard configuration.languageCode == MeetingFinalProcessingConfiguration.defaultLanguageCode else {
+        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode),
+              model != .parakeetTDTv2 || configuration.languageCode == "en"
+        else {
             throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
         }
         guard !configuration.vocabularyBoostingEnabled else {
@@ -40,7 +43,7 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
             throw MeetingProviderOptionsError.unsupportedFeature("experimentalUnifiedFinal")
         }
         return MeetingProviderOptions(
-            model: .parakeetTDTv2,
+            model: model,
             vocabularyBoostingEnabled: false,
             pronunciationMatchingEnabled: false,
             customDictionaryRewritingEnabled: false,
@@ -596,7 +599,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func transcribeDictionaryTraining(_ samples: [Float], capturePronunciation: Bool) async throws -> ASRTranscriptionResult {
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }
+        let pronunciationGeneration = DictionaryMatcherExperiment.generation
         guard let manager = self.streamingAsrManager else {
             throw NSError(
                 domain: "FluidAudioProvider",
@@ -610,14 +613,18 @@ final class FluidAudioProvider: TranscriptionProvider {
             let result = try await manager.transcribe(samples, source: AudioSource.microphone)
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }
-            var capture = shouldCapture ? self.makeEnrollment(result: result, features: features, samples: samples) : nil
+            let captureIsCurrent = shouldCapture && DictionaryMatcherExperiment.sharedFeaturesEnabled
+                && DictionaryMatcherExperiment.generation == pronunciationGeneration
+            var capture = captureIsCurrent ? self.makeEnrollment(result: result, features: features, samples: samples) : nil
             if capture != nil, DictionaryPronunciationExperiment.enabled,
                let range = DictionaryPronunciationExperiment.trimmedRange(samples)
             {
                 let embedding = try await self.encodeEdge(Array(samples[range]), manager: manager)
                 capture?.edgeEmbedding = embedding.values
                 capture?.edgeFrameCount = embedding.sourceFrameCount
+            }
+            if !DictionaryMatcherExperiment.sharedFeaturesEnabled || DictionaryMatcherExperiment.generation != pronunciationGeneration {
+                capture = nil
             }
             return ASRTranscriptionResult(text: result.text, confidence: result.confidence, pronunciationEnrollment: capture)
         } catch {
@@ -1466,51 +1473,34 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
+        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.recordingGeneration = UUID()
         self.resetIncrementalSession()
-        let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        DebugLogger.shared.info(
-            "FluidAudioProvider: clearCache called for \(selectedModel.displayName)",
-            source: "FluidAudioProvider"
-        )
-
-        let start = Date()
-        if selectedModel == .parakeetTDTv2 {
-            // Clear v2 cache only
-            let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
-            if FileManager.default.fileExists(atPath: v2CacheDir.path) {
-                try FileManager.default.removeItem(at: v2CacheDir)
-                DebugLogger.shared.info("FluidAudioProvider: Deleted Parakeet v2 cache", source: "FluidAudioProvider")
-            }
-        } else {
-            // Clear v3 cache only (default)
-            let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
-            if FileManager.default.fileExists(atPath: v3CacheDir.path) {
-                try FileManager.default.removeItem(at: v3CacheDir)
-                DebugLogger.shared.info("FluidAudioProvider: Deleted Parakeet v3 cache", source: "FluidAudioProvider")
-            }
-        }
-
-        DebugLogger.shared.debug(
-            "FluidAudioProvider: clearCache completed in \(String(format: "%.3f", Date().timeIntervalSince(start)))s",
-            source: "FluidAudioProvider"
-        )
-
+        self.temporalWarmRequest = nil
+        let warmTask = self.temporalWarmTask
+        warmTask?.cancel()
+        await warmTask?.value
         self.isReady = false
         self.streamingAsrManager = nil
         self.finalAsrManager = nil
         self.temporalModels = nil
-        self.temporalWarmTask?.cancel()
-        self.temporalWarmRequest = nil
         self.pronunciationProfilesToWarm = []
         self.edgeReferenceCache.removeAll()
         self.temporalReferenceCache.removeAll()
         self.isWordBoostingActive = false
         self.boostedVocabularyTermsCount = 0
         self.boostedTermLookup = []
+
+        let version: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
+        let directory = AsrModels.defaultCacheDirectory(for: version)
+        try await Task.detached(priority: .userInitiated) {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }.value
+        DebugLogger.shared.info("FluidAudioProvider: Deleted cache for \(selectedModel.displayName)", source: "FluidAudioProvider")
     }
 
     /// Provides direct access to the underlying AsrManager for advanced use cases

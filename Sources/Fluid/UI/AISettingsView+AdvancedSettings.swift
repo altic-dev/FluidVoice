@@ -1364,12 +1364,15 @@ extension AIEnhancementSettingsView {
                         .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
 
-                    Picker("", selection: self.editModeProviderBinding) {
+                    FluidDropdownPicker(
+                        "Provider",
+                        selectedTitle: verified.first(where: { $0.id == self.editModeProviderBinding.wrappedValue })?.name ?? "Choose provider",
+                        selection: self.editModeProviderBinding
+                    ) {
                         ForEach(verified) { provider in
                             Text(provider.name).tag(provider.id)
                         }
                     }
-                    .pickerStyle(.menu)
                     .fluidDropdownStyle()
                     .labelsHidden()
                     .frame(width: AISettingsLayout.promptInlinePickerWidth)

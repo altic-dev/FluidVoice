@@ -25,14 +25,15 @@ final class DictionaryTrainingEndpointMonitor {
 
     private let detector = DictionaryTrainingEndpointDetector()
     private var task: Task<Void, Never>?
+    private var deadlineTask: Task<Void, Never>?
 
-    private init() {}
+    init() {}
 
     func meetingResidencyParticipant() -> MeetingModelParticipant {
         MeetingModelParticipant(
             owner: "dictionary-vad",
             snapshot: {
-                let generation = DictionaryMatcherExperiment.generation
+                let generation = "dictionary-recording"
                 guard let resident = await self.detector.residencySnapshot() else { return nil }
                 return MeetingResidentModel(id: resident.id, configuration: generation)
             },
@@ -50,12 +51,12 @@ final class DictionaryTrainingEndpointMonitor {
         )
     }
 
-    /// Eligibility must survive the actual load. Disabling and re-enabling changes the
-    /// generation, so neither an old snapshot nor a late model completion can revive it.
+    /// Keep model restoration bounded to the caller's resource configuration.
+    /// Speech-end detection serves spelling capture regardless of pronunciation settings.
     static func prepareIfCurrent(
         expectedGeneration: String,
-        isEnabled: () -> Bool = { DictionaryMatcherExperiment.sharedFeaturesEnabled },
-        generation: () -> String = { DictionaryMatcherExperiment.generation },
+        isEnabled: () -> Bool = { true },
+        generation: () -> String = { "dictionary-recording" },
         prepare: () async throws -> Void,
         unload: () async -> Void
     ) async throws -> Bool {
@@ -69,11 +70,9 @@ final class DictionaryTrainingEndpointMonitor {
     }
 
     func prepare() async {
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
-        let generation = DictionaryMatcherExperiment.generation
         do {
             try await self.detector.prepare()
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return }
             DebugLogger.shared.debug(
                 "Dictionary training endpoint detector ready",
                 source: "DictionaryTrainingEndpointMonitor"
@@ -90,34 +89,47 @@ final class DictionaryTrainingEndpointMonitor {
         asr: ASRService,
         onSpeechEnded: @escaping @MainActor () -> Void
     ) {
-        self.stop()
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
-        let detector = self.detector
-        let generation = DictionaryMatcherExperiment.generation
         guard let captureToken = asr.dictionaryCaptureToken else { return }
+        self.start(
+            isCurrent: { [weak asr] in asr?.isRunning == true && asr?.dictionaryCaptureToken == captureToken },
+            audioGeneration: { [weak asr] in asr?.dictionaryTrainingAudioGeneration ?? 0 },
+            readChunk: { [weak asr] offset in
+                asr?.dictionaryTrainingAudioChunk(at: offset, count: DictionaryTrainingEndpointDetector.chunkSize) ?? []
+            },
+            onSpeechEnded: onSpeechEnded
+        )
+    }
 
-        self.task = Task { @MainActor [weak asr] in
+    /// The same loop is replayable with recorded PCM; microphone ownership stays with ASRService.
+    func start(
+        isCurrent: @escaping @MainActor () -> Bool,
+        audioGeneration: @escaping @MainActor () -> Int,
+        readChunk: @escaping @MainActor (Int) -> [Float],
+        maximumDuration: Duration = .seconds(15),
+        onSpeechEnded: @escaping @MainActor () -> Void
+    ) {
+        self.stop()
+        let detector = self.detector
+        // Bound capture even if model preparation fails or never produces an endpoint.
+        self.deadlineTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: maximumDuration) } catch { return }
+            guard !Task.isCancelled, isCurrent() else { return }
+            self?.task?.cancel()
+            onSpeechEnded()
+        }
+        self.task = Task { @MainActor [weak self] in
             do {
-                guard DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !Task.isCancelled, let asr,
-                      asr.dictionaryCaptureToken == captureToken,
-                      let detectorSession = try await detector.beginSession()
-                else {
-                    return
-                }
+                guard !Task.isCancelled, isCurrent() else { return }
+                guard let detectorSession = try await detector.beginSession() else { return }
                 defer {
                     Task { await detector.endSession(detectorSession) }
                 }
 
-                var cursor = DictionaryTrainingAudioCursor(generation: asr.dictionaryTrainingAudioGeneration)
+                var cursor = DictionaryTrainingAudioCursor(generation: audioGeneration())
                 while !Task.isCancelled {
-                    guard DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, asr.isRunning,
-                          asr.dictionaryCaptureToken == captureToken else { return }
-                    cursor.synchronize(generation: asr.dictionaryTrainingAudioGeneration)
-
-                    let chunk = asr.dictionaryTrainingAudioChunk(
-                        at: cursor.sampleOffset,
-                        count: DictionaryTrainingEndpointDetector.chunkSize
-                    )
+                    guard isCurrent() else { return }
+                    cursor.synchronize(generation: audioGeneration())
+                    let chunk = readChunk(cursor.sampleOffset)
                     guard !chunk.isEmpty else {
                         try await Task.sleep(nanoseconds: 40_000_000)
                         continue
@@ -130,9 +142,7 @@ final class DictionaryTrainingEndpointMonitor {
                     ) else {
                         continue
                     }
-                    guard DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !Task.isCancelled,
-                          asr.isRunning,
-                          asr.dictionaryCaptureToken == captureToken
+                    guard !Task.isCancelled, isCurrent()
                     else {
                         return
                     }
@@ -148,6 +158,7 @@ final class DictionaryTrainingEndpointMonitor {
                             "Dictionary training speech ended; stopping sample",
                             source: "DictionaryTrainingEndpointMonitor"
                         )
+                        self?.deadlineTask?.cancel()
                         onSpeechEnded()
                         return
                     }
@@ -164,6 +175,8 @@ final class DictionaryTrainingEndpointMonitor {
     }
 
     func stop() {
+        self.deadlineTask?.cancel()
+        self.deadlineTask = nil
         self.task?.cancel()
         self.task = nil
     }

@@ -317,13 +317,16 @@ struct FileTranscriptionView: View {
 
                                 Spacer()
 
-                                Picker("Number of speakers", selection: self.$settings.fileTranscriptionExpectedSpeakerCount) {
+                                FluidDropdownPicker(
+                                    "Number of speakers",
+                                    selectedTitle: self.settings.fileTranscriptionExpectedSpeakerCount == 0 ? "Auto" : String(self.settings.fileTranscriptionExpectedSpeakerCount),
+                                    selection: self.$settings.fileTranscriptionExpectedSpeakerCount
+                                ) {
                                     Text("Auto").tag(0)
                                     ForEach(2...8, id: \.self) { count in
                                         Text("\(count)").tag(count)
                                     }
                                 }
-                                .pickerStyle(.menu)
                                 .fluidDropdownStyle()
                                 .frame(width: 110)
                                 .disabled(self.transcriptionService.isTranscribing)

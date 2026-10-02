@@ -37,7 +37,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     let pipelineVersion: Int
 
     init(
-        asrModel: String = Self.defaultASRModel,
+        asrModel: String? = nil,
         languageCode: String = Self.defaultLanguageCode,
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
@@ -46,7 +46,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion
     ) {
-        self.asrModel = asrModel
+        self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
         self.languageCode = languageCode
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled

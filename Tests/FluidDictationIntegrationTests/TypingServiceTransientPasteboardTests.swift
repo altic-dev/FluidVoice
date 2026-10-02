@@ -488,6 +488,93 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
         XCTAssertEqual(restoredItems.last?.string(forType: .string), "item 100")
     }
 
+    func testCancelledFailedDirectAttemptSuppressesFallbackAndNextDeliveryWorks() {
+        var valid = true
+        var attempts = [String]()
+        let first = TypingService.attemptDirectInsertion(isOutputValid: { valid }) {
+            attempts.append("preferred")
+            valid = false
+            return false
+        }
+        XCTAssertFalse(first)
+
+        for fallback in ["focused", "accessibility", "hid"] {
+            XCTAssertFalse(TypingService.attemptDirectInsertion(isOutputValid: { valid }) {
+                attempts.append(fallback)
+                return true
+            })
+        }
+        XCTAssertEqual(attempts, ["preferred"])
+
+        valid = true
+        XCTAssertTrue(TypingService.attemptDirectInsertion(isOutputValid: { valid }) {
+            attempts.append("next delivery")
+            return true
+        })
+        XCTAssertEqual(attempts, ["preferred", "next delivery"])
+    }
+
+    func testFailedDirectAttemptKeepsValidFallbackAvailable() {
+        var attempts = 0
+        XCTAssertFalse(TypingService.attemptDirectInsertion(isOutputValid: { true }) {
+            attempts += 1
+            return false
+        })
+        XCTAssertTrue(TypingService.attemptDirectInsertion(isOutputValid: { true }) {
+            attempts += 1
+            return true
+        })
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testAXSelectionReplacementNeverErasesSelectionBeforeInsertion() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/Services/TypingService.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private nonisolated func setTextViaSelection("))
+        let end = try XCTUnwrap(source.range(of: "private nonisolated func insertTextAtInsertionPoint", range: start.upperBound..<source.endIndex))
+        let selection = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertEqual(selection.components(separatedBy: "AXUIElementSetAttributeValue(").count - 1, 1, "Selection replacement must be a single committed write")
+        XCTAssertFalse(selection.contains("\"\" as CFString"), "Never delete the selection before the cancel guard")
+        XCTAssertTrue(selection.contains("guard isOutputValid() else { return false }\n        let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, cfText)"))
+    }
+
+    func testDirectFallbacksAndAXWritesForwardAndRecheckOutputValidity() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/Services/TypingService.swift"), encoding: .utf8)
+        let pipelineStart = try XCTUnwrap(source.range(of: "private nonisolated func insertTextDirectly("))
+        let pipelineEnd = try XCTUnwrap(source.range(of: "private static let physicalModifierKeys", range: pipelineStart.upperBound..<source.endIndex))
+        let pipeline = String(source[pipelineStart.lowerBound..<pipelineEnd.lowerBound])
+        XCTAssertEqual(pipeline.components(separatedBy: "Self.attemptDirectInsertion(isOutputValid: isOutputValid").count - 1, 4)
+        for dispatch in [
+            "insertTextBulkInstant(text, targetPID: preferredTargetPID",
+            "insertTextBulkInstant(text, targetPID: focusedPID",
+            "insertTextViaAccessibility(text",
+            "insertTextBulkHIDInstant(text",
+        ] {
+            let callStart = try XCTUnwrap(pipeline.range(of: dispatch))
+            let callEnd = try XCTUnwrap(pipeline.range(of: "})", range: callStart.upperBound..<pipeline.endIndex))
+            XCTAssertTrue(pipeline[callStart.lowerBound..<callEnd.lowerBound].contains("isOutputValid: isOutputValid"))
+        }
+        let wrapperStart = try XCTUnwrap(source.range(of: "private func insertTextDirectlyOffMain("))
+        let wrapperEnd = try XCTUnwrap(source.range(of: "nonisolated static func attemptDirectInsertion", range: wrapperStart.upperBound..<source.endIndex))
+        let wrapper = source[wrapperStart.lowerBound..<wrapperEnd.lowerBound]
+        XCTAssertTrue(wrapper.contains("isOutputValid: {"))
+        XCTAssertTrue(wrapper.contains("DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }"))
+
+        let writeStart = try XCTUnwrap(source.range(of: "private nonisolated func insertTextAtCursorUsingSelectedRange("))
+        let writes = String(source[writeStart.lowerBound...])
+        let lines = writes.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        for (index, line) in lines.enumerated() where line.contains("= AXUIElementSetAttributeValue(") && !line.hasPrefix("_ =") {
+            XCTAssertGreaterThan(index, 0)
+            XCTAssertEqual(lines[index - 1], "guard isOutputValid() else { return false }")
+        }
+        XCTAssertTrue(writes.contains("if isOutputValid(), let axRange"))
+        XCTAssertTrue(source.contains("guard isOutputValid() else { return -1 }\n                post(keyDown)\n                post(keyUp)"))
+    }
+
     private func makePasteboard() -> NSPasteboard {
         let name = NSPasteboard.Name("com.fluidvoice.tests.transient.\(UUID().uuidString)")
         let pasteboard = NSPasteboard(name: name)

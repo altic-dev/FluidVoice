@@ -223,7 +223,7 @@ enum VoiceEngineLanguageCatalog {
         "ar",
     ]
 
-    private static let parakeetV3LanguageIDs: Set<String> = [
+    nonisolated static let parakeetV3LanguageIDs: Set<String> = [
         "bg",
         "hr",
         "cs",

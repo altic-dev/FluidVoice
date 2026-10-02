@@ -331,7 +331,7 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                Picker("", selection: Binding(
+                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
                                     get: { SettingsStore.shared.transcriptionStartSound },
                                     set: { newValue in
                                         SettingsStore.shared.transcriptionStartSound = newValue
@@ -342,7 +342,6 @@ struct SettingsView: View {
                                         Text(option.displayName).tag(option)
                                     }
                                 }
-                                .pickerStyle(.menu)
                                 .fluidDropdownStyle()
                                 .frame(width: 170, alignment: .trailing)
                             }
@@ -745,7 +744,7 @@ struct SettingsView: View {
                                                     icon: "xmark.circle.fill",
                                                     iconColor: .secondary,
                                                     title: "Cancel Recording",
-                                                    description: "Cancel the current recording or dismiss the active recording overlay"
+                                                    description: "Stop without pasting; save to History when enabled"
                                                 ),
                                                 shortcut: self.cancelRecordingShortcut,
                                                 isRecording: self.isRecording(.cancel),
@@ -807,12 +806,11 @@ struct SettingsView: View {
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            Picker("", selection: self.$hotkeyMode) {
+                                            FluidDropdownPicker("Activation mode", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
                                                 ForEach(HotkeyActivationMode.allCases) { mode in
                                                     Text(mode.displayName).tag(mode)
                                                 }
                                             }
-                                            .pickerStyle(.menu)
                                             .fluidDropdownStyle()
                                             .frame(width: 170, alignment: .trailing)
                                         }
@@ -846,7 +844,7 @@ struct SettingsView: View {
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            Picker("", selection: Binding(
+                                            FluidDropdownPicker("Text insertion", selectedTitle: SettingsStore.shared.textInsertionMode.displayName, selection: Binding(
                                                 get: { SettingsStore.shared.textInsertionMode },
                                                 set: { SettingsStore.shared.textInsertionMode = $0 }
                                             )) {
@@ -854,7 +852,6 @@ struct SettingsView: View {
                                                     Text(mode.displayName).tag(mode)
                                                 }
                                             }
-                                            .pickerStyle(.menu)
                                             .fluidDropdownStyle()
                                             .fixedSize(horizontal: true, vertical: false)
                                             .frame(minWidth: 170, alignment: .trailing)
@@ -1203,7 +1200,11 @@ struct SettingsView: View {
                                     .font(self.theme.typography.bodyStrong)
                                     .foregroundStyle(self.settingsTitleText)
                                 Spacer()
-                                Picker("", selection: self.$selectedOutputUID) {
+                                FluidDropdownPicker(
+                                    "Output device",
+                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { $0.name == self.cachedDefaultOutputName ? "\($0.name) (System Default)" : $0.name } ?? "Loading...",
+                                    selection: self.$selectedOutputUID
+                                ) {
                                     // Handle empty state gracefully
                                     if self.outputDevices.isEmpty {
                                         Text("Loading...").tag("")
@@ -1215,7 +1216,6 @@ struct SettingsView: View {
                                         }
                                     }
                                 }
-                                .pickerStyle(.menu)
                                 .fluidDropdownStyle()
                                 .frame(width: 240)
                                 .disabled(self.asr.isRunning) // Disable device changes during recording
@@ -1291,21 +1291,23 @@ struct SettingsView: View {
                                 Spacer()
 
                                 if self.settings.overlayPosition == .bottom {
-                                    Picker("", selection: self.$settings.overlaySize) {
+                                    FluidDropdownPicker("Overlay size", selectedTitle: self.settings.overlaySize.displayName, selection: self.$settings.overlaySize) {
                                         ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
                                             Text(size.displayName).tag(size)
                                         }
                                     }
-                                    .pickerStyle(.menu)
                                     .fluidDropdownStyle()
                                     .frame(width: 170, alignment: .trailing)
                                 } else {
-                                    Picker("", selection: self.$settings.notchPresentationMode) {
+                                    FluidDropdownPicker(
+                                        "Notch presentation",
+                                        selectedTitle: self.settings.notchPresentationMode.displayName,
+                                        selection: self.$settings.notchPresentationMode
+                                    ) {
                                         ForEach(SettingsStore.NotchPresentationMode.allCases, id: \.self) { mode in
                                             Text(mode.displayName).tag(mode)
                                         }
                                     }
-                                    .pickerStyle(.menu)
                                     .fluidDropdownStyle()
                                     .frame(width: 170, alignment: .trailing)
                                 }
@@ -1405,12 +1407,11 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                Picker("", selection: self.$settings.overlayPosition) {
+                                FluidDropdownPicker("Overlay position", selectedTitle: self.settings.overlayPosition.displayName, selection: self.$settings.overlayPosition) {
                                     ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
                                         Text(position.displayName).tag(position)
                                     }
                                 }
-                                .pickerStyle(.menu)
                                 .fluidDropdownStyle()
                                 .frame(width: 170, alignment: .trailing)
                             }
@@ -3009,7 +3010,7 @@ private extension SettingsView {
 
                         Spacer()
 
-                        Picker("", selection: Binding(
+                        FluidDropdownPicker("Send key", selectedTitle: self.settings.spokenSendKey.displayName, selection: Binding(
                             get: { self.settings.spokenSendKey },
                             set: { self.settings.spokenSendKey = $0 }
                         )) {
@@ -3017,7 +3018,6 @@ private extension SettingsView {
                                 Text(key.displayName).tag(key)
                             }
                         }
-                        .pickerStyle(.menu)
                         .fluidDropdownStyle()
                         .frame(width: 170, alignment: .trailing)
                         .accessibilityLabel("Spoken Send command")
@@ -3075,12 +3075,15 @@ private struct DictionarySuggestionsSettingsRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Picker("Ask after", selection: self.$settings.automaticDictionarySuggestionFrequency) {
+                    FluidDropdownPicker(
+                        "Ask after",
+                        selectedTitle: self.settings.automaticDictionarySuggestionFrequency.displayName,
+                        selection: self.$settings.automaticDictionarySuggestionFrequency
+                    ) {
                         ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
                             Text(frequency.displayName).tag(frequency)
                         }
                     }
-                    .pickerStyle(.menu)
                     .fluidDropdownStyle()
                     .fixedSize()
                 }

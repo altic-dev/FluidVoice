@@ -520,6 +520,80 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(self.dispositions(result)[unit.id]?.disposition, .emitted)
     }
 
+    @MainActor
+    func testPlaybackResetClearsCompletedFailureAndRejectsStaleLoads() async throws {
+        let playback = MeetingSegmentPlayback()
+        playback.toggle(sessionID: UUID(), segmentID: UUID())
+        let deadline = Date().addingTimeInterval(2)
+        while playback.isLoading, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertNotNil(playback.errorMessage, "A completed load failure must still be visible")
+        playback.stop()
+        XCTAssertNil(playback.errorMessage, "Changing meetings clears the old warning")
+        playback.toggle(sessionID: UUID(), segmentID: UUID())
+        playback.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(playback.errorMessage)
+        XCTAssertNil(playback.activeSegmentID)
+        XCTAssertFalse(playback.isLoading)
+        XCTAssertFalse(playback.progress.isPlaying)
+        XCTAssertEqual(playback.progress.elapsed, 0)
+        XCTAssertEqual(playback.progress.duration, 0)
+    }
+
+    @MainActor
+    func testPlaybackCancellationCannotRestartOrReportStaleFailure() async throws {
+        let playback = MeetingSegmentPlayback()
+        playback.toggle(sessionID: UUID(), segmentID: UUID())
+        playback.toggle(sessionID: UUID(), segmentID: UUID())
+        playback.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(playback.activeSegmentID)
+        XCTAssertFalse(playback.isLoading)
+        XCTAssertNil(playback.errorMessage)
+    }
+
+    @MainActor
+    func testStoppedPlaybackReleasesOwner() async throws {
+        weak var releasedPlayback: MeetingSegmentPlayback?
+        do {
+            let playback = MeetingSegmentPlayback()
+            releasedPlayback = playback
+            playback.toggle(sessionID: UUID(), segmentID: UUID())
+            playback.stop()
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(releasedPlayback)
+    }
+
+    func testPlaybackInvertsDriftAndDoesNotChangeTranscript() throws {
+        let drift = MeetingClockDriftRecord(cumulativeAbsorbedSeconds: 0.006, elapsedValidHostSeconds: 100, eligible: true)
+        let (plan, manifest, span) = try self.onlineMicFixture(drift: drift)
+        let unit = self.unit(id: "playback", span: span, analysisStart: 1, analysisEnd: 2)
+        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: self.evidence(plan: plan, units: [unit]),
+            coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: ["playback": .notEcho]
+        ))
+        let segment = try XCTUnwrap(result.segments.first)
+        let original = segment
+        let slices = try MeetingSegmentPlaybackPlan.slices(segment: segment, spans: manifest.allSpans, directory: FileManager.default.temporaryDirectory)
+        XCTAssertEqual(slices.count, 1)
+        XCTAssertEqual(try XCTUnwrap(slices.first).start, 1, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(slices.first).end, 2, accuracy: 0.001)
+        XCTAssertEqual(segment, original)
+        var otherTrack = segment
+        otherTrack.sourceTrackID = UUID()
+        XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.slices(segment: otherTrack, spans: manifest.allSpans, directory: FileManager.default.temporaryDirectory))
+        var outside = segment
+        outside.start = self.mediaTime(1000)
+        outside.end = self.mediaTime(1001)
+        XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.slices(segment: outside, spans: manifest.allSpans, directory: FileManager.default.temporaryDirectory))
+    }
+
     func testCrossSpanUnitMapsOnceAcrossChunkBoundary() throws {
         let first = self.chunk(sequence: 0, start: 100, end: 105)
         let second = self.chunk(sequence: 1, start: 105, end: 110)
@@ -551,6 +625,12 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             echoVerdicts: ["u-0": .notEcho]
         ))
         let segment = try XCTUnwrap(result.segments.first)
+        let slices = try MeetingSegmentPlaybackPlan.slices(segment: segment, spans: manifest.allSpans, directory: FileManager.default.temporaryDirectory)
+        XCTAssertEqual(slices.count, 2)
+        XCTAssertEqual(slices[0].start, 4.5, accuracy: 0.001)
+        XCTAssertEqual(slices[0].end, 5, accuracy: 0.001)
+        XCTAssertEqual(slices[1].start, 0, accuracy: 0.001)
+        XCTAssertEqual(slices[1].end, 0.5, accuracy: 0.001)
         // Start maps through the first span's transform, end through the last's — once each.
         let expectedStart = spans[0].presentationMapping.presentationTime(forAnalysisTime: 4.5)
         let expectedEnd = spans[1].presentationMapping.presentationTime(forAnalysisTime: 5.5)

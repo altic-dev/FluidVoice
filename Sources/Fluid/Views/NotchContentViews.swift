@@ -1413,7 +1413,7 @@ struct NotchCompactBottomView: View {
 struct NotchCommandOutputExpandedView: View {
     let audioPublisher: AnyPublisher<CGFloat, Never>
     let onDismiss: () -> Void
-    let onSubmit: (String) async -> Void
+    let onSubmit: (String) async -> Bool
     let onNewChat: () -> Void
     let onSwitchChat: (String) -> Void
     let onClearChat: () -> Void
@@ -1850,10 +1850,11 @@ struct NotchCommandOutputExpandedView: View {
     private func submitFollowUp() {
         guard !self.inputText.isEmpty else { return }
         let text = self.inputText
-        self.inputText = ""
 
         Task {
-            await self.onSubmit(text)
+            if await self.onSubmit(text), self.inputText == text {
+                self.inputText = ""
+            }
         }
     }
 }

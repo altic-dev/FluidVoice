@@ -2,11 +2,27 @@ import AppKit
 import Combine
 
 enum PrivateAIModelLoadState: Equatable {
+    static let missingModelMessage = "Model file is not installed."
+
     case idle
+    case downloadRequired(modelID: String)
     case downloading(modelID: String, progress: PrivateAIModelDownloadProgress?)
     case loading(modelID: String)
     case loaded(modelID: String, latencyMilliseconds: Int?)
     case failed(modelID: String, message: String)
+
+    func needsDownload(_ modelID: String) -> Bool {
+        if case let .downloadRequired(id) = self { return id == modelID }
+        return false
+    }
+
+    static func failure(modelID: String, message: String) -> Self {
+        // Verification crosses the provider bridge as text. Match only its known missing-file errors.
+        if message.hasPrefix("Missing local model: ") || message == self.missingModelMessage {
+            return .downloadRequired(modelID: modelID)
+        }
+        return .failed(modelID: modelID, message: message)
+    }
 
     func isLoading(_ modelID: String) -> Bool {
         if case .loading(modelID) = self { return true }
@@ -203,14 +219,11 @@ final class PrivateAISettingsController: ObservableObject {
                     let message = self.viewModel.connectionErrorMessage(for: PrivateAIProviderFeature.shared.providerID).isEmpty
                         ? "Model downloaded, but verification failed."
                         : self.viewModel.connectionErrorMessage(for: PrivateAIProviderFeature.shared.providerID)
-                    self.privateAILoadState = .failed(modelID: model.id, message: message)
+                    self.recordFailure(modelID: model.id, message: message)
                 }
             } catch {
                 guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
-                )
+                self.recordFailure(modelID: model.id, message: Self.errorMessage(for: error))
             }
             self.viewModel.refreshProviderItems()
         }
@@ -294,8 +307,9 @@ final class PrivateAISettingsController: ObservableObject {
                 let message = self.viewModel.connectionErrorMessage(for: PrivateAIProviderFeature.shared.providerID).isEmpty
                     ? "Model verification failed."
                     : self.viewModel.connectionErrorMessage(for: PrivateAIProviderFeature.shared.providerID)
-                self.privateAILoadState = .failed(modelID: model.id, message: message)
-                onCompletion?(message)
+                self.recordFailure(modelID: model.id, message: message)
+                onCompletion?(self.privateAILoadState.needsDownload(model.id)
+                    ? "Model files are missing. Download again to repair." : message)
             }
             self.viewModel.refreshProviderItems()
         }
@@ -321,6 +335,7 @@ final class PrivateAISettingsController: ObservableObject {
     func refreshPrivateAILoadState() {
         guard !self.session.isBusy else { return }
         if case .failed = self.privateAILoadState { return }
+        if case .downloadRequired = self.privateAILoadState { return }
         let revision = self.session.revision
         Task { @MainActor in
             let loaded = await PrivateAIIntegrationService.shared.loadedModelState()
@@ -338,7 +353,7 @@ final class PrivateAISettingsController: ObservableObject {
         guard let operation = self.beginOperation(for: model.id) else { return }
         guard PrivateAIIntegrationService.isModelInstalled(model) else {
             self.session.finish(operation)
-            self.privateAILoadState = .failed(modelID: model.id, message: "Model file is not installed.")
+            self.recordFailure(modelID: model.id, message: PrivateAIModelLoadState.missingModelMessage)
             return
         }
 
@@ -357,17 +372,11 @@ final class PrivateAISettingsController: ObservableObject {
                 case .ready:
                     self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
                 default:
-                    self.privateAILoadState = .failed(
-                        modelID: model.id,
-                        message: status.message ?? "Model did not report ready."
-                    )
+                    self.recordFailure(modelID: model.id, message: status.message ?? "Model did not report ready.")
                 }
             } catch {
                 guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
-                )
+                self.recordFailure(modelID: model.id, message: Self.errorMessage(for: error))
             }
             self.viewModel.refreshProviderItems()
         }
@@ -410,6 +419,14 @@ final class PrivateAISettingsController: ObservableObject {
                 guard self.privateAISelectedModelID == model.id else { return }
                 self.privateAILoadState = .failed(modelID: model.id, message: Self.errorMessage(for: error))
             }
+        }
+    }
+
+    private func recordFailure(modelID: String, message: String) {
+        DebugLogger.shared.error("Model operation failed model=\(modelID): \(message)", source: "AISettingsView")
+        self.privateAILoadState = .failure(modelID: modelID, message: message)
+        if self.privateAILoadState.needsDownload(modelID) {
+            self.viewModel.resetVerification(for: PrivateAIProviderFeature.shared.providerID)
         }
     }
 

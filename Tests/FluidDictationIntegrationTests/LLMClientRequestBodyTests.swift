@@ -545,6 +545,44 @@ final class LLMClientStreamingTests: XCTestCase {
         XCTAssertEqual(response.toolCalls.first?.getString("command"), "pwd")
     }
 
+    /// Qwen3 Thinking-2507 templates open the think block in the prompt, so the stream
+    /// only carries the closing tag.
+    func testTagParserSplitsReasoningWhenOnlyCloseTagStreams() async throws {
+        let client = self.makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Clean this up"]],
+            model: "qwen3-30b-a3b-thinking-2507",
+            baseURL: "https://issue-445.test/orphan-close/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "Reasoning.")
+        XCTAssertEqual(response.content, "Ready.")
+    }
+
+    func testTagParserSplitsOnEarliestCloseTag() async throws {
+        let client = self.makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Clean this up"]],
+            model: "qwen3-30b-a3b-thinking-2507",
+            baseURL: "https://issue-445.test/mixed-close/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "Reasoning.")
+        XCTAssertEqual(response.content, "Ready. Done.")
+    }
+
     func testStreamingDecodeAndCallbacksStayOffMainThread() async throws {
         let client = self.makeClient()
         let probe = LLMCallbackThreadProbe()
@@ -615,6 +653,22 @@ private class Issue445StreamURLProtocol: URLProtocol {
 
     """#
 
+    private static let orphanCloseFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"content":"Reasoning.</thi"}}]}
+
+    data: {"choices":[{"index":0,"delta":{"content":"nk>Ready."},"finish_reason":"stop"}]}
+
+    data: [DONE]
+
+    """#
+
+    private static let mixedCloseFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"content":"Reasoning.</thinking>Ready.</think> Done."},"finish_reason":"stop"}]}
+
+    data: [DONE]
+
+    """#
+
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "issue-445.test"
     }
@@ -638,7 +692,15 @@ private class Issue445StreamURLProtocol: URLProtocol {
             return
         }
 
-        let fixture = url.path.contains("tag-parser") ? Self.tagParserFixture : Self.separateReasoningFixture
+        let fixture = if url.path.contains("orphan-close") {
+            Self.orphanCloseFixture
+        } else if url.path.contains("mixed-close") {
+            Self.mixedCloseFixture
+        } else if url.path.contains("tag-parser") {
+            Self.tagParserFixture
+        } else {
+            Self.separateReasoningFixture
+        }
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(fixture.utf8))

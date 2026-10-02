@@ -93,6 +93,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
     private var silenceAccumulatedSeconds: Double = 0
+    /// Cleared by a successful append so a later failure is a new episode. Repeated rejected
+    /// buffers must not produce an unbounded session-event history.
+    private var hasReportedWriterFailure = false
 
     /// Peak amplitude (0...1) below which a buffer counts as silent for watchdog purposes.
     private static let silenceAmplitudeThreshold: Float = 0.0001
@@ -496,6 +499,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 try self.writeCheckpoint(for: &activeChunk)
             }
             self.activeChunk = activeChunk
+            let recoveredFromWriterFailure = self.hasReportedWriterFailure
+            self.hasReportedWriterFailure = false
             self.track.health.status = .healthy
             self.track.health.lastPresentationTime = Self.mediaTime(presentationTime)
             let now = Date()
@@ -514,14 +519,12 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 self.track.health.level = Self.normalizedLevel(fromPeak: peak ?? 0)
             }
             self.track.health.detail = nil
-            self.emitHealthIfNeeded()
+            self.emitHealthIfNeeded(force: recoveredFromWriterFailure)
         } catch {
             // A sink failure poisons the current container. Retire it immediately so the next
-            // callback can establish a fresh chunk instead of retrying the same invalid sink and
-            // emitting an error storm for every subsequent buffer.
-            var retiredChunk = false
+            // callback can establish a fresh chunk. Chunk-start failures have no sink to retire,
+            // but must use the same failure-episode reporting as append/finalization failures.
             if let failedChunk = self.activeChunk {
-                retiredChunk = true
                 self.activeChunk = nil
                 self.lastFinalizedEnd = failedChunk.end
                 failedChunk.sink.cancel()
@@ -529,15 +532,8 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                     Self.failedChunk(from: failedChunk),
                     "PCM chunk write failed: \(error.localizedDescription)"
                 ))
-            }
-            if !retiredChunk {
-                self.track.health.status = .degraded
-                self.track.health.detail = error.localizedDescription
-                self.eventHandler(.interrupted(
-                    kind: .writerFailure,
-                    trackID: self.track.id,
-                    detail: error.localizedDescription
-                ))
+            } else {
+                self.reportWriterFailure(detail: error.localizedDescription, sampleBuffer: sampleBuffer)
             }
         }
     }
@@ -685,9 +681,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                     self.track.chunks[index].finalizationState = .failed
                     self.track.chunks[index].captureAnalysisAsset?.presence = .failed
                 }
-                self.track.health.status = .degraded
-                self.track.health.detail = "PCM chunk ledger terminal failed: \(error.localizedDescription)"
-                self.eventHandler(.interrupted(kind: .writerFailure, trackID: self.track.id, detail: self.track.health.detail ?? "PCM chunk ledger terminal failed."))
+                self.reportWriterFailure(detail: "PCM chunk ledger terminal failed: \(error.localizedDescription)")
                 try? self.persistTrackManifest()
                 return
             }
@@ -701,11 +695,30 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 updatedAt: Date(),
                 detail: detail
             ), for: chunk.id)
-            self.track.health.status = .degraded
-            self.track.health.detail = detail
+            self.reportWriterFailure(detail: detail)
             try? self.persistTrackManifest()
-            self.eventHandler(.interrupted(kind: .writerFailure, trackID: self.track.id, detail: detail))
         }
+    }
+
+    private func reportWriterFailure(detail: String, sampleBuffer: CMSampleBuffer? = nil) {
+        guard !self.hasReportedWriterFailure else { return }
+        self.hasReportedWriterFailure = true
+        if DebugLogger.diagnosticsEnabled,
+           let sampleBuffer,
+           let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+        {
+            FileLogger.shared.appendSync(line:
+                "[MeetingPCMProbe] rejected-format track=\(self.track.kind.rawValue) " +
+                    "formatID=\(asbd.mFormatID) rate=\(asbd.mSampleRate) channels=\(asbd.mChannelsPerFrame) " +
+                    "flags=\(asbd.mFormatFlags) bits=\(asbd.mBitsPerChannel) " +
+                    "bytesPerFrame=\(asbd.mBytesPerFrame) bytesPerPacket=\(asbd.mBytesPerPacket) " +
+                    "framesPerPacket=\(asbd.mFramesPerPacket)")
+        }
+        self.track.health.status = .degraded
+        self.track.health.detail = detail
+        self.eventHandler(.interrupted(kind: .writerFailure, trackID: self.track.id, detail: detail))
+        self.emitHealthIfNeeded(force: true)
     }
 
     private func completeStop() {

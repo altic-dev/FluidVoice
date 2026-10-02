@@ -291,7 +291,15 @@ extension VoiceEngineSettingsView {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             // Action area: Show progress if THIS model is being downloaded
-            if self.viewModel.downloadingModel == model {
+            if self.viewModel.asr.deletingModelID == model.id {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text("Deleting…")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.voiceEngineSecondaryText)
+                }
+                .accessibilityLabel("Deleting \(model.humanReadableName)")
+            } else if self.viewModel.downloadingModel == model {
                 // This specific model is currently being downloaded
                 HStack(spacing: 8) {
                     VStack(alignment: .trailing, spacing: 4) {
@@ -494,7 +502,6 @@ extension VoiceEngineSettingsView {
                 }
             } label: { Label(self.settings.selectedCohereLanguage.displayName, systemImage: "globe") }
                 .fluidDropdownStyle()
-                .buttonStyle(.plain)
         } else if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
             self.nemotronLanguagePickerButton
         }

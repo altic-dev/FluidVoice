@@ -75,7 +75,7 @@ final class NotchOverlayManager {
 
     // Callbacks for command output interaction
     var onCommandOutputDismiss: (() -> Void)?
-    var onCommandFollowUp: ((String) async -> Void)?
+    var onCommandFollowUp: ((String) async -> Bool)?
     var onNotchClicked: (() -> Void)? // Called when regular notch is clicked in command mode
 
     // Callbacks for chat management
@@ -619,8 +619,8 @@ final class NotchOverlayManager {
                     }
                 },
                 onSubmit: { [weak self] text in
-                    guard let self, self.allowsCommandNotchActions else { return }
-                    await self.onCommandFollowUp?(text)
+                    guard let self, self.allowsCommandNotchActions else { return false }
+                    return await self.onCommandFollowUp?(text) ?? false
                 },
                 onNewChat: { [weak self] in
                     Task { @MainActor in
