@@ -583,6 +583,45 @@ final class LLMClientStreamingTests: XCTestCase {
         XCTAssertEqual(response.content, "Ready. Done.")
     }
 
+    /// Hosts like Together AI stream DeepSeek-R1's reasoning inline in `<think>` tags.
+    func testDeepSeekModelSplitsInlineThinkTags() async throws {
+        let client = self.makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Clean this up"]],
+            model: "deepseek-ai/DeepSeek-R1",
+            baseURL: "https://issue-445.test/inline-think/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "Reasoning.")
+        XCTAssertEqual(response.content, "Ready.")
+    }
+
+    /// DeepSeek's own API sends `reasoning_content` instead, which still goes to thinking.
+    func testDeepSeekReasoningContentStillSeparates() async throws {
+        let client = self.makeClient()
+        var config = LLMClient.Config(
+            messages: [["role": "user", "content": "Show the working directory"]],
+            model: "deepseek-reasoner",
+            baseURL: "https://issue-445.test/v1",
+            apiKey: "",
+            streaming: true
+        )
+        config.maxRetries = 1
+        config.timeoutSeconds = 5
+
+        let response = try await client.call(config)
+
+        XCTAssertEqual(response.thinking, "I should inspect the current directory.")
+        XCTAssertEqual(response.content, "")
+        XCTAssertEqual(response.toolCalls.first?.getString("command"), "pwd")
+    }
+
     func testStreamingDecodeAndCallbacksStayOffMainThread() async throws {
         let client = self.makeClient()
         let probe = LLMCallbackThreadProbe()
@@ -669,6 +708,15 @@ private class Issue445StreamURLProtocol: URLProtocol {
 
     """#
 
+    private static let inlineThinkFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"content":"<think>Reasoning.</thi"}}]}
+
+    data: {"choices":[{"index":0,"delta":{"content":"nk>Ready."},"finish_reason":"stop"}]}
+
+    data: [DONE]
+
+    """#
+
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "issue-445.test"
     }
@@ -696,6 +744,8 @@ private class Issue445StreamURLProtocol: URLProtocol {
             Self.orphanCloseFixture
         } else if url.path.contains("mixed-close") {
             Self.mixedCloseFixture
+        } else if url.path.contains("inline-think") {
+            Self.inlineThinkFixture
         } else if url.path.contains("tag-parser") {
             Self.tagParserFixture
         } else {

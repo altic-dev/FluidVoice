@@ -55,11 +55,9 @@ nonisolated enum ThinkingParserFactory {
             return StandardThinkingParser()
         }
 
-        // DeepSeek models: often use separate reasoning_content field
-        if modelLower.contains("deepseek") {
-            DebugLogger.shared.debug("ThinkingParser: Using SeparateFieldParser for DeepSeek model '\(model)'", source: "LLMClient")
-            return SeparateFieldThinkingParser()
-        }
+        // DeepSeek falls through to the standard parser: its official API's reasoning_content
+        // is routed by the stream loop before any parser runs, and hosts like Together AI
+        // stream R1's reasoning inline in <think> tags.
 
         // OpenAI reasoning models (o1, o3, o4, gpt-5): use SeparateFieldThinkingParser
         var family = modelLower
@@ -316,7 +314,7 @@ nonisolated struct NoThinkingParser: ThinkingParser {
 
 /// Parser for models that use separate fields (reasoning_content, thought, etc.)
 /// instead of inline tags like <think>.
-/// Used by: OpenAI o1/o3/gpt-5, DeepSeek (official API).
+/// Used by: OpenAI o1/o3/gpt-5.
 nonisolated struct SeparateFieldThinkingParser: ThinkingParser {
     mutating func processChunk(
         _ chunk: String,
