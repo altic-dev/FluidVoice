@@ -35,19 +35,38 @@ enum OverlayPlacement {
         return true
     }
 
+    /// The least of the overlay that must stay on a screen's visible area after the display
+    /// arrangement changes: enough to grab and drag back, clamped to the overlay's own size.
+    static let minimumGrabbableSize = CGSize(width: 44, height: 20)
+
+    /// Whether a stored position should still be used on the displays attached now.
+    static func originIsUsable(_ placed: OverlayPlacedOrigin, size: NSSize) -> Bool {
+        self.originIsUsable(
+            placed,
+            size: size,
+            screens: self.currentScreenFrames(),
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        )
+    }
+
     /// Whether a stored position should still be used.
     ///
     /// On the same display arrangement the position is honoured exactly, so an
     /// overlay deliberately dragged past a screen edge stays there. Once the
-    /// arrangement changes it is only reused while the overlay still overlaps a screen
-    /// that is actually attached; otherwise a position chosen on a display that has
-    /// since been unplugged would leave the overlay invisible, with nothing to grab.
+    /// arrangement changes it is only reused while enough of the overlay to grab is still
+    /// on one attached screen's visible area; otherwise a position chosen on a display
+    /// that has since been unplugged would leave the overlay invisible, or a sliver of it
+    /// too thin to drag back.
     ///
     /// The test is per screen rather than against their union, so the overlay is not
     /// restored into a gap between displays in an irregular arrangement, where the union
     /// covers desktop that no display draws.
-    static func originIsUsable(_ placed: OverlayPlacedOrigin, size: NSSize) -> Bool {
-        let screens = self.currentScreenFrames()
+    static func originIsUsable(
+        _ placed: OverlayPlacedOrigin,
+        size: NSSize,
+        screens: [CGRect],
+        visibleFrames: [CGRect]
+    ) -> Bool {
         guard !screens.isEmpty else { return false }
 
         // The arrangement is the one this origin was chosen on, never whatever settings
@@ -60,7 +79,12 @@ enum OverlayPlacement {
         }
 
         let overlay = NSRect(origin: placed.point, size: size)
-        return screens.contains { $0.intersects(overlay) }
+        let minWidth = min(self.minimumGrabbableSize.width, size.width)
+        let minHeight = min(self.minimumGrabbableSize.height, size.height)
+        return visibleFrames.contains { visibleFrame in
+            let onScreen = visibleFrame.intersection(overlay)
+            return !onScreen.isNull && onScreen.width >= minWidth && onScreen.height >= minHeight
+        }
     }
 
     /// The persisted origin paired with the arrangement it was stored on.
