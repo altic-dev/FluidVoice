@@ -861,7 +861,7 @@ struct SettingsView: View {
 
                                         self.optionToggleRow(
                                             title: "Automatically Press Enter",
-                                            description: "Press Enter after each successful dictation insertion. This can send messages or submit forms. No phrase is needed.",
+                                            description: "Press Enter after each confirmed dictation insertion. No phrase is needed. Skips terminal apps and unreadable fields. This can send messages or submit forms.",
                                             isOn: Binding(
                                                 get: { self.settings.automaticEnterEnabled },
                                                 set: { self.settings.automaticEnterEnabled = $0 }

@@ -2334,6 +2334,7 @@ struct ContentView: View {
     private func deliverDictationSend(
         _ outputPlan: DictationLiteralOutputPlan,
         key: SettingsStore.SpokenSendKey,
+        requiresInsertionConfirmation: Bool,
         targetPID: pid_t?,
         textReadyAt: TimeInterval,
         toggleStopRequestedAt: TimeInterval?,
@@ -2348,6 +2349,7 @@ struct ContentView: View {
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
             postInsertionKey: key,
+            requiresInsertionConfirmation: requiresInsertionConfirmation,
             requiredFocusTarget: stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
             isOutputValid: isOutputValid
@@ -3388,6 +3390,7 @@ struct ContentView: View {
                 let deliveryOutcome = await self.deliverDictationSend(
                     finalOutputPlan,
                     key: sendAction == .spokenSend ? self.settings.spokenSendKey : .enter,
+                    requiresInsertionConfirmation: sendAction == .enter,
                     targetPID: typingTarget.pid,
                     textReadyAt: finalTextReadyAt,
                     toggleStopRequestedAt: toggleStopRequestedAt,

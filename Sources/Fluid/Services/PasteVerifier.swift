@@ -120,6 +120,24 @@ enum PasteVerifier {
         return self.unchangedVerdict(before: before, after: final) ?? .notLanded(reason: "value_count_caret_unchanged")
     }
 
+    /// Automatic Enter requires readable text and exact insertion confirmation.
+    /// Retry slow destinations while retaining the original field identity.
+    nonisolated static func confirmAutomaticInsertion(before: Snapshot, pastedText: String) async -> Bool {
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled, let after = self.capture(),
+                  after.pid == before.pid, CFEqual(after.element, before.element)
+            else { return false }
+            if DictationSendPolicy.insertionIsConfirmed(
+                before: before.value,
+                selection: before.caret.map { NSRange(location: $0.location, length: $0.length) },
+                text: pastedText,
+                after: after.value
+            ) { return true }
+        }
+        return false
+    }
+
     /// `unknown` when the signals are incomplete or something other than the
     /// pasted text changed; nil when everything is exactly as before.
     private nonisolated static func unchangedVerdict(before: Snapshot, after: Snapshot) -> Verdict? {

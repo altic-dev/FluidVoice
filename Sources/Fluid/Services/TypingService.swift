@@ -594,6 +594,7 @@ final class TypingService {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        requiresInsertionConfirmation: Bool = false,
         requiredFocusTarget: CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
@@ -622,6 +623,7 @@ final class TypingService {
                 }
             }
 
+            let insertionBefore = requiresInsertionConfirmation ? PasteVerifier.capture() : nil
             var outcome: DeliveryOutcome = .actionSuppressed
             if hasTextToInsert {
                 let result = await self.typeOutputPlanInstantly(
@@ -640,6 +642,15 @@ final class TypingService {
                     return
                 }
                 outcome = .inserted
+                if requiresInsertionConfirmation {
+                    guard let insertionBefore,
+                          insertionBefore.pid == preferredTargetPID,
+                          await PasteVerifier.confirmAutomaticInsertion(before: insertionBefore, pastedText: plan.plainText)
+                    else {
+                        completion?(.insertedActionSuppressed)
+                        return
+                    }
+                }
             }
 
             guard isOutputValid() else { completion?(hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed); return }
