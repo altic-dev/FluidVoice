@@ -43,6 +43,15 @@ final class TypingService {
         var didDispatchAction: Bool {
             self == .actionDispatched || self == .insertedAndActionDispatched
         }
+
+        var textDeliveryResult: TextDeliveryResult {
+            if self == .insertionUnconfirmed {
+                return .recoverableFailure(.insertionUnconfirmed)
+            }
+            return self.didInsert || self.didDispatchAction
+                ? .commandPosted
+                : .recoverableFailure(.pasteCommandFailed)
+        }
     }
 
     nonisolated static func canDispatchPostInsertionAction(
@@ -764,6 +773,7 @@ final class TypingService {
             case .targetRestoreFailed: .targetRestoreFailed
             case .noEditableTarget: .noEditableTarget
             case .pasteNotLanded: .pasteNotLanded
+            case .insertionUnconfirmed: nil
             }
         }
     }

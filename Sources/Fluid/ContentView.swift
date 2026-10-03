@@ -3406,11 +3406,7 @@ struct ContentView: View {
                     textReadyAt: finalTextReadyAt
                 )
                 didTypeExternally = deliveryOutcome.didInsert
-                // Unconfirmed read-back follows an actual dispatched insertion;
-                // it must not display the card for a known paste-command failure.
-                deliveryResult = deliveryOutcome.didInsert || deliveryOutcome.didDispatchAction || deliveryOutcome == .insertionUnconfirmed
-                    ? .commandPosted
-                    : .recoverableFailure(.pasteCommandFailed)
+                deliveryResult = deliveryOutcome.textDeliveryResult
             } else {
                 self.appBench(
                     "text_ready_to_type_request elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - finalTextReadyAt) * 1000).rounded()))"

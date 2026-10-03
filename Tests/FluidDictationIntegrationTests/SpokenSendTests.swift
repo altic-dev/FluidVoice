@@ -598,6 +598,25 @@ final class SpokenSendTests: XCTestCase {
         XCTAssertFalse(TypingService.DeliveryOutcome.insertionUnconfirmed.didDispatchAction)
     }
 
+    func testUnconfirmedInsertionRetainsRecoverableTranscriptWithoutClaimingFailure() {
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertionUnconfirmed.textDeliveryResult, .recoverableFailure(.insertionUnconfirmed))
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertionFailed.textDeliveryResult, .recoverableFailure(.pasteCommandFailed))
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertedAndActionDispatched.textDeliveryResult, .commandPosted)
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertedActionSuppressed.textDeliveryResult, .commandPosted)
+        let state = NotchContentState.shared
+        defer { state.clearTextDeliveryFailure() }
+        state.recordTextDeliveryFailure(.insertionUnconfirmed, transcript: "exact saved transcript")
+        XCTAssertTrue(state.isTextDeliveryFailureVisible)
+        XCTAssertEqual(state.textDeliveryFailureTranscript, "exact saved transcript")
+        XCTAssertEqual(state.textDeliveryFailureMessage, "Couldn't confirm insertion — Enter skipped")
+        XCTAssertEqual(TextDeliveryFailure.userFacingDetail(forMessage: state.textDeliveryFailureMessage), "Check the text field before copying your saved transcript.")
+        let kind = DeliveryFailureOverlayController.Kind(failure: .insertionUnconfirmed)
+        XCTAssertEqual(kind, .insertionUnconfirmed)
+        XCTAssertEqual(kind?.title, "Couldn't confirm insertion — Enter skipped")
+        XCTAssertEqual(kind?.recoveryHint, "Check the field. Your transcript is saved.")
+        XCTAssertTrue(MenuBarManager.usesTransientFailureCard(kind: .insertionUnconfirmed, overlayVisible: false))
+    }
+
     func testHeldModifierDoesNotBlockSafeTextInsertionBeforeSendDecision() {
         XCTAssertTrue(
             TypingService.canInsertBeforePostInsertionAction(
