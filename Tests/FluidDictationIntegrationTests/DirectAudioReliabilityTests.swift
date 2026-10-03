@@ -650,8 +650,8 @@ final class DirectAudioReliabilityTests: XCTestCase {
             encoding: .utf8
         )
         let normalOutputSection = try XCTUnwrap(
-            source.components(separatedBy: "if spokenSendAllowed {").last?
-                .components(separatedBy: "if spokenSendRequested, !spokenSendAllowed").first
+            source.components(separatedBy: "if sendAllowed {").last?
+                .components(separatedBy: "if sendRequested, !sendAllowed").first
         )
         let pasteIndex = try XCTUnwrap(normalOutputSection.range(of: "typeOutputPlanToActiveField("))
         let dispatchResultIndex = try XCTUnwrap(normalOutputSection.range(of: "didTypeExternally = deliveryResult.wasDispatched"))
@@ -673,7 +673,7 @@ final class DirectAudioReliabilityTests: XCTestCase {
         )
         XCTAssertTrue(deliveryHandlerSection.contains("self.overlayLifecycleID == expectedOverlayLifecycleID"))
         XCTAssertTrue(normalOutputSection
-            .contains("shouldHideOverlay: deliveryResult.wasDispatched && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide && !spokenSendRequested"))
+            .contains("shouldHideOverlay: deliveryResult.wasDispatched && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide && !sendRequested"))
         XCTAssertTrue(deliveryHandlerSection.contains("guard shouldHideOverlay else { return }"))
         XCTAssertFalse(deliveryHandlerSection.contains("await self.menuBarManager.beginProcessingCompletionAndHideOverlay"))
 
