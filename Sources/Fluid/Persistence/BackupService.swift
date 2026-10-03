@@ -96,6 +96,11 @@ struct SettingsBackupPayload: Codable, Equatable {
     let overlayHighlight: Double?
     let overlayClosingAnimationEnabled: Bool?
     let meetingOverlayPreference: MeetingOverlayPreference?
+    // Optional so backups created before the overlay could be dragged still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let overlayCustomOrigin: [Double]?
+    // swiftlint:disable:next discouraged_optional_collection
+    let overlayCustomOriginScreenFrames: [Double]?
     let transcriptionPreviewCharLimit: Int
     let userTypingWPM: Int
     let saveTranscriptionHistory: Bool
