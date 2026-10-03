@@ -39,6 +39,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
     /// message for display / debugging.
     let aiProcessingError: String?
     let audio: DictationAudioMetadata?
+    var isStarred: Bool
     /// Rises when a restore gives this id different text. Nil on entries written
     /// before the field existed, and on entries that were never restored.
     var searchRevision: UInt64?
@@ -58,6 +59,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
         audio: DictationAudioMetadata? = nil,
+        isStarred: Bool = false,
         searchRevision: UInt64? = nil
     ) {
         self.id = id
@@ -75,6 +77,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
+        self.isStarred = isStarred
         self.searchRevision = searchRevision
     }
 
@@ -94,6 +97,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         aiTokensPerSecond: Double?,
         aiProcessingError: String?,
         audio: DictationAudioMetadata?,
+        isStarred: Bool,
         searchRevision: UInt64?
     ) {
         self.id = id
@@ -111,6 +115,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = aiTokensPerSecond
         self.aiProcessingError = aiProcessingError
         self.audio = audio
+        self.isStarred = isStarred
         self.searchRevision = searchRevision
     }
 
@@ -140,6 +145,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         self.aiTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .aiTokensPerSecond)
         self.aiProcessingError = try container.decodeIfPresent(String.self, forKey: .aiProcessingError)
         self.audio = try container.decodeIfPresent(DictationAudioMetadata.self, forKey: .audio)
+        self.isStarred = try container.decodeIfPresent(Bool.self, forKey: .isStarred) ?? false
         self.searchRevision = try container.decodeIfPresent(UInt64.self, forKey: .searchRevision)
     }
 
@@ -148,7 +154,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
         case characterCount, wasAIProcessed, processingModel
         case transcriptionDurationMilliseconds, parakeetProcessingDurationMilliseconds, aiProcessingDurationMilliseconds
         case aiTokensPerSecond
-        case aiProcessingError, audio, searchRevision
+        case aiProcessingError, audio, searchRevision, isStarred
     }
 
     /// Preview text for list display (first 80 chars)
@@ -217,6 +223,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
             aiTokensPerSecond: self.aiTokensPerSecond,
             aiProcessingError: self.aiProcessingError,
             audio: audio,
+            isStarred: self.isStarred,
             searchRevision: self.searchRevision
         )
     }
@@ -353,6 +360,12 @@ final class TranscriptionHistoryStore: ObservableObject {
         DebugLogger.shared.debug("Added transcription to history (total: \(self.entries.count))", source: "TranscriptionHistoryStore")
     }
 
+    func toggleStar(id: UUID) {
+        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
+        self.entries[index].isStarred.toggle()
+        self.persist(upserts: [self.entries[index]])
+    }
+
     /// Delete a specific entry
     func deleteEntry(id: UUID) {
         self.invalidateAutomaticAudioBudgetMeasurement()
@@ -408,13 +421,14 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     /// Search entries by text content
-    func search(query: String) -> [TranscriptionHistoryEntry] {
+    func search(query: String, starredOnly: Bool = false) -> [TranscriptionHistoryEntry] {
+        let entries = starredOnly ? self.entries.filter(\.isStarred) : self.entries
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return self.entries
+            return entries
         }
 
         let lowercased = query.lowercased()
-        return self.entries.filter { entry in
+        return entries.filter { entry in
             entry.rawText.lowercased().contains(lowercased) ||
                 entry.processedText.lowercased().contains(lowercased) ||
                 entry.appName.lowercased().contains(lowercased) ||
