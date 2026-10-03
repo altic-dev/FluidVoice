@@ -71,18 +71,22 @@ struct BottomWaveformView: View {
 
     var body: some View {
         ZStack {
-            self.barsView
-                .foregroundStyle(self.barFillColor)
+            if self.contentState.isDictationMuted {
+                DictationMutedIndicator(compact: self.layout.waveformWidth < 80)
+            } else {
+                self.barsView
+                    .foregroundStyle(self.barFillColor)
 
-            if self.isProcessingVisualActive {
-                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
-                    .mask {
-                        self.barsView
-                    }
-                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
+                if self.isProcessingVisualActive {
+                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                        .mask {
+                            self.barsView
+                        }
+                        .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
+                }
             }
         }
-        .opacity(self.isWaitingForMicrophone ? 0.45 : 1)
+        .opacity(self.isWaitingForMicrophone && !self.contentState.isDictationMuted ? 0.45 : 1)
         .animation(.easeOut(duration: 0.22), value: self.isWaitingForMicrophone)
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             // Update threshold when user changes sensitivity setting

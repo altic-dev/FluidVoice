@@ -834,6 +834,14 @@ struct SettingsView: View {
                                         Divider().opacity(0.2)
 
                                         self.optionToggleRow(
+                                            title: "Hold Space to Mute",
+                                            description: "During dictation, hold Space to mute and release to resume. Space works normally outside dictation. Other Space shortcuts take priority.",
+                                            isOn: self.$settings.holdSpaceToMute
+                                        )
+                                        .settingsSearchTarget(.holdSpaceToMute)
+                                        Divider().opacity(0.2)
+
+                                        self.optionToggleRow(
                                             title: "Copy to Clipboard",
                                             description: "Automatically copy transcribed text to clipboard as a backup.",
                                             isOn: self.$copyToClipboard

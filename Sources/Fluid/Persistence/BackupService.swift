@@ -63,6 +63,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let shareAnonymousAnalytics: Bool
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
+    var holdSpaceToMute: Bool? = nil
     let enableStreamingPreview: Bool
     // Optional so backups created before incremental Parakeet finalization still decode.
     let experimentalParakeetUnifiedFinalEnabled: Bool?
