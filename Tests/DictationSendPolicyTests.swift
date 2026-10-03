@@ -42,9 +42,12 @@ enum DictationSendPolicyTests {
         precondition(!DictationSendPolicy.insertionIsConfirmed(before: "Existing draft", selection: NSRange(location: 14, length: 0), text: "Hello.", after: "Existing draft"), "rejected paste cannot submit old draft")
         precondition(!DictationSendPolicy.insertionIsConfirmed(before: "", selection: NSRange(location: 0, length: 0), text: "Hello world", after: "Hello"), "partial paste cannot send")
         precondition(!DictationSendPolicy.insertionIsConfirmed(before: nil, selection: nil, text: "Hello", after: "Hello"), "unreadable editor cannot send")
-        precondition(DictationSendPolicy.insertionIsConfirmed(before: "Ask anything", selection: NSRange(location: 0, length: 0), text: "Hello.", after: "Hello."), "empty composer placeholder supported")
+        precondition(!DictationSendPolicy.insertionIsConfirmed(before: "Ask anything", selection: NSRange(location: 0, length: 0), text: "Hello.", after: "Hello."), "ambiguous placeholder cannot authorize send")
+        precondition(!DictationSendPolicy.insertionIsConfirmed(before: "Existing draft", selection: NSRange(location: 0, length: 0), text: "Hello.", after: "Hello."), "whole-field replacement must not submit a lost draft")
+        precondition(DictationSendPolicy.insertionIsConfirmed(before: "", selection: NSRange(location: 0, length: 0), text: "Hello.", after: "Hello."), "readable empty field still sends")
+        precondition(DictationSendPolicy.insertionIsConfirmed(before: "Existing draft", selection: NSRange(location: 0, length: 14), text: "Hello.", after: "Hello."), "intentional selected-draft replacement still sends")
         precondition(DictationSendPolicy.insertionIsConfirmed(before: "🙂a", selection: NSRange(location: 2, length: 1), text: "b", after: "🙂b"), "UTF16 replacement supported")
-        print("PASS: 6 insertion confirmation cases")
+        print("PASS: 9 insertion confirmation cases")
         print("PASS: \(cases.count + 2) dictation send cases, including phrase-free Enter, empty output, cancellation and Spoken Send coexistence")
     }
 }

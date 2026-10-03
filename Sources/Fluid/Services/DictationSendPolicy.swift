@@ -35,10 +35,8 @@ enum DictationSendPolicy {
               selection.length <= (before as NSString).length - selection.location
         else { return false }
         let expected = (before as NSString).replacingCharacters(in: selection, with: text)
-        if expected != before, expected == after {
-            return true
-        }
-        // Empty web composers can expose their placeholder as the initial value.
-        return selection.location == 0 && selection.length == 0 && before != after && after == text
+        // A nonempty value at caret zero might be either a placeholder or an
+        // existing draft. Never infer emptiness from the pasted result alone.
+        return expected != before && expected == after
     }
 }
