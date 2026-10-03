@@ -24,6 +24,7 @@ final class TypingService {
     enum DeliveryOutcome: Equatable {
         case rejected
         case insertionFailed
+        case insertionUnconfirmed
         case inserted
         case actionSuppressed
         case actionDispatched
@@ -34,13 +35,22 @@ final class TypingService {
             switch self {
             case .inserted, .insertedActionSuppressed, .insertedAndActionDispatched:
                 return true
-            case .rejected, .insertionFailed, .actionSuppressed, .actionDispatched:
+            case .rejected, .insertionFailed, .insertionUnconfirmed, .actionSuppressed, .actionDispatched:
                 return false
             }
         }
 
         var didDispatchAction: Bool {
             self == .actionDispatched || self == .insertedAndActionDispatched
+        }
+
+        var textDeliveryResult: TextDeliveryResult {
+            if self == .insertionUnconfirmed {
+                return .recoverableFailure(.insertionUnconfirmed)
+            }
+            return self.didInsert || self.didDispatchAction
+                ? .commandPosted
+                : .recoverableFailure(.pasteCommandFailed)
         }
     }
 
@@ -594,6 +604,7 @@ final class TypingService {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
+        requiresInsertionConfirmation: Bool = false,
         requiredFocusTarget: CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
@@ -622,6 +633,7 @@ final class TypingService {
                 }
             }
 
+            let insertionBefore = requiresInsertionConfirmation ? PasteVerifier.capture() : nil
             var outcome: DeliveryOutcome = .actionSuppressed
             if hasTextToInsert {
                 let result = await self.typeOutputPlanInstantly(
@@ -640,6 +652,15 @@ final class TypingService {
                     return
                 }
                 outcome = .inserted
+                if requiresInsertionConfirmation {
+                    guard let insertionBefore,
+                          insertionBefore.pid == preferredTargetPID,
+                          await PasteVerifier.confirmAutomaticInsertion(before: insertionBefore, pastedText: plan.plainText)
+                    else {
+                        completion?(.insertionUnconfirmed)
+                        return
+                    }
+                }
             }
 
             guard isOutputValid() else { completion?(hasTextToInsert ? .insertedActionSuppressed : .actionSuppressed); return }
@@ -752,6 +773,7 @@ final class TypingService {
             case .targetRestoreFailed: .targetRestoreFailed
             case .noEditableTarget: .noEditableTarget
             case .pasteNotLanded: .pasteNotLanded
+            case .insertionUnconfirmed: nil
             }
         }
     }

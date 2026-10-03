@@ -91,6 +91,9 @@ jobs:
     - name: Run standalone onboarding regressions
       run: sh Tests/run_onboarding_tests.sh
 
+    - name: Run dictation send regressions
+      run: sh scripts/test_dictation_send.sh
+
     - name: Run release highlights regressions
       run: sh Tests/run_release_highlights_tests.sh
 

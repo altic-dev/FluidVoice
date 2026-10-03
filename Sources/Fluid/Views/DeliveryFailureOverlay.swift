@@ -14,6 +14,7 @@ final class DeliveryFailureOverlayController {
         case pasteNotLanded
         case accessibilityNotTrusted
         case deliveryFailed
+        case insertionUnconfirmed
 
         /// Every failure the user can act on maps to a card; only an empty
         /// transcript has nothing to show.
@@ -21,6 +22,7 @@ final class DeliveryFailureOverlayController {
             switch failure {
             case .noEditableTarget: self = .noEditableTarget
             case .pasteNotLanded: self = .pasteNotLanded
+            case .insertionUnconfirmed: self = .insertionUnconfirmed
             case .accessibilityNotTrusted: self = .accessibilityNotTrusted
             case .clipboardSnapshotFailed, .clipboardWriteFailed, .pasteCommandFailed,
                  .targetUnavailable, .targetRestoreFailed: self = .deliveryFailed
@@ -33,7 +35,12 @@ final class DeliveryFailureOverlayController {
             case .noEditableTarget: "No text field focused"
             case .pasteNotLanded, .deliveryFailed: "Text wasn't inserted"
             case .accessibilityNotTrusted: "Enable Accessibility to insert text"
+            case .insertionUnconfirmed: "Couldn't confirm insertion — Enter skipped"
             }
+        }
+
+        var recoveryHint: String {
+            self == .insertionUnconfirmed ? "Check the field. Your transcript is saved." : "Your transcript is saved."
         }
 
         var offersAccessibilitySettings: Bool { self == .accessibilityNotTrusted }
@@ -213,7 +220,7 @@ private struct DeliveryFailureOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
-                Text("Your transcript is saved.")
+                Text(self.kind.recoveryHint)
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.white.opacity(0.58))
                     .lineLimit(1)

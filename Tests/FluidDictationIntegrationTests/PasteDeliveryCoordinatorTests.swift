@@ -468,7 +468,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertNil(TextDeliveryFailure.emptyText.userFacingMessage)
         XCTAssertNil(DeliveryFailureOverlayController.Kind(failure: .emptyText))
         let visibleFailures: [TextDeliveryFailure] = [
-            .accessibilityNotTrusted, .noEditableTarget, .pasteNotLanded,
+            .accessibilityNotTrusted, .noEditableTarget, .pasteNotLanded, .insertionUnconfirmed,
             .clipboardSnapshotFailed, .clipboardWriteFailed,
             .pasteCommandFailed, .targetUnavailable, .targetRestoreFailed,
         ]
