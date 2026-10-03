@@ -4,6 +4,75 @@ import XCTest
 
 @MainActor
 final class SettingsNavigationStateTests: XCTestCase {
+    func testManualLaunchPreferenceDefaultsOnAndIsIndependentOfLogin() {
+        self.withLaunchPreferences {
+            let settings = SettingsStore.shared
+            UserDefaults.standard.removeObject(forKey: "ShowMainWindowAtLaunch")
+            UserDefaults.standard.set(true, forKey: "OnboardingCompleted")
+            settings.showMainWindowAtLoginLaunch = false
+
+            XCTAssertTrue(settings.shouldShowMainWindowOnLaunch(isLoginItem: false))
+            XCTAssertFalse(settings.shouldShowMainWindowOnLaunch(isLoginItem: true))
+
+            settings.showMainWindowAtLaunch = false
+            settings.showMainWindowAtLoginLaunch = true
+
+            XCTAssertFalse(settings.shouldShowMainWindowOnLaunch(isLoginItem: false))
+            XCTAssertTrue(settings.shouldShowMainWindowOnLaunch(isLoginItem: true))
+            XCTAssertEqual(UserDefaults.standard.object(forKey: "ShowMainWindowAtLaunch") as? Bool, false)
+        }
+    }
+
+    func testIncompleteOnboardingRemainsVisibleWithBothLaunchPreferencesOff() {
+        self.withLaunchPreferences {
+            let settings = SettingsStore.shared
+            settings.showMainWindowAtLaunch = false
+            settings.showMainWindowAtLoginLaunch = false
+            UserDefaults.standard.set(false, forKey: "OnboardingCompleted")
+
+            XCTAssertTrue(settings.shouldShowMainWindowOnLaunch(isLoginItem: false))
+            XCTAssertTrue(settings.shouldShowMainWindowOnLaunch(isLoginItem: true))
+        }
+    }
+
+    func testManualLaunchPreferenceBackupPreservesFalseAndDecodesLegacyFiles() throws {
+        try self.withLaunchPreferences {
+            SettingsStore.shared.showMainWindowAtLaunch = false
+            let payload = SettingsStore.shared.makeBackupPayload()
+            let encoded = try JSONEncoder().encode(payload)
+            XCTAssertEqual(try JSONDecoder().decode(SettingsBackupPayload.self, from: encoded).showMainWindowAtLaunch, false)
+
+            var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            legacy.removeValue(forKey: "showMainWindowAtLaunch")
+            let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+            XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).showMainWindowAtLaunch)
+        }
+    }
+
+    func testInvisibleLaunchSearchFindsManualLaunchPreference() {
+        let result = SettingsSearchIndex.results(for: "invisible launch").first
+        XCTAssertEqual(result?.target, .showWindowAtLaunch)
+        XCTAssertEqual(result?.section, .general)
+    }
+
+    private func withLaunchPreferences(_ body: () throws -> Void) rethrows {
+        // Initialize migrations before taking the snapshot; restore absent keys as absent.
+        _ = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let keys = ["ShowMainWindowAtLaunch", "ShowMainWindowAtLoginLaunch", "OnboardingCompleted"]
+        let originalValues = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, originalValues) {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        try body()
+    }
+
     func testPresentAndDismissRestoresPreviousAppDestination() {
         var state = SettingsNavigationState()
 
