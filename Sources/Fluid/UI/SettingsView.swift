@@ -241,10 +241,21 @@ struct SettingsView: View {
                             .settingsSearchTarget(.launchAtStartup)
                             Divider().opacity(0.2)
 
+                            self.settingsToggleRow(
+                                title: "Show window when opening FluidVoice",
+                                description: "When off, FluidVoice starts in the menu bar. Use the menu bar to open its window. Setup still opens when needed.",
+                                isOn: Binding(
+                                    get: { SettingsStore.shared.showMainWindowAtLaunch },
+                                    set: { SettingsStore.shared.showMainWindowAtLaunch = $0 }
+                                )
+                            )
+                            .settingsSearchTarget(.showWindowAtLaunch)
+                            Divider().opacity(0.2)
+
                             // Show window when launched at login
                             self.settingsToggleRow(
                                 title: "Show window when launched at login",
-                                description: "When off, FluidVoice starts silently in the menu bar at login. Opening the app yourself always shows the window.",
+                                description: "When off, FluidVoice starts silently in the menu bar at login. Setup still opens when needed.",
                                 isOn: Binding(
                                     get: { SettingsStore.shared.showMainWindowAtLoginLaunch },
                                     set: { SettingsStore.shared.showMainWindowAtLoginLaunch = $0 }
