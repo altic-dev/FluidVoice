@@ -3406,7 +3406,9 @@ struct ContentView: View {
                     textReadyAt: finalTextReadyAt
                 )
                 didTypeExternally = deliveryOutcome.didInsert
-                deliveryResult = deliveryOutcome.didInsert || deliveryOutcome.didDispatchAction
+                // Unconfirmed read-back follows an actual dispatched insertion;
+                // it must not display the card for a known paste-command failure.
+                deliveryResult = deliveryOutcome.didInsert || deliveryOutcome.didDispatchAction || deliveryOutcome == .insertionUnconfirmed
                     ? .commandPosted
                     : .recoverableFailure(.pasteCommandFailed)
             } else {
