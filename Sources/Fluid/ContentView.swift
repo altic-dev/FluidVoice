@@ -2331,8 +2331,9 @@ struct ContentView: View {
             || identity.contains("alacritty")
     }
 
-    private func deliverSpokenSend(
+    private func deliverDictationSend(
         _ outputPlan: DictationLiteralOutputPlan,
+        key: SettingsStore.SpokenSendKey,
         targetPID: pid_t?,
         textReadyAt: TimeInterval,
         toggleStopRequestedAt: TimeInterval?,
@@ -2346,7 +2347,7 @@ struct ContentView: View {
             preferredTargetPID: targetPID,
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
-            postInsertionKey: self.settings.spokenSendKey,
+            postInsertionKey: key,
             requiredFocusTarget: stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
             isOutputValid: isOutputValid
@@ -2360,7 +2361,7 @@ struct ContentView: View {
 
         NotchContentState.shared.setSpokenSendIndicatorState(.failed)
         DebugLogger.shared.warning(
-            "Spoken Send skipped because delivery safety checks did not pass",
+            "Dictation send skipped because delivery safety checks did not pass",
             source: "ContentView"
         )
         let message = outcome.didInsert
@@ -2984,7 +2985,7 @@ struct ContentView: View {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
         let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled && !self.settings.automaticEnterEnabled)
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3341,11 +3342,17 @@ struct ContentView: View {
         if shouldTypeExternally {
             let typingTarget = stopSnapshot.map { (pid: $0.target?.pid, shouldRestoreOriginalFocus: true) }
                 ?? self.resolveTypingTargetPID(returnToStartingField: self.settings.returnDictationToStartingField)
-            let spokenSendRequested = spokenSendParse.shouldSend
+            let sendAction = DictationSendPolicy.action(
+                automaticEnterEnabled: self.settings.automaticEnterEnabled,
+                spokenSendRequested: spokenSendParse.shouldSend,
+                text: finalOutputPlan.plainText,
+                deliveryEligible: shouldDeliverOutputs && !cancelledAtASRStop && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID
+            )
+            let sendRequested = sendAction != nil
             let sendFocus = stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget
             let targetMatchesRecordingFocus = typingTarget.pid != nil
                 && typingTarget.pid == sendFocus?.pid
-            let spokenSendAllowed = spokenSendRequested
+            let sendAllowed = sendRequested
                 && aiFallbackReason == nil
                 && (sendsExistingDraft || !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 && targetMatchesRecordingFocus
@@ -3366,7 +3373,7 @@ struct ContentView: View {
                 return
             }
 
-            if spokenSendAllowed {
+            if sendAllowed {
                 NotchContentState.shared.setSpokenSendIndicatorState(.sending)
                 NotchOverlayManager.shared.updateTranscriptionText("Sending")
             }
@@ -3374,12 +3381,13 @@ struct ContentView: View {
             let deliveryResult: TextDeliveryResult
             if !focusReady {
                 deliveryResult = .recoverableFailure(.targetRestoreFailed)
-            } else if spokenSendAllowed {
+            } else if sendAllowed {
                 self.appBench(
                     "text_ready_to_type_request elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - finalTextReadyAt) * 1000).rounded()))"
                 )
-                let deliveryOutcome = await self.deliverSpokenSend(
+                let deliveryOutcome = await self.deliverDictationSend(
                     finalOutputPlan,
+                    key: sendAction == .spokenSend ? self.settings.spokenSendKey : .enter,
                     targetPID: typingTarget.pid,
                     textReadyAt: finalTextReadyAt,
                     toggleStopRequestedAt: toggleStopRequestedAt,
@@ -3416,7 +3424,7 @@ struct ContentView: View {
                     pipelineID: pipelineID,
                     pipelineStartedAt: pipelineStartedAt,
                     textReadyAt: finalTextReadyAt,
-                    shouldHideOverlay: deliveryResult.wasDispatched && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide && !spokenSendRequested,
+                    shouldHideOverlay: deliveryResult.wasDispatched && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide && !sendRequested,
                     expectedOverlayLifecycleID: expectedOverlayLifecycleID
                 )
             }
@@ -3426,10 +3434,10 @@ struct ContentView: View {
                 self.appBench("delivery_ui_skipped reason=stale_recording")
                 return
             }
-            if spokenSendRequested, !spokenSendAllowed {
+            if sendRequested, !sendAllowed {
                 NotchContentState.shared.setSpokenSendIndicatorState(.failed)
                 DebugLogger.shared.warning(
-                    "Spoken Send skipped because delivery safety checks did not pass",
+                    "Dictation send skipped because delivery safety checks did not pass",
                     source: "ContentView"
                 )
                 if aiFallbackReason == nil {
@@ -3447,7 +3455,7 @@ struct ContentView: View {
                 self.hideOverlayAfterOutput()
             }
             // Delivery UI must complete before correction tracking queries Accessibility.
-            if didTypeExternally, !spokenSendAllowed {
+            if didTypeExternally, !sendAllowed {
                 AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
                     finalOutputPlan.plainText,
                     targetPID: typingTarget.pid,

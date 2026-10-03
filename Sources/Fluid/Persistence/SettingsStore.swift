@@ -3593,6 +3593,7 @@ final class SettingsStore: ObservableObject {
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
+            automaticEnterEnabled: self.automaticEnterEnabled,
             spokenSendEnabled: self.spokenSendEnabled,
             spokenSendImmediatelyEnabled: self.spokenSendImmediatelyEnabled,
             spokenSendPhrase: self.spokenSendPhrase,
@@ -3746,6 +3747,7 @@ final class SettingsStore: ObservableObject {
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
         self.textInsertionMode = payload.textInsertionMode
+        self.automaticEnterEnabled = payload.automaticEnterEnabled ?? false
         if let spokenSendEnabled = payload.spokenSendEnabled {
             self.spokenSendEnabled = spokenSendEnabled
         }
@@ -5817,6 +5819,7 @@ private extension SettingsStore {
         static let enableAIStreaming = "EnableAIStreaming"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
+        static let automaticEnterEnabled = "AutomaticEnterEnabled"
         static let spokenSendEnabled = "SpokenSendEnabled"
         static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
         static let spokenSendPhrase = "SpokenSendPhrase"
@@ -5985,6 +5988,14 @@ extension SettingsStore {
             case .commandEnter:
                 return .maskCommand
             }
+        }
+    }
+
+    var automaticEnterEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.automaticEnterEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.automaticEnterEnabled)
         }
     }
 

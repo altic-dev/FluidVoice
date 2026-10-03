@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class SpokenSendTests: XCTestCase {
+    func testAutomaticEnterDefaultsOffAndBacksUpEnabledChoice() throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: "AutomaticEnterEnabled")
+        defer {
+            if let saved {
+                defaults.set(saved, forKey: "AutomaticEnterEnabled")
+            } else {
+                defaults.removeObject(forKey: "AutomaticEnterEnabled")
+            }
+        }
+        defaults.removeObject(forKey: "AutomaticEnterEnabled")
+        let settings = SettingsStore.shared
+        XCTAssertFalse(settings.automaticEnterEnabled)
+        settings.automaticEnterEnabled = true
+        XCTAssertTrue(defaults.bool(forKey: "AutomaticEnterEnabled"))
+        let payload = settings.makeBackupPayload()
+        let data = try JSONEncoder().encode(payload)
+        XCTAssertEqual(try JSONDecoder().decode(SettingsBackupPayload.self, from: data).automaticEnterEnabled, true)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "automaticEnterEnabled")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).automaticEnterEnabled)
+    }
+
+    func testAutomaticEnterSearchFindsDictationSetting() {
+        XCTAssertEqual(SettingsSearchIndex.results(for: "Automatically Press Enter").first?.target, .automaticEnter)
+        XCTAssertEqual(SettingsSearchTarget.automaticEnter.section, .dictation)
+    }
+
     func testDisabledFeatureLeavesTextUntouched() {
         XCTAssertEqual(
             SpokenSendParser.parse("Hello send it", phrase: "send it", enabled: false),

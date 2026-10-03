@@ -73,6 +73,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode
+    // Optional so backups from before automatic Enter still decode.
+    let automaticEnterEnabled: Bool?
     let spokenSendEnabled: Bool?
     let spokenSendImmediatelyEnabled: Bool?
     let spokenSendPhrase: String?

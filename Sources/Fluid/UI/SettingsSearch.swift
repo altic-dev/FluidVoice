@@ -32,6 +32,7 @@ enum SettingsSearchTarget: Hashable {
     case activationMode
     case copyToClipboard
     case textInsertionMode
+    case automaticEnter
     case spokenSend
     case transcriptionHistory
     case audioHistory
@@ -88,6 +89,7 @@ enum SettingsSearchTarget: Hashable {
              .activationMode,
              .copyToClipboard,
              .textInsertionMode,
+             .automaticEnter,
              .spokenSend,
              .transcriptionHistory,
              .audioHistory,
@@ -192,6 +194,7 @@ struct SettingsSearchAvailability {
              .activationMode,
              .copyToClipboard,
              .textInsertionMode,
+             .automaticEnter,
              .spokenSend,
              .transcriptionHistory,
              .audioHistory,
@@ -296,6 +299,11 @@ enum SettingsSearchIndex {
             target: .textInsertionMode,
             title: "Text Insertion Mode",
             terms: ["type text copy paste clipboard reliable insertion delivery"]
+        ),
+        .init(
+            target: .automaticEnter,
+            title: "Automatically Press Enter",
+            terms: ["auto enter return send submit after every dictation insertion"]
         ),
         .init(
             target: .spokenSend,
