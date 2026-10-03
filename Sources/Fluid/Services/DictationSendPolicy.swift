@@ -8,7 +8,7 @@ enum DictationSendPolicy {
         case spokenSend
     }
 
-    static func action(
+    nonisolated static func action(
         automaticEnterEnabled: Bool,
         spokenSendRequested: Bool,
         text: String,
@@ -27,7 +27,7 @@ enum DictationSendPolicy {
     }
 
     /// Require the exact replacement, rather than merely a posted Paste command.
-    static func insertionIsConfirmed(before: String?, selection: NSRange?, text: String, after: String?) -> Bool {
+    nonisolated static func insertionIsConfirmed(before: String?, selection: NSRange?, text: String, after: String?) -> Bool {
         guard let before, let selection, let after,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               selection.location >= 0, selection.length >= 0,
