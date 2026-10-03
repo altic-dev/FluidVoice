@@ -594,6 +594,8 @@ final class SpokenSendTests: XCTestCase {
         XCTAssertFalse(TypingService.DeliveryOutcome.actionDispatched.didInsert)
         XCTAssertTrue(TypingService.DeliveryOutcome.insertedActionSuppressed.didInsert)
         XCTAssertFalse(TypingService.DeliveryOutcome.insertedActionSuppressed.didDispatchAction)
+        XCTAssertFalse(TypingService.DeliveryOutcome.insertionUnconfirmed.didInsert)
+        XCTAssertFalse(TypingService.DeliveryOutcome.insertionUnconfirmed.didDispatchAction)
     }
 
     func testHeldModifierDoesNotBlockSafeTextInsertionBeforeSendDecision() {

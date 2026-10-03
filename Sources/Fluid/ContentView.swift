@@ -2366,8 +2366,9 @@ struct ContentView: View {
             "Dictation send skipped because delivery safety checks did not pass",
             source: "ContentView"
         )
-        let message = outcome.didInsert
-            ? "Text inserted — send skipped"
+        let message = outcome == .insertionUnconfirmed
+            ? "Couldn't confirm insertion — send skipped"
+            : outcome.didInsert ? "Text inserted — send skipped"
             : sendsExistingDraft ? "Couldn't send" : "Couldn't insert or send"
         NotchOverlayManager.shared.updateTranscriptionText(message)
         try? await Task.sleep(nanoseconds: 650_000_000)

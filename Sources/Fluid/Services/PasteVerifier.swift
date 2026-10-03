@@ -123,11 +123,12 @@ enum PasteVerifier {
     /// Automatic Enter requires readable text and exact insertion confirmation.
     /// Retry slow destinations while retaining the original field identity.
     nonisolated static func confirmAutomaticInsertion(before: Snapshot, pastedText: String) async -> Bool {
+        let originalElement = await before.element
         for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled, let after = self.capture(),
-                  after.pid == before.pid, CFEqual(after.element, before.element)
-            else { return false }
+            guard !Task.isCancelled, let after = self.capture(), after.pid == before.pid else { return false }
+            let afterElement = await after.element
+            guard CFEqual(afterElement, originalElement) else { return false }
             if DictationSendPolicy.insertionIsConfirmed(
                 before: before.value,
                 selection: before.caret.map { NSRange(location: $0.location, length: $0.length) },

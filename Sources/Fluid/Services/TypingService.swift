@@ -24,6 +24,7 @@ final class TypingService {
     enum DeliveryOutcome: Equatable {
         case rejected
         case insertionFailed
+        case insertionUnconfirmed
         case inserted
         case actionSuppressed
         case actionDispatched
@@ -34,7 +35,7 @@ final class TypingService {
             switch self {
             case .inserted, .insertedActionSuppressed, .insertedAndActionDispatched:
                 return true
-            case .rejected, .insertionFailed, .actionSuppressed, .actionDispatched:
+            case .rejected, .insertionFailed, .insertionUnconfirmed, .actionSuppressed, .actionDispatched:
                 return false
             }
         }
@@ -647,7 +648,7 @@ final class TypingService {
                           insertionBefore.pid == preferredTargetPID,
                           await PasteVerifier.confirmAutomaticInsertion(before: insertionBefore, pastedText: plan.plainText)
                     else {
-                        completion?(.insertedActionSuppressed)
+                        completion?(.insertionUnconfirmed)
                         return
                     }
                 }
