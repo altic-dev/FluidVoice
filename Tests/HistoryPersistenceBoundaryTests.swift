@@ -66,13 +66,21 @@ final class DebugLogger {
                 audio: index == 0 ? audio : nil
             )
         }
-        try defaults.set(JSONEncoder().encode(legacy), forKey: key)
+        // Simulate history written before stars existed, including legacy backups.
+        guard var legacyJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [[String: Any]] else {
+            preconditionFailure("Expected legacy history to encode as an array of objects")
+        }
+        for index in legacyJSON.indices {
+            legacyJSON[index].removeValue(forKey: "isStarred")
+        }
+        try defaults.set(JSONSerialization.data(withJSONObject: legacyJSON), forKey: key)
         let url = root.appendingPathComponent("history.sqlite3")
         let writer = TranscriptionHistoryWriter(defaults: defaults, url: url)
         let store = TranscriptionHistoryStore(writer: writer)
         // No actor suspension: these mutations necessarily precede startup loading.
         let newID = UUID()
         store.addEntry(id: newID, rawText: "new", processedText: "New dictation", appName: "Test", windowTitle: "Test")
+        store.toggleStar(id: newID)
         store.attachAudio(audio, to: newID)
         store.deleteEntry(id: legacy[1].id)
         try await store.waitUntilLoaded()
@@ -82,6 +90,8 @@ final class DebugLogger {
         precondition(defaults.data(forKey: key) == nil, "Retire legacy only after successful import")
         precondition(store.entries.count == 8400)
         precondition(store.entries.first(where: { $0.id == newID })?.audio == audio)
+        precondition(store.entries.first(where: { $0.id == newID })?.isStarred == true)
+        precondition(store.entries.filter(\.isStarred).count == 1, "Legacy entries must default to unstarred")
         precondition(!store.entries.contains(where: { $0.id == legacy[1].id }))
         let reloaded = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
         precondition(reloaded == store.entries, "Migration, metadata and concurrent startup edits must round-trip")
@@ -91,10 +101,14 @@ final class DebugLogger {
         try self.sql(url, "CREATE TRIGGER reject_old BEFORE INSERT ON history WHEN NEW.id != '\(newID.uuidString)' BEGIN SELECT RAISE(FAIL, 'unrelated row rewritten'); END")
         let enqueueStart = ProcessInfo.processInfo.systemUptime
         store.attachAudio(audio, to: newID)
+        store.toggleStar(id: newID)
+        store.toggleStar(id: newID)
         let enqueueMs = (ProcessInfo.processInfo.systemUptime - enqueueStart) * 1000
         await store.finishPendingWrites()
         await Task.yield()
         precondition(store.persistenceError == nil, "Updating one row must not rewrite unrelated history")
+        let afterStar = try await writer.load()
+        precondition(afterStar == store.entries, "Rapid star toggles and audio updates must persist in order")
         print("PASS: single-row audio update; main actor enqueue \(enqueueMs) ms")
         try self.sql(url, "DROP TRIGGER reject_old")
 
@@ -176,6 +190,60 @@ final class DebugLogger {
         precondition(afterRepeatedRestore == [expectedRestore], "Repeated restore changes only the persisted search revision")
         print("PASS: restore during loading replaces both memory and disk")
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
+        try await self.testStars(root: root, defaults: defaults, audio: audio)
+    }
+
+    @MainActor static func testStars(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {
+        let url = root.appendingPathComponent("stars.sqlite3")
+        let writer = TranscriptionHistoryWriter(defaults: defaults, url: url)
+        let store = TranscriptionHistoryStore(writer: writer)
+        try await store.waitUntilLoaded()
+        let older = TranscriptionHistoryEntry(
+            timestamp: Date(timeIntervalSince1970: 1),
+            rawText: "Original phrasing",
+            processedText: "Reusable prompt",
+            appName: "Editor",
+            windowTitle: "Reference",
+            wasAIProcessed: true,
+            audio: audio,
+            isStarred: true
+        )
+        let newer = TranscriptionHistoryEntry(
+            timestamp: Date(timeIntervalSince1970: 2),
+            rawText: "Another prompt",
+            processedText: "Another prompt",
+            appName: "Test",
+            windowTitle: "Test",
+            wasAIProcessed: false
+        )
+        store.restore(from: [older, newer])
+        precondition(store.search(query: "").map(\.id) == [newer.id, older.id], "Stars must preserve chronological order")
+        precondition(store.search(query: " ", starredOnly: true).map(\.id) == [older.id])
+        for query in ["PROMPT", "Original", "Editor", "Reference"] {
+            precondition(store.search(query: query, starredOnly: true).map(\.id) == [older.id], "Search must intersect with stars across every field")
+        }
+        precondition(store.search(query: "Another", starredOnly: true).isEmpty)
+        precondition(older.replacingAudio(nil).isStarred, "Audio removal must preserve the star")
+        let backup = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: JSONEncoder().encode(store.makeBackupPayload()))
+        store.toggleStar(id: older.id)
+        await store.finishPendingWrites()
+        let unstarred = try await writer.load()
+        precondition(!unstarred.contains(where: \.isStarred), "Removing a star must survive restart")
+        store.restore(from: backup)
+        await store.finishPendingWrites()
+        let restored = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
+        let normalizedRestore = restored.map { entry in
+            var entry = entry
+            entry.searchRevision = backup.first(where: { $0.id == entry.id })?.searchRevision
+            return entry
+        }
+        precondition(normalizedRestore == backup, "Backup restore must retain stars and metadata while refreshing search revisions")
+        store.deleteEntry(id: older.id)
+        store.toggleStar(id: older.id)
+        await store.finishPendingWrites()
+        let afterDelete = try await writer.load()
+        precondition(afterDelete == restored.filter { $0.id == newer.id }, "A stale star action must not resurrect a deleted entry")
+        print("PASS: star filtering/search, chronology, audio preservation, unstar/restart, backup restore and deletion")
     }
 
     @MainActor static func testTodaySummary(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {

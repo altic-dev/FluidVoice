@@ -8,6 +8,7 @@ struct TranscriptionHistoryView: View {
     @Environment(\.theme) private var theme
 
     @State private var searchQuery: String = ""
+    @State private var starredOnly = false
     @State private var showClearConfirmation: Bool = false
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
@@ -37,7 +38,7 @@ struct TranscriptionHistoryView: View {
     }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
-        self.historyStore.search(query: self.searchQuery)
+        self.historyStore.search(query: self.searchQuery, starredOnly: self.starredOnly)
     }
 
     private var selectedEntry: TranscriptionHistoryEntry? {
@@ -50,8 +51,17 @@ struct TranscriptionHistoryView: View {
             // MARK: - Left Panel: Entry List
 
             VStack(spacing: 0) {
-                self.searchBar
-                    .padding(12)
+                VStack(spacing: 10) {
+                    self.searchBar
+
+                    Picker("History filter", selection: self.$starredOnly) {
+                        Text("All").tag(false)
+                        Text("Starred").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                .padding(12)
 
                 if self.historyStore.isLoading {
                     ProgressView("Loading history…")
@@ -94,6 +104,10 @@ struct TranscriptionHistoryView: View {
                     .frame(minWidth: 400)
             }
         }
+        .onChange(of: self.filteredEntries.map(\.id), initial: true) { _, visibleIDs in
+            if let selectedEntryID = self.selectedEntryID, visibleIDs.contains(selectedEntryID) { return }
+            self.selectedEntryID = visibleIDs.first
+        }
         .onChange(of: self.selectedEntry?.id) { _, _ in
             self.audioEntryID = nil
         }
@@ -132,7 +146,7 @@ struct TranscriptionHistoryView: View {
                 }
             }
         } message: {
-            Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries. This action cannot be undone.")
+            Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries, including starred entries. This action cannot be undone.")
         }
         .alert("Report Sent", isPresented: self.$showReportConfirmation) {
             Button("OK", role: .cancel) {}
@@ -204,6 +218,7 @@ struct TranscriptionHistoryView: View {
         guard let id else { return }
         if !self.filteredEntries.contains(where: { $0.id == id }) {
             self.searchQuery = ""
+            self.starredOnly = false
             DispatchQueue.main.async {
                 proxy.scrollTo(id)
             }
@@ -221,6 +236,12 @@ struct TranscriptionHistoryView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(spacing: 8) {
+                            if entry.isStarred {
+                                Image(systemName: "star.fill")
+                                    .font(self.theme.typography.captionStrong)
+                                    .foregroundStyle(self.theme.palette.accent)
+                                    .accessibilityLabel("Starred")
+                            }
                             HistoryAppIcon(appName: entry.appName)
                             Spacer(minLength: 4)
                             Text(entry.relativeTimeString)
@@ -311,6 +332,14 @@ struct TranscriptionHistoryView: View {
     @ViewBuilder
     private func entryActions(_ entry: TranscriptionHistoryEntry) -> some View {
         Button {
+            self.historyStore.toggleStar(id: entry.id)
+        } label: {
+            Label(entry.isStarred ? "Unstar" : "Star", systemImage: entry.isStarred ? "star.slash" : "star")
+        }
+
+        Divider()
+
+        Button {
             self.copyFinalText(entry)
         } label: {
             Label(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text", systemImage: "doc.on.doc")
@@ -369,22 +398,37 @@ struct TranscriptionHistoryView: View {
 
     // MARK: - Empty State
 
+    private var emptyStateIcon: String {
+        if !self.searchQuery.isEmpty { return "magnifyingglass" }
+        return self.starredOnly ? "star" : "clock.arrow.circlepath"
+    }
+
+    private var emptyStateTitle: String {
+        if !self.searchQuery.isEmpty { return "No Results" }
+        return self.starredOnly ? "No Starred Transcriptions" : "No History Yet"
+    }
+
+    private var emptyStateMessage: String {
+        if !self.searchQuery.isEmpty { return "Try a different search term" }
+        return self.starredOnly
+            ? "Star a transcription to find it here quickly"
+            : "Your transcriptions will appear here"
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Spacer()
 
-            Image(systemName: self.searchQuery.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass")
+            Image(systemName: self.emptyStateIcon)
                 .font(.fluidSystem(size: 36, weight: .light))
                 .foregroundStyle(.tertiary)
 
             VStack(spacing: 4) {
-                Text(self.searchQuery.isEmpty ? "No History Yet" : "No Results")
+                Text(self.emptyStateTitle)
                     .font(.fluidSystem(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                Text(self.searchQuery.isEmpty
-                    ? "Your transcriptions will appear here"
-                    : "Try a different search term")
+                Text(self.emptyStateMessage)
                     .font(.fluidSystem(size: 12))
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -405,7 +449,7 @@ struct TranscriptionHistoryView: View {
 
             HStack {
                 // Stats
-                Text("\(self.historyStore.entries.count) entries")
+                Text(self.filteredEntries.count == 1 ? "1 entry" : "\(self.filteredEntries.count) entries")
                     .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(.tertiary)
 
@@ -444,6 +488,19 @@ struct TranscriptionHistoryView: View {
                         self.detailHeading(entry)
                         self.detailActions(entry)
                     }
+                }
+                HStack {
+                    Spacer()
+                    Button {
+                        self.historyStore.toggleStar(id: entry.id)
+                    } label: {
+                        Label(entry.isStarred ? "Starred" : "Star", systemImage: entry.isStarred ? "star.fill" : "star")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(entry.isStarred ? self.theme.palette.accent : nil)
+                    .accessibilityLabel(entry.isStarred ? "Unstar transcription" : "Star transcription")
+                    .help(entry.isStarred ? "Remove from Starred" : "Save to Starred")
                 }
                 if self.audioEntryID == entry.id {
                     HistoryInlineAudioView(entry: entry)
