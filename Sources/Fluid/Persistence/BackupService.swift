@@ -139,6 +139,12 @@ struct SettingsBackupPayload: Codable, Equatable {
     let defaultEditPromptOverride: String?
     let fileTranscriptionSpeakerLabelsEnabled: Bool?
     let fileTranscriptionExpectedSpeakerCount: Int?
+    // Additive fields: absence in an older backup preserves current preferences.
+    var meetingRecordingDefaults: MeetingRecordingDefaults? = nil
+    var privateAIIdleUnload: SettingsStore.PrivateAIIdleUnload? = nil
+    // A present empty map clears prompt overrides; an absent map preserves them.
+    // swiftlint:disable:next discouraged_optional_collection
+    var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {
@@ -220,11 +226,17 @@ final class BackupService {
         try await PronunciationDictionaryStore.shared.replaceAllProfiles(
             document.pronunciationProfiles ?? []
         )
+        let previousIdleUnload = SettingsStore.shared.privateAIIdleUnload
         SettingsStore.shared.restore(
             from: document.settings,
             promptProfiles: document.promptProfiles,
             appPromptBindings: document.appPromptBindings
         )
+        if let idleUnload = document.settings.privateAIIdleUnload, idleUnload != previousIdleUnload {
+            // Match the preference UI's targeted rescheduling; do not use the
+            // general restore notification to change model timers.
+            await PrivateAIIntegrationService.idleUnloader.settingsChanged()
+        }
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
         NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
     }

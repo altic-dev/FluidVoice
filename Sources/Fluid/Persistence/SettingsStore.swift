@@ -1691,7 +1691,7 @@ final class SettingsStore: ObservableObject {
     }
 
     /// How long the local model may sit unused before its memory is released.
-    enum PrivateAIIdleUnload: Int, CaseIterable, Identifiable {
+    enum PrivateAIIdleUnload: Int, Codable, CaseIterable, Identifiable {
         case never = 0
         case tenMinutes = 10
         case thirtyMinutes = 30
@@ -3681,7 +3681,10 @@ final class SettingsStore: ObservableObject {
             defaultDictationPromptOverride: self.defaultDictationPromptOverride,
             defaultEditPromptOverride: self.defaultEditPromptOverride,
             fileTranscriptionSpeakerLabelsEnabled: self.fileTranscriptionSpeakerLabelsEnabled,
-            fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount
+            fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
+            meetingRecordingDefaults: self.meetingRecordingDefaults,
+            privateAIIdleUnload: self.privateAIIdleUnload,
+            dictationPromptConfigurations: self.dictationPromptConfigurations
         )
     }
 
@@ -3710,6 +3713,9 @@ final class SettingsStore: ObservableObject {
         if let privateAIContextTokenLimit = payload.privateAIContextTokenLimit {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
+        if let privateAIIdleUnload = payload.privateAIIdleUnload {
+            self.privateAIIdleUnload = privateAIIdleUnload
+        }
         self.selectedSpeechModel = payload.selectedSpeechModel
         if let selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode {
             self.selectedWhisperLanguageCode = Self.whisperLanguageCode(fromBackupValue: selectedWhisperLanguageCode)
@@ -3726,6 +3732,9 @@ final class SettingsStore: ObservableObject {
         self.meetingTranscriptionBackendID = payload.meetingTranscriptionBackendID.map {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
+        if let meetingRecordingDefaults = payload.meetingRecordingDefaults {
+            self.meetingRecordingDefaults = meetingRecordingDefaults
+        }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
         self.promptModeShortcutEnabled = payload.promptModeShortcutEnabled
@@ -3888,6 +3897,9 @@ final class SettingsStore: ObservableObject {
         self.customDictionaryEntries = payload.customDictionaryEntries
 
         self.dictationPromptProfiles = promptProfiles
+        if let configurations = payload.dictationPromptConfigurations {
+            self.dictationPromptConfigurations = configurations
+        }
         self.appPromptBindings = appPromptBindings
         self.selectedDictationPromptID = payload.selectedDictationPromptID
         self.isDictationPromptOff = payload.dictationPromptOff ?? self.isDictationPromptOff
@@ -3906,6 +3918,11 @@ final class SettingsStore: ObservableObject {
         self.promptModeSelectedPromptID = payload.promptModeSelectedPromptID
         self.isSecondaryDictationPromptOff = payload.secondaryDictationPromptOff ?? false
         self.normalizePromptSelectionsIfNeeded()
+        // Validate imported mappings only after profile migration/normalization.
+        // Legacy backups do not own the newer map, so leave it intact when absent.
+        if payload.dictationPromptConfigurations != nil {
+            self.normalizeDictationPromptConfigurationsIfNeeded()
+        }
         self.purgeRetiredAppleIntelligenceState()
     }
 

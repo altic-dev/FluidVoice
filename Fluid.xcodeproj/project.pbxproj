@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */; };
 		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
 		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
 		AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */; };
@@ -159,6 +160,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBackupRoundTripTests.swift; sourceTree = "<group>"; };
 		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryInputTests.swift; sourceTree = "<group>"; };
@@ -367,6 +369,7 @@
 				7CDB0A262F3C4D5600FB7CAD /* Helpers */,
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
+				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
@@ -723,6 +726,7 @@
 			files = (
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
+				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
