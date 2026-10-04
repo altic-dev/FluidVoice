@@ -151,11 +151,18 @@ actor OriginalAudioEmbeddingExtractor {
         try Task.checkCancellation()
         #if arch(arm64)
         guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: evidence.modelKey) else {
+            if ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(evidence.modelKey) {
+                throw PronunciationDictionaryStoreError.outdatedModelRevision
+            }
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         let version = descriptor.asrModelVersion
+        let directory = AsrModels.defaultCacheDirectory(for: version)
+        guard descriptor.installationRevisionMatches(at: directory) else {
+            throw PronunciationDictionaryStoreError.outdatedModelRevision
+        }
         let models = try await AsrModels.loadLocalOnly(
-            from: AsrModels.defaultCacheDirectory(for: version),
+            from: directory,
             version: version
         )
         try Task.checkCancellation()

@@ -15,10 +15,10 @@ nonisolated enum ParakeetSpeechModelCatalog {
     }
 
     struct Descriptor: Equatable, Sendable {
+        enum InstallationRevisionError: Error { case invalidChecksum }
         let modelID: String
         let variant: Variant
         let folderName: String
-        let pronunciationModelKey: String
         let expectedDownloadBytes: Int64
         let archiveURL: URL?
         let archiveSHA256: String?
@@ -34,6 +34,16 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
         var isEnglishOnly: Bool { self.supportedLanguageCodes == ["en"] }
 
+        /// Encoder vectors are compatible only with the checkpoint that produced them.
+        /// Legacy v2/v3 keep their established persisted keys byte for byte.
+        var pronunciationModelKey: String {
+            switch self.variant {
+            case .v2: "parakeet-v2"
+            case .v3: "parakeet-v3"
+            case .mini, .pico: "\(self.modelID):sha256:\(self.archiveSHA256 ?? "unavailable")"
+            }
+        }
+
         /// The caller supplies its existing cache root; appending a folder does no IO.
         func cacheDirectory(in modelsDirectory: URL) -> URL {
             modelsDirectory.appendingPathComponent(self.folderName, isDirectory: true)
@@ -42,6 +52,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         /// Explicit filesystem validation for download/preparation work. This is
         /// separate from descriptor lookup; callers should run it off the main actor.
         func artifactsAreComplete(at directory: URL) -> Bool {
+            guard self.installationRevisionMatches(at: directory) else { return false }
             guard HuggingFaceModelDownloader.artifactIsComplete(
                 at: directory.appendingPathComponent(self.vocabularyFile), isDirectory: false
             ) else { return false }
@@ -51,8 +62,39 @@ nonisolated enum ParakeetSpeechModelCatalog {
                 )
             }
         }
+
+        /// Compact model folders are stable across releases; their exact installed
+        /// archive revision must match before an existing cache may skip download.
+        func installationRevisionMatches(at directory: URL) -> Bool {
+            guard self.variant == .mini || self.variant == .pico else { return true }
+            guard let hash = self.archiveSHA256, hash.count == 64,
+                  hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+            else { return false }
+            let marker = directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: marker.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.size] as? NSNumber)?.intValue == 64,
+                  let input = try? FileHandle(forReadingFrom: marker)
+            else { return false }
+            defer { try? input.close() }
+            return (try? input.read(upToCount: 65)) == Data(hash.utf8)
+        }
+
+        /// Only the downloader calls this on its validated, unpublished stage.
+        /// Exclusive creation rejects any marker supplied by the archive itself.
+        func writeInstallationRevision(at directory: URL) throws {
+            guard self.variant == .mini || self.variant == .pico else { return }
+            guard let hash = self.archiveSHA256, hash.count == 64,
+                  hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+            else { throw InstallationRevisionError.invalidChecksum }
+            try Data(hash.utf8).write(
+                to: directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName),
+                options: .withoutOverwriting
+            )
+        }
     }
 
+    static let installationRevisionFileName = ".fluidvoice-archive-sha256"
     static let standardModelNames = ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecision.mlmodelc"]
     static let splitModelNames = [
         "Preprocessor.mlmodelc", "Encoder-1.mlmodelc", "Encoder-2.mlmodelc",
@@ -63,7 +105,6 @@ nonisolated enum ParakeetSpeechModelCatalog {
         modelID: "parakeet-tdt-v2",
         variant: .v2,
         folderName: "parakeet-tdt-0.6b-v2-coreml",
-        pronunciationModelKey: "parakeet-v2",
         expectedDownloadBytes: 464_421_712,
         archiveURL: nil,
         archiveSHA256: nil,
@@ -81,7 +122,6 @@ nonisolated enum ParakeetSpeechModelCatalog {
         modelID: "parakeet-tdt",
         variant: .v3,
         folderName: "parakeet-tdt-0.6b-v3-coreml",
-        pronunciationModelKey: "parakeet-v3",
         expectedDownloadBytes: 483_288_717,
         archiveURL: nil,
         archiveSHA256: nil,
@@ -105,7 +145,6 @@ nonisolated enum ParakeetSpeechModelCatalog {
         modelID: "fluid-parakeet-mini",
         variant: .mini,
         folderName: "fluid-parakeet-mini-coreml",
-        pronunciationModelKey: "fluid-parakeet-mini",
         expectedDownloadBytes: 254_126_592,
         archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-mini/1.0.0/fluid-parakeet-mini-coreml.tar"),
         archiveSHA256: "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36",
@@ -116,14 +155,13 @@ nonisolated enum ParakeetSpeechModelCatalog {
         languageSupport: "English Only",
         supportedLanguageCodes: ["en"],
         downloadSize: "~242.4 MiB",
-        cardDescription: "English-only local transcription with a smaller model download.",
+        cardDescription: "In-house model by FluidVoice, with improved recognition amid background speech.",
         performanceRatings: nil
     )
     static let pico = Descriptor(
         modelID: "fluid-parakeet-pico",
         variant: .pico,
         folderName: "fluid-parakeet-pico-coreml",
-        pronunciationModelKey: "fluid-parakeet-pico",
         expectedDownloadBytes: 161_201_152,
         archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-pico/1.0.0/fluid-parakeet-pico-coreml.tar"),
         archiveSHA256: "afcdd76d4aba0328c97c858ee5c4c227ab5e23cc6885de5299d009c3671fe5d6",
@@ -142,6 +180,17 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
     static func descriptor(forModelID modelID: String) -> Descriptor? {
         self.descriptors.first { $0.modelID == modelID }
+    }
+
+    static func descriptor(forPronunciationModelKey modelKey: String) -> Descriptor? {
+        self.descriptors.first { $0.pronunciationModelKey == modelKey }
+    }
+
+    static func isOutdatedCompactPronunciationModelKey(_ modelKey: String) -> Bool {
+        [self.mini, self.pico].contains { descriptor in
+            (modelKey == descriptor.modelID || modelKey.hasPrefix(descriptor.modelID + ":sha256:"))
+                && modelKey != descriptor.pronunciationModelKey
+        }
     }
 
     static func descriptor(for variant: Variant) -> Descriptor {

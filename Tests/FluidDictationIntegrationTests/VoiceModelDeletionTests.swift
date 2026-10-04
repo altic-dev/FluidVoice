@@ -399,4 +399,18 @@ final class VoiceModelDeletionTests: XCTestCase {
         XCTAssertNil(asr.deletingModelID)
         XCTAssertNil(asr.activeExclusiveActivity)
     }
+
+    func testCompactLoadCancellationRetainsAtomicallyPublishedModelsAndLegacyPolicy() {
+        #if arch(arm64)
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+            let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+            XCTAssertFalse(provider.shouldClearCacheAfterCancellation,
+                           "The hosted downloader owns staging cleanup; cancellation during Core ML loading must retain a verified publication")
+            XCTAssertEqual(provider.modelsExistOnDisk(), SpeechModelInstallationSnapshot.shared.isInstalled(modelID: model.id))
+        }
+        for model: SettingsStore.SpeechModel in [.parakeetTDTv2, .parakeetTDT] {
+            XCTAssertTrue(FluidAudioProvider(modelOverride: model, configureWordBoosting: false).shouldClearCacheAfterCancellation)
+        }
+        #endif
+    }
 }

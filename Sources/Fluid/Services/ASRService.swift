@@ -2423,6 +2423,8 @@ final class ASRService: ObservableObject {
             } else {
                 exists = self.getAppleSpeechProvider().modelsExistOnDisk()
             }
+        } else if model == .fluidParakeetMini || model == .fluidParakeetPico {
+            exists = (try? await self.modelArtifactsExist(provider: self.transcriptionProvider)) ?? false
         } else {
             exists = model.isInstalled
         }
@@ -3982,7 +3984,8 @@ final class ASRService: ObservableObject {
                 guard let self, !self.isTerminating,
                       SettingsStore.shared.selectedSpeechModel.id == model.id else { return }
                 // Never download a missing model just to restore residency.
-                guard self.transcriptionProvider.modelsExistOnDisk() else { return }
+                guard try await self.modelArtifactsExist(provider: self.transcriptionProvider),
+                      !self.isTerminating, SettingsStore.shared.selectedSpeechModel.id == model.id else { return }
                 try await self.ensureAsrReady()
                 if SettingsStore.shared.selectedSpeechModel.id != model.id,
                    let lease = self.activeActivityLease
@@ -6367,6 +6370,15 @@ final class ASRService: ObservableObject {
         }
     }
 
+    private func modelArtifactsExist(provider: TranscriptionProvider) async throws -> Bool {
+        #if arch(arm64)
+        if let compactProvider = provider as? FluidAudioProvider {
+            return try await compactProvider.refreshModelsExistOnDiskAsync()
+        }
+        #endif
+        return provider.modelsExistOnDisk()
+    }
+
     private func performEnsureAsrReady(
         provider: TranscriptionProvider,
         operationID: UUID,
@@ -6395,7 +6407,9 @@ final class ASRService: ObservableObject {
         }
 
         self.isAsrReady = false
-        let modelsAlreadyCached = provider.modelsExistOnDisk()
+        let modelsAlreadyCached = try await self.modelArtifactsExist(provider: provider)
+        try Task.checkCancellation()
+        guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
 
         let totalStartTime = Date()
         do {

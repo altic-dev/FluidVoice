@@ -5,6 +5,7 @@ import Foundation
 /// Installs only the descriptor's hash-pinned archive, without changing model selection.
 nonisolated enum ParakeetArchiveDownloader {
     typealias Transport = @Sendable (URL, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
+    typealias RevisionWriter = @Sendable (URL, ParakeetSpeechModelCatalog.Descriptor) throws -> Void
 
     enum DownloadError: LocalizedError {
         case invalidDescriptor, invalidResponse, checksumMismatch, invalidArchive, incompleteModel, targetExists
@@ -17,7 +18,7 @@ nonisolated enum ParakeetArchiveDownloader {
             case .checksumMismatch: return "The downloaded voice model failed verification. Please try again."
             case .invalidArchive: return "The voice model archive contains invalid or unsafe files."
             case .incompleteModel: return "The voice model archive is incomplete."
-            case .targetExists: return "The voice model cache changed during download. Please try again."
+            case .targetExists: return "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again."
             case let .cleanupFailed(url): return "Voice model temporary files could not be removed: \(url.path)"
             }
         }
@@ -27,10 +28,11 @@ nonisolated enum ParakeetArchiveDownloader {
         descriptor: ParakeetSpeechModelCatalog.Descriptor,
         in modelsDirectory: URL,
         progressHandler: @escaping @Sendable (ModelPreparationProgress) -> Void = { _ in },
-        transport: Transport? = nil
+        transport: Transport? = nil,
+        revisionWriter: @escaping RevisionWriter = { directory, descriptor in try descriptor.writeInstallationRevision(at: directory) }
     ) async throws -> URL {
         let task = Task.detached(priority: .utility) {
-            try await self.install(descriptor: descriptor, modelsDirectory: modelsDirectory, progressHandler: progressHandler, transport: transport)
+            try await self.install(descriptor: descriptor, modelsDirectory: modelsDirectory, progressHandler: progressHandler, transport: transport, revisionWriter: revisionWriter)
         }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -56,7 +58,8 @@ nonisolated enum ParakeetArchiveDownloader {
         descriptor: ParakeetSpeechModelCatalog.Descriptor,
         modelsDirectory: URL,
         progressHandler: @escaping @Sendable (ModelPreparationProgress) -> Void,
-        transport: Transport?
+        transport: Transport?,
+        revisionWriter: RevisionWriter
     ) async throws -> URL {
         try Task.checkCancellation()
         guard self.isComponent(descriptor.folderName), self.isComponent(descriptor.vocabularyFile),
@@ -107,6 +110,10 @@ nonisolated enum ParakeetArchiveDownloader {
             try manager.createDirectory(at: extraction, withIntermediateDirectories: false)
             try self.extract(archive: archive, into: extraction, folderName: descriptor.folderName, archiveBytes: descriptor.expectedDownloadBytes)
             let extracted = descriptor.cacheDirectory(in: extraction)
+            guard self.contentsAreComplete(at: extracted, descriptor: descriptor) else { throw DownloadError.incompleteModel }
+            try Task.checkCancellation()
+            try revisionWriter(extracted, descriptor)
+            try Task.checkCancellation()
             guard self.artifactsAreComplete(at: extracted, descriptor: descriptor) else { throw DownloadError.incompleteModel }
             try Task.checkCancellation()
             // Both directories are on the cache filesystem; exclusive rename publishes
@@ -134,6 +141,10 @@ nonisolated enum ParakeetArchiveDownloader {
 
     /// Mirrors compiled-artifact readiness while rejecting links anywhere in the tree.
     static func artifactsAreComplete(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
+        descriptor.installationRevisionMatches(at: directory) && self.contentsAreComplete(at: directory, descriptor: descriptor)
+    }
+
+    private static func contentsAreComplete(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
         do {
             try Task.checkCancellation()
             try self.requireDirectory(directory)

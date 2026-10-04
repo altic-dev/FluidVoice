@@ -1250,6 +1250,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private func temporalReferences(_ profile: PronunciationDictionaryProfile, key: String, models: AsrModels) async throws -> [DictionaryMatchFrames] {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return [] }
+        guard profile.modelKey == self.pronunciationModelKey,
+              profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
+        else { throw PronunciationDictionaryStoreError.outdatedModelRevision }
         if let cached = self.temporalReferenceCache[key] { return cached }
         guard profile.enrollments.count >= 3 else { return [] }
         // Reserve a worst-case three-reference slot before encoding. Stable admission avoids
@@ -1488,11 +1491,33 @@ final class FluidAudioProvider: TranscriptionProvider {
     func modelsExistOnDisk() -> Bool {
         let selectedModel = self.resolvedSpeechModel
         switch selectedModel {
-        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+        case .fluidParakeetMini, .fluidParakeetPico:
+            return SpeechModelInstallationSnapshot.shared.isInstalled(modelID: selectedModel.id)
+        case .parakeetTDT, .parakeetTDTv2:
             return selectedModel.isInstalled
         default:
             return false
         }
+    }
+
+    /// Preparation uses a fresh off-main check; synchronous consumers only read
+    /// the event-refreshed installation snapshot for hosted compact models.
+    func refreshModelsExistOnDiskAsync() async throws -> Bool {
+        let model = self.resolvedSpeechModel
+        guard let descriptor = model.parakeetDescriptor, descriptor.archiveURL != nil else {
+            return self.modelsExistOnDisk()
+        }
+        let installed = try await SpeechModelInstallationSnapshot.scan([
+            .init(modelID: model.id, kind: .parakeet(descriptor)),
+        ])
+        try Task.checkCancellation()
+        return installed.contains(model.id)
+    }
+
+    var shouldClearCacheAfterCancellation: Bool {
+        // Hosted downloads own their unpublished temporary files. A later load
+        // cancellation must retain the verified, atomically published model.
+        self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
     }
 
     func clearCache() async throws {

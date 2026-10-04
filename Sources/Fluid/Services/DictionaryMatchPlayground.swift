@@ -70,6 +70,19 @@ actor DictionaryMatchPlayground {
     static let shared = DictionaryMatchPlayground()
     private var running = false
 
+    /// Resolve before loading a model: an older checkpoint's vectors remain saved
+    /// but cannot be replayed through a different encoder with the same dimensions.
+    nonisolated static func targetProfile(from profiles: [PronunciationDictionaryProfile], target: String) throws -> PronunciationDictionaryProfile {
+        let matching = profiles.filter { $0.label.caseInsensitiveCompare(target) == .orderedSame }
+        if let current = matching.first(where: { ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: $0.modelKey) != nil }) {
+            return current
+        }
+        if matching.contains(where: { ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey($0.modelKey) }) {
+            throw PronunciationDictionaryStoreError.outdatedModelRevision
+        }
+        throw DictionaryMatchPlaygroundError.unavailable("No saved Parakeet pronunciation recordings for “\(target)”. Train this word by voice first.")
+    }
+
     func analyze(recordingID: UUID, audioURL: URL, savedTranscript: String, target: String) async throws -> DictionaryMatchReport {
         let file = try AVAudioFile(forReading: audioURL)
         let duration = Double(file.length) / file.processingFormat.sampleRate
@@ -99,11 +112,7 @@ actor DictionaryMatchPlayground {
         let duration = Double(samples.count) / 16_000
         #if arch(arm64)
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
-        guard let targetProfile = allProfiles.first(where: {
-            $0.label.caseInsensitiveCompare(target) == .orderedSame && ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: $0.modelKey) != nil
-        }) else {
-            throw DictionaryMatchPlaygroundError.unavailable("No saved Parakeet pronunciation recordings for “\(target)”. Train this word by voice first.")
-        }
+        let targetProfile = try Self.targetProfile(from: allProfiles, target: target)
         let matching = allProfiles.filter { $0.modelKey == targetProfile.modelKey }.sorted {
             let lhsTarget = $0.dictionaryEntryID == targetProfile.dictionaryEntryID
             let rhsTarget = $1.dictionaryEntryID == targetProfile.dictionaryEntryID
@@ -116,7 +125,11 @@ actor DictionaryMatchPlayground {
             throw DictionaryMatchPlaygroundError.unavailable("This pronunciation model is unavailable.")
         }
         let version = descriptor.asrModelVersion
-        let models = try await AsrModels.loadLocalOnly(from: AsrModels.defaultCacheDirectory(for: version), version: version)
+        let directory = AsrModels.defaultCacheDirectory(for: version)
+        guard descriptor.installationRevisionMatches(at: directory) else {
+            throw PronunciationDictionaryStoreError.outdatedModelRevision
+        }
+        let models = try await AsrModels.loadLocalOnly(from: directory, version: version)
         let manager = AsrManager(config: ASRConfig(tdtConfig: TdtConfig(blankId: version.blankId), encoderHiddenSize: version.encoderHiddenSize))
         do {
             try await manager.initialize(models: models)

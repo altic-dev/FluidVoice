@@ -51,12 +51,12 @@ extension VoiceEngineSettingsView {
                             Spacer()
                             Menu {
                                 ForEach(SpeechProviderFilter.allCases) { option in
-                                    Button(option.rawValue) {
+                                    Button(option.displayName) {
                                         self.viewModel.providerFilter = option
                                     }
                                 }
                             } label: {
-                                Text("Filter: \(self.viewModel.providerFilter.rawValue)")
+                                Text("Filter: \(self.viewModel.providerFilter.displayName)")
                             }
                             .fluidDropdownStyle()
                             Menu {

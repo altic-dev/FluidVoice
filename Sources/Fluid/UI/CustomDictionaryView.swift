@@ -23,6 +23,9 @@ struct CustomDictionaryView: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appServices: AppServices
+    @ObservedObject private var settings = SettingsStore.shared
+    @State private var pronunciationRevisionNotice: String?
+    @State private var pronunciationRevisionNoticeRefresh: UInt64 = 0
 
     /// A row picked in the sidebar search. Opening it is the reveal; the binding is
     /// cleared so the same row can be picked again later.
@@ -269,6 +272,12 @@ struct CustomDictionaryView: View {
                 HStack(spacing: 0) {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+                            if let notice = self.pronunciationRevisionNotice {
+                                Text(notice)
+                                    .font(self.theme.typography.caption)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                             self.trainReplacementSection
                         }
                         .fluidPageContent(width: .reading, alignment: .center)
@@ -311,6 +320,19 @@ struct CustomDictionaryView: View {
         .dismissTextFocusOnBackgroundTap()
         .task(id: self.revealTarget) {
             self.revealSearchTarget()
+        }
+        .task(id: self.pronunciationRevisionNoticeRequest) {
+            self.pronunciationRevisionNotice = nil
+            guard !self.formattingOnly,
+                  let descriptor = self.settings.selectedSpeechModel.parakeetDescriptor,
+                  descriptor.variant == .mini || descriptor.variant == .pico
+            else { return }
+            let entryIDs = Set(self.settings.customDictionaryEntries.map(\.id))
+            let profiles = await PronunciationDictionaryStore.shared.allProfiles()
+            guard !Task.isCancelled,
+                  descriptor.pronunciationModelKey == self.settings.selectedSpeechModel.parakeetDescriptor?.pronunciationModelKey
+            else { return }
+            self.pronunciationRevisionNotice = DictionaryPronunciationRevisionPolicy.notice(profiles: profiles, descriptor: descriptor, entryIDs: entryIDs)
         }
         .overlay {
             if let confirmation = self.replacementConfirmation {
@@ -356,6 +378,11 @@ struct CustomDictionaryView: View {
         .onReceive(NotificationCenter.default.publisher(for: .parakeetVocabularyDidChange)) { _ in
             guard !self.formattingOnly else { return }
             self.entries = SettingsStore.shared.customDictionaryEntries
+            self.pronunciationRevisionNoticeRefresh &+= 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
+            guard !self.formattingOnly else { return }
+            self.pronunciationRevisionNoticeRefresh &+= 1
         }
         .onChange(of: self.pronunciationEnabled) { _, enabled in
             guard !enabled else { return }
@@ -823,6 +850,10 @@ struct CustomDictionaryView: View {
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var pronunciationRevisionNoticeRequest: String {
+        "\(self.settings.selectedSpeechModel.rawValue):\(self.pronunciationRevisionNoticeRefresh)"
     }
 
     private var trainingRecorderPanel: some View {
@@ -3188,6 +3219,30 @@ enum CustomDictionaryManualEntry {
             }
             return "␣"
         }.joined()
+    }
+}
+
+nonisolated enum DictionaryPronunciationRevisionPolicy {
+    /// Pure UI snapshot: no file access, settings writes or background re-encoding.
+    static func notice(
+        profiles: [PronunciationDictionaryProfile],
+        descriptor: ParakeetSpeechModelCatalog.Descriptor,
+        entryIDs: Set<UUID>
+    ) -> String? {
+        guard descriptor.variant == .mini || descriptor.variant == .pico else { return nil }
+        let current = Set(profiles.filter {
+            $0.modelKey == descriptor.pronunciationModelKey && $0.isEligibleForMatching
+        }.map(\.dictionaryEntryID))
+        let outdated = profiles.filter {
+            entryIDs.contains($0.dictionaryEntryID) && !current.contains($0.dictionaryEntryID)
+                && ($0.modelKey == descriptor.modelID || $0.modelKey.hasPrefix(descriptor.modelID + ":sha256:"))
+                && $0.modelKey != descriptor.pronunciationModelKey
+        }
+        let labels = Array(Set(outdated.map(\.label))).sorted()
+        guard !labels.isEmpty else { return nil }
+        let words = labels.prefix(3).joined(separator: ", ")
+        let additional = labels.count > 3 ? " and \(labels.count - 3) more" : ""
+        return "Pronunciation recordings for \(words)\(additional) need retraining for the updated \(descriptor.displayName). Your custom words and text corrections remain saved."
     }
 }
 

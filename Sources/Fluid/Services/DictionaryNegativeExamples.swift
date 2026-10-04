@@ -94,7 +94,8 @@ actor DictionaryNegativeExampleStore {
     }
 
     func frames(entryID: UUID, profileKey: String, modelKey: String) -> [DictionaryMatchFrames] {
-        ((try? self.read()) ?? []).filter { $0.entryID == entryID && $0.profileKey == profileKey && $0.modelKey == modelKey }.map(\.frames)
+        guard !ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(modelKey) else { return [] }
+        return ((try? self.read()) ?? []).filter { $0.entryID == entryID && $0.profileKey == profileKey && $0.modelKey == modelKey }.map(\.frames)
     }
 
     func save(_ correction: DictionaryNegativeCorrection, expectedRevision: UUID) throws {

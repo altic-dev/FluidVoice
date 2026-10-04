@@ -14,9 +14,4 @@ nonisolated extension ParakeetSpeechModelCatalog.Descriptor {
     }
 }
 
-nonisolated extension ParakeetSpeechModelCatalog {
-    static func descriptor(forPronunciationModelKey modelKey: String) -> Descriptor? {
-        self.descriptors.first { $0.pronunciationModelKey == modelKey }
-    }
-}
 #endif

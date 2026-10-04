@@ -3,6 +3,28 @@ import AVFoundation
 import Combine
 import SwiftUI
 
+/// Presentation only: preserve the user's selected model and the language catalog's order.
+enum OnboardingModelRecommendation {
+    static func defaultRoutes(forLanguageID languageID: String, from availableRoutes: [VoiceEngineLanguageRoute]) -> [VoiceEngineLanguageRoute] {
+        guard let first = availableRoutes.first else { return [] }
+        guard languageID == "en" else { return [first] }
+        if let english = availableRoutes.first(where: { $0.model == .parakeetTDTv2 }),
+           let mini = availableRoutes.first(where: { $0.model == .fluidParakeetMini })
+        {
+            return [english, mini]
+        }
+        // Mini has the same architecture gate and a newer OS gate. Keep the
+        // established cards when either preferred model is unavailable.
+        var routes = [first]
+        if let builtIn = availableRoutes.first(where: { $0.model == .appleSpeech || $0.model == .appleSpeechAnalyzer }),
+           builtIn.id != first.id
+        {
+            routes.append(builtIn)
+        }
+        return routes
+    }
+}
+
 struct WelcomeView: View {
     @EnvironmentObject var appServices: AppServices
     @Binding var selectedSidebarItem: SidebarItem?
@@ -206,36 +228,11 @@ struct OnboardingFlowView: View {
         return self.selectedLanguageRoutes.first
     }
 
-    private var primaryDisplayedModelRoute: VoiceEngineLanguageRoute? {
-        self.selectedLanguageRoutes.first
-    }
-
     private var defaultDisplayedModelRoutes: [VoiceEngineLanguageRoute] {
-        var routes: [VoiceEngineLanguageRoute] = []
-        if let primaryDisplayedModelRoute {
-            routes.append(primaryDisplayedModelRoute)
-        }
-        if let builtInRoute = self.defaultBuiltInModelRoute,
-           !routes.contains(where: { $0.id == builtInRoute.id })
-        {
-            routes.append(builtInRoute)
-        }
-        return routes
-    }
-
-    private var defaultBuiltInModelRoute: VoiceEngineLanguageRoute? {
-        guard self.selectedOnboardingLanguage.id == "en" else {
-            return nil
-        }
-
-        return self.selectedLanguageRoutes.first { route in
-            switch route.model {
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return true
-            default:
-                return false
-            }
-        }
+        OnboardingModelRecommendation.defaultRoutes(
+            forLanguageID: self.selectedOnboardingLanguage.id,
+            from: self.selectedLanguageRoutes
+        )
     }
 
     private var otherModelRoutes: [VoiceEngineLanguageRoute] {
@@ -1558,6 +1555,14 @@ struct OnboardingFlowView: View {
             }
 
             self.onboardingModelMetadataRow(badgeText: route.badgeText)
+
+            if model == .fluidParakeetMini {
+                Text(model.cardDescription)
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if model.hasPerformanceRatings {
                 self.onboardingModelFeaturePanel(for: model)

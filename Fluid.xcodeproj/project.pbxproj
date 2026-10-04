@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
 		9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */; };
@@ -170,6 +171,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
 		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
 		16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetCompactModelDemoTests.swift; sourceTree = "<group>"; };
@@ -396,6 +398,7 @@
 				93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */,
 				7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */,
 				70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */,
+				AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */,
 				16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */,
 				BC9A7E0C9B501E87114F7A88 /* ParakeetCompactModelSmokeTests.swift */,
 				E3398800F76A93226E76A5C9 /* ParakeetArchiveDownloaderTests.swift */,
@@ -763,6 +766,7 @@
 				6AE26D3BB678D13615C41376 /* UpdateBundleValidatorTests.swift in Sources */,
 				5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */,
 				B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */,
+				D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */,
 				9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */,
 				209C92C604F912C74A733D21 /* ParakeetCompactModelSmokeTests.swift in Sources */,
 				67F6BBBA604C996A20BEE7AC /* ParakeetArchiveDownloaderTests.swift in Sources */,

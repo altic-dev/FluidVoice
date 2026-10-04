@@ -11,6 +11,8 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let result = try await fixture.install(progress: recorder.record)
         XCTAssertEqual(result, fixture.target)
         XCTAssertTrue(ParakeetArchiveDownloader.artifactsAreComplete(at: result, descriptor: fixture.descriptor))
+        XCTAssertTrue(fixture.descriptor.artifactsAreComplete(at: result))
+        XCTAssertEqual(try Data(contentsOf: result.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)), try Data(XCTUnwrap(fixture.descriptor.archiveSHA256).utf8))
         XCTAssertEqual(recorder.values.filter { $0.phase == .downloading }.compactMap(\.fractionCompleted), [0.5, 1])
         XCTAssertEqual(recorder.values.last?.phase, .loading)
         try fixture.assertPreservedSiblingsAndNoStage()
@@ -25,6 +27,103 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             throw ProbeFailure.injected
         })
         XCTAssertEqual(result, fixture.target)
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testNewRevisionRejectsOldCompleteCacheAndPublishesOnlyAfterOwnedRemoval() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        XCTAssertFalse(newer.descriptor.artifactsAreComplete(at: old.target))
+        XCTAssertFalse(ParakeetArchiveDownloader.artifactsAreComplete(at: old.target, descriptor: newer.descriptor))
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(descriptor: newer.descriptor, in: old.models, transport: { _, _ in
+                XCTFail("The downloader must preserve an existing target until its caller admits removal")
+                throw ProbeFailure.injected
+            })
+            XCTFail("An old revision must never be accepted as the new installed model")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case .targetExists = error else { return XCTFail("Expected actionable existing-cache failure") }
+        }
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        // Mirror the provider's admitted removal of this exact stale model folder.
+        // The archive helper itself never removes an existing installed target.
+        try FileManager.default.removeItem(at: old.target)
+        let result = try await ParakeetArchiveDownloader.ensurePresent(descriptor: newer.descriptor, in: old.models, transport: { _, progress in
+            try newer.transport(progress)
+        })
+        XCTAssertEqual(result, old.target)
+        XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: result))
+        XCTAssertFalse(old.descriptor.artifactsAreComplete(at: result))
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testMissingWrongOversizedAndSymlinkRevisionMarkersCannotClaimInstalledCache() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        _ = try await fixture.install()
+        let marker = fixture.target.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+        for contents: Data? in [nil, Data(String(repeating: "0", count: 64).utf8), Data(repeating: 1, count: 65)] {
+            try FileManager.default.removeItem(at: marker)
+            if let contents { try contents.write(to: marker) }
+            XCTAssertFalse(fixture.descriptor.artifactsAreComplete(at: fixture.target))
+            XCTAssertFalse(ParakeetArchiveDownloader.artifactsAreComplete(at: fixture.target, descriptor: fixture.descriptor))
+            if contents == nil { try fixture.descriptor.writeInstallationRevision(at: fixture.target) }
+        }
+        try FileManager.default.removeItem(at: marker)
+        let external = fixture.base.appendingPathComponent("external-revision")
+        try Data(XCTUnwrap(fixture.descriptor.archiveSHA256).utf8).write(to: external)
+        try FileManager.default.createSymbolicLink(at: marker, withDestinationURL: external)
+        XCTAssertFalse(fixture.descriptor.artifactsAreComplete(at: fixture.target))
+        XCTAssertFalse(ParakeetArchiveDownloader.artifactsAreComplete(at: fixture.target, descriptor: fixture.descriptor))
+        XCTAssertTrue(ParakeetSpeechModelCatalog.v2.installationRevisionMatches(at: fixture.base))
+        XCTAssertTrue(ParakeetSpeechModelCatalog.v3.installationRevisionMatches(at: fixture.base))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testRevisionWriteFailureCleansStageAndNeverPublishes() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        await self.expectFailure {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: fixture.descriptor,
+                in: fixture.models,
+                transport: { _, progress in try fixture.transport(progress) },
+                revisionWriter: { _, _ in throw CocoaError(.fileWriteNoPermission) }
+            )
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.target.path))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testCancellationAfterRevisionWriteCleansStageWithoutPublishing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: fixture.descriptor,
+                in: fixture.models,
+                transport: { _, progress in try fixture.transport(progress) },
+                revisionWriter: { directory, descriptor in
+                    try descriptor.writeInstallationRevision(at: directory)
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            )
+            XCTFail("Expected cancellation before publication")
+        } catch is CancellationError {} catch { XCTFail("Expected CancellationError, got \(error)") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.target.path))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testArchiveCannotSupplyItsOwnRevisionMarker() async throws {
+        let marker = "fluid-parakeet-mini-coreml/" + ParakeetSpeechModelCatalog.installationRevisionFileName
+        let fixture = try Fixture(extraEntry: Entry(path: marker, data: Data(String(repeating: "0", count: 64).utf8)))
+        defer { fixture.cleanup() }
+        await self.expectFailure { _ = try await fixture.install() }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.target.path))
         try fixture.assertPreservedSiblingsAndNoStage()
     }
 
@@ -188,7 +287,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let archive: Data
         var target: URL { self.descriptor.cacheDirectory(in: self.models) }
 
-        init(checksum: String? = nil, omitLastArtifact: Bool = false, rootName: String = "fluid-parakeet-mini-coreml", extraEntry: Entry? = nil) throws {
+        init(checksum: String? = nil, omitLastArtifact: Bool = false, rootName: String = "fluid-parakeet-mini-coreml", extraEntry: Entry? = nil, artifactContents: String = "fixture") throws {
             self.base = FileManager.default.temporaryDirectory.appendingPathComponent("ParakeetArchiveDownloaderTests-" + UUID().uuidString, isDirectory: true)
             self.models = self.base.appendingPathComponent("Models", isDirectory: true)
             try FileManager.default.createDirectory(at: self.models, withIntermediateDirectories: true)
@@ -200,7 +299,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             let source = ParakeetSpeechModelCatalog.mini
             var entries = source.requiredModelNames.flatMap { name in
                 ["coremldata.bin", "metadata.json", "weights/weight.bin"].map {
-                    Entry(path: "\(rootName)/\(name)/\($0)", data: Data("fixture".utf8))
+                    Entry(path: "\(rootName)/\(name)/\($0)", data: Data(artifactContents.utf8))
                 }
             }
             if omitLastArtifact { entries.removeLast() }
@@ -211,7 +310,6 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
                 modelID: source.modelID,
                 variant: source.variant,
                 folderName: source.folderName,
-                pronunciationModelKey: source.pronunciationModelKey,
                 expectedDownloadBytes: Int64(self.archive.count),
                 archiveURL: source.archiveURL,
                 archiveSHA256: checksum ?? SHA256.hash(data: self.archive).map { String(format: "%02x", $0) }.joined(),

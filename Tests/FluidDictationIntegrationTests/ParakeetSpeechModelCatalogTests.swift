@@ -123,6 +123,48 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "missing", availableModels: models).isEmpty)
     }
 
+    func testEnglishOnboardingShowsV2AndMiniWithoutChangingSelectionOrAvailableRoutes() {
+        let language = VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
+        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico, .appleSpeechAnalyzer, .appleSpeech, .whisperBase]
+        let available = models.map { VoiceEngineLanguageRoute(language: language, model: $0, binding: .automatic) }
+        let selection = SettingsStore.shared.selectedSpeechModel
+        let displayed = OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: available)
+        XCTAssertEqual(displayed.map(\.model), [.parakeetTDTv2, .fluidParakeetMini])
+        XCTAssertEqual(displayed.first, available.first, "The established first recommendation must stay unchanged")
+        let displayedIDs = Set(displayed.map(\.id))
+        let other = available.filter { !displayedIDs.contains($0.id) }
+        XCTAssertEqual(other.map(\.model), [.parakeetRealtime, .parakeetTDT, .fluidParakeetPico, .appleSpeechAnalyzer, .appleSpeech, .whisperBase])
+        XCTAssertEqual(available.map(\.model), models)
+        XCTAssertEqual(Set((displayed + other).map(\.id)), Set(available.map(\.id)))
+        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
+        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "In-house model by FluidVoice, with improved recognition amid background speech.")
+        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "English-only local transcription with the smallest Parakeet model download.")
+    }
+
+    func testOnboardingRecommendationsPreserveUnavailableMiniIntelAndNonEnglishFallbacks() {
+        let english = VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
+        func routes(_ models: [SettingsStore.SpeechModel]) -> [VoiceEngineLanguageRoute] {
+            models.map { VoiceEngineLanguageRoute(language: english, model: $0, binding: .automatic) }
+        }
+        let oldOS = routes([.parakeetTDTv2, .parakeetTDT, .appleSpeech])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: oldOS).map(\.model), [.parakeetTDTv2, .appleSpeech])
+        let intel = routes([.whisperBase, .appleSpeechAnalyzer, .appleSpeech])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: intel).map(\.model), [.whisperBase, .appleSpeechAnalyzer])
+        let appleFirst = routes([.appleSpeech, .whisperBase])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: appleFirst), [appleFirst[0]], "Do not duplicate the built-in card")
+        let withoutV2 = routes([.parakeetTDT, .fluidParakeetMini, .appleSpeech])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: withoutV2).map(\.model), [.parakeetTDT, .appleSpeech])
+        let french = VoiceEngineLanguage(id: "fr", displayName: "French", aliases: [], isPopular: true)
+        let frenchRoutes = [.parakeetTDT, SettingsStore.SpeechModel.appleSpeech].map {
+            VoiceEngineLanguageRoute(language: french, model: $0, binding: .automatic)
+        }
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "fr", from: frenchRoutes), [frenchRoutes[0]])
+        XCTAssertTrue(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: []).isEmpty)
+        XCTAssertTrue(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "fr", from: []).isEmpty)
+        let onlyMini = routes([.fluidParakeetMini])
+        XCTAssertEqual(OnboardingModelRecommendation.defaultRoutes(forLanguageID: "en", from: onlyMini), onlyMini)
+    }
+
     func testCatalogReadsPreserveExistingAndNewPersistedSelections() throws {
         let defaults = UserDefaults.standard
         let domain = try XCTUnwrap(Bundle.main.bundleIdentifier)
@@ -180,6 +222,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         for name in descriptor.requiredModelNames {
             try self.installCompiledFixture(at: directory.appendingPathComponent(name, isDirectory: true))
         }
+        try descriptor.writeInstallationRevision(at: directory)
     }
 
     private func installCompiledFixture(at directory: URL) throws {
