@@ -650,6 +650,9 @@ extension VoiceEngineSettingsView {
     }
 
     private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
+        if model == .fluidParakeetMini || model == .fluidParakeetPico {
+            return model.languageSupport
+        }
         switch model {
         case .nemotronStreaming, .nemotronStreaming320:
             return "Nemotron Speech 3.5 - Streaming Capable"

@@ -1551,6 +1551,12 @@ struct OnboardingFlowView: View {
             }
             .frame(height: 38, alignment: .top)
 
+            if model == .fluidParakeetMini || model == .fluidParakeetPico {
+                Text(model.languageSupport)
+                    .font(self.theme.typography.bodySmallStrong)
+                    .foregroundStyle(Color.white.opacity(0.62))
+            }
+
             self.onboardingModelMetadataRow(badgeText: route.badgeText)
 
             if model.hasPerformanceRatings {
