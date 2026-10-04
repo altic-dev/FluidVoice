@@ -163,6 +163,7 @@ struct AppBackupDocument: Codable, Equatable {
 enum BackupServiceError: LocalizedError {
     case unsupportedSchemaVersion(BackupFileVersion)
     case invalidJSON
+    case operationInProgress
 
     var errorDescription: String? {
         switch self {
@@ -170,6 +171,8 @@ enum BackupServiceError: LocalizedError {
             return "This backup uses an unsupported schema version (\(version.major).\(version.minor))."
         case .invalidJSON:
             return "The selected backup file is not a valid FluidVoice backup."
+        case .operationInProgress:
+            return "A backup import or export is already running. Wait for it to finish, then try again."
         }
     }
 }
@@ -178,11 +181,23 @@ enum BackupServiceError: LocalizedError {
 final class BackupService {
     static let shared = BackupService()
 
+    private var operationInProgress = false
+
     private init() {}
 
+    private func beginOperation() throws {
+        guard !self.operationInProgress else { throw BackupServiceError.operationInProgress }
+        self.operationInProgress = true
+    }
+
     func makeBackupDocument() async throws -> AppBackupDocument {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
         try await TranscriptionHistoryStore.shared.waitUntilLoaded()
+        try Task.checkCancellation()
         let pronunciationProfiles = await PronunciationDictionaryStore.shared.allProfiles()
+        try Task.checkCancellation()
         return AppBackupDocument(
             schemaVersion: .current,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown",
@@ -219,6 +234,9 @@ final class BackupService {
     }
 
     func restore(_ document: AppBackupDocument) async throws {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
         try self.validate(document)
         // A legacy backup represents the complete state from before voice
         // profiles existed. Restoring it must therefore clear newer profiles
@@ -226,6 +244,9 @@ final class BackupService {
         try await PronunciationDictionaryStore.shared.replaceAllProfiles(
             document.pronunciationProfiles ?? []
         )
+        // Profile replacement is a synchronous actor write once admitted. Finish
+        // the matching settings/History commit even if cancellation arrives during
+        // its actor hop; stopping here would leave a partially restored document.
         let previousIdleUnload = SettingsStore.shared.privateAIIdleUnload
         SettingsStore.shared.restore(
             from: document.settings,

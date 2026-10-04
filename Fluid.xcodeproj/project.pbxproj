@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */; };
+		563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */; };
+		7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */; };
+		6AE26D3BB678D13615C41376 /* UpdateBundleValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */; };
 		75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */; };
 		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
 		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
@@ -160,6 +164,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateRollbackBackupTests.swift; sourceTree = "<group>"; };
+		F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateInstallationPipelineTests.swift; sourceTree = "<group>"; };
+		8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAppReplacementTests.swift; sourceTree = "<group>"; };
+		93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateBundleValidatorTests.swift; sourceTree = "<group>"; };
 		4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBackupRoundTripTests.swift; sourceTree = "<group>"; };
 		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
@@ -370,6 +378,10 @@
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
 				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
+				91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */,
+				F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */,
+				8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */,
+				93E63CD61E6BD954698A8E63 /* UpdateBundleValidatorTests.swift */,
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
@@ -727,6 +739,10 @@
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
 				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
+				24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */,
+				563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */,
+				7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */,
+				6AE26D3BB678D13615C41376 /* UpdateBundleValidatorTests.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
