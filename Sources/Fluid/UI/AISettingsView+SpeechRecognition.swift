@@ -415,7 +415,7 @@ extension VoiceEngineSettingsView {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
                         }
-                        .fluidGlassAction(quiet: true)
+                        .fluidGlassAction(prominent: true)
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
                     }
 
