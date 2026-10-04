@@ -306,6 +306,7 @@ final class GlobalHotkeyManager: NSObject {
     private var isRewriteRecordingProvider: (() -> Bool)?
     private var isShortcutCaptureActiveProvider: (() -> Bool)?
     private var shortcutCaptureHandler: ((NSEvent) -> NSEvent?)?
+    private let isSessionLockedProvider: () -> Bool
     private var cancelCallback: (() -> CancelHandlingResult)?
     private var pasteLastTranscriptionCallback: (() -> Void)?
     private var hotkeyMode: HotkeyActivationMode = SettingsStore.shared.hotkeyMode
@@ -540,7 +541,8 @@ final class GlobalHotkeyManager: NSObject {
         isCommandRecordingProvider: (() -> Bool)? = nil,
         isRewriteRecordingProvider: (() -> Bool)? = nil,
         isShortcutCaptureActiveProvider: (() -> Bool)? = nil,
-        shortcutCaptureHandler: ((NSEvent) -> NSEvent?)? = nil
+        shortcutCaptureHandler: ((NSEvent) -> NSEvent?)? = nil,
+        isSessionLockedProvider: @escaping () -> Bool = { GlobalHotkeyManager.currentSessionIsLocked() }
     ) {
         self.asrService = asrService
         self.primaryShortcuts = primaryShortcuts
@@ -564,6 +566,7 @@ final class GlobalHotkeyManager: NSObject {
         self.isRewriteRecordingProvider = isRewriteRecordingProvider
         self.isShortcutCaptureActiveProvider = isShortcutCaptureActiveProvider
         self.shortcutCaptureHandler = shortcutCaptureHandler
+        self.isSessionLockedProvider = isSessionLockedProvider
         super.init()
 
         self.initializeWithDelay()
@@ -2352,7 +2355,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func canTriggerRecordingAction(_ label: String) -> Bool {
-        guard !Self.currentSessionIsLocked() else {
+        guard !self.isSessionLockedProvider() else {
             DebugLogger.shared.info("Ignoring \(label) - screen is locked", source: "GlobalHotkeyManager")
             return false
         }
