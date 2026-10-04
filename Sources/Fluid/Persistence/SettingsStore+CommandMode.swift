@@ -54,6 +54,9 @@ extension SettingsStore {
         if self.isPrivateAIProviderID(sourceProviderID) {
             return "\(PrivateAIProviderFeature.displayName) for Command Mode is coming soon. Choose a model from a verified chat provider."
         }
+        if AppleIntelligenceProvider.matches(sourceProviderID) {
+            return "Command Mode can't use \(AppleIntelligenceProvider.displayName) because terminal tools need a chat API. Choose a model from a verified chat provider."
+        }
 
         let providerID = self.effectiveCommandModeProviderID
         guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -104,7 +107,7 @@ extension SettingsStore {
     /// Build on presentation/catalog events, not while rendering rows. Credentials use the existing process cache.
     func commandModeModelCatalog() -> [CommandModelOption] {
         let apiKeys = self.providerAPIKeys
-        let providers = ModelRepository.shared.builtInProvidersList() + self.savedProviders.map { (id: $0.id, name: $0.name) }
+        let providers = ModelRepository.shared.commandModeProvidersList() + self.savedProviders.map { (id: $0.id, name: $0.name) }
         var seenProviders = Set<String>()
         var options: [CommandModelOption] = []
         for provider in providers {
@@ -144,7 +147,7 @@ extension SettingsStore {
     private func supportedCommandModeProviderID(_ providerID: String) -> String? {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard !self.isPrivateAIProviderID(trimmed) else { return nil }
+        guard !self.isPrivateAIProviderID(trimmed), !AppleIntelligenceProvider.matches(trimmed) else { return nil }
         return trimmed
     }
 
@@ -153,7 +156,7 @@ extension SettingsStore {
     }
 
     private func isCommandModeProviderVerified(_ providerID: String, apiKeys: [String: String]) -> Bool {
-        guard !self.isPrivateAIProviderID(providerID) else { return false }
+        guard !self.isPrivateAIProviderID(providerID), !AppleIntelligenceProvider.matches(providerID) else { return false }
         let key = ModelRepository.shared.providerKey(for: providerID)
         guard let stored = self.verifiedProviderFingerprints[key] else { return false }
 

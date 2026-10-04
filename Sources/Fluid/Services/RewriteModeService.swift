@@ -13,6 +13,8 @@ final class RewriteModeService: ObservableObject {
     @Published var conversationHistory: [Message] = []
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
+    /// Replaced in tests so Edit mode can run without the on-device model.
+    var appleIntelligenceGenerator: (any AppleIntelligenceGenerating)?
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
@@ -40,6 +42,9 @@ final class RewriteModeService: ObservableObject {
         let id = UUID()
         let role: Role
         let content: String
+        /// The words the user spoke, before FluidVoice wrapped them for chat providers.
+        var spokenInstruction: String?
+        var isFailure = false
 
         enum Role: Equatable {
             case user
@@ -102,7 +107,7 @@ final class RewriteModeService: ObservableObject {
             self.isWriteMode = true
 
             // Write Mode: User is asking AI to write/generate something
-            self.conversationHistory.append(Message(role: .user, content: prompt))
+            self.conversationHistory.append(Message(role: .user, content: prompt, spokenInstruction: prompt))
         } else {
             // Rewrite Mode: User has selected text and is giving instructions
             self.isWriteMode = false
@@ -123,10 +128,14 @@ final class RewriteModeService: ObservableObject {
                     Output ONLY the requested text, nothing else.
                     """
                 }
-                self.conversationHistory.append(Message(role: .user, content: rewritePrompt))
+                self.conversationHistory.append(Message(role: .user, content: rewritePrompt, spokenInstruction: prompt))
             } else {
                 // Follow-up request
-                self.conversationHistory.append(Message(role: .user, content: "Follow-up instruction: \(prompt)\n\nApply this to the previous result. Output ONLY the updated text."))
+                self.conversationHistory.append(Message(
+                    role: .user,
+                    content: "Follow-up instruction: \(prompt)\n\nApply this to the previous result. Output ONLY the updated text.",
+                    spokenInstruction: prompt
+                ))
             }
         }
 
@@ -144,7 +153,7 @@ final class RewriteModeService: ObservableObject {
             )
 
         } catch {
-            self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)", isFailure: true))
             self.isProcessing = false
             self.appendDiagnosticLog(
                 "processRewriteRequest failure | writeMode=\(self.isWriteMode) | error=\(error.localizedDescription)"
@@ -195,7 +204,7 @@ final class RewriteModeService: ObservableObject {
 
     // MARK: - LLM Integration
 
-    private func callLLM(messages: [Message], isWriteMode: Bool) async throws -> String {
+    func callLLM(messages: [Message], isWriteMode: Bool) async throws -> String {
         let settings = SettingsStore.shared
         let promptMode: SettingsStore.PromptMode = .edit
         let appBundleID = self.promptAppBundleID
@@ -219,7 +228,11 @@ final class RewriteModeService: ObservableObject {
             )
         }
         let usesPrivateAIProvider = self.isPrivateAIProviderID(providerID)
+        let usesAppleIntelligence = AppleIntelligenceProvider.matches(providerID)
         guard usesPrivateAIProvider || self.isProviderVerified(providerID, settings: settings) else {
+            if usesAppleIntelligence {
+                throw AIProcessingError.appleIntelligence(.unavailable(AppleIntelligenceProvider.availability))
+            }
             throw NSError(
                 domain: "RewriteMode",
                 code: -3,
@@ -262,6 +275,24 @@ final class RewriteModeService: ObservableObject {
                 code: -4,
                 userInfo: [NSLocalizedDescriptionKey: "No AI model selected"]
             )
+        }
+        if usesAppleIntelligence {
+            guard let request = Self.appleIntelligenceRequest(instructions: systemPrompt, messages: messages) else {
+                throw AIProcessingError.emptyResponse
+            }
+            if self.shouldTracePromptProcessing {
+                self.logPromptTrace("Apple Intelligence instructions", value: request.instructions)
+                self.logPromptTrace("Apple Intelligence history turns", value: "\(request.history.count)")
+                self.logPromptTrace("Apple Intelligence prompt", value: request.prompt)
+            }
+            let response = try await AppleIntelligenceService.transform(
+                request,
+                generator: self.appleIntelligenceGenerator ?? AppleIntelligenceSystemGenerator()
+            )
+            if self.shouldTracePromptProcessing {
+                self.logPromptTrace("Model answer (A)", value: response)
+            }
+            return response
         }
         var runtimeModel = model
         var localModelPath = PrivateAIIntegrationService.configuredLocalModelPath
@@ -418,6 +449,30 @@ final class RewriteModeService: ObservableObject {
         return response.content
     }
 
+    /// Rebuilds the conversation as real model turns from the spoken requests, skipping failed
+    /// attempts. The last message must be the request being sent now.
+    static func appleIntelligenceRequest(instructions: String, messages: [Message]) -> AppleIntelligenceRequest? {
+        guard let current = messages.last, current.role == .user else { return nil }
+        var history: [(request: String, response: String)] = []
+        var pendingRequest: String?
+        for message in messages.dropLast() {
+            switch message.role {
+            case .user:
+                pendingRequest = message.spokenInstruction ?? message.content
+            case .assistant:
+                if let request = pendingRequest, !message.isFailure {
+                    history.append((request: request, response: message.content))
+                }
+                pendingRequest = nil
+            }
+        }
+        return AppleIntelligencePrompt.rewrite(
+            instructions: instructions,
+            history: history,
+            request: current.spokenInstruction ?? current.content
+        )
+    }
+
     private func logPromptTrace(_ title: String, value: String) {
         let line = "[PromptTrace][Edit] \(title):\n\(value)"
         if self.forcePromptTraceToConsole {
@@ -462,6 +517,9 @@ final class RewriteModeService: ObservableObject {
 
     private func isProviderVerified(_ providerID: String, settings: SettingsStore) -> Bool {
         guard !self.isPrivateAIProviderID(providerID) else { return false }
+        if AppleIntelligenceProvider.matches(providerID) {
+            return AppleIntelligenceProvider.availability.isAvailable
+        }
         let key = self.providerKey(for: providerID)
         guard let stored = settings.verifiedProviderFingerprints[key] else { return false }
         let baseURL = self.providerBaseURL(for: providerID, settings: settings)

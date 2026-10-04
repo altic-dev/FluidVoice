@@ -106,6 +106,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     @Published var cachedProviderItems: [ProviderItemData] = []
+    @Published var appleIntelligenceAvailability: AppleIntelligenceAvailability = .unavailable
     @Published var cachedAddedProviderItems: [ProviderItemData] = []
     @Published var cachedVerifiedProviderItems: [ProviderItemData] = []
     @Published var cachedUnverifiedProviderItems: [ProviderItemData] = []
@@ -130,6 +131,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var pendingDeletePromptName: String = ""
 
     private var newPromptShortcutCancellable: AnyCancellable?
+    private var appActivationCancellable: AnyCancellable?
 
     init(settings: SettingsStore, menuBarManager: MenuBarManager, promptTest: DictationPromptTestCoordinator) {
         self.settings = settings
@@ -147,6 +149,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 var config = self.pendingNewPromptConfiguration ?? SettingsStore.DictationPromptConfiguration()
                 config.shortcut = shortcut
                 self.pendingNewPromptConfiguration = config
+            }
+        // Apple Intelligence is turned on and off in System Settings, outside this window.
+        self.appActivationCancellable = NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                guard let self, self.appear else { return }
+                self.refreshAppleIntelligenceAvailability()
             }
     }
 
@@ -276,6 +285,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func providerDisplayName(for providerID: String) -> String {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return ModelRepository.shared.displayName(for: providerID)
+        }
+        if AppleIntelligenceProvider.matches(providerID) {
+            return AppleIntelligenceProvider.displayName
         }
 
         switch providerID {
@@ -1035,6 +1047,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func canUseProviderWithoutVerification(_ providerID: String) -> Bool {
+        if AppleIntelligenceProvider.matches(providerID) {
+            return self.appleIntelligenceAvailability.isAvailable
+        }
         let baseURL = self.providerBaseURL(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines)
         return !baseURL.isEmpty && !self.selectedModel(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (self.isLocalEndpoint(baseURL) || !self.providerAPIKey(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1085,6 +1100,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.updateCurrentProvider()
             self.availableModels = []
             self.selectedModel = ""
+            return
+        }
+
+        if AppleIntelligenceProvider.matches(newValue) {
+            self.openAIBaseURL = ""
+            self.updateCurrentProvider()
+            self.availableModels = [AppleIntelligenceProvider.modelID]
+            self.selectedModel = AppleIntelligenceProvider.modelID
             return
         }
 
@@ -1512,6 +1535,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 }
                 continue
             }
+            if AppleIntelligenceProvider.matches(providerID) {
+                let availability = AppleIntelligenceProvider.availability
+                self.appleIntelligenceAvailability = availability
+                statuses[providerID] = availability.isAvailable ? .success : .unknown
+                continue
+            }
             guard let stored = self.settings.verifiedProviderFingerprints[key] else {
                 if statuses[providerID] == .success { statuses[providerID] = .unknown }
                 continue
@@ -1527,6 +1556,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         self.connectionStatusByProvider = statuses
         self.connectionStatus = statuses[self.selectedProviderID] ?? .unknown
+    }
+
+    func refreshAppleIntelligenceAvailability() {
+        self.refreshVerifiedProviders()
+        self.refreshProviderItems()
     }
 
     /// No-op: never auto-select a provider. The user's selection is sticky.

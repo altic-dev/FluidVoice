@@ -4,6 +4,9 @@ import Foundation
 enum ModelDisplayName {
     static func forID(_ modelID: String) -> String {
         let id = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id == AppleIntelligenceProvider.modelID {
+            return AppleIntelligenceProvider.modelDisplayName
+        }
         let canonical = PrivateAIModelRegistry.canonicalModelID(for: id) ?? id
         guard let model = PrivateAIModelRegistry.model(id: canonical), !model.displayName.isEmpty else { return id }
         return model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1")

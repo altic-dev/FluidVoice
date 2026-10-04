@@ -21,6 +21,7 @@ nonisolated enum AIProcessingError: LocalizedError {
     case missingModel(provider: String)
     case emptyResponse
     case dictationExceedsAIContextWindow
+    case appleIntelligence(AppleIntelligenceFailure)
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,8 @@ nonisolated enum AIProcessingError: LocalizedError {
             return "AI returned an empty response"
         case .dictationExceedsAIContextWindow:
             return "Dictation exceeded the AI context window"
+        case let .appleIntelligence(failure):
+            return failure.message
         }
     }
 
@@ -42,7 +45,7 @@ nonisolated enum AIProcessingError: LocalizedError {
         switch self {
         case .noVerifiedProvider, .missingAPIKey, .missingModel:
             return true
-        case .emptyResponse, .dictationExceedsAIContextWindow:
+        case .emptyResponse, .dictationExceedsAIContextWindow, .appleIntelligence:
             return false
         }
     }
@@ -2771,6 +2774,25 @@ struct ContentView: View {
             if let overrideSystemPrompt { return overrideSystemPrompt }
             return self.buildSystemPrompt(appInfo: appInfo, dictationSlot: dictationSlot)
         }()
+
+        if route.usesAppleIntelligence {
+            // Output is not streamed: chunks would reach the preview before the sanitizer sees them.
+            let appleRequest = isDictationCall
+                ? AppleIntelligencePrompt.dictation(promptText: promptText, transcript: inputText)
+                : AppleIntelligencePrompt.transformation(instructions: promptText, text: inputText)
+            if self.shouldTracePromptProcessing {
+                self.logDictationPromptTrace("Apple Intelligence instructions", value: appleRequest.instructions)
+                self.logDictationPromptTrace("Input transcription (Q)", value: inputText)
+                self.logDictationPromptTrace("Apple Intelligence prompt", value: appleRequest.prompt)
+            }
+            self.appBench("ai_apple_intelligence_call")
+            let text = try await AppleIntelligenceService.transform(appleRequest)
+            self.appBench("ai_apple_intelligence_return")
+            if self.shouldTracePromptProcessing {
+                self.logDictationPromptTrace("Model answer (A)", value: text)
+            }
+            return AITextProcessingResult(text: text, tokensPerSecond: nil, fluidIntelligenceLatencyMilliseconds: nil)
+        }
 
         // Keep cleanup instructions separate from transcript data. Explicit
         // ${transcript} templates retain their authored single-turn layout.

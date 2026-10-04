@@ -38,6 +38,7 @@
 		D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */; };
 		D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */; };
 		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
+		A1E1A1000000000000000002 /* AppleIntelligenceProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E1A1000000000000000001 /* AppleIntelligenceProviderTests.swift */; };
 		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
 		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
 		BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */; };
@@ -172,6 +173,7 @@
 		D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerTurnMergingTests.swift; sourceTree = "<group>"; };
 		D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingExistingAudioReplayTests.swift; sourceTree = "<group>"; };
 		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
+		A1E1A1000000000000000001 /* AppleIntelligenceProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceProviderTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
 		BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptionBackendTests.swift; sourceTree = "<group>"; };
@@ -384,6 +386,7 @@
 				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
 				D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */,
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
+				A1E1A1000000000000000001 /* AppleIntelligenceProviderTests.swift */,
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
 				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
 				BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */,
@@ -741,6 +744,7 @@
 				D1A600000000000000000202 /* SpeakerTurnMergingTests.swift in Sources */,
 				D1A700000000000000000002 /* MeetingExistingAudioReplayTests.swift in Sources */,
 				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
+				A1E1A1000000000000000002 /* AppleIntelligenceProviderTests.swift in Sources */,
 				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
 				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
 				BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */,
