@@ -33,6 +33,236 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
 
 @MainActor
 final class VoiceModelDeletionTests: XCTestCase {
+    private func makeNoHardwareController(for asr: ASRService) -> DirectCoreAudioLifecycleController {
+        DirectCoreAudioLifecycleController(
+            packetHandler: asr.recoveryPacketHandlerForTesting,
+            inputFactory: { _, _ in throw CocoaError(.fileReadUnknown) },
+            fingerprintReader: { _ in throw CocoaError(.fileReadUnknown) },
+            installsHardwareListeners: false,
+            deviceSnapshotReader: { _ in throw CocoaError(.fileReadUnknown) },
+            deviceLivenessReader: { _ in nil },
+            deviceResolver: { _ in throw CocoaError(.fileReadUnknown) },
+            onFormatInvalidated: { _ in }
+        )
+    }
+
+    func testBusyBackupAdmissionPreservesCapturedPCMProviderAndActivity() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .appleSpeech
+        let asr = ASRService()
+        let original = DeletionFixtureProvider()
+        let replacement = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.appleSpeech] = original
+        asr.modelProvidersForTesting[.parakeetTDT] = replacement
+        asr.isAsrReady = true
+        // Never open an input, query Core Audio, or install real hardware listeners.
+        let controller = self.makeNoHardwareController(for: asr)
+        let samples: [Float] = [0.12, -0.24, 0.31]
+        asr.configureAudioRouteRecoveryForTesting(controller: controller, devices: [], initialSamples: samples)
+        let dictation = try asr.acquireExclusiveActivity(.dictation)
+        let before = asr.audioRouteRecoveryStateForTesting
+        XCTAssertThrowsError(try asr.beginSettingsBackupRestore()) { error in
+            guard case ASRActivityError.settingsRestoreUnavailable = error else { return XCTFail("Unexpected admission error: \(error)") }
+        }
+        XCTAssertEqual(settings.selectedSpeechModel, .appleSpeech)
+        XCTAssertTrue((asr.fileTranscriptionProvider as? DeletionFixtureProvider) === original)
+        XCTAssertTrue(asr.isAsrReady)
+        XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+        let after = asr.audioRouteRecoveryStateForTesting
+        XCTAssertTrue(after.acceptingPCM)
+        XCTAssertEqual(after.samples, samples)
+        XCTAssertEqual(after.pending, before.pending)
+        XCTAssertEqual(after.recovering, before.recovering)
+        XCTAssertEqual(original.prepareCalls + replacement.prepareCalls, 0)
+        XCTAssertEqual(original.clearCalls + replacement.clearCalls, 0)
+        await asr.finishAudioRouteRecoveryTest()
+        asr.releaseExclusiveActivity(dictation)
+        let admitted = try asr.beginSettingsBackupRestore()
+        XCTAssertEqual(asr.activeExclusiveActivity, .settingsRestore)
+        asr.releaseExclusiveActivity(admitted)
+        XCTAssertNil(asr.activeExclusiveActivity)
+    }
+
+    func testBackupReservationRejectsNewTranscriptionModelWorkAndPreview() async throws {
+        let asr = ASRService()
+        let selected = SettingsStore.shared.selectedSpeechModel
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[selected] = provider
+        asr.modelProvidersForTesting[.whisperTiny] = provider
+        let reservation = try asr.beginSettingsBackupRestore()
+        for activity: ASRExclusiveActivity in [.dictation, .fileTranscription, .localAPI, .meeting, .modelMaintenance] {
+            XCTAssertThrowsError(try asr.acquireExclusiveActivity(activity))
+        }
+        do {
+            try await asr.ensureAsrReady()
+            XCTFail("Preparation must not enter while a backup is being applied")
+        } catch let ASRActivityError.activityInProgress(activity) {
+            XCTAssertEqual(activity, .settingsRestore)
+        }
+        do {
+            try await asr.downloadModel(.whisperTiny, progressHandler: nil)
+            XCTFail("Download must not enter while a backup is being applied")
+        } catch let ASRActivityError.activityInProgress(activity) {
+            XCTAssertEqual(activity, .settingsRestore)
+        }
+        do {
+            try await asr.clearModelCache(for: .whisperTiny)
+            XCTFail("Deletion must not enter while a backup is being applied")
+        } catch {}
+        asr.micStatus = .authorized
+        await asr.startMicrophonePreview()
+        XCTAssertFalse(asr.isMicrophonePreviewActive)
+        XCTAssertFalse(asr.hasActiveModelDownload)
+        XCTAssertFalse(asr.hasActiveModelPreparation)
+        XCTAssertNil(asr.deletingModelID)
+        XCTAssertEqual(provider.prepareCalls, 0)
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
+        XCTAssertEqual(asr.activeExclusiveActivity, .settingsRestore)
+        asr.releaseExclusiveActivity(reservation)
+        XCTAssertNil(asr.activeExclusiveActivity)
+        let retry = try asr.beginSettingsBackupRestore()
+        asr.releaseExclusiveActivity(retry)
+    }
+
+    func testSynchronousBackupResetPrecedesQueuedPostImportAdmission() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .parakeetTDT
+        let asr = ASRService()
+        asr.configureAudioRouteRecoveryForTesting(
+            controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: []
+        )
+        await asr.finishAudioRouteRecoveryTest()
+        // Provider construction is metadata-only; no preparation or model load.
+        let retired = try XCTUnwrap(asr.fileTranscriptionProvider as? FluidAudioProvider)
+        asr.isAsrReady = true
+        let reservation = try asr.beginSettingsBackupRestore()
+        settings.selectedSpeechModel = .parakeetTDTv2
+        // Mirrors the unchanged-idle import tail: synchronous invalidation,
+        // UI event/queued caller, then lease release, with no intervening await.
+        asr.handleSettingsBackupDidRestore()
+        XCTAssertTrue(asr.isAsrReady, "The held reservation defers retirement until release")
+        XCTAssertEqual(asr.activeExclusiveActivity, .settingsRestore)
+        let queuedCaller = Task { @MainActor in
+            XCTAssertFalse(asr.isAsrReady, "A queued caller must never see old ready state after import admission releases")
+            XCTAssertFalse((asr.fileTranscriptionProvider as? FluidAudioProvider) === retired, "The old cached provider must be retired before the caller runs")
+            do {
+                let next = try asr.acquireExclusiveActivity(.dictation)
+                asr.releaseExclusiveActivity(next)
+            } catch let ASRActivityError.activityInProgress(activity) {
+                XCTAssertEqual(activity, .modelMaintenance, "The bounded model reset may still own admission")
+            } catch { XCTFail("Unexpected queued admission error: \(error)") }
+        }
+        asr.releaseExclusiveActivity(reservation)
+        XCTAssertFalse(asr.isAsrReady)
+        XCTAssertFalse((asr.fileTranscriptionProvider as? FluidAudioProvider) === retired)
+        // Cache-existence checks use a fake and never prepare/load actual models.
+        let replacement = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.parakeetTDTv2] = replacement
+        await queuedCaller.value
+        await asr.finishAudioRouteRecoveryTest()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while asr.activeExclusiveActivity != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertNil(asr.activeExclusiveActivity)
+        XCTAssertEqual(replacement.prepareCalls, 0)
+        XCTAssertEqual(replacement.clearCalls, 0)
+        let retry = try asr.beginSettingsBackupRestore()
+        asr.releaseExclusiveActivity(retry)
+    }
+
+    func testActiveDownloadRejectsBackupWithoutCancellingOrChangingIt() async throws {
+        let asr = ASRService()
+        let selected = SettingsStore.shared.selectedSpeechModel
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.whisperTiny] = provider
+        provider.prepareBody = {
+            XCTAssertTrue(asr.hasActiveModelDownload)
+            XCTAssertThrowsError(try asr.beginSettingsBackupRestore())
+            XCTAssertNil(asr.activeExclusiveActivity)
+            XCTAssertTrue(asr.hasActiveModelDownload)
+            XCTAssertFalse(asr.isCancellingModelDownload)
+            XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
+        }
+        try await asr.downloadModel(.whisperTiny, progressHandler: nil)
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertEqual(provider.clearCalls, 0)
+        provider.prepareBody = nil
+        let retry = try asr.beginSettingsBackupRestore()
+        asr.releaseExclusiveActivity(retry)
+    }
+
+    func testActivePreparationRejectsBackupWithoutCancellingIt() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .whisperTiny
+        let asr = ASRService()
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.whisperTiny] = provider
+        provider.prepareBody = {
+            XCTAssertTrue(asr.hasActiveModelPreparation)
+            XCTAssertThrowsError(try asr.beginSettingsBackupRestore())
+            XCTAssertNil(asr.activeExclusiveActivity)
+            XCTAssertTrue(asr.hasActiveModelPreparation)
+            XCTAssertFalse(asr.isCancellingModelPreparation)
+            throw CocoaError(.fileReadUnknown)
+        }
+        do { try await asr.ensureAsrReady() } catch {}
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertEqual(provider.clearCalls, 0)
+        provider.prepareBody = nil
+        let retry = try asr.beginSettingsBackupRestore()
+        asr.releaseExclusiveActivity(retry)
+    }
+
+    func testCompletedProviderResetDoesNotPermanentlyBlockBackupImport() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .whisperTiny
+        let asr = ASRService()
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.whisperTiny] = provider
+        asr.resetTranscriptionProvider()
+        XCTAssertThrowsError(try asr.beginSettingsBackupRestore())
+        let deadline = ContinuousClock.now + .seconds(3)
+        while asr.activeExclusiveActivity != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertNil(asr.activeExclusiveActivity)
+        // Give the independent executor drain its actor turn; no ensureAsrReady
+        // call is allowed to hide a stale completed reset handle in this regression.
+        var reservation: ASRActivityLease?
+        while reservation == nil, ContinuousClock.now < deadline {
+            reservation = try? asr.beginSettingsBackupRestore()
+            if reservation == nil { try await Task.sleep(for: .milliseconds(1)) }
+        }
+        let admitted = try XCTUnwrap(reservation)
+        asr.releaseExclusiveActivity(admitted)
+        XCTAssertEqual(provider.prepareCalls, 0)
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+    }
+
+    func testCancelledBackupAdmissionNeverAcquiresAnActivity() async throws {
+        let asr = ASRService()
+        let cancelled = Task { () throws -> ASRActivityLease in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try asr.beginSettingsBackupRestore()
+        }
+        do { _ = try await cancelled.value; XCTFail("Cancelled imports must not reserve activity") }
+        catch is CancellationError {}
+        XCTAssertNil(asr.activeExclusiveActivity)
+        let retry = try asr.beginSettingsBackupRestore()
+        asr.releaseExclusiveActivity(retry)
+    }
+
     func testCancelledDownloadKeepsCleanupFailureAndDoesNotClearPublishedCache() async throws {
         let selected = SettingsStore.shared.selectedSpeechModel
         let retained = FileManager.default.temporaryDirectory.appendingPathComponent("retained-download-stage")
@@ -404,8 +634,10 @@ final class VoiceModelDeletionTests: XCTestCase {
         #if arch(arm64)
         for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
             let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
-            XCTAssertFalse(provider.shouldClearCacheAfterCancellation,
-                           "The hosted downloader owns staging cleanup; cancellation during Core ML loading must retain a verified publication")
+            XCTAssertFalse(
+                provider.shouldClearCacheAfterCancellation,
+                "The hosted downloader owns staging cleanup; cancellation during Core ML loading must retain a verified publication"
+            )
             XCTAssertEqual(provider.modelsExistOnDisk(), SpeechModelInstallationSnapshot.shared.isInstalled(modelID: model.id))
         }
         for model: SettingsStore.SpeechModel in [.parakeetTDTv2, .parakeetTDT] {

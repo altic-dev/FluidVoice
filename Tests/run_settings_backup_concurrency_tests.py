@@ -26,7 +26,9 @@ def declaration(source: str, marker: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref")
-    parser.add_argument("--expect-overlap-gap", action="store_true")
+    probes = parser.add_mutually_exclusive_group()
+    probes.add_argument("--expect-overlap-gap", action="store_true")
+    probes.add_argument("--expect-active-work-gap", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
     selected = subprocess.check_output(["xcode-select", "-p"], text=True, timeout=10).strip()
@@ -50,6 +52,12 @@ def main() -> None:
         members = gate_line + "\n" + declaration(source, "    private func beginOperation()") + "\n" + members
     errors = declaration(source, "enum BackupServiceError:")
     schema = declaration(source, "struct BackupFileVersion:")
+    asr_source = (repo / "Sources/Fluid/Services/ASRService.swift").read_text()
+    asr_admission = declaration(asr_source, "    func beginSettingsBackupRestore()")
+    asr_activity = declaration(asr_source, "enum ASRExclusiveActivity:")
+    asr_error = declaration(asr_source, "enum ASRActivityError:")
+    asr_release = declaration(asr_source, "    func releaseExclusiveActivity(")
+    asr_restore = declaration(asr_source, "    func handleSettingsBackupDidRestore()")
     swift = r'''
 import Foundation
 SCHEMA
@@ -162,6 +170,58 @@ enum PrivateAIIntegrationService { static let idleUnloader = IdleDouble() }
         onPost?()
     }
 }
+ASR_ACTIVITY
+ASR_ERROR
+struct ASRActivityLease: Equatable { let id: UUID; let activity: ASRExclusiveActivity }
+@MainActor final class HandoffProbe { var isRecovering = false }
+@MainActor final class ResidencyProbe { var isExclusive = false }
+@MainActor final class ASRService {
+    var isTerminating = false
+    var activeActivityLease: ASRActivityLease?
+    var activeExclusiveActivity: ASRExclusiveActivity?
+    var isRunning = false, isStarting = false, isStoppingFinalTranscription = false
+    let recordingBufferHandoffGate = HandoffProbe()
+    var isMicrophonePreviewRequested = false, isMicrophonePreviewActive = false
+    var hasActiveModelDownload = false, hasActiveModelPreparation = false
+    var deletingModelID: String?, providerResetDrain: UUID?
+    var isCancellingModelPreparation = false, isCancellingModelDownload = false
+    let meetingModelResidency = ResidencyProbe()
+    var isAsrReady = true, isDownloadingModel = false, isLoadingModel = false
+    var admissions = 0
+    var releases: Int { DictionaryAudioLearningService.shared.activityEnds }
+    var providerResetPending = false
+    var deferredMeetingActivityLeaseRelease: ASRActivityLease?
+    var completedResets = 0, recoveryRequests = 0
+    ASR_ADMISSION
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard activeActivityLease == nil else { throw ASRActivityError.activityInProgress(activeExclusiveActivity!) }
+        let lease = ASRActivityLease(id: UUID(), activity: activity)
+        activeActivityLease = lease; activeExclusiveActivity = activity; admissions += 1; return lease
+    }
+    ASR_RELEASE
+    ASR_RESTORE
+    func isMeetingASRClaimBlocking(lease: ASRActivityLease) -> Bool { false }
+    func resetTranscriptionProvider() {
+        if activeActivityLease != nil { providerResetPending = true; return }
+        isAsrReady = false; completedResets += 1
+    }
+    func scheduleAudioRouteRecovery(reason: String, requiresIdlePrewarm: Bool, reconcilesInputSelection: Bool) {
+        recoveryRequests += 1
+    }
+}
+@MainActor final class DictionaryAudioLearningService {
+    static let shared = DictionaryAudioLearningService()
+    var activityEnds = 0
+    func activityDidEnd() { activityEnds += 1 }
+}
+@MainActor final class SpeechModelInstallationSnapshot {
+    static let shared = SpeechModelInstallationSnapshot()
+    func refresh() {}
+}
+@MainActor final class AppServices {
+    static let shared = AppServices()
+    var asr = ASRService()
+}
 @MainActor final class BackupService {
 MEMBERS
 }
@@ -177,6 +237,8 @@ MEMBERS
     } catch { fatalError("Wrong busy error: \(error)") }
 }
 @MainActor func reset(idleGate: Gate? = nil, exportGate: Gate? = nil, restoreGate: Gate? = nil) async {
+    AppServices.shared.asr = ASRService()
+    DictionaryAudioLearningService.shared.activityEnds = 0
     SettingsStore.shared.owner = "original"
     SettingsStore.shared.privateAIIdleUnload = 30
     SettingsStore.shared.meetingLanguage = "en"
@@ -219,9 +281,27 @@ func awaitGate(_ gate: Gate) async {
         CURRENT_TESTS
     }
 }
-'''.replace("SCHEMA", schema).replace("ERRORS", errors).replace("MEMBERS", members)
+'''.replace("SCHEMA", schema).replace("ERRORS", errors).replace("MEMBERS", members).replace("ASR_ACTIVITY", asr_activity).replace("ASR_ERROR", asr_error).replace("ASR_ADMISSION", asr_admission).replace("ASR_RELEASE", asr_release).replace("ASR_RESTORE", asr_restore)
 
-    if args.expect_overlap_gap:
+    if args.expect_active_work_gap:
+        swift = swift[:swift.index("@main struct Run")] + r'''
+@main struct Run {
+    @MainActor static func main() async throws {
+        let service = BackupService()
+        await reset()
+        let asr = AppServices.shared.asr
+        asr.isRunning = true
+        let dictation = try asr.acquireExclusiveActivity(.dictation)
+        try await service.restore(document("changed-during-dictation", idle: nil))
+        let state = await PronunciationDictionaryStore.shared.state()
+        expect(SettingsStore.shared.owner == "changed-during-dictation" && state.0 == ["changed-during-dictation"], "historical restore changes settings/profiles during dictation")
+        expect(TranscriptionHistoryStore.shared.writes == 1 && NotificationCenter.default.snapshots.count == 1, "historical restore publishes history and restore callbacks while recording")
+        expect(asr.activeActivityLease == dictation && asr.isRunning, "the ongoing dictation did not release its lease before the restore")
+        print("REPRODUCED: backup changes settings/profiles/history and posts restore callbacks while dictation still owns its recording lease")
+    }
+}
+'''
+    elif args.expect_overlap_gap:
         # Historical enum lacks the busy case, so remove the current-only helper.
         start = swift.index("@MainActor func busy(")
         end = swift.index("@MainActor func reset(", start)
@@ -247,18 +327,98 @@ func awaitGate(_ gate: Gate) async {
         expect(freshExport.pronunciationProfiles == ["B"] && freshExport.settings.owner == "B", "import and export can retry after owner finishes")
 ''')
         swift = swift.replace("CURRENT_TESTS", r'''
+        // Reject complete imports before any profile/settings/history mutation when
+        // existing capture, processing, preparation, download or cleanup owns the app.
+        for blocker in 0..<21 {
+            await reset()
+            let asr = AppServices.shared.asr
+            switch blocker {
+            case 0: _ = try asr.acquireExclusiveActivity(.dictation)
+            case 1: _ = try asr.acquireExclusiveActivity(.fileTranscription)
+            case 2: _ = try asr.acquireExclusiveActivity(.localAPI)
+            case 3: _ = try asr.acquireExclusiveActivity(.meeting)
+            case 4: _ = try asr.acquireExclusiveActivity(.modelMaintenance)
+            case 5: asr.isRunning = true
+            case 6: asr.isStarting = true
+            case 7: asr.isStoppingFinalTranscription = true
+            case 8: asr.recordingBufferHandoffGate.isRecovering = true
+            case 9: asr.isMicrophonePreviewRequested = true
+            case 10: asr.isMicrophonePreviewActive = true
+            case 11: asr.hasActiveModelDownload = true
+            case 12: asr.hasActiveModelPreparation = true
+            case 13: asr.deletingModelID = "fixture"
+            case 14: asr.providerResetDrain = UUID()
+            case 15: asr.isCancellingModelPreparation = true
+            case 16: asr.meetingModelResidency.isExclusive = true
+            case 17: asr.isAsrReady = false; asr.isLoadingModel = true
+            case 18: asr.isCancellingModelDownload = true
+            case 19: asr.isTerminating = true
+            default: asr.isAsrReady = false; asr.isDownloadingModel = true
+            }
+            let originalLease = asr.activeActivityLease
+            do {
+                try await service.restore(document("busy", idle: nil))
+                fatalError("Active work must reject the import before any writes")
+            } catch ASRActivityError.settingsRestoreUnavailable {
+                expect(ASRActivityError.settingsRestoreUnavailable.localizedDescription.contains("import the backup again"), "busy rejection gives an explicit retry")
+            }
+            let untouched = await PronunciationDictionaryStore.shared.state()
+            expect(untouched.2 == 0 && untouched.0 == ["original"], "busy import must not replace profiles")
+            expect(SettingsStore.shared.owner == "original" && TranscriptionHistoryStore.shared.history == ["original"] && TranscriptionHistoryStore.shared.writes == 0, "busy import must preserve settings/history")
+            expect(NotificationCenter.default.snapshots.isEmpty && asr.activeActivityLease == originalLease, "busy import must not notify or release another activity")
+            // No queued automatic import: a fresh explicit retry is required.
+            AppServices.shared.asr = ASRService()
+            try await service.restore(document("retry", idle: nil))
+            expect(SettingsStore.shared.owner == "retry" && AppServices.shared.asr.activeActivityLease == nil, "busy rejection releases backup gate for explicit retry")
+        }
+
         // Reverse overlap: an admitted import has not yet replaced profiles.
         let restoreGate = Gate()
         await reset(restoreGate: restoreGate)
         let firstRestore = Task { try await service.restore(document("A")) }
         await awaitGate(restoreGate)
+        let restoringASR = AppServices.shared.asr
+        expect(restoringASR.activeExclusiveActivity == .settingsRestore, "import reserves ASR before the profile actor hop")
+        for activity: ASRExclusiveActivity in [.dictation, .fileTranscription, .localAPI, .meeting, .modelMaintenance] {
+            do {
+                _ = try restoringASR.acquireExclusiveActivity(activity)
+                fatalError("A new activity must not race into the suspended import")
+            } catch ASRActivityError.activityInProgress(let existing) {
+                expect(existing == .settingsRestore, "competing activity sees the exact import owner")
+            }
+        }
         await busy { _ = try await service.makeBackupDocument() }
         await busy { try await service.restore(document("B")) }
         let beforeReplace = await PronunciationDictionaryStore.shared.state()
         expect(beforeReplace.2 == 1 && beforeReplace.1 == 0 && TranscriptionHistoryStore.shared.loads == 0, "reverse overlap is rejected before export load or second profile write")
         await restoreGate.release(); try await firstRestore.value
+        expect(restoringASR.activeActivityLease == nil && restoringASR.admissions == 1 && restoringASR.releases == 1, "successful import releases its exact ASR reservation once")
+        let nextDictation = try restoringASR.acquireExclusiveActivity(.dictation)
+        restoringASR.releaseExclusiveActivity(nextDictation)
         let afterRestore = try await service.makeBackupDocument()
         expect(afterRestore.settings.owner == "A" && afterRestore.pronunciationProfiles == ["A"] && afterRestore.transcriptionHistory == ["A"], "admitted restore publishes one complete document")
+
+        // An unchanged idle preference leaves no await after the UI notification.
+        // Observe synchronous reset arming, then queue capture admission before
+        // restore returns; it must never observe the old ready-model state.
+        await reset()
+        let unchangedASR = AppServices.shared.asr
+        var queuedCapture: Task<Void, Never>?
+        NotificationCenter.default.onPost = {
+            expect(unchangedASR.activeExclusiveActivity == .settingsRestore && unchangedASR.providerResetPending, "UI observers run after model retirement is armed while import admission is held")
+            queuedCapture = Task { @MainActor in
+                expect(!unchangedASR.isAsrReady && unchangedASR.completedResets == 1, "queued capture sees retired ready-model state before admission")
+                do {
+                    let lease = try unchangedASR.acquireExclusiveActivity(.dictation)
+                    unchangedASR.releaseExclusiveActivity(lease)
+                } catch { fatalError("Capture should be retryable after the completed fixture reset") }
+            }
+        }
+        try await service.restore(document("unchanged-idle", idle: 30))
+        await queuedCapture?.value
+        let unchangedIdle = await PrivateAIIntegrationService.idleUnloader.state()
+        expect(unchangedIdle.0 == 0 && unchangedASR.recoveryRequests == 1 && unchangedASR.completedResets == 1, "unchanged idle import arms exactly one reset/recovery without a timer hop")
+        expect(!unchangedASR.providerResetPending && unchangedASR.activeActivityLease == nil, "queued capture leaves no stale reset or import reservation")
 
         // Retain ownership through timer replies and notification reentrancy.
         let idleGate = Gate()
@@ -293,6 +453,7 @@ func awaitGate(_ gate: Gate) async {
         let cancelledRestore = Task { try await service.restore(document("cancelled", idle: nil)) }
         await awaitGate(cancelledRestoreGate); cancelledRestore.cancel(); await cancelledRestoreGate.release()
         try await cancelledRestore.value
+        expect(AppServices.shared.asr.activeActivityLease == nil && AppServices.shared.asr.releases == 1, "cancelled admitted import releases its ASR reservation")
         let completed = try await service.makeBackupDocument()
         expect(completed.pronunciationProfiles == ["cancelled"] && completed.settings.owner == "cancelled" && completed.transcriptionHistory == ["cancelled"], "cancellation after profile admission finishes a consistent restore")
         expect(NotificationCenter.default.snapshots.count == 1, "completed cancelled restore notifies exactly once")
@@ -317,6 +478,7 @@ func awaitGate(_ gate: Gate) async {
         await PronunciationDictionaryStore.shared.setup(reject: true)
         do { try await service.restore(document("failed")); fatalError("Expected store failure") } catch ProbeFailure.storage {}
         expect(SettingsStore.shared.owner == "original" && TranscriptionHistoryStore.shared.writes == 0 && NotificationCenter.default.snapshots.isEmpty, "profile failure has no settings/history/notification effects")
+        expect(AppServices.shared.asr.activeActivityLease == nil && AppServices.shared.asr.releases == 1, "profile failure releases the exact ASR reservation")
         await PronunciationDictionaryStore.shared.setup()
         _ = try await service.makeBackupDocument()
         try await service.restore(document("retry", idle: nil))
@@ -383,6 +545,7 @@ func awaitGate(_ gate: Gate) async {
         await manualGate.release()
         let manualSnapshot = try await manualExport.value
         expect(manualSnapshot.pronunciationProfiles == ["original"] && manualSnapshot.settings.owner == "manual", "service gate does not falsely serialize ordinary dictionary/settings mutations")
+        expect(AppServices.shared.asr.activeActivityLease == nil, "no completed test leaves import admission held")
         print("LIMIT: ordinary dictionary/settings edits remain outside backup-operation admission")
         print("PASS: \(assertions) production-method concurrency assertions")
 ''')

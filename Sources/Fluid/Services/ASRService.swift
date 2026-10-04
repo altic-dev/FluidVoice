@@ -364,6 +364,7 @@ enum ASRExclusiveActivity: String, Equatable {
     case localAPI
     case meeting
     case modelMaintenance
+    case settingsRestore
 
     var displayName: String {
         switch self {
@@ -377,6 +378,8 @@ enum ASRExclusiveActivity: String, Equatable {
             return "meeting transcription"
         case .modelMaintenance:
             return "voice model maintenance"
+        case .settingsRestore:
+            return "settings import"
         }
     }
 }
@@ -388,11 +391,14 @@ struct ASRActivityLease: Equatable {
 
 enum ASRActivityError: LocalizedError {
     case activityInProgress(ASRExclusiveActivity)
+    case settingsRestoreUnavailable
 
     var errorDescription: String? {
         switch self {
         case let .activityInProgress(activity):
             return "Wait for the active \(activity.displayName) to finish."
+        case .settingsRestoreUnavailable:
+            return "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
         }
     }
 }
@@ -663,6 +669,23 @@ final class ASRService: ObservableObject {
         throw ASRActivityError.activityInProgress(activeActivityLease.activity)
     }
 
+    /// Reject before any backup writes, then reserve admission across its actor hop.
+    /// Keep the whole import together instead of changing the current capture's settings.
+    func beginSettingsBackupRestore() throws -> ASRActivityLease {
+        try Task.checkCancellation()
+        guard !self.isTerminating, self.activeActivityLease == nil,
+              !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+              !self.recordingBufferHandoffGate.isRecovering,
+              !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive,
+              !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+              self.deletingModelID == nil, self.providerResetDrain == nil,
+              !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+              !self.meetingModelResidency.isExclusive,
+              self.isAsrReady || (!self.isDownloadingModel && !self.isLoadingModel)
+        else { throw ASRActivityError.settingsRestoreUnavailable }
+        return try self.acquireExclusiveActivity(.settingsRestore)
+    }
+
     func releaseExclusiveActivity(_ lease: ASRActivityLease) {
         guard self.activeActivityLease == lease else { return }
         if self.isMeetingASRClaimBlocking(lease: lease) {
@@ -853,7 +876,6 @@ final class ASRService: ObservableObject {
     private var lastBoostHitTerm: String?
     private var hasPendingParakeetVocabularyReload: Bool = false
     private var vocabularyChangeObserver: NSObjectProtocol?
-    private var settingsBackupRestoreObserver: NSObjectProtocol?
     private var clamshellStateChangeObserver: NSObjectProtocol?
     private var inputDeviceAvailabilityChangeObserver: NSObjectProtocol?
 
@@ -1271,6 +1293,9 @@ final class ASRService: ObservableObject {
         source: AnalyticsModelDownloadSource = .settings,
         progressHandler: ((Double) -> Void)?
     ) async throws {
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
         let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
         defer { self.meetingModelResidency.endOperation(admission) }
         if self.isMeetingASRPreparationClaimed {
@@ -1404,10 +1429,16 @@ final class ASRService: ObservableObject {
         }
         let resetDrainID = UUID()
         let executor = self.transcriptionExecutor
-        let resetDrainTask = Task { await executor.cancelAndAwaitPending() }
+        let resetDrainTask = Task { @MainActor [weak self] in
+            await executor.cancelAndAwaitPending()
+            // A completed handle must not leave future imports permanently busy.
+            if self?.providerResetDrain?.id == resetDrainID {
+                self?.providerResetDrain = nil
+            }
+        }
         self.providerResetDrain = (resetDrainID, resetDrainTask)
-        // Keep the task handle until its provider has stopped and cancellation cleanup has
-        // completed. The next ensureAsrReady call waits for it before touching the same cache.
+        // ensureAsrReady joins this executor drain. The retiring preparation task
+        // separately remains retained until its provider cancellation cleanup finishes.
         self.ensureReadyProviderKey = nil
         self.ensureReadyOperationID = nil
         self.lastBoostHitTerm = nil
@@ -2170,15 +2201,6 @@ final class ASRService: ObservableObject {
                 self?.handleParakeetVocabularyDidChange()
             }
         }
-        self.settingsBackupRestoreObserver = NotificationCenter.default.addObserver(
-            forName: .settingsBackupDidRestore,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleSettingsBackupDidRestore()
-            }
-        }
         self.clamshellStateChangeObserver = NotificationCenter.default.addObserver(
             forName: .clamshellStateDidChange,
             object: nil,
@@ -2206,9 +2228,6 @@ final class ASRService: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = self.engineConfigurationChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        if let observer = self.settingsBackupRestoreObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = self.clamshellStateChangeObserver {
@@ -2248,8 +2267,9 @@ final class ASRService: ObservableObject {
 
     @MainActor
     func handleSettingsBackupDidRestore() {
-        // A restored selection must retire the old ready model. The existing reset
-        // waits for active work and never deletes downloaded model files.
+        // BackupService calls this synchronously while settingsRestore holds admission.
+        // Its release consumes the pending reset before a new capture can enter.
+        // Downloaded model files remain intact.
         self.resetTranscriptionProvider()
         SpeechModelInstallationSnapshot.shared.refresh()
         self.scheduleAudioRouteRecovery(
@@ -2470,6 +2490,7 @@ final class ASRService: ObservableObject {
               self.isRunning == false,
               self.isStarting == false,
               self.activeExclusiveActivity != .meeting,
+              self.activeExclusiveActivity != .settingsRestore,
               self.isTerminating == false
         else { return }
 
@@ -2488,6 +2509,7 @@ final class ASRService: ObservableObject {
                   self.isRunning == false,
                   self.isStarting == false,
                   self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
                   self.isTerminating == false,
                   Task.isCancelled == false
             else {
@@ -2507,6 +2529,7 @@ final class ASRService: ObservableObject {
               self.isRunning == false,
               self.isStarting == false,
               self.activeExclusiveActivity != .meeting,
+              self.activeExclusiveActivity != .settingsRestore,
               self.isTerminating == false,
               Task.isCancelled == false
         else {
@@ -2533,6 +2556,7 @@ final class ASRService: ObservableObject {
                   self.isRunning == false,
                   self.isStarting == false,
                   self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
                   self.isTerminating == false
             else { throw CancellationError() }
             _ = try await self.directAudioLifecycleController.start(
@@ -2545,6 +2569,7 @@ final class ASRService: ObservableObject {
                   self.isRunning == false,
                   self.isStarting == false,
                   self.activeExclusiveActivity != .meeting,
+                  self.activeExclusiveActivity != .settingsRestore,
                   self.isTerminating == false
             else { throw CancellationError() }
             self.activeAudioCaptureBackend = .directCoreAudio
@@ -6276,6 +6301,9 @@ final class ASRService: ObservableObject {
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         try Task.checkCancellation()
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
@@ -6329,6 +6357,9 @@ final class ASRService: ObservableObject {
             }
         }
 
+        guard self.activeExclusiveActivity != .settingsRestore else {
+            throw ASRActivityError.activityInProgress(.settingsRestore)
+        }
         guard self.deletingModelID == nil, SettingsStore.shared.selectedSpeechModel == model else {
             throw CancellationError()
         }

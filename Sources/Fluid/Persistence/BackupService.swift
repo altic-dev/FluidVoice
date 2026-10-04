@@ -238,6 +238,9 @@ final class BackupService {
         defer { self.operationInProgress = false }
         try Task.checkCancellation()
         try self.validate(document)
+        let asr = AppServices.shared.asr
+        let activityLease = try asr.beginSettingsBackupRestore()
+        defer { asr.releaseExclusiveActivity(activityLease) }
         // A legacy backup represents the complete state from before voice
         // profiles existed. Restoring it must therefore clear newer profiles
         // instead of leaving them attached to restored dictionary entry IDs.
@@ -256,6 +259,10 @@ final class BackupService {
         // Commit settings, History and synchronous observers together before
         // yielding to another actor, keeping the settings/History snapshot consistent.
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
+        // Arm model retirement before admission reopens, including imports whose
+        // unchanged idle preference has no further actor hop. UI notification
+        // delivery must never decide whether the next capture uses stale state.
+        asr.handleSettingsBackupDidRestore()
         NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
         if let idleUnload = document.settings.privateAIIdleUnload, idleUnload != previousIdleUnload {
             // Match the preference UI's targeted rescheduling; do not use the
