@@ -458,7 +458,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     func restore(from payload: [TranscriptionHistoryEntry]) {
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
-        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRecord.revision) }) { first, _ in first }
+        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
         self.entries = payload
             .map { entry in
                 var entry = entry
@@ -642,6 +642,12 @@ final class TranscriptionHistoryStore: ObservableObject {
             "HISTORY_BENCH enqueueMs=\((ProcessInfo.processInfo.systemUptime - startedAt) * 1000) upserts=\(upserts.count) deletes=\(deletes.count)",
             source: "TranscriptionHistoryStore"
         )
+    }
+
+    /// Search retries may reload unavailable history, but must never rewrite it.
+    func retryLoadingIfNeeded() {
+        guard !self.hasLoaded else { return }
+        self.retryPersistence()
     }
 
     func retryPersistence() {

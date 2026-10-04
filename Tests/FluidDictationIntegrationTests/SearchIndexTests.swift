@@ -1,3 +1,5 @@
+import CryptoKit
+import Darwin
 @testable import FluidVoice_Debug
 import Foundation
 import SQLite3
@@ -85,6 +87,208 @@ final class SearchIndexTests: XCTestCase {
         XCTAssertTrue(old.isEmpty)
         let new = try await self.ids(.chats, query: "second")
         XCTAssertEqual(new, [original.id])
+    }
+
+    func testLowerAndEqualRevisionsCannotReplaceNewerIndexedText() async throws {
+        let latest = Self.record("latest harbour manuscript", revision: 9)
+        try await self.index.reconcile(.history, with: [latest])
+        for revision: UInt64 in [1, 9] {
+            let stale = SearchIndexRecord(id: latest.id, revision: revision, timestamp: latest.timestamp, text: "obsolete lighthouse manuscript")
+            let report = try await self.index.reconcile(.history, with: [stale])
+            XCTAssertEqual(report, .init(upserted: 0, deleted: 0))
+            let current = try await self.ids(.history, query: "harb")
+            let replaced = try await self.ids(.history, query: "lighth")
+            XCTAssertEqual(current, [latest.id])
+            XCTAssertTrue(replaced.isEmpty)
+        }
+    }
+
+    func testReconcilingOneKindDoesNotDeleteOrReplaceOtherNamespaces() async throws {
+        let history = Self.record("harbour history")
+        let transcript = SearchIndexRecord(id: history.id, revision: 17, timestamp: history.timestamp, text: "lighthouse transcript")
+        let chat = SearchIndexRecord(id: history.id, revision: 30, timestamp: history.timestamp, text: "mountain chat")
+        try await self.index.reconcile(.history, with: [history])
+        try await self.index.reconcile(.transcripts, with: [transcript])
+        try await self.index.reconcile(.chats, with: [chat])
+        let report = try await self.index.reconcile(.history, with: [])
+        XCTAssertEqual(report, .init(upserted: 0, deleted: 1))
+        let historyCount = try await self.count(.history)
+        let transcripts = try await self.ids(.transcripts, query: "lighth")
+        let chats = try await self.ids(.chats, query: "mount")
+        XCTAssertEqual(historyCount, 0)
+        XCTAssertEqual(transcripts, [history.id])
+        XCTAssertEqual(chats, [history.id])
+    }
+
+    func testSealedRecordOnlyNamespaceReopensWithoutBackfillAndKeepsPrefixMatches() async throws {
+        XCTAssertNil(SearchIndex.spec.vectorSpace)
+        XCTAssertTrue(SearchIndex.spec.attributes.isEmpty)
+        let directory = self.root.appendingPathComponent("sealed", isDirectory: true)
+        let records = [Self.record("meeting notes from monday"), Self.record("harbour lights at dusk")]
+        let initialRoot = FluidZeppelinRoot(root: directory)
+        let initial = SearchIndex(root: initialRoot)
+        do {
+            try await initial.reconcile(.history, with: records)
+            let store = try await initial.namespace(.history)
+            _ = try await store.seal()
+            let sealed = try await store.stats()
+            XCTAssertEqual(sealed.activeRowCount, 0, "Record-only rows must leave the active segment when sealed")
+        } catch {
+            await initialRoot.closeAll()
+            throw error
+        }
+        await initialRoot.closeAll()
+
+        // Distinct roots and actor handles exercise the actual reopen path, not
+        // the cached namespace task from the first reconcile.
+        for _ in 0..<3 {
+            let reopenedRoot = FluidZeppelinRoot(root: directory)
+            let reopened = SearchIndex(root: reopenedRoot)
+            do {
+                let report = try await reopened.reconcile(.history, with: records)
+                XCTAssertEqual(report, .init(upserted: 0, deleted: 0))
+                for typed in ["mee", "meetin", "notes mo"] {
+                    let hits = try await reopened.query(.history, text: typed, limit: 10)
+                    XCTAssertEqual(Set(hits.map(\.id)), [records[0].id])
+                }
+                let store = try await reopened.namespace(.history)
+                let sealed = try await store.stats()
+                XCTAssertEqual(sealed.activeRowCount, 0, "An unchanged reopen must not create a fresh active backfill")
+            } catch {
+                await reopenedRoot.closeAll()
+                throw error
+            }
+            await reopenedRoot.closeAll()
+        }
+    }
+
+    func testReopenedIndexAppliesInsertDeleteAndRestoredRevisionWithoutRevivingOldText() async throws {
+        let directory = self.root.appendingPathComponent("revisions", isDirectory: true)
+        let kept = Self.record("original harbour text", revision: 6)
+        let removed = Self.record("removed lighthouse text", revision: 4)
+        let initialRoot = FluidZeppelinRoot(root: directory)
+        let initial = SearchIndex(root: initialRoot)
+        do {
+            try await initial.reconcile(.history, with: [kept, removed])
+            let store = try await initial.namespace(.history)
+            _ = try await store.seal()
+        } catch {
+            await initialRoot.closeAll()
+            throw error
+        }
+        await initialRoot.closeAll()
+
+        let reopenedRoot = FluidZeppelinRoot(root: directory)
+        let reopened = SearchIndex(root: reopenedRoot)
+        do {
+            let restored = SearchIndexRecord(id: kept.id, revision: 7, timestamp: kept.timestamp, text: "restored mountain text")
+            let inserted = Self.record("new river text")
+            let report = try await reopened.reconcile(.history, with: [restored, inserted])
+            XCTAssertEqual(report, .init(upserted: 2, deleted: 1))
+            let restoredHits = try await reopened.query(.history, text: "mount", limit: 10)
+            let insertedHits = try await reopened.query(.history, text: "riv", limit: 10)
+            let oldHits = try await reopened.query(.history, text: "harbour", limit: 10)
+            let deletedHits = try await reopened.query(.history, text: "lighthouse", limit: 10)
+            XCTAssertEqual(Set(restoredHits.map(\.id)), [kept.id])
+            XCTAssertEqual(Set(insertedHits.map(\.id)), [inserted.id])
+            XCTAssertTrue(oldHits.isEmpty)
+            XCTAssertTrue(deletedHits.isEmpty)
+        } catch {
+            await reopenedRoot.closeAll()
+            throw error
+        }
+        await reopenedRoot.closeAll()
+    }
+
+    func testUnchangedLegacyBackfillSealsOnceAndSmallSubsequentWritesStayActive() async throws {
+        let directory = self.root.appendingPathComponent("maintenance", isDirectory: true)
+        let records = (0..<260).map { Self.record("maintenance harbour entry \($0)") }
+        let legacyRoot = FluidZeppelinRoot(root: directory)
+        let legacy = SearchIndex(root: legacyRoot, maintenanceActiveRowLimit: nil)
+        do {
+            try await legacy.reconcile(.history, with: records)
+            let store = try await legacy.namespace(.history)
+            let stats = try await store.stats()
+            XCTAssertEqual(stats.activeRowCount, 260)
+        } catch {
+            await legacyRoot.closeAll()
+            throw error
+        }
+        await legacyRoot.closeAll()
+
+        let maintainedRoot = FluidZeppelinRoot(root: directory)
+        let maintained = SearchIndex(root: maintainedRoot)
+        do {
+            let backfill = try await maintained.reconcile(.history, with: records)
+            XCTAssertEqual(backfill, .init(upserted: 0, deleted: 0), "Sealing must not relabel unchanged records as new writes")
+            let store = try await maintained.namespace(.history)
+            let first = try await store.stats()
+            XCTAssertEqual(first.activeRowCount, 0)
+            XCTAssertGreaterThan(first.segmentBytes, 0)
+            let repeated = try await maintained.reconcile(.history, with: records)
+            let second = try await store.stats()
+            XCTAssertEqual(repeated, .init(upserted: 0, deleted: 0))
+            XCTAssertEqual(second.segmentBytes, first.segmentBytes, "An unchanged snapshot must not create another segment")
+            XCTAssertEqual(second.activeRowCount, 0)
+
+            let added = Self.record("one additional river entry")
+            let insertion = try await maintained.reconcile(.history, with: records + [added])
+            let smallWrite = try await store.stats()
+            XCTAssertEqual(insertion, .init(upserted: 1, deleted: 0))
+            XCTAssertEqual(smallWrite.activeRowCount, 1, "Do not seal after every dictation")
+            let hits = try await maintained.query(.history, text: "additional riv", limit: 10)
+            XCTAssertEqual(Set(hits.map(\.id)), [added.id])
+        } catch {
+            await maintainedRoot.closeAll()
+            throw error
+        }
+        await maintainedRoot.closeAll()
+    }
+
+    func testFailedSealingPreservesSearchableRecordsAndRetriesOnNextSnapshot() async throws {
+        let directory = self.root.appendingPathComponent("maintenance-failure", isDirectory: true)
+        let namespace = directory.appendingPathComponent(SearchIndexKind.history.rawValue, isDirectory: true)
+        let database = FluidZeppelinRoot(root: directory)
+        let records = (0..<260).map { Self.record("permission harbour entry \($0)") }
+        let legacy = SearchIndex(root: database, maintenanceActiveRowLimit: nil)
+        do {
+            try await legacy.reconcile(.history, with: records)
+            // The live WAL handle stays writable; immutable segment publication
+            // needs a new directory entry and must fail under these permissions.
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: namespace.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: namespace.path) }
+            let permissionProbe = namespace.appendingPathComponent("permission-probe")
+            var deniesCreation = false
+            do {
+                try Data([0]).write(to: permissionProbe, options: .withoutOverwriting)
+            } catch {
+                deniesCreation = true
+            }
+            if !deniesCreation {
+                try? FileManager.default.removeItem(at: permissionProbe)
+                throw XCTSkip("The test runner can create files despite private directory permissions")
+            }
+            let maintained = SearchIndex(root: database)
+            let report = try await maintained.reconcile(.history, with: records)
+            XCTAssertEqual(report, .init(upserted: 0, deleted: 0), "Maintenance failure must not fail an otherwise successful reconcile")
+            let store = try await maintained.namespace(.history)
+            let failedStats = try await store.stats()
+            XCTAssertEqual(failedStats.activeRowCount, 260)
+            let hits = try await maintained.query(.history, text: "permission harb", limit: 300)
+            XCTAssertEqual(Set(hits.map(\.id)), Set(records.map(\.id)))
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: namespace.path)
+            let retry = try await maintained.reconcile(.history, with: records)
+            let retriedStats = try await store.stats()
+            XCTAssertEqual(retry, .init(upserted: 0, deleted: 0))
+            XCTAssertEqual(retriedStats.activeRowCount, 0)
+            let restoredHits = try await maintained.query(.history, text: "permission harb", limit: 300)
+            XCTAssertEqual(Set(restoredHits.map(\.id)), Set(records.map(\.id)))
+        } catch {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: namespace.path)
+            await database.closeAll()
+            throw error
+        }
+        await database.closeAll()
     }
 
     /// A damaged namespace is moved aside by `FluidZeppelinRoot`; the next reconcile
@@ -315,7 +519,7 @@ final class SearchIndexCoordinatorTests: XCTestCase {
             XCTAssertEqual(afterEdits, [saved.id, deleted.id, stale.id], "Edits after a failed load are still an incomplete snapshot")
 
             try fixture.defaults.set(JSONEncoder().encode([saved, deleted]), forKey: "TranscriptionHistoryEntries")
-            history.retryPersistence()
+            history.retryLoadingIfNeeded()
             try await history.waitUntilLoaded()
             XCTAssertNil(history.persistenceError)
             XCTAssertEqual(Set(history.entries.map(\.id)), [saved.id, pending.id])
@@ -336,6 +540,30 @@ final class SearchIndexCoordinatorTests: XCTestCase {
             try await history.waitUntilLoaded()
             XCTAssertTrue(history.entries.isEmpty)
             try await self.waitForIndexedIDs([], in: fixture.index)
+        }
+    }
+
+    func testSearchRetryNeverRewritesSuccessfullyLoadedHistory() async throws {
+        try await self.withFixture { fixture in
+            let saved = self.entry("saved history must remain untouched")
+            try fixture.defaults.set(JSONEncoder().encode([saved]), forKey: "TranscriptionHistoryEntries")
+            let history = TranscriptionHistoryStore(writer: fixture.writer)
+            try await history.waitUntilLoaded()
+            var connection: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(fixture.historyURL.path, &connection), SQLITE_OK)
+            let database = try XCTUnwrap(connection)
+            defer { sqlite3_close(database) }
+            // retryPersistence's loaded branch deletes every row before rewriting.
+            // Make that unintended operation fail instead of merely comparing IDs.
+            XCTAssertEqual(sqlite3_exec(database, "CREATE TRIGGER reject_history_rewrite BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'unexpected history rewrite'); END", nil, nil, nil), SQLITE_OK)
+            history.retryLoadingIfNeeded()
+            await history.finishPendingWrites()
+            XCTAssertNil(history.persistenceError)
+            let writeError = await fixture.writer.drain()
+            XCTAssertNil(writeError)
+            let rows = try await fixture.writer.load()
+            XCTAssertEqual(rows.map(\.id), [saved.id])
+            XCTAssertEqual(history.entries.map(\.id), [saved.id])
         }
     }
 
@@ -411,5 +639,553 @@ final class SearchIndexCoordinatorTests: XCTestCase {
             coordinator.start(historyStore: history)
             try await self.waitForIndexedIDs([saved.id], in: fixture.index)
         }
+    }
+
+    func testFirstSearchPreparationWaitsForLoadedHistoryAndSuppressesSelfRefresh() async throws {
+        try await self.withFixture { fixture in
+            let saved = self.entry("first query authoritative history")
+            try fixture.defaults.set(JSONEncoder().encode([saved]), forKey: "TranscriptionHistoryEntries")
+            let history = TranscriptionHistoryStore(writer: fixture.writer)
+            try await history.waitUntilLoaded()
+            let probe = SearchReconcileProbe(gatedCallCount: 3)
+            var refreshCount = 0
+            let coordinator = SearchIndexCoordinator(
+                index: fixture.index,
+                reconcile: { kind, records in try await probe.reconcile(kind, records: records) },
+                refresh: { refreshCount += 1 }
+            )
+            var prepared = false
+            let preparation = Task { try await coordinator.prepareForSearch(historyStore: history); prepared = true }
+            do {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while await probe.calls().count < 3, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                let calls = await probe.calls()
+                XCTAssertEqual(calls.count, 3)
+                guard calls.count == 3 else { throw SearchReconcileProbe.Failure.unavailable }
+                let indexedHistory = try XCTUnwrap(calls.first { $0.kind == .history })
+                XCTAssertEqual(indexedHistory.records.map(\.id), [saved.id])
+                XCTAssertEqual(indexedHistory.records.first?.text, saved.searchRecord.text)
+                XCTAssertFalse(prepared, "The first query cannot run against an unfinished history snapshot")
+                XCTAssertEqual(refreshCount, 0)
+                await probe.releaseAll()
+                let completionDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while !prepared, ContinuousClock.now < completionDeadline {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                XCTAssertTrue(prepared)
+                guard prepared else { throw SearchReconcileProbe.Failure.unavailable }
+                try await preparation.value
+                XCTAssertEqual(refreshCount, 0, "Seeding the first search must not cancel and restart its own query")
+            } catch {
+                await probe.releaseAll()
+                await coordinator.stop()
+                _ = await preparation.result
+                throw error
+            }
+            await coordinator.stop()
+        }
+    }
+}
+
+private struct SearchBenchmarkRecord: Decodable {
+    let id: UUID
+    let revision: UInt64
+    let timestampMilliseconds: Int64
+    let text: String
+
+    var record: SearchIndexRecord {
+        SearchIndexRecord(id: self.id, revision: self.revision, timestamp: Date(timeIntervalSince1970: Double(self.timestampMilliseconds) / 1000), text: self.text)
+    }
+}
+
+private actor SearchReconcileProbe {
+    struct Call: Sendable {
+        let kind: SearchIndexKind
+        let records: [SearchIndexRecord]
+    }
+
+    enum Failure: Error { case unavailable }
+
+    private var recorded: [Call] = []
+    private var gates: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var released = false
+    private var active: [SearchIndexKind: Int] = [:]
+    private var peak: [SearchIndexKind: Int] = [:]
+    private let gatedCallCount: Int
+    private let failingCalls: Set<Int>
+
+    init(gatedCallCount: Int = 2, failingCalls: Set<Int> = []) {
+        self.gatedCallCount = gatedCallCount
+        self.failingCalls = failingCalls
+    }
+
+    func reconcile(_ kind: SearchIndexKind, records: [SearchIndexRecord]) async throws -> SearchIndex.ReconcileReport {
+        let number = self.recorded.count
+        self.recorded.append(Call(kind: kind, records: records))
+        self.active[kind, default: 0] += 1
+        self.peak[kind] = max(self.peak[kind, default: 0], self.active[kind, default: 0])
+        defer { self.active[kind, default: 0] -= 1 }
+        if !self.released, number < self.gatedCallCount {
+            await withCheckedContinuation { self.gates[number] = $0 }
+        }
+        if self.failingCalls.contains(number) { throw Failure.unavailable }
+        return .init(upserted: records.count, deleted: 0)
+    }
+
+    func calls() -> [Call] { self.recorded }
+    func maximumConcurrentCalls(_ kind: SearchIndexKind) -> Int { self.peak[kind, default: 0] }
+    func release(_ number: Int) { self.gates.removeValue(forKey: number)?.resume() }
+
+    func releaseAll() {
+        self.released = true
+        let gates = self.gates.values
+        self.gates.removeAll()
+        for gate in gates {
+            gate.resume()
+        }
+    }
+}
+
+@MainActor
+final class SearchIndexCoordinatorSchedulingTests: XCTestCase {
+    private func entry(_ text: String) -> TranscriptionHistoryEntry {
+        TranscriptionHistoryEntry(rawText: text, processedText: text, appName: "Fixture", windowTitle: "Fixture", wasAIProcessed: false)
+    }
+
+    private func withProbe(failingCalls: Set<Int> = [], preparationTimeout: Duration = .seconds(20), _ body: (SearchIndexCoordinator, SearchReconcileProbe, () -> Int) async throws -> Void) async throws {
+        let probe = SearchReconcileProbe(failingCalls: failingCalls)
+        var refreshCount = 0
+        let coordinator = SearchIndexCoordinator(
+            reconcile: { kind, records in
+                try await probe.reconcile(kind, records: records)
+            },
+            refresh: { refreshCount += 1 },
+            preparationTimeout: preparationTimeout
+        )
+        do {
+            try await body(coordinator, probe) { refreshCount }
+        } catch {
+            await probe.releaseAll()
+            await coordinator.stop()
+            throw error
+        }
+        await probe.releaseAll()
+        await coordinator.stop()
+    }
+
+    private func waitForCalls(_ count: Int, in probe: SearchReconcileProbe) async throws {
+        try await self.waitUntil { await probe.calls().count >= count }
+    }
+
+    private func waitUntil(_ condition: () async -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !(await condition()), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard await condition() else {
+            XCTFail("A bounded search scheduling condition did not complete")
+            throw SearchReconcileProbe.Failure.unavailable
+        }
+    }
+
+    func testRapidSnapshotsKeepOneWorkerAndOnlyTheLatestSuccessor() async throws {
+        try await self.withProbe { coordinator, probe, refreshCount in
+            let first = self.entry("first snapshot")
+            coordinator.submit(.history([first]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            var latest = first
+            for number in 0..<100 {
+                latest = self.entry("latest snapshot \(number)")
+                coordinator.submit(.history([latest]))
+                coordinator.flush()
+            }
+            let before = await probe.calls()
+            XCTAssertEqual(before.count, 1, "A blocked reconcile must not spawn a task chain")
+            var completed = false
+            var captureStarted = false
+            let barrier = Task { captureStarted = true; try await coordinator.waitUntilCurrent(); completed = true }
+            try await self.waitUntil { captureStarted }
+            await probe.release(0)
+            try await self.waitForCalls(2, in: probe)
+            XCTAssertFalse(completed, "The current snapshot barrier must include the captured latest snapshot")
+            XCTAssertEqual(refreshCount(), 0, "Do not refresh results from an intermediate snapshot")
+            let calls = await probe.calls()
+            XCTAssertEqual(calls.map { $0.records.map(\.id) }, [[first.id], [latest.id]])
+            XCTAssertEqual(calls[1].records.first?.text, latest.searchRecord.text)
+            await probe.release(1)
+            try await self.waitUntil { completed }
+            try await barrier.value
+            try await self.waitUntil { refreshCount() == 1 }
+            let peak = await probe.maximumConcurrentCalls(.history)
+            XCTAssertEqual(peak, 1)
+        }
+    }
+
+    func testCapturedBarrierIsNotExtendedByLaterSnapshots() async throws {
+        try await self.withProbe { coordinator, probe, _ in
+            coordinator.submit(.history([self.entry("captured snapshot")]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            var completed = false
+            var captureStarted = false
+            let barrier = Task { captureStarted = true; try await coordinator.waitUntilCurrent(); completed = true }
+            // Let the barrier capture generation one before sending generation two.
+            try await self.waitUntil { captureStarted }
+            coordinator.submit(.history([self.entry("later snapshot")]))
+            await probe.release(0)
+            try await self.waitForCalls(2, in: probe)
+            try await self.waitUntil { completed }
+            try await barrier.value
+            await probe.release(1)
+            try await coordinator.waitUntilCurrent()
+        }
+    }
+
+    func testStopDropsQueuedSnapshotsCancelsWaitersAndDrainsCurrentWork() async throws {
+        try await self.withProbe { coordinator, probe, refreshCount in
+            coordinator.submit(.history([self.entry("running snapshot")]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            coordinator.submit(.history([self.entry("queued snapshot")]))
+            var barrierCancelled = false
+            let barrier = Task {
+                do {
+                    try await coordinator.waitUntilCurrent()
+                    XCTFail("Stop must cancel the barrier")
+                } catch is CancellationError {
+                    barrierCancelled = true
+                } catch {
+                    XCTFail("Unexpected barrier failure: \(error)")
+                }
+            }
+            await Task.yield()
+            var stopped = false
+            let stop = Task { await coordinator.stop(); stopped = true }
+            try await self.waitUntil { barrierCancelled }
+            XCTAssertFalse(stopped, "Stop must await the actual in-flight write before closeAll")
+            await probe.release(0)
+            try await self.waitUntil { stopped }
+            await stop.value
+            await barrier.value
+            coordinator.submit(.history([self.entry("after stop")]))
+            coordinator.flush()
+            do {
+                try await coordinator.waitUntilCurrent()
+                XCTFail("A stopped coordinator cannot reopen")
+            } catch is CancellationError {}
+            let calls = await probe.calls()
+            XCTAssertEqual(calls.count, 1)
+            XCTAssertEqual(refreshCount(), 0, "Late work must not refresh search during termination")
+        }
+    }
+
+    func testFailedReconcileFinishesBarrierAndExplicitRetryUsesLatestSnapshot() async throws {
+        try await self.withProbe(failingCalls: [0]) { coordinator, probe, refreshCount in
+            coordinator.submit(.history([self.entry("failed first snapshot")]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            let latest = self.entry("latest retry snapshot")
+            coordinator.submit(.history([latest]))
+            var failed = false
+            let barrier = Task {
+                do {
+                    try await coordinator.waitUntilCurrent()
+                    XCTFail("The first reconcile is intentionally unavailable")
+                } catch SearchReconcileProbe.Failure.unavailable {
+                    failed = true
+                }
+            }
+            await Task.yield()
+            await probe.release(0)
+            try await self.waitUntil { failed }
+            try await barrier.value
+            XCTAssertEqual(refreshCount(), 0)
+            var retried = false
+            let retry = Task { try await coordinator.waitUntilCurrent(); retried = true }
+            try await self.waitForCalls(2, in: probe)
+            let calls = await probe.calls()
+            XCTAssertEqual(calls[1].records.map(\.id), [latest.id], "Retry cannot replay an older snapshot over newer input")
+            await probe.release(1)
+            try await self.waitUntil { retried }
+            try await retry.value
+            try await self.waitUntil { refreshCount() == 1 }
+        }
+    }
+
+    func testPreparationTimeoutFinishesPromptlyWithoutStartingAnotherWorker() async throws {
+        try await self.withProbe(preparationTimeout: .milliseconds(50)) { coordinator, probe, _ in
+            coordinator.submit(.history([self.entry("temporarily slow snapshot")]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            let start = ContinuousClock.now
+            do {
+                try await coordinator.waitUntilCurrent()
+                XCTFail("The blocked writer must exceed the injected preparation deadline")
+            } catch SearchIndexCoordinator.PreparationError.timedOut {}
+            XCTAssertLessThan(start.duration(to: .now), .seconds(2))
+            let before = await probe.calls()
+            XCTAssertEqual(before.count, 1, "Timeout must not create another index worker")
+            await probe.release(0)
+            try await coordinator.waitUntilCurrent()
+            let peak = await probe.maximumConcurrentCalls(.history)
+            XCTAssertEqual(peak, 1)
+        }
+    }
+
+    func testCancellingOneBarrierDoesNotCancelTheSharedIndexWorkerOrOtherWaiter() async throws {
+        try await self.withProbe { coordinator, probe, _ in
+            coordinator.submit(.history([self.entry("shared pending snapshot")]))
+            coordinator.flush()
+            try await self.waitForCalls(1, in: probe)
+            var cancelled = false
+            var survivorCompleted = false
+            let first = Task {
+                do {
+                    try await coordinator.waitUntilCurrent()
+                    XCTFail("This waiter was cancelled")
+                } catch is CancellationError {
+                    cancelled = true
+                }
+            }
+            let survivor = Task { try await coordinator.waitUntilCurrent(); survivorCompleted = true }
+            first.cancel()
+            try await self.waitUntil { cancelled }
+            try await first.value
+            XCTAssertFalse(survivorCompleted)
+            await probe.release(0)
+            try await self.waitUntil { survivorCompleted }
+            try await survivor.value
+            let calls = await probe.calls()
+            XCTAssertEqual(calls.count, 1)
+        }
+    }
+}
+
+private struct SearchBenchmarkStats: Codable {
+    let activeRows: UInt64
+    let residentOwnedBytes: UInt64
+    let mappedBytes: UInt64
+    let segmentBytes: UInt64
+    let walBytes: UInt64
+    let physicalFootprint: UInt64?
+
+    init(_ stats: StoreStats) {
+        self.activeRows = stats.activeRowCount
+        self.residentOwnedBytes = stats.residentOwnedBytes
+        self.mappedBytes = stats.mappedBytes
+        self.segmentBytes = stats.segmentBytes
+        self.walBytes = stats.walBytes
+        self.physicalFootprint = stats.physicalFootprint
+    }
+}
+
+private struct SearchBenchmarkReopen: Codable {
+    let queryMilliseconds: Double
+    let reconcileMilliseconds: Double
+    let returnedHits: Int
+    let beforeQueryPhysicalFootprintBytes: UInt64?
+    let afterQueryPhysicalFootprintBytes: UInt64?
+    let afterReconcilePhysicalFootprintBytes: UInt64?
+    let stats: SearchBenchmarkStats
+}
+
+private struct SearchBenchmarkVariant: Codable {
+    let label: String
+    let recordCount: Int
+    let openMilliseconds: Double
+    let reconcileMilliseconds: Double
+    let initialUpserts: Int
+    let initialDeletes: Int
+    let beforeOpenPhysicalFootprintBytes: UInt64?
+    let afterOpenPhysicalFootprintBytes: UInt64?
+    let afterReconcilePhysicalFootprintBytes: UInt64?
+    let before: SearchBenchmarkStats
+    let after: SearchBenchmarkStats
+    let membershipSHA256: String
+    let queryMembershipSHA256: [String: String]
+    let reopens: [SearchBenchmarkReopen]
+}
+
+extension SearchIndexTests {
+    /// Explicitly supplied JSON is an exported private copy, never a production
+    /// store. Both variants modify only unique test roots. Reports omit all text.
+    func testOptInCopiedRealHistoryReopenBenchmark() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let recordsPath = environment["FLUIDVOICE_SEARCH_BENCHMARK_RECORDS"],
+              let outputPath = environment["FLUIDVOICE_SEARCH_BENCHMARK_OUTPUT"]
+        else { throw XCTSkip("Supply private record JSON and a report directory to run the search reopen benchmark") }
+        let input = URL(fileURLWithPath: recordsPath)
+        let attributes = try FileManager.default.attributesOfItem(atPath: input.path)
+        XCTAssertLessThanOrEqual((attributes[.size] as? NSNumber)?.intValue ?? Int.max, 256 * 1024 * 1024)
+        guard (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= 256 * 1024 * 1024 else {
+            throw CocoaError(.fileReadTooLarge)
+        }
+        let records = try JSONDecoder().decode([SearchBenchmarkRecord].self, from: Data(contentsOf: input)).map(\.record)
+        XCTAssertTrue((10_000...20_000).contains(records.count), "Use the real approximately 13k-record corpus")
+        let expectedIDs = Set(records.map(\.id))
+        XCTAssertEqual(expectedIDs.count, records.count)
+        guard (10_000...20_000).contains(records.count), expectedIDs.count == records.count else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let queries = ["the", "meeting", "mo", "project", "update"]
+        let labels: [String]
+        if let variant = environment["FLUIDVOICE_SEARCH_BENCHMARK_VARIANT"] {
+            guard ["baseline", "optimized"].contains(variant) else { throw CocoaError(.coderInvalidValue) }
+            labels = [variant]
+        } else {
+            labels = ["baseline", "optimized"]
+        }
+        var variants: [SearchBenchmarkVariant] = []
+        try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
+        for label in labels {
+            let directory = self.root.appendingPathComponent(label, isDirectory: true)
+            if let sourcePath = environment["FLUIDVOICE_SEARCH_BENCHMARK_SOURCE_INDEX"] {
+                // Optional frozen index copy permits unchanged legacy-backfill
+                // timing. The provided source directory is never opened/written.
+                try FileManager.default.copyItem(at: URL(fileURLWithPath: sourcePath, isDirectory: true), to: directory)
+            }
+            let result = try await self.benchmarkVariant(label, directory: directory, records: records, queries: queries)
+            XCTAssertEqual(result.membershipSHA256, Self.membershipHash(expectedIDs))
+            if label == "optimized" { XCTAssertEqual(result.after.activeRows, 0) }
+            if let baseline = variants.first {
+                XCTAssertEqual(result.queryMembershipSHA256, baseline.queryMembershipSHA256, "Sealing must preserve all matching IDs; top-50 score ties may legitimately reorder")
+                XCTAssertEqual(result.initialUpserts, baseline.initialUpserts)
+                XCTAssertEqual(result.initialDeletes, baseline.initialDeletes)
+            }
+            variants.append(result)
+            if label == "optimized", let preparedPath = environment["FLUIDVOICE_SEARCH_BENCHMARK_EXPORT_PREPARED_INDEX"] {
+                // An explicitly requested private fixture for a fresh-process
+                // reopen measurement; never exported by ordinary test runs.
+                let destination = URL(fileURLWithPath: preparedPath, isDirectory: true)
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try FileManager.default.copyItem(at: directory, to: destination)
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path)
+            }
+        }
+        let output = URL(fileURLWithPath: outputPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let report = output.appendingPathComponent("search-index-benchmark-\(UUID().uuidString).json")
+        try encoder.encode(variants).write(to: report, options: .withoutOverwriting)
+        print("Search index benchmark report: \(report.path)")
+    }
+
+    private func benchmarkVariant(_ label: String, directory: URL, records: [SearchIndexRecord], queries: [String]) async throws -> SearchBenchmarkVariant {
+        let root = FluidZeppelinRoot(root: directory)
+        let index = SearchIndex(root: root, maintenanceActiveRowLimit: label == "baseline" ? nil : 256)
+        let beforeOpenFootprint = Self.physicalFootprint()
+        let start = ContinuousClock.now
+        let store: ZeppelinStore
+        let before: StoreStats
+        let report: SearchIndex.ReconcileReport
+        let openMilliseconds: Double
+        let afterOpenFootprint: UInt64?
+        let reconcileMilliseconds: Double
+        let afterReconcileFootprint: UInt64?
+        let after: StoreStats
+        var membership = Set<UUID>()
+        var queryHashes: [String: String] = [:]
+        do {
+            store = try await index.namespace(.history)
+            openMilliseconds = Self.milliseconds(since: start)
+            afterOpenFootprint = Self.physicalFootprint()
+            before = try await store.stats()
+            let reconcileStart = ContinuousClock.now
+            report = try await index.reconcile(.history, with: records)
+            reconcileMilliseconds = Self.milliseconds(since: reconcileStart)
+            afterReconcileFootprint = Self.physicalFootprint()
+            after = try await store.stats()
+            for try await document in store.documents(fields: []) {
+                membership.insert(document.id.uuid)
+            }
+            // Full membership avoids mistaking a different ordering of equal
+            // BM25 scores at the result limit for a lost document.
+            for query in queries {
+                let hits = try await index.query(.history, text: query, limit: records.count)
+                queryHashes[query] = Self.membershipHash(Set(hits.map(\.id)))
+            }
+        } catch {
+            await root.closeAll()
+            throw error
+        }
+        await root.closeAll()
+        var reopens: [SearchBenchmarkReopen] = []
+        for iteration in 0..<5 {
+            let freshRoot = FluidZeppelinRoot(root: directory)
+            let fresh = SearchIndex(root: freshRoot, maintenanceActiveRowLimit: label == "baseline" ? nil : 256)
+            do {
+                let beforeQueryFootprint = Self.physicalFootprint()
+                let queryStart = ContinuousClock.now
+                // This first query opens the namespace; no cached actor/handle
+                // from a prior iteration can hide startup WAL replay.
+                let hits = try await fresh.query(.history, text: queries[iteration % queries.count], limit: 50)
+                let queryMilliseconds = Self.milliseconds(since: queryStart)
+                let afterQueryFootprint = Self.physicalFootprint()
+                let reconcileStart = ContinuousClock.now
+                let unchanged = try await fresh.reconcile(.history, with: records)
+                let reconcileMilliseconds = Self.milliseconds(since: reconcileStart)
+                let afterReconcileFootprint = Self.physicalFootprint()
+                XCTAssertEqual(unchanged, .init(upserted: 0, deleted: 0))
+                let freshStore = try await fresh.namespace(.history)
+                let stats = try await freshStore.stats()
+                let count = try await freshStore.count().count
+                XCTAssertEqual(count, UInt64(records.count))
+                reopens.append(SearchBenchmarkReopen(
+                    queryMilliseconds: queryMilliseconds,
+                    reconcileMilliseconds: reconcileMilliseconds,
+                    returnedHits: hits.count,
+                    beforeQueryPhysicalFootprintBytes: beforeQueryFootprint,
+                    afterQueryPhysicalFootprintBytes: afterQueryFootprint,
+                    afterReconcilePhysicalFootprintBytes: afterReconcileFootprint,
+                    stats: SearchBenchmarkStats(stats)
+                ))
+            } catch {
+                await freshRoot.closeAll()
+                throw error
+            }
+            await freshRoot.closeAll()
+        }
+        return SearchBenchmarkVariant(
+            label: label,
+            recordCount: records.count,
+            openMilliseconds: openMilliseconds,
+            reconcileMilliseconds: reconcileMilliseconds,
+            initialUpserts: report.upserted,
+            initialDeletes: report.deleted,
+            beforeOpenPhysicalFootprintBytes: beforeOpenFootprint,
+            afterOpenPhysicalFootprintBytes: afterOpenFootprint,
+            afterReconcilePhysicalFootprintBytes: afterReconcileFootprint,
+            before: SearchBenchmarkStats(before),
+            after: SearchBenchmarkStats(after),
+            membershipSHA256: Self.membershipHash(membership),
+            queryMembershipSHA256: queryHashes,
+            reopens: reopens
+        )
+    }
+
+    private static func membershipHash(_ ids: Set<UUID>) -> String {
+        let input = ids.map(\.uuidString).sorted().joined(separator: "\n")
+        return SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
+        let components = start.duration(to: .now).components
+        return Double(components.seconds) * 1000 + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private static func physicalFootprint() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let capacity = Int(count)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: capacity) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? info.phys_footprint : nil
     }
 }

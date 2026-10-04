@@ -107,7 +107,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         SettingsStore.shared.bootstrapOnboardingState(isTrueFirstOpen: isTrueFirstOpen)
 
         AnalyticsService.shared.bootstrap()
-        SearchIndexCoordinator.shared.start()
 
         // Check for updates automatically if enabled (initial check on launch)
         self.checkForUpdatesAutomatically()
@@ -178,7 +177,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func closeZeppelinForTermination() {
         var didClose = false
         Task {
-            await FluidZeppelinRoot.shared.closeAll()
+            AppSearchService.shared.stop()
+            await SearchIndexCoordinator.shared.stop()
+            await FluidZeppelinRoot.shared.shutdown()
             didClose = true
         }
 
