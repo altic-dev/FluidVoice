@@ -570,7 +570,36 @@ final class ASRService: ObservableObject {
         )
     }
 
-    @Published var isRunning: Bool = false
+    @Published var isRunning: Bool = false {
+        didSet {
+            if !self.isRunning {
+                self.dictationMuteGeneration &+= 1
+                self.clearDictationMuteIndicator()
+            }
+        }
+    }
+
+    @Published private(set) var isDictationMuted = false
+    private(set) var dictationMuteGeneration: UInt64 = 0
+
+    func setDictationMuted(_ muted: Bool) {
+        guard self.isRunningOrStarting, !self.isDictionaryTrainingCaptureActive,
+              !self.isStoppingFinalTranscription, muted != self.isDictationMuted else { return }
+        self.audioCapturePipeline.setDictationMuted(muted, at: mach_absolute_time())
+        self.isDictationMuted = muted
+        NotchContentState.shared.isDictationMuted = muted
+        if muted {
+            self.audioLevelSubject.send(0)
+        }
+    }
+
+    private func clearDictationMuteIndicator() {
+        if self.isDictationMuted {
+            self.isDictationMuted = false
+        }
+        if NotchContentState.shared.isDictationMuted { NotchContentState.shared.isDictationMuted = false }
+    }
+
     @Published var finalText: String = ""
     @Published var partialTranscription: String = ""
     @Published var wordBoostStatusText: String = "Word boost: off"
@@ -612,7 +641,17 @@ final class ASRService: ObservableObject {
     private var lastFinalParakeetProcessingMs: Int?
     private(set) var dictionaryTrainingAudioGeneration = 0
 
-    @Published private(set) var isStarting: Bool = false // Guard against re-entrant start() calls
+    @Published private(set) var isStarting: Bool = false { // Guard against re-entrant start() calls
+        didSet {
+            if self.isStarting {
+                self.dictationMuteGeneration &+= 1
+            }
+            if !self.isStarting, !self.isRunning {
+                self.clearDictationMuteIndicator()
+            }
+        }
+    }
+
     private var pendingMediaCaptureSessionID: Int?
     @Published private(set) var activeExclusiveActivity: ASRExclusiveActivity?
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
@@ -2714,6 +2753,9 @@ final class ASRService: ObservableObject {
                 return .failed
             }
         }
+
+        self.audioCapturePipeline.resetDictationMute()
+        self.audioCapturePipeline.setDictationMuted(self.isDictationMuted, at: mach_absolute_time())
 
         // Reserve the start before relinquishing preview ownership so a
         // press-and-hold release can cancel the handoff. Keep the running input
@@ -6859,7 +6901,8 @@ final class ASRService: ObservableObject {
         self.streamingHealthCheckCount += 1
         if self.streamingHealthCheckCount >= 3 {
             let currentBufferCount = self.audioBuffer.count
-            if currentBufferCount == self.streamingHealthLastBufferCount,
+            if !self.isDictationMuted,
+               currentBufferCount == self.streamingHealthLastBufferCount,
                currentBufferCount < 16_000
             {
                 DebugLogger.shared.warning(
@@ -6887,6 +6930,7 @@ final class ASRService: ObservableObject {
                   operationID: operationID
               )
         else { return }
+        guard !self.isDictationMuted else { return }
         self.benchmarkStreamingChunkIndex += 1
         let chunkIndex = self.benchmarkStreamingChunkIndex
         let chunkAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)
@@ -7650,7 +7694,7 @@ private extension ASRService {
 // conversion, levels, and session-safe delivery without touching ASRService from
 // a realtime callback.
 
-private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
+final nonisolated class AudioCapturePipeline: @unchecked Sendable {
     private let audioBuffer: ThreadSafeAudioBuffer
     private let onFirstAudio: (Int, UInt64, Int, Int, Double, Int, Int) -> Void
     private let onLevel: (CGFloat) -> Void
@@ -7658,6 +7702,8 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
 
     private let lock = NSLock()
     private var recordingEnabled: Bool = false
+    private var muteTimeline = DictationMuteTimeline()
+    private var needsMuteSeparation = false
     private var levelMonitoringEnabled: Bool = false
     private var firstAudioReported: Bool = false
     private var recordingSessionID: Int = 0
@@ -7730,6 +7776,18 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.smoothedLevel = 0.0
         }
         self.lock.unlock()
+    }
+
+    func setDictationMuted(_ muted: Bool, at hostTime: UInt64) {
+        self.lock.withLock { self.muteTimeline.setMuted(muted, at: hostTime) }
+    }
+
+    /// Reset only between logical recordings, not during an audio-route retry.
+    func resetDictationMute() {
+        self.lock.withLock {
+            self.muteTimeline = DictationMuteTimeline()
+            self.needsMuteSeparation = false
+        }
     }
 
     var isLevelMonitoringEnabled: Bool {
@@ -7849,12 +7907,6 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             return
         }
 
-        let acceptedSamples: [Float]
-        if acceptedRange.lowerBound == 0, acceptedRange.upperBound == samples.count {
-            acceptedSamples = samples
-        } else {
-            acceptedSamples = Array(samples[acceptedRange])
-        }
         self.lock.lock()
         guard self.recordingEnabled,
               self.recordingSessionID == recordingSessionID,
@@ -7863,22 +7915,14 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             self.lock.unlock()
             return
         }
-        if inputSampleTime >= 0 {
-            let acceptedSampleStart = inputSampleTime + Int64(acceptedRange.lowerBound)
-            if let lastInputSampleEnd = self.lastInputSampleEnd,
-               lastInputSampleEnd != acceptedSampleStart
-            {
-                // Do not interpolate across a hardware discontinuity or a
-                // packet dropped under extreme consumer backpressure.
-                self.resetResamplerLocked()
-            }
-            self.lastInputSampleEnd = inputSampleTime + Int64(acceptedRange.upperBound)
-        }
-        let mono16k = self.resampleTo16kLocked(
-            acceptedSamples,
-            sourceSampleRate: sampleRate
+        let mono16k = self.resampleAudibleRangesLocked(
+            samples,
+            acceptedRange: acceptedRange,
+            sampleRate: sampleRate,
+            inputHostTime: inputHostTime,
+            inputSampleTime: inputSampleTime
         )
-        guard mono16k.isEmpty == false else {
+        guard !mono16k.isEmpty || self.muteTimeline.hasExclusions else {
             self.lock.unlock()
             return
         }
@@ -7916,6 +7960,10 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
             )
         }
         self.lock.unlock()
+        guard !mono16k.isEmpty else {
+            self.onLevel(0)
+            return
+        }
         let measurement = self.measureAudioLevel(mono16k)
         AudioSpectrumMeter.shared.ingest(mono16k)
         self.onLevel(measurement.level)
@@ -7994,6 +8042,61 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         self.resampleSourceFrameCursor = 0
         self.resampleNextSourcePosition = 0
         self.resamplePreviousSample = nil
+    }
+
+    /// Remove muted samples before resampling, streaming, or history storage. Reset
+    /// interpolation at every excluded range so a muted sample cannot cross a seam.
+    private func resampleAudibleRangesLocked(
+        _ samples: [Float],
+        acceptedRange: Range<Int>,
+        sampleRate: Double,
+        inputHostTime: UInt64,
+        inputSampleTime: Int64
+    ) -> [Float] {
+        if !self.muteTimeline.hasExclusions {
+            return self.resampleCapturedRangeLocked(samples, range: acceptedRange, sampleRate: sampleRate, inputSampleTime: inputSampleTime)
+        }
+        let ranges = self.muteTimeline.audibleRanges(
+            in: acceptedRange,
+            packetHostTime: inputHostTime,
+            sampleRate: sampleRate,
+            hostTicksPerSecond: Self.hostTicksPerSecond
+        )
+        var output: [Float] = []
+        var cursor = acceptedRange.lowerBound
+        for range in ranges {
+            if range.lowerBound > cursor {
+                self.needsMuteSeparation = true
+            }
+            if self.needsMuteSeparation { self.resetResamplerLocked() }
+            if self.needsMuteSeparation {
+                // Keep a short word boundary, without accumulating minutes of silence.
+                if !self.audioBuffer.isEmpty || !output.isEmpty {
+                    output.append(contentsOf: repeatElement(0, count: 1600))
+                }
+                self.needsMuteSeparation = false
+            }
+            output.append(contentsOf: self.resampleCapturedRangeLocked(samples, range: range, sampleRate: sampleRate, inputSampleTime: inputSampleTime))
+            cursor = range.upperBound
+        }
+        if cursor < acceptedRange.upperBound {
+            self.needsMuteSeparation = true
+            self.resetResamplerLocked()
+            self.lastInputSampleEnd = nil
+        }
+        return output
+    }
+
+    private func resampleCapturedRangeLocked(_ samples: [Float], range: Range<Int>, sampleRate: Double, inputSampleTime: Int64) -> [Float] {
+        if inputSampleTime >= 0 {
+            let sampleStart = inputSampleTime + Int64(range.lowerBound)
+            if let lastInputSampleEnd = self.lastInputSampleEnd, lastInputSampleEnd != sampleStart {
+                self.resetResamplerLocked()
+            }
+            self.lastInputSampleEnd = inputSampleTime + Int64(range.upperBound)
+        }
+        let acceptedSamples = range == samples.indices ? samples : Array(samples[range])
+        return self.resampleTo16kLocked(acceptedSamples, sourceSampleRate: sampleRate)
     }
 
     private func resetCaptureHealthLocked() {

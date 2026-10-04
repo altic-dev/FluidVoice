@@ -30,6 +30,7 @@ enum SettingsSearchTarget: Hashable {
     case cancelRecordingShortcut
     case pasteLastTranscriptionShortcut
     case activationMode
+    case holdSpaceToMute
     case copyToClipboard
     case textInsertionMode
     case spokenSend
@@ -86,6 +87,7 @@ enum SettingsSearchTarget: Hashable {
              .analyticsPrivacy,
              .microphonePermission,
              .activationMode,
+             .holdSpaceToMute,
              .copyToClipboard,
              .textInsertionMode,
              .spokenSend,
@@ -287,6 +289,7 @@ enum SettingsSearchIndex {
             terms: ["reinsert recent text hotkey shortcut clipboard"]
         ),
         .init(target: .activationMode, title: "Activation Mode", terms: ["hold toggle hotkey behavior"]),
+        .init(target: .holdSpaceToMute, title: "Hold Space to Mute", terms: ["pause microphone spacebar resume silence"]),
         .init(
             target: .copyToClipboard,
             title: "Copy to Clipboard",
