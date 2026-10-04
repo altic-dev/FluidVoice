@@ -7,11 +7,13 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     let settings: SettingsStore
     private let appServices: AppServices
     private var cancellables = Set<AnyCancellable>()
+    let installations = SpeechModelInstallationSnapshot.shared
 
     var asr: ASRService { self.appServices.asr }
 
     var areSpeechModelActionsBlocked: Bool {
-        self.asr.isRunning
+        !self.installations.canUseModelActions
+            || self.asr.isRunning
             || self.asr.deletingModelID != nil
             || self.asr.activeExclusiveActivity != nil
             || self.downloadingModel != nil
@@ -56,15 +58,18 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 }
             }
             .store(in: &self.cancellables)
+        self.installations.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.objectWillChange.send() }
+            }
+            .store(in: &self.cancellables)
     }
 
     func onAppear() {
         self.previewSpeechModel = self.settings.selectedSpeechModel
         self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
 
-        Task {
-            await self.asr.checkIfModelsExistAsync()
-        }
+        self.installations.refresh()
     }
 
     func handleSelectedSpeechModelChange(_ newValue: SettingsStore.SpeechModel) {
@@ -97,7 +102,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
 
         if self.installedOnlyFilter {
-            models = models.filter { $0.isInstalled }
+            models = models.filter { self.isSpeechModelInstalled($0) }
         }
 
         switch self.modelSortOption {
@@ -172,6 +177,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.settings.selectedSpeechModel == model
     }
 
+    func isSpeechModelInstalled(_ model: SettingsStore.SpeechModel) -> Bool {
+        self.installations.isInstalled(modelID: model.id)
+    }
+
     var modelDescriptionText: String {
         let model = self.settings.selectedSpeechModel
         switch model {
@@ -183,6 +192,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "Parakeet TDT v3 uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
         case .parakeetTDTv2:
             return "Parakeet TDT v2 is an English-only model optimized for accuracy and consistency on Apple Silicon."
+        case .fluidParakeetMini, .fluidParakeetPico:
+            return "\(model.cardDescription) Requires Apple silicon."
         case .parakeetRealtime:
             return "Parakeet Flash uses FluidAudio's true streaming EOU pipeline for low-latency English dictation. Best when you want words to appear live as you speak."
         case .qwen3Asr:

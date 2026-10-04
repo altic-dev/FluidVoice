@@ -38,6 +38,7 @@ struct OnboardingFlowView: View {
     }
 
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var installations = SpeechModelInstallationSnapshot.shared
     @StateObject private var aiSetup = OnboardingAISetupController.live
 
     @Binding var currentStep: Int
@@ -356,6 +357,7 @@ struct OnboardingFlowView: View {
             FluidOnboardingWindowTransparency()
         }
         .onAppear {
+            self.installations.refresh()
             self.isOnboardingFlowVisible = true
             self.syncOnboardingSelectionFromSettings()
             self.playLandingWelcomeSoundIfNeeded()
@@ -1426,7 +1428,7 @@ struct OnboardingFlowView: View {
     }
 
     private func isOnboardingModelBundledOrInstalled(_ model: SettingsStore.SpeechModel) -> Bool {
-        model.isInstalled
+        self.installations.isInstalled(modelID: model.id)
     }
 
     private func isPreparingOnboardingModel(_ model: SettingsStore.SpeechModel) -> Bool {
@@ -1447,7 +1449,7 @@ struct OnboardingFlowView: View {
     }
 
     private func prepareOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
-        guard !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
+        guard self.installations.canUseModelActions, !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
@@ -1483,7 +1485,7 @@ struct OnboardingFlowView: View {
     }
 
     private func uninstallOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
-        guard !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
+        guard self.installations.canUseModelActions, !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
         self.uninstallingModelRouteID = route.id
 
@@ -1516,7 +1518,7 @@ struct OnboardingFlowView: View {
         let isPreparing = self.preparingModelRouteID == route.id || (isRouteActiveInSettings && (self.asr.isDownloadingModel || (self.asr.isLoadingModel && !self.asr.isAsrReady)))
         let isReady = self.isOnboardingRouteReady(route)
         let isUninstalling = self.uninstallingModelRouteID == route.id
-        let areModelActionsBlocked = self.asr.isRunning || self.uninstallingModelRouteID != nil || self.preparingModelRouteID != nil || isPreparing || self.isModelPreparationInProgress
+        let areModelActionsBlocked = !self.installations.canUseModelActions || self.asr.isRunning || self.uninstallingModelRouteID != nil || self.preparingModelRouteID != nil || isPreparing || self.isModelPreparationInProgress
         let isBuiltInAppleModel = model == .appleSpeech || model == .appleSpeechAnalyzer
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         let cardFill = isHovered
@@ -1525,6 +1527,9 @@ struct OnboardingFlowView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
+                if model.brandName == "FluidVoice" {
+                    FluidVoiceBrandIcon(size: 22)
+                }
                 Text(self.onboardingModelTitle(for: model))
                     .font(self.theme.typography.sectionTitle)
                     .foregroundStyle(.white)
@@ -1548,7 +1553,9 @@ struct OnboardingFlowView: View {
 
             self.onboardingModelMetadataRow(badgeText: route.badgeText)
 
-            self.onboardingModelFeaturePanel(for: model)
+            if model.hasPerformanceRatings {
+                self.onboardingModelFeaturePanel(for: model)
+            }
 
             Spacer(minLength: 0)
 
@@ -1602,6 +1609,22 @@ struct OnboardingFlowView: View {
                     isDisabled: areModelActionsBlocked || isReady
                 ) {
                     self.prepareOnboardingRoute(route)
+                }
+            } else if !self.installations.canUseModelActions {
+                if self.installations.isChecking {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking downloads…").font(self.theme.typography.bodySmall)
+                    }
+                } else {
+                    self.onboardingModelActionButton(
+                        id: "\(route.id)-retry-check",
+                        title: "Retry check",
+                        systemImage: "arrow.clockwise",
+                        tone: .primary,
+                        width: nil,
+                        isDisabled: false
+                    ) { self.installations.refresh() }
                 }
             } else if isDownloaded {
                 HStack(spacing: 8) {
@@ -1947,6 +1970,10 @@ struct OnboardingFlowView: View {
             return "Parakeet v3"
         case .parakeetTDTv2:
             return "Parakeet v2"
+        case .fluidParakeetMini:
+            return "Fluid Parakeet Mini"
+        case .fluidParakeetPico:
+            return "Fluid Parakeet Pico"
         case .parakeetRealtime:
             return "Parakeet Flash"
         case .cohereTranscribeSixBit:

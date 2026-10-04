@@ -38,7 +38,7 @@ final class NemotronProvider: TranscriptionProvider {
 
     private let repositoryOwner = "BarathwajAnandan"
     private let repositoryRevision = "main"
-    static let requiredFiles = [
+    nonisolated static let requiredFiles = [
         "metadata.json",
         "preprocessor.mlpackage",
         "encoder.mlpackage",
@@ -79,7 +79,7 @@ final class NemotronProvider: TranscriptionProvider {
         return Self.artifactsAreComplete(at: dir)
     }
 
-    static func artifactsAreComplete(at directory: URL) -> Bool {
+    nonisolated static func artifactsAreComplete(at directory: URL) -> Bool {
         guard HuggingFaceModelDownloader.artifactsAreComplete(
             root: directory,
             items: self.requiredFiles.map {

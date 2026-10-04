@@ -1,0 +1,191 @@
+@testable import FluidVoice_Debug
+import Foundation
+import XCTest
+
+@MainActor
+final class ParakeetSpeechModelCatalogTests: XCTestCase {
+    func testAllOfflineParakeetVariantsHaveIndependentStableCacheAndPronunciationKeys() throws {
+        let descriptors = ParakeetSpeechModelCatalog.descriptors
+        XCTAssertEqual(Set(descriptors.map(\.variant)), Set(ParakeetSpeechModelCatalog.Variant.allCases))
+        XCTAssertEqual(Set(descriptors.map(\.modelID)).count, 4)
+        XCTAssertEqual(Set(descriptors.map(\.folderName)).count, 4)
+        XCTAssertEqual(Set(descriptors.map(\.pronunciationModelKey)).count, 4)
+        let root = URL(fileURLWithPath: "/fixture/FluidAudio/Models", isDirectory: true)
+        for descriptor in descriptors {
+            let model = try XCTUnwrap(SettingsStore.SpeechModel(rawValue: descriptor.modelID))
+            XCTAssertEqual(model.parakeetDescriptor, descriptor)
+            XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(for: descriptor.variant), descriptor)
+            XCTAssertEqual(descriptor.cacheDirectory(in: root).deletingLastPathComponent(), root)
+            XCTAssertEqual(descriptor.cacheDirectory(in: root).lastPathComponent, descriptor.folderName)
+            XCTAssertEqual(model.expectedDownloadBytes, descriptor.expectedDownloadBytes)
+            XCTAssertEqual(model.displayName, descriptor.displayName)
+            XCTAssertEqual(model.humanReadableName, descriptor.humanReadableName)
+            XCTAssertFalse(model.isWhisperModel)
+            XCTAssertEqual(model.provider, .nvidia)
+            XCTAssertTrue(model.requiresAppleSilicon)
+            XCTAssertEqual(model.requiresMacOS15, model == .fluidParakeetMini || model == .fluidParakeetPico)
+            XCTAssertFalse(model.requiresMacOS26)
+            XCTAssertNil(model.whisperModelFile)
+            XCTAssertNil(model.legacyWhisperModelFile)
+            XCTAssertEqual(try JSONDecoder().decode(SettingsStore.SpeechModel.self, from: JSONEncoder().encode(model)), model)
+        }
+        XCTAssertNil(ParakeetSpeechModelCatalog.descriptor(forModelID: "missing"))
+        XCTAssertNil(SettingsStore.SpeechModel.parakeetRealtime.parakeetDescriptor)
+        XCTAssertNil(SettingsStore.SpeechModel.whisperBase.parakeetDescriptor)
+    }
+
+    func testLegacyV2V3MetadataAndArchitectureDefaultRemainUnchanged() {
+        let v2 = ParakeetSpeechModelCatalog.v2
+        let v3 = ParakeetSpeechModelCatalog.v3
+        XCTAssertEqual(v2.modelID, "parakeet-tdt-v2")
+        XCTAssertEqual(v3.modelID, "parakeet-tdt")
+        XCTAssertEqual(v2.folderName, "parakeet-tdt-0.6b-v2-coreml")
+        XCTAssertEqual(v3.folderName, "parakeet-tdt-0.6b-v3-coreml")
+        XCTAssertEqual(v2.pronunciationModelKey, "parakeet-v2")
+        XCTAssertEqual(v3.pronunciationModelKey, "parakeet-v3")
+        XCTAssertEqual(v2.expectedDownloadBytes, 464_421_712)
+        XCTAssertEqual(v3.expectedDownloadBytes, 483_288_717)
+        XCTAssertEqual(v2.downloadSize, "~442.9 MiB")
+        XCTAssertEqual(v3.downloadSize, "~460.9 MiB")
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDTv2.humanReadableName, "Blazing Fast - English")
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDT.humanReadableName, "Blazing Fast - Multilingual")
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDTv2.accuracyPercent, 0.96)
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDT.accuracyPercent, 0.92)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDTv2.hasPerformanceRatings)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDT.hasPerformanceRatings)
+        for model: SettingsStore.SpeechModel in [.parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming] {
+            XCTAssertEqual(model.brandName, "NVIDIA")
+            XCTAssertEqual(model.brandColorHex, "#76B900")
+            XCTAssertEqual(model.provider, .nvidia)
+        }
+        XCTAssertNil(v2.archiveURL)
+        XCTAssertNil(v3.archiveSHA256)
+        XCTAssertEqual(Set(v2.requiredModelNames), Set(["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecision.mlmodelc"]))
+        XCTAssertEqual(v2.requiredModelNames, v3.requiredModelNames)
+        XCTAssertEqual(v2.supportedLanguageCodes, ["en"])
+        XCTAssertEqual(Set(v3.supportedLanguageCodes), Set([
+            "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+            "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+        ]))
+        XCTAssertEqual(SettingsStore.SpeechModel.defaultModel, CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase)
+    }
+
+    func testHostedSmallVariantsUseExactArchivesAndNoInventedPerformanceRatings() throws {
+        let fixtures: [(SettingsStore.SpeechModel, Int64, String, String)] = [
+            (.fluidParakeetMini, 254_126_592, "fluid-mini", "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36"),
+            (.fluidParakeetPico, 161_201_152, "fluid-pico", "afcdd76d4aba0328c97c858ee5c4c227ab5e23cc6885de5299d009c3671fe5d6"),
+        ]
+        for (model, bytes, path, hash) in fixtures {
+            let descriptor = try XCTUnwrap(model.parakeetDescriptor)
+            XCTAssertEqual(descriptor.expectedDownloadBytes, bytes)
+            XCTAssertEqual(descriptor.archiveSHA256, hash)
+            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.0.0/\(descriptor.folderName).tar")
+            XCTAssertEqual(descriptor.archiveURL?.scheme, "https")
+            XCTAssertEqual(descriptor.supportedLanguageCodes, ["en"])
+            XCTAssertTrue(descriptor.isEnglishOnly)
+            XCTAssertEqual(model.languageSupport, "English Only")
+            XCTAssertEqual(model.brandName, "FluidVoice")
+            XCTAssertEqual(model.brandColorHex, "#1A75FF")
+            XCTAssertEqual(model.provider, .nvidia, "Product branding must not change the Parakeet backend or family filter")
+            XCTAssertFalse(model.usesAppleLogo)
+            XCTAssertEqual(model.supportedLanguageCodes, "EN")
+            XCTAssertEqual(model.supportedLanguageNames, "English")
+            XCTAssertFalse(model.hasPerformanceRatings)
+            XCTAssertNil(descriptor.performanceRatings)
+            XCTAssertEqual(model.accuracyPercent, 0)
+            XCTAssertEqual(model.speedPercent, 0)
+            XCTAssertTrue(model.supportsPronunciationMatching, "Real split encoders produce compatible 1024-dimensional embeddings")
+            XCTAssertTrue(model.supportsCustomVocabulary, "Real CTC110m boosting is verified for both variants")
+            XCTAssertEqual(model.streamingPreviewIntervalSeconds, SettingsStore.SpeechModel.parakeetTDTv2.streamingPreviewIntervalSeconds)
+            XCTAssertEqual(model.minimumStreamingPreviewSeconds, SettingsStore.SpeechModel.parakeetTDTv2.minimumStreamingPreviewSeconds)
+            XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
+        }
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetMini.humanReadableName, "Blazing Fast Mini")
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Blazing Fast Pico")
+    }
+
+    func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
+        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico]
+        let english = VoiceEngineLanguageCatalog.routes(forLanguageID: "en", availableModels: models)
+        XCTAssertEqual(english.map(\.model), models)
+        XCTAssertEqual(english.first?.model, .parakeetTDTv2)
+        for route in english where route.model == .fluidParakeetMini || route.model == .fluidParakeetPico {
+            XCTAssertEqual(route.binding, .automatic)
+            XCTAssertNotNil(route.badgeText)
+        }
+        for language in VoiceEngineLanguageCatalog.allLanguages(availableModels: models) where language.id != "en" {
+            let routes = VoiceEngineLanguageCatalog.routes(for: language, availableModels: models)
+            XCTAssertFalse(routes.contains { $0.model == .fluidParakeetMini || $0.model == .fluidParakeetPico })
+            XCTAssertEqual(routes.map(\.model), [.parakeetTDT])
+        }
+        XCTAssertEqual(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.fluidParakeetMini, .fluidParakeetPico]).map(\.id), ["en"])
+        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "fr", availableModels: [.fluidParakeetMini, .fluidParakeetPico]).isEmpty)
+        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "missing", availableModels: models).isEmpty)
+    }
+
+    func testCatalogReadsPreserveExistingAndNewPersistedSelections() throws {
+        let defaults = UserDefaults.standard
+        let domain = try XCTUnwrap(Bundle.main.bundleIdentifier)
+        let original = defaults.persistentDomain(forName: domain)
+        defer {
+            if let original {
+                defaults.setPersistentDomain(original, forName: domain)
+            } else {
+                defaults.removePersistentDomain(forName: domain)
+            }
+        }
+        let settings = SettingsStore.shared
+        let models: [SettingsStore.SpeechModel] = [.parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .whisperBase]
+        for model in models {
+            // A direct persisted fixture avoids sending model-switch UI events.
+            defaults.set(model.rawValue, forKey: "SelectedSpeechModel")
+            let before = defaults.persistentDomain(forName: domain)
+            _ = model.parakeetDescriptor
+            _ = model.displayName
+            _ = model.expectedDownloadBytes
+            _ = SettingsStore.SpeechModel.availableModels
+            let expected = model.requiresAppleSilicon && !CPUArchitecture.isAppleSilicon ? SettingsStore.SpeechModel.whisperBase : model
+            XCTAssertEqual(settings.selectedSpeechModel, expected)
+            XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), model.rawValue)
+            XCTAssertEqual(defaults.persistentDomain(forName: domain) as NSDictionary?, before as NSDictionary?)
+        }
+    }
+
+    func testSplitCompletenessRequiresEveryEncoderPartAndVocabularyWithoutBorrowingSiblingCache() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mini = ParakeetSpeechModelCatalog.mini
+        let pico = ParakeetSpeechModelCatalog.pico
+        let miniDirectory = mini.cacheDirectory(in: root)
+        try self.installFixture(mini, at: miniDirectory)
+        XCTAssertTrue(mini.artifactsAreComplete(at: miniDirectory))
+        XCTAssertFalse(pico.artifactsAreComplete(at: pico.cacheDirectory(in: root)))
+        let encoder = miniDirectory.appendingPathComponent("Encoder-3.mlmodelc", isDirectory: true)
+        try FileManager.default.removeItem(at: encoder)
+        XCTAssertFalse(mini.artifactsAreComplete(at: miniDirectory))
+        try self.installCompiledFixture(at: encoder)
+        let vocabulary = miniDirectory.appendingPathComponent(mini.vocabularyFile)
+        try Data().write(to: vocabulary)
+        XCTAssertFalse(mini.artifactsAreComplete(at: miniDirectory))
+        try Data("{}".utf8).write(to: vocabulary)
+        XCTAssertTrue(mini.artifactsAreComplete(at: miniDirectory))
+        let weights = encoder.appendingPathComponent("weights/weight.bin")
+        try Data().write(to: weights)
+        XCTAssertFalse(mini.artifactsAreComplete(at: miniDirectory))
+    }
+
+    private func installFixture(_ descriptor: ParakeetSpeechModelCatalog.Descriptor, at directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
+        for name in descriptor.requiredModelNames {
+            try self.installCompiledFixture(at: directory.appendingPathComponent(name, isDirectory: true))
+        }
+    }
+
+    private func installCompiledFixture(at directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("weights", isDirectory: true), withIntermediateDirectories: true)
+        try Data([1]).write(to: directory.appendingPathComponent("coremldata.bin"))
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("metadata.json"))
+        try Data([1]).write(to: directory.appendingPathComponent("weights/weight.bin"))
+    }
+}

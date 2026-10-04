@@ -150,12 +150,10 @@ actor OriginalAudioEmbeddingExtractor {
     @concurrent static func extract(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
         try Task.checkCancellation()
         #if arch(arm64)
-        let version: AsrModelVersion
-        switch evidence.modelKey {
-        case "parakeet-v2": version = .v2
-        case "parakeet-v3": version = .v3
-        default: throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: evidence.modelKey) else {
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
+        let version = descriptor.asrModelVersion
         let models = try await AsrModels.loadLocalOnly(
             from: AsrModels.defaultCacheDirectory(for: version),
             version: version
@@ -163,7 +161,7 @@ actor OriginalAudioEmbeddingExtractor {
         try Task.checkCancellation()
         let manager = AsrManager(config: ASRConfig(
             tdtConfig: TdtConfig(blankId: version.blankId),
-            encoderHiddenSize: 1024
+            encoderHiddenSize: version.encoderHiddenSize
         ))
         do {
             try await manager.initialize(models: models)

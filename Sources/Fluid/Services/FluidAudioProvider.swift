@@ -206,6 +206,12 @@ final class FluidAudioProvider: TranscriptionProvider {
             ?? SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled
     }
 
+    private var resolvedSpeechModel: SettingsStore.SpeechModel {
+        let selected = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        // Preserve the established fallback for old Qwen selections.
+        return selected == .qwen3Asr ? .parakeetTDT : selected
+    }
+
     private var explicitPronunciationMatchingEnabled: Bool {
         self.meetingOptions?.pronunciationMatchingEnabled
             ?? self.enhancementOptions?.pronunciationMatchingEnabled
@@ -295,10 +301,13 @@ final class FluidAudioProvider: TranscriptionProvider {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        let asrModelVersion: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
-        let modelVersion = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
-        self.pronunciationModelKey = "parakeet-\(modelVersion)"
+        let selectedModel = self.resolvedSpeechModel
+        guard let descriptor = selectedModel.parakeetDescriptor else {
+            throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])
+        }
+        let asrModelVersion = descriptor.asrModelVersion
+        let modelVersion = descriptor.variant.rawValue
+        self.pronunciationModelKey = descriptor.pronunciationModelKey
         let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
         let modelCacheDirectory = AsrModels.defaultCacheDirectory(for: asrModelVersion)
         DebugLogger.shared.info(
@@ -307,13 +316,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         )
         DebugLogger.shared.debug("FluidAudioProvider: target cache directory=\(cacheDirectory.path)", source: "FluidAudioProvider")
         try Task.checkCancellation()
-        if FileManager.default.fileExists(atPath: modelCacheDirectory.path), !self.modelsExistOnDisk() {
-            DebugLogger.shared.warning(
-                "FluidAudioProvider: removing incomplete \(modelVersion) cache before download",
-                source: "FluidAudioProvider"
-            )
-            try FileManager.default.removeItem(at: modelCacheDirectory)
-        }
+        try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: modelCacheDirectory.path),
+               !descriptor.artifactsAreComplete(at: modelCacheDirectory)
+            {
+                try FileManager.default.removeItem(at: modelCacheDirectory)
+            }
+        }.value
+        try Task.checkCancellation()
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
         progressRelay.report(.preparingDownload)
         let fluidAudioProgressHandler: DownloadUtils.ProgressHandler = { progress in
@@ -333,11 +344,23 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Download and load models
         let models: AsrModels
         do {
-            models = try await AsrModels.downloadAndLoad(
-                version: asrModelVersion,
-                progressHandler: fluidAudioProgressHandler
-            )
+            if descriptor.archiveURL != nil {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(descriptor: descriptor, in: cacheDirectory) { progress in
+                    progressRelay.report(progress)
+                }
+                try Task.checkCancellation()
+                progressRelay.report(.loading)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+            } else {
+                models = try await AsrModels.downloadAndLoad(
+                    version: asrModelVersion,
+                    progressHandler: fluidAudioProgressHandler
+                )
+            }
         } catch {
+            // A canceled transfer can still leave files that require user cleanup.
+            // Keep that repair path visible instead of reporting an ordinary cancel.
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             let nsError = error as NSError
             if Task.isCancelled
                 || error is CancellationError
@@ -369,7 +392,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Shares the same underlying MLModel objects (reference types) so memory overhead
         // is only the decoder state (~100KB).
         let finalManager: AsrManager
-        if self.configureWordBoosting {
+        if self.configureWordBoosting, selectedModel.supportsCustomVocabulary {
             do {
                 if let vocabBundle = try await ParakeetVocabularyStore.shared.loadTokenizedVocabularyBundle() {
                     DebugLogger.shared.debug(
@@ -1463,9 +1486,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.resolvedSpeechModel
         switch selectedModel {
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             return selectedModel.isInstalled
         default:
             return false
@@ -1473,7 +1496,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.resolvedSpeechModel
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.recordingGeneration = UUID()
@@ -1493,8 +1516,10 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.boostedVocabularyTermsCount = 0
         self.boostedTermLookup = []
 
-        let version: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
-        let directory = AsrModels.defaultCacheDirectory(for: version)
+        guard let descriptor = selectedModel.parakeetDescriptor else {
+            throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])
+        }
+        let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
         try await Task.detached(priority: .userInitiated) {
             if FileManager.default.fileExists(atPath: directory.path) {
                 try FileManager.default.removeItem(at: directory)

@@ -1112,7 +1112,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return self.getAppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             return self.getFluidAudioProvider()
         case .parakeetRealtime:
             return self.getParakeetRealtimeProvider()
@@ -1244,7 +1244,7 @@ final class ASRService: ObservableObject {
             }
         case .appleSpeech:
             return AppleSpeechProvider()
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             // Create a new provider configured for the specific model
             return FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
         case .parakeetRealtime:
@@ -1317,6 +1317,7 @@ final class ASRService: ObservableObject {
                 try Task.checkCancellation()
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
             } catch {
+                if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
                 let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
                 if wasCancelled,
                    provider.shouldClearCacheAfterCancellation,
@@ -1340,6 +1341,7 @@ final class ASRService: ObservableObject {
                 self.downloadProgress = nil
                 self.modelPreparationPhase = nil
                 self.isCancellingModelDownload = false
+                SpeechModelInstallationSnapshot.shared.refresh()
             }
         }
 
@@ -2174,11 +2176,7 @@ final class ASRService: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.scheduleAudioRouteRecovery(
-                    reason: "settings backup restored",
-                    requiresIdlePrewarm: true,
-                    reconcilesInputSelection: true
-                )
+                self?.handleSettingsBackupDidRestore()
             }
         }
         self.clamshellStateChangeObserver = NotificationCenter.default.addObserver(
@@ -2243,6 +2241,19 @@ final class ASRService: ObservableObject {
 
         self.scheduleAudioRouteRecovery(
             reason: "input availability changed:\(deviceID ?? 0)",
+            requiresIdlePrewarm: true,
+            reconcilesInputSelection: true
+        )
+    }
+
+    @MainActor
+    func handleSettingsBackupDidRestore() {
+        // A restored selection must retire the old ready model. The existing reset
+        // waits for active work and never deletes downloaded model files.
+        self.resetTranscriptionProvider()
+        SpeechModelInstallationSnapshot.shared.refresh()
+        self.scheduleAudioRouteRecovery(
+            reason: "settings backup restored",
             requiresIdlePrewarm: true,
             reconcilesInputSelection: true
         )
@@ -6376,6 +6387,8 @@ final class ASRService: ObservableObject {
             return
         }
 
+        defer { SpeechModelInstallationSnapshot.shared.refresh() }
+
         // If the flag is set but provider isn't ready (e.g., provider switch without reset), re-init.
         if self.isAsrReady, !provider.isReady {
             DebugLogger.shared.debug("ASR marked ready but provider not ready; re-initializing", source: "ASRService")
@@ -6515,7 +6528,7 @@ final class ASRService: ObservableObject {
             }
             throw CancellationError()
         } catch {
-            if Task.isCancelled || Self.isModelPreparationCancellation(error) {
+            if !ParakeetArchiveDownloader.isCleanupFailure(error), Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)
                 if provider.shouldClearCacheAfterCancellation,
                    provider.modelsExistOnDisk() == false
@@ -6652,6 +6665,9 @@ final class ASRService: ObservableObject {
             )
             return
         } catch {
+            // Staging cleanup failure must not delete a successfully published cache
+            // or hide its repair path when cancellation was also requested.
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             if Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 throw CancellationError()
             }
@@ -6692,6 +6708,7 @@ final class ASRService: ObservableObject {
         do {
             try await provider.prepare(progressHandler: progressHandler)
         } catch {
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             if Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 throw CancellationError()
             }
@@ -6771,6 +6788,7 @@ final class ASRService: ObservableObject {
         let isActive = SettingsStore.shared.selectedSpeechModel == model
         defer {
             self.deletingModelID = nil
+            SpeechModelInstallationSnapshot.shared.refresh()
             self.releaseExclusiveActivity(activityLease)
         }
         DebugLogger.shared.debug("Clearing model cache for \(model.displayName)", source: "ASRService")

@@ -100,7 +100,7 @@ actor DictionaryMatchPlayground {
         #if arch(arm64)
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
         guard let targetProfile = allProfiles.first(where: {
-            $0.label.caseInsensitiveCompare(target) == .orderedSame && ["parakeet-v2", "parakeet-v3"].contains($0.modelKey)
+            $0.label.caseInsensitiveCompare(target) == .orderedSame && ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: $0.modelKey) != nil
         }) else {
             throw DictionaryMatchPlaygroundError.unavailable("No saved Parakeet pronunciation recordings for “\(target)”. Train this word by voice first.")
         }
@@ -112,7 +112,10 @@ actor DictionaryMatchPlayground {
         }
         let profiles = Array(matching.prefix(64))
         try Task.checkCancellation()
-        let version: AsrModelVersion = targetProfile.modelKey == "parakeet-v2" ? .v2 : .v3
+        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: targetProfile.modelKey) else {
+            throw DictionaryMatchPlaygroundError.unavailable("This pronunciation model is unavailable.")
+        }
+        let version = descriptor.asrModelVersion
         let models = try await AsrModels.loadLocalOnly(from: AsrModels.defaultCacheDirectory(for: version), version: version)
         let manager = AsrManager(config: ASRConfig(tdtConfig: TdtConfig(blankId: version.blankId), encoderHiddenSize: version.encoderHiddenSize))
         do {

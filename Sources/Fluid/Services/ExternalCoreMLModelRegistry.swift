@@ -2,11 +2,11 @@ import CoreML
 import FluidAudio
 import Foundation
 
-enum ExternalCoreMLASRBackend {
+nonisolated enum ExternalCoreMLASRBackend: Sendable {
     case cohereTranscribe
 }
 
-struct ExternalCoreMLManifestIdentity: Decodable {
+nonisolated struct ExternalCoreMLManifestIdentity: Decodable, Sendable {
     let modelID: String
     let sampleRate: Int
     let maxAudioSamples: Int
@@ -22,7 +22,7 @@ struct ExternalCoreMLManifestIdentity: Decodable {
     }
 }
 
-enum ExternalCoreMLArtifactsValidationError: LocalizedError {
+nonisolated enum ExternalCoreMLArtifactsValidationError: LocalizedError {
     case missingEntries([String])
     case manifestMissing(URL)
     case manifestUnreadable(URL, Error)
@@ -57,7 +57,7 @@ enum ExternalCoreMLArtifactsValidationError: LocalizedError {
     }
 }
 
-struct ExternalCoreMLASRModelSpec {
+nonisolated struct ExternalCoreMLASRModelSpec: Sendable {
     private static let bundleStampFileName = ".fluid_artifact_bundle_version"
 
     let backend: ExternalCoreMLASRBackend
@@ -244,7 +244,7 @@ extension SettingsStore.SpeechModel {
 
     var supportsCustomVocabulary: Bool {
         switch self {
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             return true
         default:
             return false

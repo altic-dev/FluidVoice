@@ -9,6 +9,7 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
     var isReady = true
     var clearCalls = 0
     var prepareCalls = 0
+    var cachedFilesExist = false
     var clear: (() async throws -> Void)?
     var prepareBody: (() async throws -> Void)?
 
@@ -21,6 +22,8 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
         ASRTranscriptionResult(text: "", confidence: 0)
     }
 
+    func modelsExistOnDisk() -> Bool { self.cachedFilesExist }
+
     func clearCache() async throws {
         self.clearCalls += 1
         try await self.clear?()
@@ -30,6 +33,161 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
 
 @MainActor
 final class VoiceModelDeletionTests: XCTestCase {
+    func testCancelledDownloadKeepsCleanupFailureAndDoesNotClearPublishedCache() async throws {
+        let selected = SettingsStore.shared.selectedSpeechModel
+        let retained = FileManager.default.temporaryDirectory.appendingPathComponent("retained-download-stage")
+        let asr = ASRService()
+        let provider = DeletionFixtureProvider()
+        provider.cachedFilesExist = true
+        provider.prepareBody = {
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw ParakeetArchiveDownloader.DownloadError.cleanupFailed(retained)
+        }
+        asr.modelProvidersForTesting[.fluidParakeetMini] = provider
+        do {
+            try await asr.downloadModel(.fluidParakeetMini, progressHandler: nil)
+            XCTFail("The retained cleanup path must reach the caller")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case let .cleanupFailed(path) = error else { return XCTFail("Unexpected archive failure") }
+            XCTAssertEqual(path, retained)
+        }
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
+        XCTAssertFalse(asr.hasActiveModelDownload)
+        XCTAssertFalse(asr.isCancellingModelDownload)
+        XCTAssertNil(asr.downloadingModelId)
+    }
+
+    func testPreparationCleanupFailureSkipsDestructiveRetryEvenWhenCancelled() async throws {
+        guard SettingsStore.SpeechModel.availableModels.contains(.fluidParakeetMini) else {
+            throw XCTSkip("Compact model preparation requires a supported Mac and macOS version")
+        }
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .fluidParakeetMini
+        let retained = FileManager.default.temporaryDirectory.appendingPathComponent("retained-preparation-stage")
+        for cancelled in [false, true] {
+            for cached in [false, true] {
+                let asr = ASRService()
+                let provider = DeletionFixtureProvider()
+                provider.cachedFilesExist = cached
+                provider.prepareBody = {
+                    if cancelled { withUnsafeCurrentTask { $0?.cancel() } }
+                    throw ParakeetArchiveDownloader.DownloadError.cleanupFailed(retained)
+                }
+                asr.modelProvidersForTesting[.fluidParakeetMini] = provider
+                do {
+                    try await asr.ensureAsrReady()
+                    XCTFail("The retained cleanup path must reach the caller")
+                } catch let error as ParakeetArchiveDownloader.DownloadError {
+                    guard case let .cleanupFailed(path) = error else { return XCTFail("Unexpected archive failure") }
+                    XCTAssertEqual(path, retained)
+                }
+                XCTAssertEqual(provider.prepareCalls, 1)
+                XCTAssertEqual(provider.clearCalls, 0, "A staging failure must preserve published model files")
+                XCTAssertFalse(asr.isAsrReady)
+                XCTAssertFalse(asr.hasActiveModelPreparation)
+                XCTAssertFalse(asr.isCancellingModelPreparation)
+                XCTAssertFalse(asr.isDownloadingModel)
+                XCTAssertFalse(asr.isLoadingModel)
+            }
+        }
+    }
+
+    func testRestoredCompactSelectionRetiresReadyModelOnlyAfterActiveWorkFinishes() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+            settings.selectedSpeechModel = .parakeetTDT
+            let asr = ASRService()
+            let old = DeletionFixtureProvider()
+            let restored = DeletionFixtureProvider()
+            asr.modelProvidersForTesting[.parakeetTDT] = old
+            asr.modelProvidersForTesting[model] = restored
+            asr.isAsrReady = true
+            let lease = try asr.acquireExclusiveActivity(.dictation)
+            settings.selectedSpeechModel = model
+            asr.handleSettingsBackupDidRestore()
+            XCTAssertTrue(asr.isAsrReady, "Restoring settings must not interrupt active dictation")
+            XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+            XCTAssertEqual(old.clearCalls, 0)
+            XCTAssertEqual(restored.prepareCalls, 0)
+            await asr.finishAudioRouteRecoveryTest()
+            asr.releaseExclusiveActivity(lease)
+            XCTAssertFalse(asr.isAsrReady, "The old ready model must be retired before the next dictation")
+            XCTAssertEqual(settings.selectedSpeechModel, model)
+            XCTAssertEqual(old.clearCalls, 0, "Restoring settings must retain downloaded files")
+            let deadline = Date().addingTimeInterval(2)
+            while asr.activeExclusiveActivity != nil, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            XCTAssertNil(asr.activeExclusiveActivity)
+        }
+    }
+
+    func testCompactModelDownloadsKeepActiveSelectionAndRejectCompetingDeletion() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .parakeetTDT
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+            let asr = ASRService()
+            let target = DeletionFixtureProvider()
+            let active = DeletionFixtureProvider()
+            asr.isAsrReady = true
+            asr.modelProvidersForTesting[model] = target
+            asr.modelProvidersForTesting[.parakeetTDT] = active
+            target.prepareBody = {
+                XCTAssertEqual(asr.downloadingModelId, model.id)
+                XCTAssertEqual(settings.selectedSpeechModel, .parakeetTDT)
+                do {
+                    try await asr.clearModelCache(for: model)
+                    XCTFail("A model being downloaded must not be deleted")
+                } catch {}
+                XCTAssertTrue(asr.hasActiveModelDownload)
+            }
+            try await asr.downloadModel(model, progressHandler: nil)
+            XCTAssertEqual(target.prepareCalls, 1)
+            XCTAssertEqual(active.prepareCalls, 0)
+            XCTAssertEqual(active.clearCalls, 0)
+            XCTAssertTrue(active.isReady)
+            XCTAssertTrue(asr.isAsrReady)
+            XCTAssertEqual(settings.selectedSpeechModel, .parakeetTDT)
+            XCTAssertFalse(asr.hasActiveModelDownload)
+            XCTAssertNil(asr.downloadingModelId)
+            target.prepareBody = nil
+        }
+    }
+
+    func testCompactModelFailedAndCancelledDownloadsReleaseAdmission() async throws {
+        let selected = SettingsStore.shared.selectedSpeechModel
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+            let asr = ASRService()
+            let provider = DeletionFixtureProvider()
+            asr.modelProvidersForTesting[model] = provider
+            for cancelled in [false, true] {
+                provider.prepareBody = {
+                    if cancelled { throw CancellationError() }
+                    throw URLError(.notConnectedToInternet)
+                }
+                do {
+                    try await asr.downloadModel(model, progressHandler: nil)
+                    XCTFail("Failure must reach the caller")
+                } catch {}
+                XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
+                XCTAssertFalse(asr.hasActiveModelDownload)
+                XCTAssertNil(asr.downloadingModelId)
+                XCTAssertFalse(asr.isCancellingModelDownload)
+            }
+            provider.prepareBody = nil
+            try await asr.downloadModel(model, progressHandler: nil)
+            XCTAssertEqual(provider.prepareCalls, 3)
+        }
+    }
+
     func testLegacyNemotronDeletionUsesCanonicalProviderAndInvalidatesOnlyActiveModel() async throws {
         let settings = SettingsStore.shared
         let previous = settings.selectedSpeechModel

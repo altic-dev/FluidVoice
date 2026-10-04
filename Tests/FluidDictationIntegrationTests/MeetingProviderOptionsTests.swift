@@ -27,6 +27,8 @@ final class MeetingProviderOptionsTests: XCTestCase {
             "parakeet-tdt-v3",
             "parakeet-tdt-v99",
             "whisper-tiny",
+            "fluid-parakeet-mini",
+            "fluid-parakeet-pico",
             "",
         ]
         for asrModel in unsupportedModels {
@@ -172,7 +174,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
             throw XCTSkip("Set FLUIDVOICE_MEETING_GERMAN_FIXTURE to a 16 kHz mono German WAV for model verification")
         }
         let file = try AVAudioFile(forReading: URL(fileURLWithPath: path), commonFormat: .pcmFormatFloat32, interleaved: false)
-        XCTAssertEqual(file.processingFormat.sampleRate, 16000)
+        XCTAssertEqual(file.processingFormat.sampleRate, 16_000)
         XCTAssertEqual(file.processingFormat.channelCount, 1)
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
         try file.read(into: buffer)
@@ -186,7 +188,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertTrue(output.result.text.lowercased().contains("morgen"))
         XCTAssertTrue(output.result.text.lowercased().contains("freitag"))
         XCTAssertFalse(output.words.isEmpty)
-        XCTAssertTrue(output.words.allSatisfy { $0.start >= 0 && $0.end >= $0.start && $0.end <= Double(samples.count) / 16000 + 0.1 })
+        XCTAssertTrue(output.words.allSatisfy { $0.start >= 0 && $0.end >= $0.start && $0.end <= Double(samples.count) / 16_000 + 0.1 })
         XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selected)
     }
     #endif
