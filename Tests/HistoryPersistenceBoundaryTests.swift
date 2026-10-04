@@ -67,7 +67,9 @@ final class DebugLogger {
             )
         }
         // Simulate history written before stars existed, including legacy backups.
-        var legacyJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [[String: Any]]
+        guard var legacyJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [[String: Any]] else {
+            preconditionFailure("Expected legacy history to encode as an array of objects")
+        }
         for index in legacyJSON.indices {
             legacyJSON[index].removeValue(forKey: "isStarred")
         }
@@ -198,13 +200,21 @@ final class DebugLogger {
         try await store.waitUntilLoaded()
         let older = TranscriptionHistoryEntry(
             timestamp: Date(timeIntervalSince1970: 1),
-            rawText: "Original phrasing", processedText: "Reusable prompt", appName: "Editor",
-            windowTitle: "Reference", wasAIProcessed: true, audio: audio, isStarred: true
+            rawText: "Original phrasing",
+            processedText: "Reusable prompt",
+            appName: "Editor",
+            windowTitle: "Reference",
+            wasAIProcessed: true,
+            audio: audio,
+            isStarred: true
         )
         let newer = TranscriptionHistoryEntry(
             timestamp: Date(timeIntervalSince1970: 2),
-            rawText: "Another prompt", processedText: "Another prompt", appName: "Test",
-            windowTitle: "Test", wasAIProcessed: false
+            rawText: "Another prompt",
+            processedText: "Another prompt",
+            appName: "Test",
+            windowTitle: "Test",
+            wasAIProcessed: false
         )
         store.restore(from: [older, newer])
         precondition(store.search(query: "").map(\.id) == [newer.id, older.id], "Stars must preserve chronological order")
