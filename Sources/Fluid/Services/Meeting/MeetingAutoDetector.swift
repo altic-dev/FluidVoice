@@ -108,6 +108,8 @@ final class MeetingAutoDetector {
     private let clock: any MeetingClockProviding
     private let isNativeDetectionEnabled: () -> Bool
     private let isBrowserDetectionEnabled: () -> Bool
+    private let rejectionLogger: (String) -> Void
+    private var lastLoggedRejectionByPID: [Int32: String] = [:]
 
     private var records: [Int32: CandidateRecord] = [:] {
         didSet { self.publishAutomaticTarget() }
@@ -139,7 +141,8 @@ final class MeetingAutoDetector {
         activityGate: any DetectionActivityGate,
         clock: any MeetingClockProviding,
         isNativeDetectionEnabled: @escaping () -> Bool,
-        isBrowserDetectionEnabled: @escaping () -> Bool
+        isBrowserDetectionEnabled: @escaping () -> Bool,
+        rejectionLogger: @escaping (String) -> Void = { DebugLogger.shared.log($0, source: "MeetingAutoDetector") }
     ) {
         self.workspaceEvents = workspaceEvents
         self.micActivity = micActivity
@@ -150,6 +153,7 @@ final class MeetingAutoDetector {
         self.clock = clock
         self.isNativeDetectionEnabled = isNativeDetectionEnabled
         self.isBrowserDetectionEnabled = isBrowserDetectionEnabled
+        self.rejectionLogger = rejectionLogger
     }
 
     // MARK: - Lifecycle
@@ -186,6 +190,7 @@ final class MeetingAutoDetector {
         self.titleEnrichmentInFlight.removeAll()
         self.titleEnrichmentGeneration.removeAll()
         self.removeTransientDisarmObservers()
+        self.lastLoggedRejectionByPID.removeAll()
     }
 
     private func pollTick(runGeneration: UInt64) async {
@@ -252,6 +257,7 @@ final class MeetingAutoDetector {
             DebugLogger.shared.log("app-activated bundle=\(event.bundleIdentifier)", source: "MeetingAutoDetector")
         case .terminated:
             self.records[event.processID] = nil
+            self.lastLoggedRejectionByPID[event.processID] = nil
             self.lastBrowserPollAt[event.processID] = nil
             self.titleEnrichmentInFlight.remove(event.processID)
             self.titleEnrichmentGeneration[event.processID] = nil
@@ -526,36 +532,36 @@ final class MeetingAutoDetector {
             return // a transient HAL failure is not an inactive edge, but cannot confirm anew
         }
         guard now.timeIntervalSince(audioEvidenceAt) <= Self.confirmDeadlineSeconds else {
-            self.logConfirmRejected("deadline", bundleIdentifier: record.bundleIdentifier)
+            self.logConfirmRejected("deadline", record: record)
             return
         }
         guard abs(windowEvidenceAt.timeIntervalSince(audioEvidenceAt)) <= Self.coincidenceWindowSeconds else {
-            self.logConfirmRejected("coincidence", bundleIdentifier: record.bundleIdentifier)
+            self.logConfirmRejected("coincidence", record: record)
             return
         }
         let frontmostPasses = audioEvidenceSource == .process ? record.lastFrontmostAt != nil : self.isFrontmostNearEdge(record, edge: audioEvidenceAt)
         guard frontmostPasses else {
-            self.logConfirmRejected("frontmost", bundleIdentifier: record.bundleIdentifier)
+            self.logConfirmRejected("frontmost", record: record)
             return
         }
 
         let readiness = self.activityGate.preflightState()
         guard readiness != .busy else {
-            self.logConfirmRejected("busy", bundleIdentifier: record.bundleIdentifier)
+            self.logConfirmRejected("busy", record: record)
             return
         }
 
         let episodeKey = "pid:\(pid)|\(evidenceKey)"
         if var existingEpisode = self.episodesByKey[episodeKey] {
             if !existingEpisode.duplicateEpisodeRejectionLogged {
-                self.logConfirmRejected("duplicate-episode", bundleIdentifier: record.bundleIdentifier)
+                self.logConfirmRejected("duplicate-episode", record: record)
                 existingEpisode.duplicateEpisodeRejectionLogged = true
                 self.episodesByKey[episodeKey] = existingEpisode
             }
             return
         }
         guard (self.dismissedBundleUntil[record.bundleIdentifier].map { $0 > now }) != true else {
-            self.logConfirmRejected("bundle-suppressed", bundleIdentifier: record.bundleIdentifier)
+            self.logConfirmRejected("bundle-suppressed", record: record)
             return
         }
 
@@ -569,6 +575,7 @@ final class MeetingAutoDetector {
             confirmedAt: now
         )
         self.episodesByKey[episodeKey] = episode
+        self.lastLoggedRejectionByPID[pid] = nil
 
         DebugLogger.shared.log("preflight-state=\(Self.readinessToken(readiness)) bundle=\(record.bundleIdentifier)", source: "MeetingAutoDetector")
         guard readiness != .busy else {
@@ -587,8 +594,12 @@ final class MeetingAutoDetector {
         ))
     }
 
-    private func logConfirmRejected(_ reason: String, bundleIdentifier: String) {
-        DebugLogger.shared.log("confirm-rejected reason=\(reason) bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
+    private func logConfirmRejected(_ reason: String, record: CandidateRecord) {
+        // Diagnostics follow reason changes; prompt admission still runs on every event.
+        // These slots share the candidate lifetime and never mutate source-selection state.
+        guard self.lastLoggedRejectionByPID[record.pid] != reason else { return }
+        self.lastLoggedRejectionByPID[record.pid] = reason
+        self.rejectionLogger("confirm-rejected reason=\(reason) bundle=\(record.bundleIdentifier)")
     }
 
     private static func readinessToken(_ state: DetectionPreflightState) -> String {
@@ -760,6 +771,7 @@ final class MeetingAutoDetector {
             episode.consumed ? nil : episode.id
         }
         self.records = [:]
+        self.lastLoggedRejectionByPID.removeAll()
         self.titleEnrichmentInFlight.removeAll()
         self.titleEnrichmentGeneration.removeAll()
         self.lastMicReleaseAt = nil

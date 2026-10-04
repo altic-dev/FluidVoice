@@ -190,6 +190,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
     private let validateRecordingModels: @MainActor () async throws -> Void
+    private let processingLogger: @MainActor (String) -> Void
     private static let correctionUndoStackCap = 50
 
     init(
@@ -198,7 +199,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         processing: any MeetingProcessingControlling,
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
-        validateRecordingModels: @escaping @MainActor () async throws -> Void = {}
+        validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
+        processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
         self.store = store
         self.persistence = MeetingSessionPersistenceQueue(store: store)
@@ -207,6 +209,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.audioArbiter = audioArbiter
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.validateRecordingModels = validateRecordingModels
+        self.processingLogger = processingLogger
     }
 
     var currentSession: MeetingSession? {
@@ -1548,6 +1551,22 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
+        let diagnosticStarted = ContinuousClock.now
+        var diagnosticStage = MeetingProcessingStage.pending
+        var diagnosticOutcome = "failed"
+        var diagnosticFailure: MeetingSessionFailure?
+        defer {
+            let elapsed = diagnosticStarted.duration(to: .now).components
+            let elapsedMs = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
+            var line = "Meeting processing outcome=\(diagnosticOutcome) session=\(inputSession.id) stage=\(diagnosticStage.rawValue) elapsedMs=\(elapsedMs)"
+            if let failure = diagnosticFailure {
+                // One bounded line; never add meeting titles, transcripts or audio contents.
+                let detail = String(failure.message.prefix(512)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+                let code = String(failure.code.prefix(128)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+                line += " errorCode=\(code) detail=\(detail)"
+            }
+            self.processingLogger(line)
+        }
         #if DEBUG
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .processing)
         var diagnosticsProcessingSucceeded = false
@@ -1568,6 +1587,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session: session,
                 sessionDirectory: sessionDirectory
             ) { [weak self] stage in
+                guard self?.operationGeneration == generation else { return }
+                diagnosticStage = stage
                 self?.updateProcessingStage(stage, generation: generation)
             }
             guard self.operationGeneration == generation,
@@ -1664,6 +1685,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .completed(session.id)
             self.operationGeneration = nil
             await self.releaseActivityLease()
+            diagnosticOutcome = "completed"
+            diagnosticStage = .completed
             // afterTranscription policy deletes here; sweep failures are logged, never affect this result.
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
             #if DEBUG
@@ -1671,7 +1694,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             #endif
             return session
         } catch {
+            if error is CancellationError { diagnosticOutcome = "cancelled" }
             guard self.operationGeneration == generation else {
+                diagnosticOutcome = "superseded"
                 throw error
             }
             if error is CancellationError {
@@ -1693,6 +1718,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw error
             }
             let failure = Self.failure(from: error, domain: .processing, recoverable: true)
+            diagnosticFailure = failure
             // A failed completed-session save must not durably publish a sidecar or overwrite the
             // last saved transcript under `.failed`. The verified new sidecar remains unreferenced
             // for retry/journal reconciliation.
