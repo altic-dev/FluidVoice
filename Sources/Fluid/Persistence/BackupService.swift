@@ -232,13 +232,15 @@ final class BackupService {
             promptProfiles: document.promptProfiles,
             appPromptBindings: document.appPromptBindings
         )
+        // Commit settings, History and synchronous observers together before
+        // yielding to another actor, keeping the settings/History snapshot consistent.
+        TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
+        NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
         if let idleUnload = document.settings.privateAIIdleUnload, idleUnload != previousIdleUnload {
             // Match the preference UI's targeted rescheduling; do not use the
             // general restore notification to change model timers.
             await PrivateAIIntegrationService.idleUnloader.settingsChanged()
         }
-        TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
-        NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
     }
 
     func suggestedFilename(for date: Date = Date()) -> String {
