@@ -1010,6 +1010,162 @@ private struct SearchBenchmarkVariant: Codable {
 }
 
 extension SearchIndexTests {
+    /// Exercises the real coordinator's snapshot construction and index updates,
+    /// using synthetic finished dictations only. No audio, preferences or real stores.
+    @MainActor
+    func testOptInSequentialDictationMemoryGrowth() async throws {
+        guard let path = ProcessInfo.processInfo.environment["FLUIDVOICE_SEARCH_APPEND_MEMORY_REPORT"], !path.isEmpty else {
+            throw XCTSkip("Supply an external JSON report path for the incremental memory simulation")
+        }
+        let database = FluidZeppelinRoot(root: self.root.appendingPathComponent("append-memory", isDirectory: true))
+        let index = SearchIndex(root: database)
+        let coordinator = SearchIndexCoordinator(index: index, refresh: {}, preparationTimeout: .seconds(120))
+        var entries = (0..<12_880).map { number in
+            TranscriptionHistoryEntry(
+                rawText: "not indexed",
+                processedText: "seedhistory item\(number) " + String(repeating: "meeting project update planning notes ", count: 5),
+                appName: "Synthetic fixture",
+                windowTitle: "Search memory simulation",
+                wasAIProcessed: false
+            )
+        }
+        var samples: [SearchAppendMemorySample] = []
+        var timings: [Double] = []
+        var peak: UInt64 = 0
+        var samplerTicks = 0
+        var sampler: Task<Void, Never>?
+        do {
+            coordinator.submit(.history(entries))
+            try await coordinator.waitUntilCurrent()
+            _ = try await index.query(.history, text: "seedhistory", limit: 50)
+            let store = try await index.namespace(.history)
+            try samples.append(await self.appendMemorySample("prepared baseline", added: 0, sourceRows: entries.count, store: store))
+            peak = Self.physicalFootprint() ?? 0
+            sampler = Task {
+                // Bound diagnostic storage/work even if native recovery is slow.
+                while !Task.isCancelled, samplerTicks < 20_000 {
+                    peak = max(peak, Self.physicalFootprint() ?? 0)
+                    samplerTicks += 1
+                    do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+                }
+            }
+            for added in 1...1024 {
+                entries.append(TranscriptionHistoryEntry(
+                    rawText: "not indexed",
+                    processedText: "appendmarker update\(added) " + String(repeating: "finished dictation project followup ", count: added % 8 + 1),
+                    appName: "Synthetic fixture",
+                    windowTitle: "Sequential additions",
+                    wasAIProcessed: false
+                ))
+                let started = ContinuousClock.now
+                coordinator.submit(.history(entries))
+                try await coordinator.waitUntilCurrent()
+                timings.append(Self.milliseconds(since: started))
+                if added % 32 == 0 || added == 1 || added == 255 || added == 257 {
+                    let hits = try await index.query(.history, text: "appendmarker update\(added)", limit: 50)
+                    XCTAssertTrue(hits.contains { $0.id == entries.last?.id })
+                    try samples.append(await self.appendMemorySample("sequential", added: added, sourceRows: entries.count, store: store))
+                }
+                if added % 256 == 0 {
+                    let stats = try await store.stats()
+                    XCTAssertEqual(stats.activeRowCount, 0)
+                    print("Search append simulation: \(added) additions indexed and sealed")
+                }
+            }
+            // A rapid event burst must keep only the latest successor snapshot.
+            for added in 1025...1280 {
+                entries.append(TranscriptionHistoryEntry(
+                    rawText: "not indexed",
+                    processedText: "burstmarker update\(added) " + String(repeating: "rapid finished history update ", count: 6),
+                    appName: "Synthetic fixture",
+                    windowTitle: "Burst additions",
+                    wasAIProcessed: false
+                ))
+                coordinator.submit(.history(entries))
+            }
+            try await coordinator.waitUntilCurrent()
+            try samples.append(await self.appendMemorySample("burst drained", added: 1280, sourceRows: entries.count, store: store))
+            let burstStats = try await store.stats()
+            XCTAssertEqual(burstStats.activeRowCount, 0)
+            // More words require more memory even with the same row-count limit.
+            for added in 1281...1408 {
+                entries.append(TranscriptionHistoryEntry(
+                    rawText: "not indexed",
+                    processedText: "longmarker update\(added) " + String(repeating: "longer dictation contains discussion of project details and followup actions ", count: 220),
+                    appName: "Synthetic fixture",
+                    windowTitle: "Long additions",
+                    wasAIProcessed: false
+                ))
+                coordinator.submit(.history(entries))
+                try await coordinator.waitUntilCurrent()
+                if added % 32 == 0 {
+                    try samples.append(await self.appendMemorySample("long entries", added: added, sourceRows: entries.count, store: store))
+                }
+            }
+            try await Task.sleep(for: .milliseconds(300))
+            try samples.append(await self.appendMemorySample("settled", added: 1408, sourceRows: entries.count, store: store))
+            var actual = Set<UUID>()
+            for try await row in store.documents(fields: []) {
+                actual.insert(row.id.uuid)
+            }
+            XCTAssertEqual(actual, Set(entries.map(\.id)))
+            let latest = try await index.query(.history, text: "longmarker update1408", limit: 50)
+            XCTAssertTrue(latest.contains { $0.id == entries.last?.id })
+            sampler?.cancel()
+            await sampler?.value
+            await coordinator.stop()
+            await database.closeAll()
+            let closed = Self.physicalFootprint()
+            let reopenedRoot = FluidZeppelinRoot(root: self.root.appendingPathComponent("append-memory", isDirectory: true))
+            let reopened = SearchIndex(root: reopenedRoot)
+            let reopenStart = ContinuousClock.now
+            let reopenedHits = try await reopened.query(.history, text: "longmarker update1408", limit: 50)
+            let reopenMilliseconds = Self.milliseconds(since: reopenStart)
+            XCTAssertTrue(reopenedHits.contains { $0.id == entries.last?.id })
+            let reopenedStore = try await reopened.namespace(.history)
+            try samples.append(await self.appendMemorySample("reopened", added: 1408, sourceRows: entries.count, store: reopenedStore))
+            await reopenedRoot.closeAll()
+            let sorted = timings.sorted()
+            let report = SearchAppendMemoryReport(
+                initialRows: 12_880,
+                addedRows: 1408,
+                peakPhysicalFootprintBytes: peak,
+                closedPhysicalFootprintBytes: closed,
+                samplerTicks: samplerTicks,
+                medianUpdateMilliseconds: sorted[sorted.count / 2],
+                p95UpdateMilliseconds: sorted[Int(Double(sorted.count - 1) * 0.95)],
+                reopenMilliseconds: reopenMilliseconds,
+                samples: samples
+            )
+            let output = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(report).write(to: output, options: .withoutOverwriting)
+            print("Search append memory report: \(output.path)")
+        } catch {
+            sampler?.cancel()
+            await sampler?.value
+            await coordinator.stop()
+            await database.closeAll()
+            throw error
+        }
+    }
+
+    private func appendMemorySample(_ phase: String, added: Int, sourceRows: Int, store: ZeppelinStore) async throws -> SearchAppendMemorySample {
+        let stats = try await store.stats()
+        return SearchAppendMemorySample(
+            phase: phase,
+            addedRows: added,
+            sourceRows: sourceRows,
+            processPhysicalFootprintBytes: Self.physicalFootprint(),
+            index: SearchBenchmarkStats(stats),
+            cacheBytes: stats.cacheBytes,
+            queryPoolBytes: stats.queryPoolBytes,
+            openFiles: stats.openFiles
+        )
+    }
+
     /// Explicitly supplied JSON is an exported private copy, never a production
     /// store. Both variants modify only unique test roots. Reports omit all text.
     func testOptInCopiedRealHistoryReopenBenchmark() async throws {
@@ -1188,4 +1344,27 @@ extension SearchIndexTests {
         }
         return result == KERN_SUCCESS ? info.phys_footprint : nil
     }
+}
+
+private struct SearchAppendMemorySample: Codable {
+    let phase: String
+    let addedRows: Int
+    let sourceRows: Int
+    let processPhysicalFootprintBytes: UInt64?
+    let index: SearchBenchmarkStats
+    let cacheBytes: UInt64
+    let queryPoolBytes: UInt64
+    let openFiles: UInt64
+}
+
+private struct SearchAppendMemoryReport: Codable {
+    let initialRows: Int
+    let addedRows: Int
+    let peakPhysicalFootprintBytes: UInt64
+    let closedPhysicalFootprintBytes: UInt64?
+    let samplerTicks: Int
+    let medianUpdateMilliseconds: Double
+    let p95UpdateMilliseconds: Double
+    let reopenMilliseconds: Double
+    let samples: [SearchAppendMemorySample]
 }
