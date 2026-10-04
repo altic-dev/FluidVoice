@@ -1,6 +1,7 @@
 // Existing end-to-end fixture suite is kept together to share its setup and helpers.
 // swiftlint:disable file_length
 import AppKit
+import Combine
 import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
@@ -11,6 +12,48 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(
+            tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil
+        )
+        let leasing = SuspendedHandbackASRActivityLeasing()
+        defer { leasing.resumeHandback() }
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(),
+            audioArbiter: AudioActivityArbiter { leasing }
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.emit(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: "Fixture stop"))
+        for _ in 0..<200 {
+            if leasing.handbackStarted { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(leasing.handbackStarted, "Unexpected stop must reach audio handback")
+        XCTAssertEqual(coordinator.state, .interrupted(session.id))
+        XCTAssertFalse(coordinator.isQuiescent, "Retry/settings refresh must wait for handback")
+        await self.drainCaptureEvents()
+        var notifications = 0
+        let subscription = coordinator.objectWillChange.sink { notifications += 1 }
+        defer { subscription.cancel() }
+        leasing.resumeHandback()
+        for _ in 0..<200 {
+            if coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertGreaterThan(notifications, 0, "Views must be told when retry/settings refresh becomes safe")
+        XCTAssertEqual(coordinator.state, .interrupted(session.id), "Completion must not restart recording")
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(leasing.handbackCount, 1)
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.state, .interrupted)
+        XCTAssertTrue(saved?.failures.isEmpty == true)
+    }
+
     func testVoiceProcessingFallbackDoesNotDegradeHealthyRecording() async throws {
         for deliverDuringStart in [false, true] {
             let dir = self.makeTempDirectory()

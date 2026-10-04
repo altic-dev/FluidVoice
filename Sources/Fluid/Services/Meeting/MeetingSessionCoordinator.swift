@@ -144,7 +144,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         willSet { if (newValue == nil) != (self.stopTask == nil) { self.objectWillChange.send() } }
     }
 
-    private var interruptionTask: Task<Void, Never>?
+    private var interruptionTask: Task<Void, Never>? {
+        willSet { if (newValue == nil) != (self.interruptionTask == nil) { self.objectWillChange.send() } }
+    }
+
     private var terminationTask: Task<Void, Never>?
     private var retryTask: Task<MeetingSession, Error>? {
         willSet { if (newValue == nil) != (self.retryTask == nil) { self.objectWillChange.send() } }
