@@ -1,0 +1,58 @@
+[
+ {
+  "file": "good-two-releases.json",
+  "model": "mini",
+  "platform": "ios",
+  "build": 25,
+  "format": 2,
+  "release": "2.0.0"
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "mini",
+  "platform": "ios",
+  "build": 25,
+  "format": 1,
+  "release": "1.2.0"
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "mini",
+  "platform": "ios",
+  "build": 12,
+  "format": 2,
+  "release": "1.2.0"
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "mini",
+  "platform": "ios",
+  "build": 9,
+  "format": 2,
+  "release": null
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "mini",
+  "platform": "macos",
+  "build": 25,
+  "format": 2,
+  "release": null
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "pico",
+  "platform": "ios",
+  "build": 25,
+  "format": 2,
+  "release": null
+ },
+ {
+  "file": "good-two-releases.json",
+  "model": "v3",
+  "platform": "ios",
+  "build": 25,
+  "format": 2,
+  "release": null
+ }
+]

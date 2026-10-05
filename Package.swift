@@ -37,6 +37,9 @@ let package = Package(
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
                 .product(name: "ZeppelinEmbed", package: "zeppelin-embed"),
             ],
+            resources: [
+                .copy("Resources/speech-model-check.pcm"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]

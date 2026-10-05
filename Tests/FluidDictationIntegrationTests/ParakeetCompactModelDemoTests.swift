@@ -10,7 +10,7 @@ final class ParakeetCompactModelDemoTests: XCTestCase {
     func testOptInNativeOnboardingAndSettingsReview() async throws {
         guard ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_DEMO"] == "1",
               let audioPath = ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_AUDIO"]
-        else { throw XCTSkip("Explicitly enable the native model review with a real recorded English WAV") }
+        else { throw XCTSkip("Explicitly enable the native model review with an English test WAV") }
         let settings = SettingsStore.shared
         settings.onboardingSelectedLanguageID = "en"
         let finished = expectation(description: "Native review closed")
@@ -45,7 +45,7 @@ private struct CompactModelReviewView: View {
     @State private var onboardingStep = 2
     @State private var shortcutTarget: ShortcutRecordingTarget?
     @State private var shortcutMessage: String?
-    @State private var transcript = "Choose a downloaded model to transcribe the real recording."
+    @State private var transcript = "Choose a downloaded model to transcribe the test recording."
     @State private var isTranscribing = false
     private let menuBarManager = MenuBarManager()
 
@@ -55,7 +55,7 @@ private struct CompactModelReviewView: View {
                 Picker("Review", selection: self.$page) {
                     Text("Voice Engine").tag(0)
                     Text("Onboarding").tag(1)
-                    Text("Real transcription").tag(2)
+                    Text("Test transcription").tag(2)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 450)
@@ -84,7 +84,7 @@ private struct CompactModelReviewView: View {
                 .environmentObject(AppServices.shared)
             case 2:
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("Real recorded audio · English · Microphone stays off")
+                    Text("English test recording · Microphone stays off")
                     HStack {
                         Button("Test Mini") { self.transcribe(.fluidParakeetMini) }
                         Button("Test Pico") { self.transcribe(.fluidParakeetPico) }

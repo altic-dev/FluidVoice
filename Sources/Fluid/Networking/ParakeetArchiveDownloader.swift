@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -6,8 +5,15 @@ import Foundation
 nonisolated enum ParakeetArchiveDownloader {
     typealias Transport = @Sendable (URL, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
     typealias RevisionWriter = @Sendable (URL, ParakeetSpeechModelCatalog.Descriptor) throws -> Void
+    typealias CapacityReader = @Sendable (URL) throws -> Int64
     typealias StageValidator = @Sendable (URL) async throws -> Void
     private static let publicationLock = NSLock()
+
+    private struct InstallationIO: Sendable {
+        let transport: Transport?
+        let capacityReader: CapacityReader?
+        let revisionWriter: RevisionWriter
+    }
 
     private struct InstalledIdentity: Equatable {
         let device: UInt64
@@ -19,6 +25,8 @@ nonisolated enum ParakeetArchiveDownloader {
         case invalidDescriptor, invalidResponse, checksumMismatch, invalidArchive, incompleteModel, targetExists
         case cleanupFailed(URL)
         case targetChanged
+        case capacityUnavailable
+        case insufficientSpace(required: Int64, available: Int64)
         case replacementCleanupFailed(installed: URL, retainedOld: URL)
         case updateFailedWithCleanup(reason: String, installed: URL, temporaryFiles: URL)
 
@@ -31,6 +39,8 @@ nonisolated enum ParakeetArchiveDownloader {
             case .incompleteModel: return "The voice model archive is incomplete."
             case .targetExists: return "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again."
             case let .cleanupFailed(url): return "Voice model temporary files could not be removed: \(url.path)"
+            case .capacityUnavailable: return "Available disk space could not be checked. Your installed model was kept. Please try again."
+            case .insufficientSpace: return "There is not enough free disk space to safely update this voice model. Free some space and try again. Your installed model was kept."
             case .targetChanged: return "The installed voice model changed during this update. Its files were preserved. Please try again."
             case let .replacementCleanupFailed(installed, retainedOld): return "The updated voice model is installed at \(installed.path), but its old files could not be removed: \(retainedOld.path)"
             case let .updateFailedWithCleanup(reason, installed, temporaryFiles):
@@ -48,10 +58,18 @@ nonisolated enum ParakeetArchiveDownloader {
         replaceExisting: Bool = false,
         stageValidator: StageValidator? = nil,
         transport: Transport? = nil,
+        capacityReader: CapacityReader? = nil,
         revisionWriter: @escaping RevisionWriter = { directory, descriptor in try descriptor.writeInstallationRevision(at: directory) }
     ) async throws -> URL {
         let task = Task.detached(priority: .utility) {
-            try await self.install(descriptor: descriptor, modelsDirectory: modelsDirectory, progressHandler: progressHandler, replaceExisting: replaceExisting, stageValidator: stageValidator, transport: transport, revisionWriter: revisionWriter)
+            try await self.install(
+                descriptor: descriptor,
+                modelsDirectory: modelsDirectory,
+                progressHandler: progressHandler,
+                replaceExisting: replaceExisting,
+                stageValidator: stageValidator,
+                io: InstallationIO(transport: transport, capacityReader: capacityReader, revisionWriter: revisionWriter)
+            )
         }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -68,22 +86,17 @@ nonisolated enum ParakeetArchiveDownloader {
         return false
     }
 
-    private static func download(url: URL, maximumBytes: Int64, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 600
-        return try await ProgressiveFileDownloader.download(from: url, configuration: configuration, maximumBytes: maximumBytes, onProgress: progress)
-    }
-
     private static func install(
         descriptor: ParakeetSpeechModelCatalog.Descriptor,
         modelsDirectory: URL,
         progressHandler: @escaping @Sendable (ModelPreparationProgress) -> Void,
         replaceExisting: Bool,
         stageValidator: StageValidator?,
-        transport: Transport?,
-        revisionWriter: RevisionWriter
+        io: InstallationIO
     ) async throws -> URL {
+        let transport = io.transport
+        let capacityReader = io.capacityReader
+        let revisionWriter = io.revisionWriter
         try Task.checkCancellation()
         guard self.isComponent(descriptor.folderName), self.isComponent(descriptor.vocabularyFile),
               !descriptor.requiredModelNames.isEmpty,
@@ -101,7 +114,7 @@ nonisolated enum ParakeetArchiveDownloader {
         guard let archiveURL = descriptor.archiveURL, archiveURL.scheme == "https", archiveURL.host != nil,
               let checksum = descriptor.archiveSHA256,
               checksum.count == 64, checksum.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
-              descriptor.expectedDownloadBytes > 0
+              descriptor.expectedDownloadBytes > 0, descriptor.expectedDownloadBytes <= 1_073_741_824
         else { throw DownloadError.invalidDescriptor }
         try manager.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         try self.requireDirectory(modelsDirectory)
@@ -112,13 +125,27 @@ nonisolated enum ParakeetArchiveDownloader {
         } else {
             original = nil
         }
+        // The old model already consumes disk space; reserve both the tar and its unpacked copy.
+        // Runs inside this detached installer, before transport or private staging is created.
+        let headroom: Int64 = 32 * 1024 * 1024
+        let required = descriptor.expectedDownloadBytes * 2 + headroom
+        let available: Int64
+        do {
+            available = try (capacityReader ?? self.availableCapacity)(modelsDirectory)
+        } catch {
+            try Task.checkCancellation()
+            throw DownloadError.capacityUnavailable
+        }
+        guard available >= 0 else { throw DownloadError.capacityUnavailable }
+        guard available >= required else { throw DownloadError.insufficientSpace(required: required, available: available) }
+        try Task.checkCancellation()
         let stage = modelsDirectory.appendingPathComponent(".\(descriptor.folderName)-\(UUID().uuidString).staging", isDirectory: true)
         try manager.createDirectory(at: stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         var retainedDownload: URL?
         do {
             progressHandler(.preparingDownload)
-            let transfer: Transport = transport ?? { url, progress in
-                try await self.download(url: url, maximumBytes: descriptor.expectedDownloadBytes, progress: progress)
+            let transfer: Transport = transport ?? { _, progress in
+                try await CompactSpeechModelArchiveTransport.download(descriptor: descriptor, in: modelsDirectory, progress: progress)
             }
             let (downloaded, response) = try await transfer(archiveURL) { bytes, _ in
                 let bounded = max(0, min(bytes, descriptor.expectedDownloadBytes))
@@ -136,9 +163,12 @@ nonisolated enum ParakeetArchiveDownloader {
             guard try self.sha256(archive) == checksum else { throw DownloadError.checksumMismatch }
             progressHandler(.optimizing)
             let extraction = stage.appendingPathComponent("extracted", isDirectory: true)
-            try manager.createDirectory(at: extraction, withIntermediateDirectories: false)
-            try self.extract(archive: archive, into: extraction, folderName: descriptor.folderName, archiveBytes: descriptor.expectedDownloadBytes)
-            let extracted = descriptor.cacheDirectory(in: extraction)
+            let extracted = try ParakeetArchiveInstaller.unpack(
+                archive: archive,
+                folderName: descriptor.folderName,
+                staging: extraction,
+                manifestSHA256: descriptor.manifestSHA256
+            )
             guard self.contentsAreComplete(at: extracted, descriptor: descriptor) else { throw DownloadError.incompleteModel }
             try Task.checkCancellation()
             try revisionWriter(extracted, descriptor)
@@ -185,6 +215,16 @@ nonisolated enum ParakeetArchiveDownloader {
         return target
     }
 
+    private static func availableCapacity(at directory: URL) throws -> Int64 {
+        if let capacity = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage,
+           capacity >= 0 { return capacity }
+        let attributes = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+        guard let bytes = attributes[.systemFreeSize] as? NSNumber, bytes.int64Value >= 0 else {
+            throw DownloadError.capacityUnavailable
+        }
+        return bytes.int64Value
+    }
+
     private static func installedIdentity(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) throws -> InstalledIdentity {
         guard let revision = descriptor.installedArchiveSHA256(at: directory),
               self.contentsAreComplete(at: directory, descriptor: descriptor),
@@ -200,7 +240,13 @@ nonisolated enum ParakeetArchiveDownloader {
 
     /// Mirrors compiled-artifact readiness while rejecting links anywhere in the tree.
     static func artifactsAreComplete(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
-        descriptor.installationRevisionMatches(at: directory) && self.contentsAreComplete(at: directory, descriptor: descriptor)
+        guard descriptor.installationRevisionMatches(at: directory),
+              self.contentsAreComplete(at: directory, descriptor: descriptor)
+        else { return false }
+        if let manifestSHA256 = descriptor.manifestSHA256 {
+            return descriptor.installedManifestSHA256(at: directory) == manifestSHA256
+        }
+        return true
     }
 
     private static func contentsAreComplete(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
@@ -257,86 +303,6 @@ nonisolated enum ParakeetArchiveDownloader {
     }
 
     private static func sha256(_ url: URL) throws -> String {
-        let input = try FileHandle(forReadingFrom: url)
-        defer { try? input.close() }
-        var hasher = SHA256()
-        while true {
-            try Task.checkCancellation()
-            guard let data = try input.read(upToCount: 1_048_576), !data.isEmpty else { break }
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func extract(archive: URL, into destination: URL, folderName: String, archiveBytes: Int64) throws {
-        let input = try FileHandle(forReadingFrom: archive)
-        defer { try? input.close() }
-        var entryCount = 0
-        while true {
-            try Task.checkCancellation()
-            guard let data = try input.read(upToCount: 512), data.count == 512 else { throw DownloadError.invalidArchive }
-            let header = [UInt8](data)
-            if header.allSatisfy({ $0 == 0 }) { return }
-            entryCount += 1
-            guard entryCount <= 50_000,
-                  try self.octal(header, range: 148..<156) == header.enumerated().reduce(Int64(0), { $0 + Int64((148..<156).contains($1.offset) ? 32 : $1.element) })
-            else { throw DownloadError.invalidArchive }
-            let size = try self.octal(header, range: 124..<136)
-            let offset = try input.offset()
-            let padding = (512 - size % 512) % 512
-            guard size >= 0, offset <= UInt64(archiveBytes), UInt64(size + padding) <= UInt64(archiveBytes) - offset else {
-                throw DownloadError.invalidArchive
-            }
-            let type = header[156]
-            if type == 103 || type == 120 {
-                // Metadata is never interpreted as paths or links. Published archives
-                // carry their actual filenames in their following ustar header.
-                try input.seek(toOffset: offset + UInt64(size + padding))
-                continue
-            }
-            let name = try self.string(header, range: 0..<100)
-            let prefix = try self.string(header, range: 345..<500)
-            let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
-            guard !path.hasPrefix("/") else { throw DownloadError.invalidArchive }
-            var components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-            if components.first == "." { components.removeFirst() }
-            guard components.first == folderName, components.allSatisfy(self.isComponent) else { throw DownloadError.invalidArchive }
-            let output = components.reduce(destination) { $0.appendingPathComponent($1) }
-            switch type {
-            case 0, 48:
-                guard components.count > 1, !self.pathExists(output) else { throw DownloadError.invalidArchive }
-                try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
-                guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw DownloadError.invalidArchive }
-                let file = try FileHandle(forWritingTo: output)
-                defer { try? file.close() }
-                var remaining = size
-                while remaining > 0 {
-                    try Task.checkCancellation()
-                    let count = Int(min(remaining, 1_048_576))
-                    guard let body = try input.read(upToCount: count), body.count == count else { throw DownloadError.invalidArchive }
-                    try file.write(contentsOf: body)
-                    remaining -= Int64(body.count)
-                }
-            case 53:
-                guard size == 0 else { throw DownloadError.invalidArchive }
-                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-                try self.requireDirectory(output)
-            default: throw DownloadError.invalidArchive
-            }
-            try input.seek(toOffset: offset + UInt64(size + padding))
-        }
-    }
-
-    private static func string(_ bytes: [UInt8], range: Range<Int>) throws -> String {
-        guard let value = String(bytes: bytes[range].prefix { $0 != 0 }, encoding: .utf8) else { throw DownloadError.invalidArchive }
-        return value
-    }
-
-    private static func octal(_ bytes: [UInt8], range: Range<Int>) throws -> Int64 {
-        let text = try self.string(bytes, range: range).trimmingCharacters(in: .whitespaces)
-        guard text.isEmpty || text.utf8.allSatisfy({ (48...55).contains($0) }), let value = Int64(text.isEmpty ? "0" : text, radix: 8) else {
-            throw DownloadError.invalidArchive
-        }
-        return value
+        try ParakeetArchiveInstaller.sha256(of: url)
     }
 }

@@ -450,6 +450,159 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         try fixture.assertPreservedSiblingsAndNoStage()
     }
 
+    func testPinnedManifestIsVerifiedBeforeRevisionWriteAndStageValidation() async throws {
+        let fixture = try Fixture(includeManifest: true)
+        defer { fixture.cleanup() }
+        let calls = ProgressRecorder()
+        let result = try await ParakeetArchiveDownloader.ensurePresent(
+            descriptor: fixture.descriptor,
+            in: fixture.models,
+            stageValidator: { stage in
+                XCTAssertTrue(fixture.descriptor.artifactsAreComplete(at: stage))
+                calls.record(.loading)
+            },
+            transport: { _, progress in try fixture.transport(progress) },
+            revisionWriter: { stage, descriptor in
+                try ParakeetArchiveInstaller.verify(folder: stage, folderName: descriptor.folderName, manifestSHA256: try XCTUnwrap(descriptor.manifestSHA256))
+                calls.record(.optimizing)
+                try descriptor.writeInstallationRevision(at: stage)
+            }
+        )
+        XCTAssertEqual(result, fixture.target)
+        XCTAssertEqual(calls.values.count, 2)
+        XCTAssertEqual(fixture.descriptor.installedManifestSHA256(at: result), fixture.descriptor.manifestSHA256)
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testCachedArchiveMarkerCannotBypassChangedManifestPin() async throws {
+        let fixture = try Fixture(includeManifest: true)
+        defer { fixture.cleanup() }
+        _ = try await fixture.install()
+        var changed = fixture.descriptor
+        changed.manifestSHA256 = String(repeating: "0", count: 64)
+        XCTAssertFalse(ParakeetArchiveDownloader.artifactsAreComplete(at: fixture.target, descriptor: changed))
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: changed,
+                in: fixture.models,
+                replaceExisting: true,
+                transport: { _, progress in try fixture.transport(progress) }
+            )
+            XCTFail("A matching archive marker cannot bypass a mismatched manifest pin")
+        } catch let error as ParakeetArchiveInstaller.InstallError {
+            XCTAssertEqual(error, .manifestMismatch)
+        }
+        XCTAssertTrue(ParakeetArchiveDownloader.artifactsAreComplete(at: fixture.target, descriptor: fixture.descriptor))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testBadPinnedManifestOrPayloadNeverWritesRevisionOrValidatesAndPreservesOldModel() async throws {
+        for tamperPayload in [false, true] {
+            let old = try Fixture()
+            let newer = try Fixture(artifactContents: "new", includeManifest: true, tamperManifestFile: tamperPayload,
+                                    manifestHashOverride: tamperPayload ? nil : String(repeating: "0", count: 64))
+            defer { old.cleanup(); newer.cleanup() }
+            _ = try await old.install()
+            let calls = ProgressRecorder()
+            do {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(
+                    descriptor: newer.descriptor,
+                    in: old.models,
+                    replaceExisting: true,
+                    stageValidator: { _ in calls.record(.loading) },
+                    transport: { _, progress in try newer.transport(progress) },
+                    revisionWriter: { _, _ in calls.record(.optimizing) }
+                )
+                XCTFail("Expected pinned manifest/payload rejection")
+            } catch let error as ParakeetArchiveInstaller.InstallError {
+                if tamperPayload {
+                    guard case .fileMismatch = error else { return XCTFail("Expected payload mismatch, got \(error)") }
+                } else {
+                    XCTAssertEqual(error, .manifestMismatch)
+                }
+            }
+            XCTAssertTrue(calls.values.isEmpty)
+            XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+            XCTAssertEqual(try String(contentsOf: old.target.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "fixture")
+            try old.assertPreservedSiblingsAndNoStage()
+            try newer.assertPreservedSiblingsAndNoStage()
+        }
+    }
+
+    func testLowOrUnknownCapacityRefusesBeforeTransferAndKeepsExistingModel() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new", includeManifest: true)
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let required = newer.descriptor.expectedDownloadBytes * 2 + 32 * 1_024 * 1_024
+        for available in [Int64(0), required - 1, -1] {
+            let calls = ProgressRecorder()
+            do {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(
+                    descriptor: newer.descriptor,
+                    in: old.models,
+                    replaceExisting: true,
+                    stageValidator: { _ in calls.record(.loading) },
+                    transport: { _, progress in calls.record(.preparingDownload); return try newer.transport(progress) },
+                    capacityReader: { directory in
+                        XCTAssertEqual(directory, old.models)
+                        XCTAssertFalse(Thread.isMainThread)
+                        return available
+                    },
+                    revisionWriter: { _, _ in calls.record(.optimizing) }
+                )
+                XCTFail("Expected capacity refusal")
+            } catch let error as ParakeetArchiveDownloader.DownloadError {
+                if available < 0 {
+                    guard case .capacityUnavailable = error else { return XCTFail("Expected unknown-capacity error, got \(error)") }
+                } else {
+                    guard case let .insufficientSpace(needed, free) = error else { return XCTFail("Expected low-space error, got \(error)") }
+                    XCTAssertEqual(needed, required)
+                    XCTAssertEqual(free, available)
+                }
+            }
+            XCTAssertTrue(calls.values.isEmpty)
+            XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+            XCTAssertEqual(try String(contentsOf: old.target.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "fixture")
+            try old.assertPreservedSiblingsAndNoStage()
+            try newer.assertPreservedSiblingsAndNoStage()
+        }
+    }
+
+    func testCapacityReaderFailureHasDefinedErrorAndNeverStartsTransfer() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: fixture.descriptor,
+                in: fixture.models,
+                transport: { _, _ in XCTFail("Capacity must be checked before network"); throw ProbeFailure.injected },
+                capacityReader: { _ in throw ProbeFailure.injected }
+            )
+            XCTFail("Expected unknown-capacity refusal")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case .capacityUnavailable = error else { return XCTFail("Expected capacity error, got \(error)") }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.target.path))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testExactReservedCapacityAllowsFirstInstallOffMain() async throws {
+        let fixture = try Fixture(includeManifest: true)
+        defer { fixture.cleanup() }
+        let result = try await ParakeetArchiveDownloader.ensurePresent(
+            descriptor: fixture.descriptor,
+            in: fixture.models,
+            transport: { _, progress in try fixture.transport(progress) },
+            capacityReader: { _ in
+                XCTAssertFalse(Thread.isMainThread)
+                return fixture.descriptor.expectedDownloadBytes * 2 + 32 * 1_024 * 1_024
+            }
+        )
+        XCTAssertTrue(ParakeetArchiveDownloader.artifactsAreComplete(at: result, descriptor: fixture.descriptor))
+        try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
     private func expectFailure(_ body: () async throws -> Void) async {
         do { try await body(); XCTFail("Expected archive installation to fail") } catch {}
     }
@@ -503,7 +656,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let archive: Data
         var target: URL { self.descriptor.cacheDirectory(in: self.models) }
 
-        init(checksum: String? = nil, omitLastArtifact: Bool = false, rootName: String = "fluid-parakeet-mini-coreml", extraEntry: Entry? = nil, artifactContents: String = "fixture") throws {
+        init(checksum: String? = nil, omitLastArtifact: Bool = false, rootName: String = "fluid-parakeet-mini-coreml", extraEntry: Entry? = nil, artifactContents: String = "fixture", includeManifest: Bool = false, tamperManifestFile: Bool = false, manifestHashOverride: String? = nil) throws {
             self.base = FileManager.default.temporaryDirectory.appendingPathComponent("ParakeetArchiveDownloaderTests-" + UUID().uuidString, isDirectory: true)
             self.models = self.base.appendingPathComponent("Models", isDirectory: true)
             try FileManager.default.createDirectory(at: self.models, withIntermediateDirectories: true)
@@ -521,6 +674,21 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             if omitLastArtifact { entries.removeLast() }
             entries.append(Entry(path: "\(rootName)/\(source.vocabularyFile)", data: Data("{}".utf8)))
             if let extraEntry { entries.append(extraEntry) }
+            var manifestSHA256: String?
+            if includeManifest {
+                let manifest: [String: Any] = [
+                    "folderName": rootName,
+                    "totalSize": entries.reduce(0) { $0 + $1.data.count },
+                    "files": entries.map { entry in
+                        ["path": String(entry.path.dropFirst(rootName.count + 1)), "size": entry.data.count,
+                         "sha256": SHA256.hash(data: entry.data).map { String(format: "%02x", $0) }.joined()] as [String: Any]
+                    }
+                ]
+                let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+                manifestSHA256 = manifestHashOverride ?? SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                if tamperManifestFile { entries[0].data = Data("tampered".utf8) }
+                entries.append(Entry(path: "\(rootName)/manifest.json", data: data))
+            }
             self.archive = Self.tar(entries)
             self.descriptor = .init(
                 modelID: source.modelID,
@@ -537,7 +705,8 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
                 supportedLanguageCodes: source.supportedLanguageCodes,
                 downloadSize: source.downloadSize,
                 cardDescription: source.cardDescription,
-                performanceRatings: source.performanceRatings
+                performanceRatings: source.performanceRatings,
+                manifestSHA256: manifestSHA256
             )
         }
 

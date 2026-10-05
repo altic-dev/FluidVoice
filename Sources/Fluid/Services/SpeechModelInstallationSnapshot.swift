@@ -26,17 +26,20 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
 
         let modelID: String
         let kind: Kind
+        var rejectedManifestHashes: Set<String> = []
     }
 
     nonisolated struct ScanResult: Equatable, Sendable {
         let installedIDs: Set<String>
         let updateAvailableIDs: Set<String>
         let installedArchiveHashes: [String: String]
+        let installedManifestHashes: [String: String]
 
-        init(installedIDs: Set<String>, updateAvailableIDs: Set<String> = [], installedArchiveHashes: [String: String] = [:]) {
+        init(installedIDs: Set<String>, updateAvailableIDs: Set<String> = [], installedArchiveHashes: [String: String] = [:], installedManifestHashes: [String: String] = [:]) {
             self.installedIDs = installedIDs
             self.updateAvailableIDs = updateAvailableIDs
             self.installedArchiveHashes = installedArchiveHashes
+            self.installedManifestHashes = installedManifestHashes
         }
     }
 
@@ -52,6 +55,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     var installedIDs: Set<String> { self.value.result.installedIDs }
     var updateAvailableIDs: Set<String> { self.value.result.updateAvailableIDs }
     var installedArchiveHashes: [String: String] { self.value.result.installedArchiveHashes }
+    var installedManifestHashes: [String: String] { self.value.result.installedManifestHashes }
     var latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor] { self.value.latestDescriptors }
     var state: State { self.value.state }
     var isChecking: Bool { self.state == .checking }
@@ -87,7 +91,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     /// A display/profile key lookup only; it never starts download or reads disk.
     func installedDescriptor(for model: SettingsStore.SpeechModel) -> ParakeetSpeechModelCatalog.Descriptor? {
         guard let descriptor = self.latestDescriptors[model.id], let hash = self.installedArchiveHashes[model.id] else { return nil }
-        return descriptor.replacingArchive(url: nil, sha256: hash)
+        return descriptor.replacingArchive(url: nil, sha256: hash, manifestSHA256: self.installedManifestHashes[model.id])
     }
 
     /// Keep at most one worker and one latest request. Byte-progress callbacks never call this.
@@ -152,7 +156,8 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     }
 
     private static func captureProbes() -> [Probe] {
-        SettingsStore.SpeechModel.availableModels.map { model in
+        let releases = CompactSpeechModelReleaseCatalog.shared
+        return SettingsStore.SpeechModel.availableModels.map { model in
             let kind: Probe.Kind
             if let descriptor = CompactSpeechModelReleaseCatalog.shared.descriptor(for: model) ?? model.parakeetDescriptor {
                 kind = .parakeet(descriptor)
@@ -178,7 +183,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                     kind = .unavailable
                 }
             }
-            return Probe(modelID: model.id, kind: kind)
+            return Probe(modelID: model.id, kind: kind, rejectedManifestHashes: releases.descriptor(for: model) == nil ? [] : releases.snapshot.rejectedManifestHashes)
         }
     }
 
@@ -190,6 +195,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         var installed: Set<String> = []
         var updates: Set<String> = []
         var hashes: [String: String] = [:]
+        var manifests: [String: String] = [:]
         let fm = FileManager.default
         let caches = cachesDirectory ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first
         let models = modelsDirectory ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -206,7 +212,17 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                     exists = hash != nil
                     if let hash {
                         hashes[probe.modelID] = hash
-                        if hash != descriptor.archiveSHA256 { updates.insert(probe.modelID) }
+                        let manifest = models.flatMap { descriptor.installedManifestSHA256(at: descriptor.cacheDirectory(in: $0)) }
+                        if let manifest { manifests[probe.modelID] = manifest }
+                        let differs: Bool
+                        if let latest = descriptor.manifestSHA256, let manifest {
+                            differs = latest != manifest
+                        } else {
+                            // Legacy complete caches with the same tar need no redundant download.
+                            differs = hash != descriptor.archiveSHA256
+                        }
+                        let rejected = descriptor.manifestSHA256.map { probe.rejectedManifestHashes.contains($0) } ?? false
+                        if differs, !rejected { updates.insert(probe.modelID) }
                     }
                 } else {
                     exists = models.map { descriptor.artifactsAreComplete(at: descriptor.cacheDirectory(in: $0)) } ?? false
@@ -238,6 +254,6 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             if exists { installed.insert(probe.modelID) }
         }
         try Task.checkCancellation()
-        return ScanResult(installedIDs: installed, updateAvailableIDs: updates, installedArchiveHashes: hashes)
+        return ScanResult(installedIDs: installed, updateAvailableIDs: updates, installedArchiveHashes: hashes, installedManifestHashes: manifests)
     }
 }

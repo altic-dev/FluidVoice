@@ -4,6 +4,28 @@ import XCTest
 
 @MainActor
 final class ParakeetSpeechModelCatalogTests: XCTestCase {
+    func testManifestIdentityReadIsBoundedAndRejectsLinksWithoutChangingArchiveMarker() throws {
+        let descriptor = ParakeetSpeechModelCatalog.mini
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+        let oldHash = String(repeating: "a", count: 64)
+        try Data(oldHash.utf8).write(to: marker)
+        let manifest = directory.appendingPathComponent("manifest.json")
+        XCTAssertNil(descriptor.installedManifestSHA256(at: directory))
+        try Data("{}".utf8).write(to: manifest)
+        XCTAssertEqual(descriptor.installedManifestSHA256(at: directory), "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a")
+        XCTAssertEqual(try Data(contentsOf: marker), Data(oldHash.utf8))
+        try Data(repeating: 0, count: 1_048_577).write(to: manifest)
+        XCTAssertNil(descriptor.installedManifestSHA256(at: directory))
+        try FileManager.default.removeItem(at: manifest)
+        try FileManager.default.createSymbolicLink(at: manifest, withDestinationURL: marker)
+        XCTAssertNil(descriptor.installedManifestSHA256(at: directory))
+        XCTAssertNil(ParakeetSpeechModelCatalog.v2.installedManifestSHA256(at: directory))
+        XCTAssertEqual(try Data(contentsOf: marker), Data(oldHash.utf8))
+    }
+
     func testInstalledCompactRevisionCanBeOlderButMustHaveCompleteRegularArtifacts() throws {
         let descriptor = ParakeetSpeechModelCatalog.mini
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

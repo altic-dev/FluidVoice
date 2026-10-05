@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -8,6 +9,101 @@ import FluidAudio
 
 @MainActor
 final class ParakeetCompactModelSmokeTests: XCTestCase {
+    func testShippedRuntimeCheckRecordingIsBundledAndUnchanged() throws {
+        let url = try XCTUnwrap(CompactSpeechModelRuntimeCheck.recordingURL)
+        let data = try Data(contentsOf: url)
+        XCTAssertEqual(data.count, 131_162)
+        XCTAssertEqual(
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            "961ac4a204b913fb953e1ef9a7d4a54a235f69a3bf0a818a6712968bacdde68d"
+        )
+        let samples = try CompactSpeechModelRuntimeCheck.samples()
+        XCTAssertEqual(samples.count, 65_581)
+        XCTAssertTrue(samples.allSatisfy(\.isFinite))
+        XCTAssertTrue(samples.contains { abs($0) > 0.01 })
+    }
+
+    func testRuntimeCheckRequiresFiveDistinctWholeWords() {
+        XCTAssertTrue(CompactSpeechModelRuntimeCheck.accepts("QUICK, brown fox jumps over."))
+        XCTAssertTrue(CompactSpeechModelRuntimeCheck.accepts("The quick brown fox jumps over the lazy dog near quiet water."))
+        XCTAssertFalse(CompactSpeechModelRuntimeCheck.accepts("quick brown fox jumps"))
+        XCTAssertFalse(CompactSpeechModelRuntimeCheck.accepts("quick quick quick quick quick"))
+        XCTAssertFalse(CompactSpeechModelRuntimeCheck.accepts("quickly brownish foxes jumping overhead"))
+        XCTAssertFalse(CompactSpeechModelRuntimeCheck.accepts(""))
+    }
+
+    func testRuntimeCheckRejectsInvalidAndOversizedPCM() throws {
+        for data in [Data(), Data([0]), Data(repeating: 0, count: 32_001), Data(repeating: 0, count: 480_002)] {
+            XCTAssertThrowsError(try CompactSpeechModelRuntimeCheck.decode(data)) { error in
+                XCTAssertEqual(error as? CompactSpeechModelRuntimeCheck.Failure, .invalidRecording)
+            }
+        }
+        var data = Data(repeating: 0, count: 32_000)
+        data[0] = 0xff
+        data[1] = 0x7f
+        data[2] = 0
+        data[3] = 0x80
+        let samples = try CompactSpeechModelRuntimeCheck.decode(data)
+        XCTAssertEqual(samples.count, 16_000)
+        XCTAssertEqual(samples[0], 32_767.0 / 32_768)
+        XCTAssertEqual(samples[1], -1)
+    }
+
+    func testRuntimeDeadlineJoinsCanceledProofCleanup() async throws {
+        let activity = RuntimeCheckActivity()
+        do {
+            try await CompactSpeechModelRuntimeCheck.withDeadline(.milliseconds(10)) {
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    await activity.finish()
+                    throw error
+                }
+            }
+            XCTFail("A blocked proof must time out")
+        } catch {
+            XCTAssertEqual(error as? CompactSpeechModelRuntimeCheck.Failure, .timedOut)
+        }
+        let finished = await activity.finished
+        XCTAssertTrue(finished, "The installer must not delete staged files while proof still uses them")
+    }
+
+    func testCanceledRuntimeProofJoinsCleanupWithoutReportingBadWeights() async throws {
+        let activity = RuntimeCheckActivity()
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let task = Task {
+            try await CompactSpeechModelRuntimeCheck.withDeadline(.seconds(60)) {
+                continuation.yield(())
+                continuation.finish()
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    await activity.finish()
+                    throw error
+                }
+            }
+        }
+        for await _ in started { break }
+        task.cancel()
+        do {
+            try await task.value
+            XCTFail("Canceled verification must not publish weights")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        let finished = await activity.finished
+        XCTAssertTrue(finished)
+    }
+
+    func testSuccessfulRuntimeProofCancelsDeadline() async throws {
+        let activity = RuntimeCheckActivity()
+        try await CompactSpeechModelRuntimeCheck.withDeadline(.seconds(60)) {
+            await activity.finish()
+        }
+        let finished = await activity.finished
+        XCTAssertTrue(finished)
+    }
+
     func testHostedOldWeightsStayUsableUntilExplicitValidatedUpdate() async throws {
         #if arch(arm64)
         guard ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_AUDIO"] != nil else {
@@ -61,8 +157,9 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
     func testHostedCompactModelsDownloadLoadTranscribeAndExtractDictionaryFrames() async throws {
         #if arch(arm64)
         guard let audioPath = ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_AUDIO"] else {
-            throw XCTSkip("Set FLUIDVOICE_COMPACT_MODEL_AUDIO to a real English recording for the live model check")
+            throw XCTSkip("Set FLUIDVOICE_COMPACT_MODEL_AUDIO to an English test recording for the hosted model check")
         }
+        let verificationSamples = try CompactSpeechModelRuntimeCheck.samples()
         let file = try AVAudioFile(forReading: URL(fileURLWithPath: audioPath), commonFormat: .pcmFormatFloat32, interleaved: false)
         XCTAssertEqual(file.processingFormat.sampleRate, 16_000)
         XCTAssertEqual(file.processingFormat.channelCount, 1)
@@ -76,7 +173,17 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let selection = SettingsStore.shared.selectedSpeechModel
         for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
-            let directory = try await ParakeetArchiveDownloader.ensurePresent(descriptor: descriptor, in: root)
+            // Exercise first-download publication through the real provider's staged proof.
+            do {
+                let model: SettingsStore.SpeechModel = descriptor.variant == .mini ? .fluidParakeetMini : .fluidParakeetPico
+                let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+                provider.modelCacheRootForTesting = root
+                try await provider.prepare()
+                XCTAssertTrue(provider.isReady)
+                XCTAssertFalse(provider.isWordBoostingActive)
+            }
+            let directory = descriptor.cacheDirectory(in: root)
+            XCTAssertTrue(descriptor.artifactsAreComplete(at: directory))
             let models = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
             XCTAssertEqual(models.version, descriptor.asrModelVersion)
             XCTAssertNotNil(models.splitEncoder)
@@ -86,6 +193,8 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
             let manager = AsrManager(config: .default)
             do {
                 try await manager.initialize(models: models)
+                let verification = try await manager.transcribe(verificationSamples, source: .microphone)
+                XCTAssertTrue(CompactSpeechModelRuntimeCheck.accepts(verification.text), "Shipped sentence failed: \(verification.text)")
                 let result = try await manager.transcribe(samples, source: .microphone)
                 XCTAssertGreaterThanOrEqual(result.text.split(separator: " ").count, 3)
                 let embedding = try await manager.pronunciationEmbedding(audioSamples: samples, focalSampleRange: 0..<samples.count)
@@ -105,4 +214,9 @@ final class ParakeetCompactModelSmokeTests: XCTestCase {
         throw XCTSkip("Compact Parakeet models require Apple silicon")
         #endif
     }
+}
+
+private actor RuntimeCheckActivity {
+    private(set) var finished = false
+    func finish() { self.finished = true }
 }

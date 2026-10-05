@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Immutable metadata shared by model selection, cache ownership and ASR routing.
@@ -31,6 +32,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         let downloadSize: String
         let cardDescription: String
         let performanceRatings: PerformanceRatings?
+        var manifestSHA256: String? = nil
 
         var isEnglishOnly: Bool { self.supportedLanguageCodes == ["en"] }
 
@@ -119,6 +121,24 @@ nonisolated enum ParakeetSpeechModelCatalog {
             return enumerationFailed ? nil : hash
         }
 
+        /// Small bounded identity read for installation snapshots, never UI rendering.
+        /// Existing archive markers remain the pronunciation identity across migration.
+        func installedManifestSHA256(at directory: URL) -> String? {
+            guard self.variant == .mini || self.variant == .pico,
+                  (try? FileManager.default.attributesOfItem(atPath: directory.path))?[.type] as? FileAttributeType == .typeDirectory
+            else { return nil }
+            let file = directory.appendingPathComponent("manifest.json")
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = (attributes[.size] as? NSNumber)?.intValue,
+                  size > 0, size <= 1_048_576,
+                  let input = try? FileHandle(forReadingFrom: file)
+            else { return nil }
+            defer { try? input.close() }
+            guard let data = try? input.read(upToCount: 1_048_577), data.count == size else { return nil }
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+
         /// Only the downloader calls this on its validated, unpublished stage.
         /// Exclusive creation rejects any marker supplied by the archive itself.
         func writeInstallationRevision(at directory: URL) throws {
@@ -195,7 +215,8 @@ nonisolated enum ParakeetSpeechModelCatalog {
         supportedLanguageCodes: ["en"],
         downloadSize: "~242.4 MiB",
         cardDescription: "In-house model by FluidVoice, with improved recognition amid background speech.",
-        performanceRatings: nil
+        performanceRatings: nil,
+        manifestSHA256: "32193c4cec7f5daf92fd617c424e7a157ea8dfcfa832a0db2cfcfa5cb9b674b8"
     )
     static let pico = Descriptor(
         modelID: "fluid-parakeet-pico",
@@ -212,7 +233,8 @@ nonisolated enum ParakeetSpeechModelCatalog {
         supportedLanguageCodes: ["en"],
         downloadSize: "~153.7 MiB",
         cardDescription: "English-only local transcription with the smallest Parakeet model download.",
-        performanceRatings: nil
+        performanceRatings: nil,
+        manifestSHA256: "a87ee649edc18aca6d30f251e75237f48c995448b865ffee35ab343ed3e66121"
     )
 
     static let descriptors = [ParakeetSpeechModelCatalog.v2, ParakeetSpeechModelCatalog.v3, ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico]

@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import CryptoKit
+import Darwin
 import Foundation
 import XCTest
 
@@ -38,6 +39,14 @@ private actor CompactCatalogFetchGate {
     }
 }
 
+private nonisolated final class CatalogTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSince1970: 1_000_000)
+
+    func now() -> Date { self.lock.withLock { self.date } }
+    func advance(_ seconds: TimeInterval) { self.lock.withLock { self.date.addTimeInterval(seconds) } }
+}
+
 @MainActor
 final class SpeechModelInstallationSnapshotTests: XCTestCase {
     private func waitUntil(_ condition: @escaping @MainActor () async -> Bool) async throws {
@@ -49,161 +58,282 @@ final class SpeechModelInstallationSnapshotTests: XCTestCase {
         XCTAssertTrue(completed, "Snapshot operation must finish within the test deadline")
     }
 
-    private func catalogModels(version: String = "1.2.0") -> [[String: Any]] {
-        [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico].map {
-            [
-                "variant": $0.variant.rawValue, "version": version,
-                "url": "https://models.fluidvoice.app/parakeet/fluid-\($0.variant.rawValue)/\(version)/\($0.folderName).tar",
-                "sha256": String(repeating: $0.variant == .mini ? "a" : "b", count: 64),
-                "byteCount": $0.expectedDownloadBytes,
-            ]
-        }
+    private struct FeedCase: Decodable {
+        let file: String
+        let lastSequence: Int
+        let verdict: String
     }
 
-    private func signedCatalog(
+    private struct PickCase: Decodable {
+        let file: String
+        let model: String
+        let platform: String
+        let build: Int
+        let format: Int
+        let release: String?
+    }
+
+    private var fixtures: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/ModelRelease")
+    }
+
+    private func fixture<T: Decodable>(_ type: T.Type, _ path: String) throws -> T {
+        try JSONDecoder().decode(type, from: Data(contentsOf: self.fixtures.appendingPathComponent(path)))
+    }
+
+    private func fixtureKey() throws -> String {
+        try XCTUnwrap(self.fixture([String: String].self, "test_key.json")["publicKey"])
+    }
+
+    private func releaseModels(release: String = "1.2.0", format: Int = 1, minBuild: Int = 27) -> [String: [String: [[String: Any]]]] {
+        var result: [String: [String: [[String: Any]]]] = [:]
+        for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
+            result[descriptor.variant.rawValue] = ["macos": [[
+                "release": release,
+                "url": "https://models.fluidvoice.app/parakeet/fluid-\(descriptor.variant.rawValue)/\(release)/\(descriptor.folderName).tar",
+                "sha256": String(repeating: descriptor.variant == .mini ? "a" : "b", count: 64),
+                "manifestSHA256": String(repeating: descriptor.variant == .mini ? "c" : "d", count: 64),
+                "bytes": descriptor.expectedDownloadBytes,
+                "format": format,
+                "minBuild": minBuild,
+            ]]]
+        }
+        return result
+    }
+
+    private func signedFeed(
         key: Curve25519.Signing.PrivateKey,
-        models: [[String: Any]],
-        payloadSchema: Int = 1,
-        envelopeSchema: Int = 1
+        sequence: Int,
+        models: [String: [String: [[String: Any]]]]
     ) throws -> Data {
-        let payload = try JSONSerialization.data(withJSONObject: ["schemaVersion": payloadSchema, "models": models])
+        let payload = try JSONSerialization.data(withJSONObject: ["schema": 1, "sequence": sequence, "models": models])
         return try JSONSerialization.data(withJSONObject: [
-            "schemaVersion": envelopeSchema, "payload": payload.base64EncodedString(),
-            "signature": key.signature(for: payload).base64EncodedString(),
+            "payload": payload.base64EncodedString(), "signature": key.signature(for: payload).base64EncodedString(),
         ])
     }
 
-    func testSignedCatalogChangesOnlyTrustedReleaseMetadata() throws {
+    func testEveryCanonicalFeedFixtureGetsTheSameVerdict() throws {
+        let key = try self.fixtureKey()
+        let cases = try self.fixture([FeedCase].self, "feeds/expected.json")
+        XCTAssertEqual(cases.count, 40)
+        for feed in cases {
+            let data = try Data(contentsOf: self.fixtures.appendingPathComponent("feeds/\(feed.file)"))
+            let verdict: String
+            do {
+                _ = try SpeechModelFeed.verified(envelope: data, publicKeys: [key], lastSequence: feed.lastSequence)
+                verdict = "ok"
+            } catch {
+                verdict = (error as? SpeechModelFeed.Rejection)?.rawValue ?? String(describing: error)
+            }
+            XCTAssertEqual(verdict, feed.verdict, feed.file)
+        }
+    }
+
+    func testCanonicalReleasePicksAndProductionKeysMatchIPhone() throws {
+        let key = try self.fixtureKey()
+        let picks = try self.fixture([PickCase].self, "feeds/picks.json")
+        XCTAssertEqual(picks.count, 7)
+        for pick in picks {
+            let data = try Data(contentsOf: self.fixtures.appendingPathComponent("feeds/\(pick.file)"))
+            let payload = try SpeechModelFeed.verified(envelope: data, publicKeys: [key], lastSequence: 0)
+            XCTAssertEqual(SpeechModelFeed.entry(in: payload, model: pick.model, platform: pick.platform, build: pick.build, supportedFormat: pick.format)?.release, pick.release)
+        }
+        let keys = try self.fixture([String: String].self, "public_keys.json")
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.publicKeys, [try XCTUnwrap(keys["main"]), try XCTUnwrap(keys["spare"])])
+        let data = try Data(contentsOf: self.fixtures.appendingPathComponent("feeds/good.json"))
+        XCTAssertThrowsError(try SpeechModelFeed.verified(envelope: data, publicKeys: CompactSpeechModelReleaseCatalog.publicKeys, lastSequence: 0)) {
+            XCTAssertEqual($0 as? SpeechModelFeed.Rejection, .badSignature)
+        }
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.manifestURL.absoluteString, "https://models.fluidvoice.app/feed/v1/speech-models.json")
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.maximumManifestBytes, 64 * 1_024)
+    }
+
+    func testMacReleaseChangesOnlyTrustedMetadataAndNeverPicksIOS() throws {
         let key = Curve25519.Signing.PrivateKey()
-        let descriptors = try CompactSpeechModelReleaseCatalog.validate(
-            self.signedCatalog(key: key, models: self.catalogModels()), publicKey: key.publicKey.rawRepresentation
-        )
-        XCTAssertEqual(descriptors.count, 2)
+        let payload = try SpeechModelFeed.verified(envelope: self.signedFeed(key: key, sequence: 5, models: self.releaseModels()), publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], lastSequence: 0)
+        let descriptors = CompactSpeechModelReleaseCatalog.descriptors(in: payload, build: 27)
         for original in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
             let release = try XCTUnwrap(descriptors[original.variant])
             XCTAssertNotEqual(release.archiveSHA256, original.archiveSHA256)
+            XCTAssertNotEqual(release.manifestSHA256, original.manifestSHA256)
             XCTAssertEqual(release.expectedDownloadBytes, original.expectedDownloadBytes)
             XCTAssertEqual(release.folderName, original.folderName)
             XCTAssertEqual(release.requiredModelNames, original.requiredModelNames)
             XCTAssertEqual(release.vocabularyFile, original.vocabularyFile)
             XCTAssertEqual(release.displayName, original.displayName)
             XCTAssertEqual(release.cardDescription, original.cardDescription)
-            XCTAssertEqual(release.languageSupport, original.languageSupport)
             XCTAssertEqual(release.supportedLanguageCodes, ["en"])
         }
-        XCTAssertEqual(Data(base64Encoded: CompactSpeechModelReleaseCatalog.publicKeyBase64)?.count, 32)
-    }
-
-    func testCatalogRejectsUnsignedTamperedUnknownAndUnsafeReleases() throws {
-        let key = Curve25519.Signing.PrivateKey()
-        let data = try self.signedCatalog(key: key, models: self.catalogModels())
-        XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(data, publicKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation))
-        XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(Data(repeating: 0, count: 16_385), publicKey: key.publicKey.rawRepresentation))
-        for schema in [0, 2] {
-            XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(
-                self.signedCatalog(key: key, models: self.catalogModels(), payloadSchema: schema), publicKey: key.publicKey.rawRepresentation
-            ))
-            XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(
-                self.signedCatalog(key: key, models: self.catalogModels(), envelopeSchema: schema), publicKey: key.publicKey.rawRepresentation
-            ))
-        }
-        var cases: [[[String: Any]]] = []
-        let normal = self.catalogModels()
-        cases.append([normal[0]])
-        cases.append([normal[0], normal[0]])
-        cases.append(self.catalogModels(version: "1.0.0"))
-        let invalidFields: [(String, Any)] = [
-            ("variant", "v3"), ("version", "../1.2.0"), ("version", "01.2.0"),
-            ("url", "http://models.fluidvoice.app/parakeet/fluid-mini/1.2.0/fluid-parakeet-mini-coreml.tar"),
-            ("url", "https://elsewhere.invalid/parakeet/fluid-mini/1.2.0/fluid-parakeet-mini-coreml.tar"),
-            ("url", "https://models.fluidvoice.app/parakeet/fluid-mini/1.2.0/arbitrary.tar"),
-            ("sha256", String(repeating: "A", count: 64)), ("sha256", "short"),
-            ("byteCount", 0), ("byteCount", 600_000_001),
+        let builtins: [ParakeetSpeechModelCatalog.Variant: ParakeetSpeechModelCatalog.Descriptor] = [.mini: ParakeetSpeechModelCatalog.mini, .pico: ParakeetSpeechModelCatalog.pico]
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.descriptors(in: payload, build: 26), builtins)
+        let iosOnly: [String: [String: [[String: Any]]]] = [
+            "mini": ["ios": self.releaseModels()["mini"]?["macos"] ?? [], "macos": []],
+            "pico": ["ios": [], "macos": []],
         ]
-        for (field, value) in invalidFields {
-            var changed = normal
-            changed[0][field] = value
-            cases.append(changed)
+        let incompatible = [self.releaseModels(format: 2), self.releaseModels(minBuild: 28), iosOnly]
+        for models in incompatible {
+            let fallback = try SpeechModelFeed.verified(envelope: self.signedFeed(key: key, sequence: 6, models: models), publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], lastSequence: 5)
+            XCTAssertEqual(CompactSpeechModelReleaseCatalog.descriptors(in: fallback, build: 27), builtins)
         }
-        for models in cases {
-            XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(
-                self.signedCatalog(key: key, models: models), publicKey: key.publicKey.rawRepresentation
-            ))
-        }
-        var tampered = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        tampered["payload"] = Data("{}".utf8).base64EncodedString()
-        XCTAssertThrowsError(try CompactSpeechModelReleaseCatalog.validate(
-            JSONSerialization.data(withJSONObject: tampered), publicKey: key.publicKey.rawRepresentation
-        ))
     }
 
-    func testCatalogCoalescesChecksAndPreservesCachedReleaseAfterFailure() async throws {
+    func testCatalogCoalescesAndAcceptsRollbackOnlyUnderNewSequence() async throws {
         let key = Curve25519.Signing.PrivateKey()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let cache = directory.appendingPathComponent("catalog.json")
-        try self.signedCatalog(key: key, models: self.catalogModels()).write(to: cache)
+        let cache = directory.appendingPathComponent("feed.json")
+        try self.signedFeed(key: key, sequence: 5, models: self.releaseModels()).write(to: cache)
         let gate = CompactCatalogFetchGate()
-        let catalog = CompactSpeechModelReleaseCatalog(publicKey: key.publicKey.rawRepresentation, cacheURL: cache, fetch: { try await gate.fetch() })
+        let catalog = CompactSpeechModelReleaseCatalog(publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], cacheURL: cache, build: 27, fetch: { try await gate.fetch() })
         let first = Task { await catalog.refreshIfNeeded() }
         try await self.waitUntil { await gate.calls == 1 }
         let second = Task { await catalog.refreshIfNeeded() }
-        XCTAssertEqual(catalog.descriptor(for: .mini).archiveSHA256, String(repeating: "a", count: 64))
+        XCTAssertEqual(catalog.snapshot.sequence, 5)
         let cached = catalog.snapshot
-        await gate.complete(.success(try self.signedCatalog(key: key, models: self.catalogModels(version: "1.1.1"))))
+        await gate.complete(.success(try self.signedFeed(key: key, sequence: 4, models: self.releaseModels(release: "1.3.0"))))
         await first.value
         await second.value
         XCTAssertEqual(catalog.snapshot, cached)
-        let calls = await gate.calls
-        XCTAssertEqual(calls, 1)
         await catalog.refreshIfNeeded()
-        let stillOne = await gate.calls
-        XCTAssertEqual(stillOne, 1, "Appearance bursts must not repeat a failed check")
+        let calls = await gate.calls
+        XCTAssertEqual(calls, 1, "Failed checks retry hourly, not on every appearance")
         let retry = Task { await catalog.refreshIfNeeded(force: true) }
         try await self.waitUntil { await gate.calls == 2 }
-        await gate.complete(.success(try self.signedCatalog(key: key, models: self.catalogModels(version: "1.3.0"))))
+        await gate.complete(.success(try self.signedFeed(key: key, sequence: 6, models: self.releaseModels(release: "1.0.0"))))
         await retry.value
-        XCTAssertTrue(catalog.descriptor(for: .pico).archiveURL?.path.contains("/1.3.0/") == true)
-        XCTAssertGreaterThan(catalog.revision, cached.revision)
-        let latest = catalog.snapshot
-        let older = Task { await catalog.refreshIfNeeded(force: true) }
-        try await self.waitUntil { await gate.calls == 3 }
-        var replay = self.catalogModels(version: "1.3.0")
-        replay[1] = self.catalogModels(version: "1.2.0")[1]
-        await gate.complete(.success(try self.signedCatalog(key: key, models: replay)))
-        await older.value
-        XCTAssertEqual(catalog.snapshot, latest, "One older variant must reject the whole signed release atomically")
-        let retained = try CompactSpeechModelReleaseCatalog.validate(Data(contentsOf: cache), publicKey: key.publicKey.rawRepresentation)
-        XCTAssertTrue(retained[.pico]?.archiveURL?.path.contains("/1.3.0/") == true, "A replay cannot overwrite the higher signed cache")
+        XCTAssertEqual(catalog.snapshot.sequence, 6)
+        XCTAssertTrue(catalog.descriptor(for: .pico).archiveURL?.path.contains("/1.0.0/") == true, "Intentional rollback is allowed under a higher signed sequence")
+        let retained = try SpeechModelFeed.verified(envelope: Data(contentsOf: cache), publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], lastSequence: 6)
+        XCTAssertEqual(retained.sequence, 6)
         XCTAssertEqual(catalog.descriptor(for: .v3), ParakeetSpeechModelCatalog.v3)
         XCTAssertNil(catalog.descriptor(for: SettingsStore.SpeechModel.appleSpeech))
+        let reopened = CompactSpeechModelReleaseCatalog(publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], cacheURL: cache, build: 27, fetch: { XCTFail("Persisted successful checks must not refetch before one day"); throw URLError(.timedOut) })
+        await reopened.refreshIfNeeded()
+        XCTAssertEqual(reopened.snapshot.sequence, 6)
+        XCTAssertEqual(reopened.descriptor(for: .mini), catalog.descriptor(for: .mini))
     }
 
-    func testOptionalPublishedCatalogFixtureUsesEmbeddedProductionKey() throws {
-        guard let path = ProcessInfo.processInfo.environment["FLUID_COMPACT_MODEL_CATALOG_FIXTURE"] else {
-            throw XCTSkip("Set FLUID_COMPACT_MODEL_CATALOG_FIXTURE to the externally generated signed envelope")
-        }
-        let releases = try CompactSpeechModelReleaseCatalog.validate(
-            Data(contentsOf: URL(fileURLWithPath: path)),
-            publicKey: try XCTUnwrap(Data(base64Encoded: CompactSpeechModelReleaseCatalog.publicKeyBase64))
-        )
-        XCTAssertEqual(Set(releases.keys), [.mini, .pico])
-        XCTAssertEqual(releases[.mini]?.modelID, ParakeetSpeechModelCatalog.mini.modelID)
-        XCTAssertEqual(releases[.pico]?.modelID, ParakeetSpeechModelCatalog.pico.modelID)
+    func testRejectionsPersistAreBoundedAndCannotChangeModelSelection() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = directory.appendingPathComponent("feed.json")
+        let catalog = CompactSpeechModelReleaseCatalog(cacheURL: cache, fetch: { throw URLError(.timedOut) })
+        let selection = SettingsStore.shared.selectedSpeechModel
+        let hash = try XCTUnwrap(ParakeetSpeechModelCatalog.mini.manifestSHA256)
+        await catalog.reject(manifestSHA256: hash)
+        let revision = catalog.revision
+        await catalog.reject(manifestSHA256: hash)
+        await catalog.reject(manifestSHA256: "invalid")
+        XCTAssertEqual(catalog.revision, revision)
+        XCTAssertEqual(catalog.snapshot.rejectedManifestHashes, [hash])
+        XCTAssertEqual(catalog.descriptor(for: .mini), ParakeetSpeechModelCatalog.mini)
+        XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
+        let reopened = CompactSpeechModelReleaseCatalog(cacheURL: cache, fetch: { throw URLError(.timedOut) })
+        await reopened.refreshIfNeeded()
+        XCTAssertTrue(reopened.snapshot.rejectedManifestHashes.contains(hash))
+        let bounded = CompactSpeechModelReleaseCatalog(cacheURL: nil, fetch: { throw URLError(.timedOut) })
+        for number in 0..<70 { await bounded.reject(manifestSHA256: String(format: "%064x", number)) }
+        XCTAssertEqual(bounded.snapshot.rejectedManifestHashes.count, 64)
+        XCTAssertFalse(bounded.snapshot.rejectedManifestHashes.contains(String(format: "%064x", 0)))
+        XCTAssertTrue(bounded.snapshot.rejectedManifestHashes.contains(String(format: "%064x", 69)))
     }
 
-    func testOfflineInvalidCatalogKeepsBuiltInModelsUsable() async throws {
+    func testCompetingCatalogsPreserveHighestSignedSequenceAndMergeRejections() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let keys = [key.publicKey.rawRepresentation.base64EncodedString()]
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let cache = directory.appendingPathComponent("catalog.json")
-        try Data("{\"schemaVersion\":1,\"models\":[]}".utf8).write(to: cache)
+        let cache = directory.appendingPathComponent("feed.json")
+        try self.signedFeed(key: key, sequence: 1, models: self.releaseModels()).write(to: cache)
+        let earlierGate = CompactCatalogFetchGate()
+        let laterGate = CompactCatalogFetchGate()
+        let earlier = CompactSpeechModelReleaseCatalog(publicKeys: keys, cacheURL: cache, build: 27, fetch: { try await earlierGate.fetch() })
+        let later = CompactSpeechModelReleaseCatalog(publicKeys: keys, cacheURL: cache, build: 27, fetch: { try await laterGate.fetch() })
+        let earlierCheck = Task { await earlier.refreshIfNeeded(force: true) }
+        try await self.waitUntil { await earlierGate.calls == 1 }
+        let laterCheck = Task { await later.refreshIfNeeded(force: true) }
+        try await self.waitUntil { await laterGate.calls == 1 }
+        await laterGate.complete(.success(try self.signedFeed(key: key, sequence: 3, models: self.releaseModels(release: "1.3.0"))))
+        await laterCheck.value
+        await earlierGate.complete(.success(try self.signedFeed(key: key, sequence: 2, models: self.releaseModels(release: "1.2.0"))))
+        await earlierCheck.value
+        XCTAssertEqual(earlier.snapshot.sequence, 3, "The stale writer must adopt the higher on-disk signed feed")
+        XCTAssertEqual(earlier.descriptor(for: .mini), later.descriptor(for: .mini))
+        XCTAssertEqual(try SpeechModelFeed.verified(envelope: Data(contentsOf: cache), publicKeys: keys, lastSequence: 3).sequence, 3)
+        let lock = open(cache.appendingPathExtension("lock").path, O_RDWR)
+        XCTAssertGreaterThanOrEqual(lock, 0)
+        guard lock >= 0 else { return }
+        defer { Darwin.close(lock) }
+        XCTAssertEqual(flock(lock, LOCK_EX | LOCK_NB), 0)
+        let firstHash = String(repeating: "e", count: 64)
+        let secondHash = String(repeating: "f", count: 64)
+        let firstReject = Task { await earlier.reject(manifestSHA256: firstHash) }
+        let secondReject = Task { await later.reject(manifestSHA256: secondHash) }
+        try await self.waitUntil {
+            earlier.snapshot.rejectedManifestHashes.contains(firstHash) && later.snapshot.rejectedManifestHashes.contains(secondHash)
+        }
+        await firstReject.value
+        await secondReject.value
+        XCTAssertEqual(flock(lock, LOCK_UN), 0)
+        // Both bounded busy retries exhausted while the lock was held. The next
+        // duplicate rejection event must flush the one retained pending state.
+        await earlier.reject(manifestSHA256: firstHash)
+        await later.reject(manifestSHA256: secondHash)
+        let reopened = CompactSpeechModelReleaseCatalog(publicKeys: keys, cacheURL: cache, build: 27, fetch: { throw URLError(.timedOut) })
+        await reopened.refreshIfNeeded()
+        XCTAssertEqual(reopened.snapshot.sequence, 3)
+        XCTAssertEqual(reopened.snapshot.rejectedManifestHashes, [firstHash, secondHash], "Overlapping processes must retain both failures after restart")
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.cacheFolderName(bundleIdentifier: "com.FluidApp.app", isDebug: false), "FluidVoice")
+        XCTAssertEqual(CompactSpeechModelReleaseCatalog.cacheFolderName(bundleIdentifier: "com.FluidApp.app.debug", isDebug: true), "FluidVoice/com.FluidApp.app.debug")
+    }
+
+    func testSuccessfulChecksWaitOneDayAndFailedChecksRetryHourly() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let clock = CatalogTestClock()
+        let gate = CompactCatalogFetchGate()
+        let catalog = CompactSpeechModelReleaseCatalog(
+            publicKeys: [key.publicKey.rawRepresentation.base64EncodedString()], cacheURL: nil, build: 27,
+            now: { clock.now() }, fetch: { try await gate.fetch() }
+        )
+        let first = Task { await catalog.refreshIfNeeded() }
+        try await self.waitUntil { await gate.calls == 1 }
+        await gate.complete(.success(try self.signedFeed(key: key, sequence: 1, models: self.releaseModels())))
+        await first.value
+        clock.advance(86_399)
+        await catalog.refreshIfNeeded()
+        let beforeDay = await gate.calls
+        XCTAssertEqual(beforeDay, 1)
+        clock.advance(1)
+        let failure = Task { await catalog.refreshIfNeeded() }
+        try await self.waitUntil { await gate.calls == 2 }
+        await gate.complete(.failure(URLError(.timedOut)))
+        await failure.value
+        let lastGood = catalog.snapshot
+        clock.advance(3_599)
+        await catalog.refreshIfNeeded()
+        let beforeHour = await gate.calls
+        XCTAssertEqual(beforeHour, 2)
+        clock.advance(1)
+        let retry = Task { await catalog.refreshIfNeeded() }
+        try await self.waitUntil { await gate.calls == 3 }
+        await gate.complete(.failure(URLError(.timedOut)))
+        await retry.value
+        XCTAssertEqual(catalog.snapshot, lastGood)
+    }
+
+    func testOfflineInvalidFeedKeepsBuiltInModelsUsable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cache = directory.appendingPathComponent("feed.json")
+        try Data("{\"schema\":1,\"models\":[]}".utf8).write(to: cache)
         let catalog = CompactSpeechModelReleaseCatalog(cacheURL: cache, fetch: { throw URLError(.timedOut) })
         await catalog.refreshIfNeeded()
         XCTAssertEqual(catalog.descriptor(for: .mini), ParakeetSpeechModelCatalog.mini)
         XCTAssertEqual(catalog.descriptor(for: .pico), ParakeetSpeechModelCatalog.pico)
-        XCTAssertEqual(catalog.revision, 0)
+        XCTAssertEqual(catalog.snapshot.sequence, 0)
     }
 
     func testOldCompleteCompactInstallIsUsableAndHasUpdateWithActualProfileHash() async throws {
@@ -242,6 +372,30 @@ final class SpeechModelInstallationSnapshotTests: XCTestCase {
         try await self.waitUntil { snapshot.state == .ready }
         XCTAssertEqual(snapshot.installedIDs, [descriptor.modelID])
         XCTAssertTrue(snapshot.updateAvailableIDs.isEmpty)
+
+        let manifestBytes = Data("{\"schema\":1}".utf8)
+        let manifestHash = SHA256.hash(data: manifestBytes).map { String(format: "%02x", $0) }.joined()
+        let manifestFile = directory.appendingPathComponent("manifest.json")
+        try manifestBytes.write(to: manifestFile)
+        let sameManifest = descriptor.replacingArchive(url: descriptor.archiveURL, sha256: oldHash, manifestSHA256: manifestHash)
+        let matching = try await SpeechModelInstallationSnapshot.scanResult(
+            [.init(modelID: descriptor.modelID, kind: .parakeet(sameManifest))], cachesDirectory: root, modelsDirectory: root
+        )
+        XCTAssertEqual(matching.installedManifestHashes, [descriptor.modelID: manifestHash])
+        XCTAssertTrue(matching.updateAvailableIDs.isEmpty, "Manifest identity wins even when archive packaging differs")
+        let newManifest = String(repeating: "d", count: 64)
+        let update = sameManifest.replacingArchive(url: descriptor.archiveURL, sha256: oldHash, manifestSHA256: newManifest)
+        let differing = try await SpeechModelInstallationSnapshot.scanResult(
+            [.init(modelID: descriptor.modelID, kind: .parakeet(update))], cachesDirectory: root, modelsDirectory: root
+        )
+        XCTAssertEqual(differing.updateAvailableIDs, [descriptor.modelID])
+        let rejected = try await SpeechModelInstallationSnapshot.scanResult(
+            [.init(modelID: descriptor.modelID, kind: .parakeet(update), rejectedManifestHashes: [newManifest])], cachesDirectory: root, modelsDirectory: root
+        )
+        XCTAssertEqual(rejected.installedIDs, [descriptor.modelID])
+        XCTAssertTrue(rejected.updateAvailableIDs.isEmpty, "A failed runtime release must not nag the user again")
+        XCTAssertEqual(rejected.installedArchiveHashes, matching.installedArchiveHashes, "Feed identity must not change pronunciation checkpoint identity")
+        XCTAssertEqual(try Data(contentsOf: manifestFile), manifestBytes, "Checking and rejecting cannot change installed files")
     }
 
     func testRapidRefreshScansOnlyInitialAndLatestSnapshotAndRejectsOldResult() async throws {
