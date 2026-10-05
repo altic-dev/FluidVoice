@@ -63,6 +63,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
         try self.createOwnedDirectory(directory)
         let claim = try Claim(directory.appendingPathComponent("claim.lock"))
         defer { claim.close() }
+        try self.removeAbandonedReadyArchives(in: directory)
         let marker = directory.appendingPathComponent("release.sha256")
         let partial = directory.appendingPathComponent("archive.partial")
         var completed = try self.preparePartial(partial, marker: marker, hash: hash, total: descriptor.expectedDownloadBytes, chunkBytes: chunkBytes)
@@ -108,7 +109,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
         try Task.checkCancellation()
         // Transfer unique ownership while still holding the claim, so another process
         // cannot resume or replace a completed file the installer is about to consume.
-        let ready = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoiceCompactArchive-\(UUID().uuidString).tar")
+        let ready = directory.appendingPathComponent("ready-\(getpid())-\(UUID().uuidString).tar")
         try FileManager.default.moveItem(at: partial, to: ready)
         // This 200 represents an assembled file, not an HTTP range response. The outer
         // installer still verifies its whole size/SHA before any extraction/publication.
@@ -117,6 +118,31 @@ nonisolated enum CompactSpeechModelArchiveTransport {
             throw Failure.invalidRange
         }
         return (ready, response)
+    }
+
+    /// A completed handoff may outlive an app exit before the installer consumes it.
+    /// Bound recovery work and never remove another live process's owned handoff.
+    private static func removeAbandonedReadyArchives(in directory: URL) throws {
+        guard let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants]) else {
+            throw Failure.unsafePartial(directory)
+        }
+        var inspected = 0
+        for case let file as URL in files {
+            try Task.checkCancellation()
+            inspected += 1
+            guard inspected <= 128 else { break }
+            let name = file.lastPathComponent
+            guard name.hasPrefix("ready-"), name.hasSuffix(".tar") else { continue }
+            let identity = name.dropFirst("ready-".count).dropLast(".tar".count)
+            let parts = identity.split(separator: "-", maxSplits: 1)
+            guard parts.count == 2,
+                  let owner = Int32(parts[0]), owner > 0, String(owner) == parts[0],
+                  let uuid = UUID(uuidString: String(parts[1])), uuid.uuidString == parts[1],
+                  kill(owner, 0) == -1, errno == ESRCH,
+                  (try? self.optionalFileSize(file)) != nil
+            else { continue }
+            try FileManager.default.removeItem(at: file)
+        }
     }
 
     private static func preparePartial(_ partial: URL, marker: URL, hash: String, total: Int64, chunkBytes: Int64) throws -> Int64 {

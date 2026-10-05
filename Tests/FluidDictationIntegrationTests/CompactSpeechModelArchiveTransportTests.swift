@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -206,10 +207,23 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
     }
 
     func testCompletedArchiveOwnershipPreventsChecksumFailureResume() async throws {
+        try await self.assertChecksumFailureRetry(seedCorruptPrefix: false)
+    }
+
+    func testDamagedAlignedRetainedPrefixCannotSurviveChecksumFailureRetry() async throws {
+        try await self.assertChecksumFailureRetry(seedCorruptPrefix: true)
+    }
+
+    private func assertChecksumFailureRetry(seedCorruptPrefix: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let corrupted = Data("XXXXXXXXXX".utf8)
-        let (ready, _) = try await fixture.download { request, _, progress in try fixture.chunk(request, progress: progress, payload: corrupted) }
+        if seedCorruptPrefix {
+            try fixture.seedPartial(corrupted.prefix(4), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
+        }
+        let (ready, _) = try await fixture.download { request, _, progress in
+            try fixture.chunk(request, progress: progress, payload: seedCorruptPrefix ? fixture.payload : corrupted)
+        }
         XCTAssertNotEqual(try Fixture.sha256(Data(contentsOf: ready)), fixture.descriptor.archiveSHA256)
         // The outer installer's checksum failure deletes only this uniquely owned complete file.
         try FileManager.default.removeItem(at: ready)
@@ -222,6 +236,64 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: retry) }
         XCTAssertEqual(recorder.values.first, "bytes=0-3")
         XCTAssertEqual(try Data(contentsOf: retry), fixture.payload)
+        try fixture.assertSiblings()
+    }
+
+    func testNextAttemptRemovesDeadProcessHandoffAndPreservesActiveAndUnknownFiles() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.seedPartial(Data(), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
+        let directory = fixture.partial.deletingLastPathComponent()
+        let deadOwner = Int32.max
+        XCTAssertEqual(kill(deadOwner, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+        let abandoned = directory.appendingPathComponent("ready-\(deadOwner)-\(UUID().uuidString).tar")
+        let active = directory.appendingPathComponent("ready-\(getpid())-\(UUID().uuidString).tar")
+        let unknown = directory.appendingPathComponent("ready-\(deadOwner)-not-a-uuid.tar")
+        for file in [abandoned, active, unknown] { try fixture.payload.write(to: file) }
+        let (ready, _) = try await fixture.download { request, _, progress in try fixture.chunk(request, progress: progress) }
+        XCTAssertEqual(ready.deletingLastPathComponent(), directory)
+        XCTAssertTrue(ready.lastPathComponent.hasPrefix("ready-\(getpid())-"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: abandoned.path))
+        XCTAssertEqual(try Data(contentsOf: active), fixture.payload)
+        XCTAssertEqual(try Data(contentsOf: unknown), fixture.payload)
+        XCTAssertEqual(try Data(contentsOf: ready), fixture.payload)
+        try fixture.assertSiblings()
+    }
+
+    func testAbandonedHandoffLinksAndDirectoriesCannotDeleteExternalFiles() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.seedPartial(Data(), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
+        let directory = fixture.partial.deletingLastPathComponent()
+        let external = fixture.base.appendingPathComponent("external-ready")
+        try fixture.payload.write(to: external)
+        let symlink = directory.appendingPathComponent("ready-\(Int32.max)-\(UUID().uuidString).tar")
+        let hardlink = directory.appendingPathComponent("ready-\(Int32.max)-\(UUID().uuidString).tar")
+        let folder = directory.appendingPathComponent("ready-\(Int32.max)-\(UUID().uuidString).tar")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: external)
+        try FileManager.default.linkItem(at: external, to: hardlink)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let (ready, _) = try await fixture.download { request, _, progress in try fixture.chunk(request, progress: progress) }
+        XCTAssertEqual(try Data(contentsOf: ready), fixture.payload)
+        XCTAssertEqual(try Data(contentsOf: external), fixture.payload)
+        for file in [symlink, hardlink, folder] { XCTAssertTrue(FileManager.default.fileExists(atPath: file.path)) }
+        try fixture.assertSiblings()
+    }
+
+    func testAbandonedHandoffCleanupIsBoundedPerAttempt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.seedPartial(Data(), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
+        let directory = fixture.partial.deletingLastPathComponent()
+        for _ in 0..<160 {
+            let file = directory.appendingPathComponent("ready-\(Int32.max)-\(UUID().uuidString).tar")
+            try fixture.payload.write(to: file)
+        }
+        _ = try await fixture.download { request, _, progress in try fixture.chunk(request, progress: progress) }
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix("ready-\(Int32.max)-") }
+        XCTAssertGreaterThanOrEqual(remaining.count, 160 - 128)
+        XCTAssertLessThan(remaining.count, 160)
         try fixture.assertSiblings()
     }
 
