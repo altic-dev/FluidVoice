@@ -1,4 +1,6 @@
+import AppKit
 @testable import FluidVoice_Debug
+import SwiftUI
 import Foundation
 import XCTest
 
@@ -44,6 +46,241 @@ final class VoiceModelDeletionTests: XCTestCase {
             deviceResolver: { _ in throw CocoaError(.fileReadUnknown) },
             onFormatInvalidated: { _ in }
         )
+    }
+
+    private func withDictationModeSwitchFixture(
+        asr: ASRService,
+        hasActiveMode: Bool = true,
+        body: (ContentView) async throws -> Void
+    ) async throws {
+        var ready: ContentView?
+        let oldMode = NotchContentState.shared.mode
+        let oldSlot = NotchContentState.shared.activeDictationShortcutSlot
+        let oldPrompt = NotchContentState.shared.isPromptModeActive
+        let oldProfileName = NotchContentState.shared.promptModeOverrideProfileName
+        let oldProfileID = NotchContentState.shared.promptModeOverrideProfileID
+        let oldStopLabel = NotchContentState.shared.stopSnapshotLabel
+        let manager = MenuBarManager()
+        let view = ContentView.dictationModeSwitchFixture(asr: asr, hasActiveMode: hasActiveMode) { ready = $0 }
+            .environmentObject(manager)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 120, height: 80)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+            NotchContentState.shared.mode = oldMode
+            NotchContentState.shared.activeDictationShortcutSlot = oldSlot
+            NotchContentState.shared.isPromptModeActive = oldPrompt
+            NotchContentState.shared.promptModeOverrideProfileName = oldProfileName
+            NotchContentState.shared.promptModeOverrideProfileID = oldProfileID
+            NotchContentState.shared.stopSnapshotLabel = oldStopLabel
+        }
+        host.layoutSubtreeIfNeeded()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ready == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        manager.setOverlayMode(.edit)
+        try await body(XCTUnwrap(ready, "SwiftUI must install the real ContentView state"))
+    }
+
+    private func replayPrimaryTap(_ manager: GlobalHotkeyManager) throws {
+        for type in [CGEventType.keyDown, .keyUp] {
+            let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 2, keyDown: type == .keyDown))
+            event.type = type
+            event.flags = [.maskControl, .maskCommand]
+            _ = manager.handleKeyEvent(type: type, event: event)
+        }
+    }
+
+    private func makeModeSwitchHotkeyManager(
+        asr: ASRService,
+        view: ContentView,
+        onSwitch: @escaping () -> Void,
+        onStop: @escaping () -> Void
+    ) -> GlobalHotkeyManager {
+        let manager = GlobalHotkeyManager(
+            asrService: asr,
+            primaryShortcuts: [HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])],
+            promptModeShortcut: HotkeyShortcut(keyCode: 60, modifierFlags: []),
+            commandModeShortcut: nil,
+            rewriteModeShortcut: HotkeyShortcut(keyCode: 58, modifierFlags: []),
+            promptModeShortcutEnabled: false,
+            commandModeShortcutEnabled: false,
+            rewriteModeShortcutEnabled: false,
+            dictationModeCallback: {
+                onSwitch()
+                await view.beginDictationModeSwitchForTesting()?.value
+            },
+            stopAndProcessCallback: { _ in onStop() },
+            isDictateRecordingProvider: { view.dictationModeSwitchStateForTesting.mode == "dictate" },
+            isSessionLockedProvider: { false }
+        )
+        manager.setHotkeyMode(.toggle)
+        return manager
+    }
+
+    func testRewriteToDictateSwitchPreservesCaptureThenNextTapStops() async throws {
+        let settings = SettingsStore.shared
+        let selected = settings.selectedSpeechModel
+        let primary = settings.dictationPromptSelection(for: .primary)
+        let secondary = settings.dictationPromptSelection(for: .secondary)
+        let savesHistory = settings.saveTranscriptionHistory
+        let asr = ASRService()
+        let provider = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[selected] = provider
+        asr.isAsrReady = true
+        asr.finalText = "retained final text"
+        let samples: [Float] = [0.12, -0.24, 0.31]
+        asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: samples)
+        let lease = try asr.acquireExclusiveActivity(.dictation)
+        asr.configureDictationModeSwitchForTesting(ownedLease: lease)
+        try await self.withDictationModeSwitchFixture(asr: asr) { view in
+            let generation = view.dictationModeSwitchStateForTesting.generation
+            var switches = 0
+            var stops = 0
+            let manager = self.makeModeSwitchHotkeyManager(asr: asr, view: view, onSwitch: { switches += 1 }, onStop: {
+                stops += 1
+                asr.isRunning = false
+                asr.releaseExclusiveActivity(lease)
+            })
+            asr.errorTitle = "Dictation Unavailable"
+            asr.errorMessage = "Wait for the active dictation to finish."
+            asr.showError = true
+            try self.replayPrimaryTap(manager)
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(switches, 1)
+            XCTAssertEqual(stops, 0)
+            XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, "dictate")
+            XCTAssertEqual(view.dictationModeSwitchStateForTesting.slot, .primary)
+            XCTAssertEqual(view.dictationModeSwitchStateForTesting.generation, generation)
+            XCTAssertEqual(NotchContentState.shared.mode, .dictation)
+            XCTAssertFalse(asr.showError, "Only the stale own-capture block should disappear")
+            XCTAssertTrue(asr.isRunning)
+            XCTAssertTrue(asr.canSwitchOwnedDictationCaptureMode)
+            XCTAssertEqual(asr.activeExclusiveActivity, .dictation)
+            XCTAssertTrue(asr.audioRouteRecoveryStateForTesting.acceptingPCM)
+            XCTAssertEqual(asr.audioRouteRecoveryStateForTesting.samples, samples)
+            XCTAssertTrue((asr.fileTranscriptionProvider as? DeletionFixtureProvider) === provider)
+            XCTAssertTrue(asr.isAsrReady)
+            XCTAssertEqual(asr.finalText, "retained final text")
+            XCTAssertEqual(provider.prepareCalls + provider.clearCalls, 0)
+            XCTAssertEqual(settings.selectedSpeechModel, selected)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), primary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), secondary)
+            XCTAssertEqual(settings.saveTranscriptionHistory, savesHistory)
+            try self.replayPrimaryTap(manager)
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(switches, 1, "The next tap must stop, not switch again")
+            XCTAssertEqual(stops, 1)
+            XCTAssertFalse(asr.isRunning)
+            XCTAssertNil(asr.activeExclusiveActivity)
+        }
+        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+        await asr.finishAudioRouteRecoveryTest()
+        asr.releaseExclusiveActivity(lease)
+    }
+
+    func testRapidRewriteToDictateDoubleTapSwitchesThenStopsOnce() async throws {
+        let asr = ASRService()
+        asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: [0.5])
+        let lease = try asr.acquireExclusiveActivity(.dictation)
+        asr.configureDictationModeSwitchForTesting(ownedLease: lease)
+        try await self.withDictationModeSwitchFixture(asr: asr) { view in
+            var switches = 0
+            var stops = 0
+            let manager = self.makeModeSwitchHotkeyManager(asr: asr, view: view, onSwitch: { switches += 1 }, onStop: {
+                stops += 1
+                asr.isRunning = false
+                asr.releaseExclusiveActivity(lease)
+            })
+            try self.replayPrimaryTap(manager)
+            try self.replayPrimaryTap(manager)
+            for _ in 0..<30 {
+                await Task.yield()
+            }
+            XCTAssertEqual(switches, 1)
+            XCTAssertEqual(stops, 1)
+            XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, "dictate")
+            XCTAssertEqual(asr.audioRouteRecoveryStateForTesting.samples, [0.5])
+        }
+        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+        await asr.finishAudioRouteRecoveryTest()
+        asr.releaseExclusiveActivity(lease)
+    }
+
+    func testDictationModeSwitchRejectsForeignAndUnsettledCaptureWithoutWrites() async throws {
+        let cases: [(String, ASRExclusiveActivity)] = [
+            ("meeting", .meeting), ("file", .fileTranscription), ("API", .localAPI),
+            ("model", .modelMaintenance), ("backup", .settingsRestore),
+            ("unowned", .dictation), ("mismatch", .dictation), ("stale", .dictation),
+            ("starting", .dictation), ("finalizing", .dictation), ("training", .dictation),
+            ("draining", .dictation), ("recovering", .dictation),
+            ("idle UI", .dictation), ("cancel save", .dictation), ("processing", .dictation)
+        ]
+        let settings = SettingsStore.shared
+        let secondary = settings.dictationPromptSelection(for: .secondary)
+        defer { settings.setDictationPromptSelection(secondary, for: .secondary) }
+        let attempted: SettingsStore.DictationPromptSelection = secondary == .privateAI ? .off : .privateAI
+        for (name, activity) in cases {
+            let asr = ASRService()
+            let provider = DeletionFixtureProvider()
+            asr.modelProvidersForTesting[settings.selectedSpeechModel] = provider
+            asr.isAsrReady = true
+            asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: [0.25])
+            let lease = try asr.acquireExclusiveActivity(activity)
+            let owned = name == "unowned" ? nil : name == "mismatch" ? ASRActivityLease(id: UUID(), activity: .dictation) : lease
+            asr.configureDictationModeSwitchForTesting(ownedLease: owned, starting: name == "starting", finalizing: name == "finalizing", dictionaryTraining: name == "training")
+            if name == "stale" { asr.releaseExclusiveActivity(lease) }
+            let finishDrain = name == "draining" || name == "recovering" ? asr.beginDictationBufferDrainForTesting(recovering: name == "recovering") : nil
+            try await self.withDictationModeSwitchFixture(asr: asr, hasActiveMode: name != "idle UI") { view in
+                view.blockDictationModeSwitchForTesting(savingCancellation: name == "cancel save", processing: name == "processing")
+                let before = view.dictationModeSwitchStateForTesting
+                XCTAssertNil(view.beginDictationModeSwitchForTesting(selection: attempted), name)
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, before.mode, name)
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.slot, before.slot, name)
+                XCTAssertEqual(view.dictationModeSwitchStateForTesting.generation, before.generation, name)
+                XCTAssertEqual(NotchContentState.shared.mode, .edit, name)
+                XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), secondary, name)
+                XCTAssertEqual(asr.audioRouteRecoveryStateForTesting.samples, [0.25], name)
+                XCTAssertTrue(asr.audioRouteRecoveryStateForTesting.acceptingPCM, name)
+                XCTAssertTrue((asr.fileTranscriptionProvider as? DeletionFixtureProvider) === provider, name)
+                XCTAssertEqual(provider.prepareCalls + provider.clearCalls, 0, name)
+            }
+            finishDrain?()
+            asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+            await asr.finishAudioRouteRecoveryTest()
+            asr.releaseExclusiveActivity(lease)
+        }
+    }
+
+    func testOwnedDictationModeSwitchPreservesUnrelatedError() async throws {
+        let asr = ASRService()
+        asr.configureAudioRouteRecoveryForTesting(controller: self.makeNoHardwareController(for: asr), devices: [], initialSamples: [0.25])
+        let lease = try asr.acquireExclusiveActivity(.dictation)
+        asr.configureDictationModeSwitchForTesting(ownedLease: lease)
+        asr.errorTitle = "Microphone Unavailable"
+        asr.errorMessage = "Retained microphone error"
+        asr.showError = true
+        try await self.withDictationModeSwitchFixture(asr: asr) { view in
+            XCTAssertNil(view.beginDictationModeSwitchForTesting())
+            XCTAssertEqual(view.dictationModeSwitchStateForTesting.mode, "dictate")
+            XCTAssertTrue(asr.showError)
+            XCTAssertEqual(asr.errorTitle, "Microphone Unavailable")
+            XCTAssertEqual(asr.errorMessage, "Retained microphone error")
+        }
+        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+        await asr.finishAudioRouteRecoveryTest()
+        asr.releaseExclusiveActivity(lease)
     }
 
     func testBusyBackupAdmissionPreservesCapturedPCMProviderAndActivity() async throws {

@@ -658,6 +658,15 @@ final class ASRService: ObservableObject {
         self.isRunning || self.isStarting
     }
 
+    /// Change only the output mode of our existing capture, never another activity's audio.
+    var canSwitchOwnedDictationCaptureMode: Bool {
+        guard let lease = self.dictationActivityLease else { return false }
+        return lease.activity == .dictation && self.activeActivityLease == lease
+            && self.isRunning && !self.isStarting && !self.isStoppingFinalTranscription
+            && !self.isTerminating && !self.isDictionaryTrainingCaptureActive
+            && !self.recordingBufferHandoffGate.isActive && !self.recordingBufferHandoffGate.isRecovering
+    }
+
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
         guard let activeActivityLease = self.activeActivityLease else {
             DictionaryAudioLearningService.shared.cancelForRecording()
@@ -954,6 +963,24 @@ final class ASRService: ObservableObject {
             self.audioCapturePipeline.isRecordingEnabledForTesting,
             self.audioBuffer.getAll()
         )
+    }
+
+    func configureDictationModeSwitchForTesting(
+        ownedLease: ASRActivityLease?,
+        starting: Bool = false,
+        finalizing: Bool = false,
+        dictionaryTraining: Bool = false
+    ) {
+        self.dictationActivityLease = ownedLease
+        self.isStarting = starting
+        self.isStoppingFinalTranscription = finalizing
+        self.isDictionaryTrainingCaptureActive = dictionaryTraining
+    }
+
+    func beginDictationBufferDrainForTesting(recovering: Bool = false) -> (() -> Void)? {
+        guard let token = self.recordingBufferHandoffGate.begin() else { return nil }
+        if recovering { self.recordingBufferHandoffGate.markTimedOut(token) }
+        return { self.recordingBufferHandoffGate.complete(token) }
     }
 
     func finishAudioRouteRecoveryTest() async {
