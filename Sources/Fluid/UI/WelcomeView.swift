@@ -2003,10 +2003,8 @@ struct OnboardingFlowView: View {
             return "Parakeet v3"
         case .parakeetTDTv2:
             return "Parakeet v2"
-        case .fluidParakeetMini:
-            return "Fluid Parakeet Mini"
-        case .fluidParakeetPico:
-            return "Fluid Parakeet Pico"
+        case .fluidParakeetMini, .fluidParakeetPico:
+            return model.displayName
         case .parakeetRealtime:
             return "Parakeet Flash"
         case .cohereTranscribeSixBit:

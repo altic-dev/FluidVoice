@@ -170,8 +170,8 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             XCTAssertEqual(model.minimumStreamingPreviewSeconds, SettingsStore.SpeechModel.parakeetTDTv2.minimumStreamingPreviewSeconds)
             XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
         }
-        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetMini.humanReadableName, "Blazing Fast Mini")
-        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Blazing Fast Pico")
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetMini.humanReadableName, "Fluid Blazing Fast Mini")
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Fluid Blazing Fast Pico")
     }
 
     func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
