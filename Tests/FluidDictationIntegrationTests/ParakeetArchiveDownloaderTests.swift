@@ -183,6 +183,37 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         try newer.assertPreservedSiblingsAndNoStage()
     }
 
+    func testCancellationAtCompletedArchiveHandoffCleansReadyAndKeepsOldModel() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let directory = old.models.appendingPathComponent(".compact-downloads/\(newer.descriptor.folderName)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ready = directory.appendingPathComponent("ready-\(getpid())-\(UUID().uuidString).tar")
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: newer.descriptor,
+                in: old.models,
+                replaceExisting: true,
+                transport: { url, _ in
+                    try newer.archive.write(to: ready)
+                    let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+                    // Cancel after a completed handoff exists, before its URL reaches
+                    // the installer's first cancellation check.
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return (ready, response)
+                }
+            )
+            XCTFail("Expected cancellation at the completed archive handoff")
+        } catch is CancellationError {} catch { XCTFail("Expected CancellationError, got \(error)") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        XCTAssertEqual(try String(contentsOf: old.target.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "fixture")
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
     func testCompetingUpdatesPublishOnceAndRejectStaleOriginalIdentity() async throws {
         let old = try Fixture()
         let newer = try Fixture(artifactContents: "new trained checkpoint")
