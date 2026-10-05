@@ -67,7 +67,9 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
                 return try fixture.chunk(request, progress: progress)
             }
         }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         task.cancel()
         do { _ = try await task.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(cleanup.values, ["joined"])
@@ -109,14 +111,20 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
     func testNewReleaseDiscardsOnlyItsOwnOldPartial() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        try fixture.seedPartial(fixture.payload.prefix(4), marker: try XCTUnwrap(fixture.descriptor.archiveSHA256))
+        try fixture.seedPartial(fixture.payload.prefix(4), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
         let replacement = Data("ABCDEFGHIJ".utf8)
         let descriptor = fixture.descriptor.replacingArchive(url: fixture.descriptor.archiveURL, sha256: Fixture.sha256(replacement), byteCount: Int64(replacement.count))
         let recorder = Recorder()
-        let (ready, _) = try await CompactSpeechModelArchiveTransport.download(descriptor: descriptor, in: fixture.models, progress: { _, _ in }, transport: { request, _, progress in
-            recorder.add(request.value(forHTTPHeaderField: "Range") ?? "")
-            return try fixture.chunk(request, progress: progress, payload: replacement)
-        }, chunkBytes: 4)
+        let (ready, _) = try await CompactSpeechModelArchiveTransport.download(
+            descriptor: descriptor,
+            in: fixture.models,
+            progress: { _, _ in },
+            transport: { request, _, progress in
+                recorder.add(request.value(forHTTPHeaderField: "Range") ?? "")
+                return try fixture.chunk(request, progress: progress, payload: replacement)
+            },
+            chunkBytes: 4
+        )
         defer { try? FileManager.default.removeItem(at: ready) }
         XCTAssertEqual(recorder.values.first, "bytes=0-3")
         XCTAssertEqual(try Data(contentsOf: ready), replacement)
@@ -156,7 +164,9 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
                 throw ProbeFailure.injected
             }
         }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         do {
             _ = try await fixture.download { _, _, _ in XCTFail("A competing claim must fail before network"); throw ProbeFailure.injected }
             XCTFail("Expected another-process claim failure")
@@ -174,14 +184,13 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
             for hardLink in [false, true] {
                 let fixture = try Fixture()
                 defer { fixture.cleanup() }
-                try fixture.seedPartial(Data(), marker: try XCTUnwrap(fixture.descriptor.archiveSHA256))
+                try fixture.seedPartial(Data(), marker: XCTUnwrap(fixture.descriptor.archiveSHA256))
                 let external = fixture.base.appendingPathComponent("external")
                 let contents = Data(String(repeating: "f", count: 64).utf8)
                 try contents.write(to: external)
                 let link = fixture.partial.deletingLastPathComponent().appendingPathComponent(name)
                 if FileManager.default.fileExists(atPath: link.path) { try FileManager.default.removeItem(at: link) }
-                if hardLink { try FileManager.default.linkItem(at: external, to: link) }
-                else { try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external) }
+                if hardLink { try FileManager.default.linkItem(at: external, to: link) } else { try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external) }
                 do {
                     _ = try await fixture.download { _, _, _ in XCTFail("Unsafe retained files must fail before network"); throw ProbeFailure.injected }
                     XCTFail("Expected unsafe link rejection")
@@ -201,7 +210,7 @@ final nonisolated class CompactSpeechModelArchiveTransportTests: XCTestCase {
         defer { fixture.cleanup() }
         let corrupted = Data("XXXXXXXXXX".utf8)
         let (ready, _) = try await fixture.download { request, _, progress in try fixture.chunk(request, progress: progress, payload: corrupted) }
-        XCTAssertNotEqual(Fixture.sha256(try Data(contentsOf: ready)), fixture.descriptor.archiveSHA256)
+        XCTAssertNotEqual(try Fixture.sha256(Data(contentsOf: ready)), fixture.descriptor.archiveSHA256)
         // The outer installer's checksum failure deletes only this uniquely owned complete file.
         try FileManager.default.removeItem(at: ready)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.partial.path))

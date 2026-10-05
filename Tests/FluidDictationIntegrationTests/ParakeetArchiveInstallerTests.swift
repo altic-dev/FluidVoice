@@ -17,7 +17,7 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
     }
 
     private func cases() throws -> [TarCase] {
-        try JSONDecoder().decode([TarCase].self, from: Data(contentsOf: fixtures.appendingPathComponent("expected.json")))
+        try JSONDecoder().decode([TarCase].self, from: Data(contentsOf: self.fixtures.appendingPathComponent("expected.json")))
     }
 
     private func scratch() throws -> URL {
@@ -27,8 +27,12 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
     }
 
     private func unpack(_ tar: TarCase, staging: URL) throws -> URL {
-        try ParakeetArchiveInstaller.unpack(archive: fixtures.appendingPathComponent(tar.file), folderName: tar.folderName,
-                                           staging: staging, manifestSHA256: tar.manifestSHA256)
+        try ParakeetArchiveInstaller.unpack(
+            archive: self.fixtures.appendingPathComponent(tar.file),
+            folderName: tar.folderName,
+            staging: staging,
+            manifestSHA256: tar.manifestSHA256
+        )
     }
 
     private func verdict(_ error: Error) -> String {
@@ -43,9 +47,9 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
         for entry in entries {
             let result: String
             do {
-                _ = try unpack(entry, staging: base.appendingPathComponent(entry.file, isDirectory: true))
+                _ = try self.unpack(entry, staging: base.appendingPathComponent(entry.file, isDirectory: true))
                 result = "ok"
-            } catch { result = verdict(error) }
+            } catch { result = self.verdict(error) }
             XCTAssertEqual(result, entry.verdict, entry.file)
         }
     }
@@ -104,7 +108,7 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
             try Data("keep".utf8).write(to: folder.appendingPathComponent("weights"))
         }
-        for entry in try cases() where entry.verdict != "ok" {
+        for entry in try self.cases() where entry.verdict != "ok" {
             XCTAssertThrowsError(try unpack(entry, staging: base.appendingPathComponent(entry.file)))
             for folder in [installed, sibling] {
                 XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("weights")), Data("keep".utf8), entry.file)
@@ -122,7 +126,7 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
         let link = base.appendingPathComponent("linked-staging")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: protected)
         for staging in [protected, link] {
-            XCTAssertThrowsError(try unpack(good, staging: staging)) {
+            XCTAssertThrowsError(try self.unpack(good, staging: staging)) {
                 XCTAssertEqual($0 as? ParakeetArchiveInstaller.InstallError, .invalidStaging)
             }
             XCTAssertEqual(try Data(contentsOf: protected.appendingPathComponent("weights")), Data("keep".utf8))
@@ -152,7 +156,7 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
             let manifest: [String: Any] = [
                 "folderName": "tiny-model", "totalSize": 0,
-                "files": [["path": "payload", "size": size, "sha256": String(repeating: "0", count: 64)]]
+                "files": [["path": "payload", "size": size, "sha256": String(repeating: "0", count: 64)]],
             ]
             let data = try JSONSerialization.data(withJSONObject: manifest)
             let url = folder.appendingPathComponent("manifest.json")
@@ -177,7 +181,7 @@ final nonisolated class ParakeetArchiveInstallerTests: XCTestCase {
         let base = try scratch()
         defer { try? FileManager.default.removeItem(at: base) }
         let good = try XCTUnwrap(cases().first { $0.file == "good.tar" })
-        let archive = fixtures.appendingPathComponent(good.file)
+        let archive = self.fixtures.appendingPathComponent(good.file)
         let stage = base.appendingPathComponent("staging")
         let task = Task.detached {
             withUnsafeCurrentTask { $0?.cancel() }

@@ -239,9 +239,13 @@ final class DebugLogger {
         }
         precondition(normalizedRestore == backup, "Backup restore must retain stars and metadata while refreshing search revisions")
         store.selectEntryFromSearch(id: older.id)
-        let firstRequest = store.searchSelectionRequest!
+        guard let firstRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting a search result must create a request")
+        }
         store.selectEntryFromSearch(id: older.id)
-        let repeatedRequest = store.searchSelectionRequest!
+        guard let repeatedRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting the same result again must create a request")
+        }
         precondition(firstRequest != repeatedRequest, "Repeated clicks on the same result must create a fresh bounded request")
         store.consumeSearchSelectionRequest(firstRequest)
         precondition(store.searchSelectionRequest == repeatedRequest, "A stale consumer must not clear the latest search request")

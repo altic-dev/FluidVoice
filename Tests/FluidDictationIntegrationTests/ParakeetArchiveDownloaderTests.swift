@@ -91,7 +91,9 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         defer { old.cleanup(); newer.cleanup() }
         _ = try await old.install()
         let result = try await ParakeetArchiveDownloader.ensurePresent(
-            descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+            descriptor: newer.descriptor,
+            in: old.models,
+            replaceExisting: true,
             stageValidator: { stage in
                 XCTAssertNotEqual(stage, old.target)
                 XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: stage))
@@ -114,10 +116,11 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             _ = try await old.install()
             do {
                 _ = try await ParakeetArchiveDownloader.ensurePresent(
-                    descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                    descriptor: newer.descriptor,
+                    in: old.models,
+                    replaceExisting: true,
                     stageValidator: { _ in
-                        if cancel { withUnsafeCurrentTask { $0?.cancel() } }
-                        else { throw ProbeFailure.injected }
+                        if cancel { withUnsafeCurrentTask { $0?.cancel() } } else { throw ProbeFailure.injected }
                     }, transport: { _, progress in try newer.transport(progress) }
                 )
                 XCTFail("Failed or cancelled Core ML validation must not publish")
@@ -189,8 +192,11 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let operation: @Sendable () async throws -> Bool = {
             do {
                 _ = try await ParakeetArchiveDownloader.ensurePresent(
-                    descriptor: newer.descriptor, in: old.models, replaceExisting: true,
-                    stageValidator: { _ in await gate.enter() }, transport: { _, progress in try newer.transport(progress) }
+                    descriptor: newer.descriptor,
+                    in: old.models,
+                    replaceExisting: true,
+                    stageValidator: { _ in await gate.enter() },
+                    transport: { _, progress in try newer.transport(progress) }
                 )
                 return true
             } catch let error as ParakeetArchiveDownloader.DownloadError {
@@ -201,7 +207,9 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let first = Task { try await operation() }
         let second = Task { try await operation() }
         let deadline = ContinuousClock.now + .seconds(3)
-        while await gate.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(1)) }
+        while await gate.count < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
         let arrived = await gate.count
         await gate.releaseAll()
         XCTAssertEqual(arrived, 2, "Both stages must validate before either publishes")
@@ -220,7 +228,9 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         _ = try await old.install()
         do {
             _ = try await ParakeetArchiveDownloader.ensurePresent(
-                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                descriptor: newer.descriptor,
+                in: old.models,
+                replaceExisting: true,
                 stageValidator: { stage in
                     let ownedStage = stage.deletingLastPathComponent().deletingLastPathComponent()
                     try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ownedStage.path)
@@ -246,7 +256,9 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         _ = try await old.install()
         do {
             _ = try await ParakeetArchiveDownloader.ensurePresent(
-                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                descriptor: newer.descriptor,
+                in: old.models,
+                replaceExisting: true,
                 stageValidator: { _ in
                     let replacement = old.models.appendingPathComponent("competing-target")
                     try FileManager.default.copyItem(at: old.target, to: replacement)
@@ -270,7 +282,9 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let competingHash = String(repeating: "a", count: 64)
         do {
             _ = try await ParakeetArchiveDownloader.ensurePresent(
-                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                descriptor: newer.descriptor,
+                in: old.models,
+                replaceExisting: true,
                 stageValidator: { _ in
                     try Data(competingHash.utf8).write(to: old.target.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName))
                 }, transport: { _, progress in try newer.transport(progress) }
@@ -463,7 +477,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             },
             transport: { _, progress in try fixture.transport(progress) },
             revisionWriter: { stage, descriptor in
-                try ParakeetArchiveInstaller.verify(folder: stage, folderName: descriptor.folderName, manifestSHA256: try XCTUnwrap(descriptor.manifestSHA256))
+                try ParakeetArchiveInstaller.verify(folder: stage, folderName: descriptor.folderName, manifestSHA256: XCTUnwrap(descriptor.manifestSHA256))
                 calls.record(.optimizing)
                 try descriptor.writeInstallationRevision(at: stage)
             }
@@ -499,8 +513,12 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
     func testBadPinnedManifestOrPayloadNeverWritesRevisionOrValidatesAndPreservesOldModel() async throws {
         for tamperPayload in [false, true] {
             let old = try Fixture()
-            let newer = try Fixture(artifactContents: "new", includeManifest: true, tamperManifestFile: tamperPayload,
-                                    manifestHashOverride: tamperPayload ? nil : String(repeating: "0", count: 64))
+            let newer = try Fixture(
+                artifactContents: "new",
+                includeManifest: true,
+                tamperManifestFile: tamperPayload,
+                manifestHashOverride: tamperPayload ? nil : String(repeating: "0", count: 64)
+            )
             defer { old.cleanup(); newer.cleanup() }
             _ = try await old.install()
             let calls = ProgressRecorder()
@@ -534,7 +552,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let newer = try Fixture(artifactContents: "new", includeManifest: true)
         defer { old.cleanup(); newer.cleanup() }
         _ = try await old.install()
-        let required = newer.descriptor.expectedDownloadBytes * 2 + 32 * 1_024 * 1_024
+        let required = newer.descriptor.expectedDownloadBytes * 2 + 32 * 1024 * 1024
         for available in [Int64(0), required - 1, -1] {
             let calls = ProgressRecorder()
             do {
@@ -596,7 +614,7 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             transport: { _, progress in try fixture.transport(progress) },
             capacityReader: { _ in
                 XCTAssertFalse(Thread.isMainThread)
-                return fixture.descriptor.expectedDownloadBytes * 2 + 32 * 1_024 * 1_024
+                return fixture.descriptor.expectedDownloadBytes * 2 + 32 * 1024 * 1024
             }
         )
         XCTAssertTrue(ParakeetArchiveDownloader.artifactsAreComplete(at: result, descriptor: fixture.descriptor))
@@ -628,11 +646,14 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
             guard !self.released else { return }
             await withCheckedContinuation { self.continuations.append($0) }
         }
+
         func releaseAll() {
             self.released = true
             let pending = self.continuations
             self.continuations = []
-            for continuation in pending { continuation.resume() }
+            for continuation in pending {
+                continuation.resume()
+            }
         }
     }
 
@@ -656,7 +677,16 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         let archive: Data
         var target: URL { self.descriptor.cacheDirectory(in: self.models) }
 
-        init(checksum: String? = nil, omitLastArtifact: Bool = false, rootName: String = "fluid-parakeet-mini-coreml", extraEntry: Entry? = nil, artifactContents: String = "fixture", includeManifest: Bool = false, tamperManifestFile: Bool = false, manifestHashOverride: String? = nil) throws {
+        init(
+            checksum: String? = nil,
+            omitLastArtifact: Bool = false,
+            rootName: String = "fluid-parakeet-mini-coreml",
+            extraEntry: Entry? = nil,
+            artifactContents: String = "fixture",
+            includeManifest: Bool = false,
+            tamperManifestFile: Bool = false,
+            manifestHashOverride: String? = nil
+        ) throws {
             self.base = FileManager.default.temporaryDirectory.appendingPathComponent("ParakeetArchiveDownloaderTests-" + UUID().uuidString, isDirectory: true)
             self.models = self.base.appendingPathComponent("Models", isDirectory: true)
             try FileManager.default.createDirectory(at: self.models, withIntermediateDirectories: true)
@@ -680,9 +710,12 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
                     "folderName": rootName,
                     "totalSize": entries.reduce(0) { $0 + $1.data.count },
                     "files": entries.map { entry in
-                        ["path": String(entry.path.dropFirst(rootName.count + 1)), "size": entry.data.count,
-                         "sha256": SHA256.hash(data: entry.data).map { String(format: "%02x", $0) }.joined()] as [String: Any]
-                    }
+                        [
+                            "path": String(entry.path.dropFirst(rootName.count + 1)),
+                            "size": entry.data.count,
+                            "sha256": SHA256.hash(data: entry.data).map { String(format: "%02x", $0) }.joined(),
+                        ] as [String: Any]
+                    },
                 ]
                 let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
                 manifestSHA256 = manifestHashOverride ?? SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

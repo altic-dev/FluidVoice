@@ -1,7 +1,7 @@
 import AppKit
 @testable import FluidVoice_Debug
-import SwiftUI
 import Foundation
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -227,7 +227,7 @@ final class VoiceModelDeletionTests: XCTestCase {
             ("unowned", .dictation), ("mismatch", .dictation), ("stale", .dictation),
             ("starting", .dictation), ("finalizing", .dictation), ("training", .dictation),
             ("draining", .dictation), ("recovering", .dictation),
-            ("idle UI", .dictation), ("cancel save", .dictation), ("processing", .dictation)
+            ("idle UI", .dictation), ("cancel save", .dictation), ("processing", .dictation),
         ]
         let settings = SettingsStore.shared
         let secondary = settings.dictationPromptSelection(for: .secondary)
@@ -495,8 +495,7 @@ final class VoiceModelDeletionTests: XCTestCase {
             withUnsafeCurrentTask { $0?.cancel() }
             return try asr.beginSettingsBackupRestore()
         }
-        do { _ = try await cancelled.value; XCTFail("Cancelled imports must not reserve activity") }
-        catch is CancellationError {}
+        do { _ = try await cancelled.value; XCTFail("Cancelled imports must not reserve activity") } catch is CancellationError {}
         XCTAssertNil(asr.activeExclusiveActivity)
         let retry = try asr.beginSettingsBackupRestore()
         asr.releaseExclusiveActivity(retry)
@@ -884,6 +883,7 @@ final class VoiceModelDeletionTests: XCTestCase {
         }
         #endif
     }
+
     func testCompactWeightUpdatesRejectEveryForeignActivityWithoutChangingCaptureOrProvider() async throws {
         let selected = SettingsStore.shared.selectedSpeechModel
         for activity: ASRExclusiveActivity in [.dictation, .meeting, .fileTranscription, .localAPI, .settingsRestore, .modelMaintenance] {
@@ -1021,10 +1021,14 @@ final class VoiceModelDeletionTests: XCTestCase {
         let stale = provider.preparationProgressHandler
         provider.prepareBody = {
             stale?(.downloading(0.97))
-            for _ in 0..<4 { await Task.yield() }
+            for _ in 0..<4 {
+                await Task.yield()
+            }
             XCTAssertNil(asr.downloadProgress, "An old operation must not update the new progress")
             provider.preparationProgressHandler?(.downloading(0.25))
-            for _ in 0..<4 { await Task.yield() }
+            for _ in 0..<4 {
+                await Task.yield()
+            }
             XCTAssertEqual(asr.downloadProgress, 0.25)
         }
         try await asr.downloadModel(.fluidParakeetMini, updateWeights: true, progressHandler: nil)
@@ -1076,5 +1080,4 @@ final class VoiceModelDeletionTests: XCTestCase {
         XCTAssertNil(asr.activeExclusiveActivity)
         XCTAssertFalse(asr.hasActiveModelDownload)
     }
-
 }

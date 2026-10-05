@@ -23,7 +23,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let leasing = SuspendedHandbackASRActivityLeasing()
         defer { leasing.resumeHandback() }
         let coordinator = MeetingSessionCoordinator(
-            store: store, capture: capture, processing: StubProcessingController(),
+            store: store,
+            capture: capture,
+            processing: StubProcessingController(),
             audioArbiter: AudioActivityArbiter { leasing }
         )
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
@@ -2544,8 +2546,10 @@ final class MeetingRecoveryTests: XCTestCase {
         let arbiter = StubArbiter()
         let processing = DiagnosticFailingProcessingController(error: error)
         let coordinator = MeetingSessionCoordinator(
-            store: store, capture: StubCaptureController(),
-            processing: processing, audioArbiter: arbiter,
+            store: store,
+            capture: StubCaptureController(),
+            processing: processing,
+            audioArbiter: arbiter,
             processingLogger: { lines.append($0) }
         )
         await coordinator.ensureRestored()
@@ -2591,8 +2595,10 @@ final class MeetingRecoveryTests: XCTestCase {
         var lines: [String] = []
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
-            store: store, capture: StubCaptureController(),
-            processing: DiagnosticFailingProcessingController(error: CancellationError()), audioArbiter: arbiter,
+            store: store,
+            capture: StubCaptureController(),
+            processing: DiagnosticFailingProcessingController(error: CancellationError()),
+            audioArbiter: arbiter,
             processingLogger: { lines.append($0) }
         )
         await coordinator.ensureRestored()
