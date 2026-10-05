@@ -166,7 +166,7 @@ extension VoiceEngineSettingsView {
                             .lineLimit(2)
 
                         if let descriptor = model.parakeetDescriptor {
-                            Text("Built on \(descriptor.attribution)")
+                            Text(descriptor.creditLine)
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)

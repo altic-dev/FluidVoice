@@ -43,6 +43,13 @@ nonisolated enum ParakeetSpeechModelCatalog {
             }
         }
 
+        var creditLine: String {
+            switch self.variant {
+            case .v2, .v3: "Built on NVIDIA Parakeet."
+            case .mini, .pico: "Made by FluidVoice, built on NVIDIA Parakeet and Moondream’s Parakeet Ultra."
+            }
+        }
+
         /// Encoder vectors are compatible only with the checkpoint that produced them.
         /// Legacy v2/v3 keep their established persisted keys byte for byte.
         var pronunciationModelKey: String {
@@ -221,7 +228,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         languageSupport: "English Only",
         supportedLanguageCodes: ["en"],
         downloadSize: "~242.4 MiB",
-        cardDescription: "Built for speech with background noise.",
+        cardDescription: "Clear dictation in noisy places, at half the size of Blazing Fast. Runs on your Mac.",
         performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.95),
         manifestSHA256: "32193c4cec7f5daf92fd617c424e7a157ea8dfcfa832a0db2cfcfa5cb9b674b8"
     )
@@ -239,7 +246,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         languageSupport: "English Only",
         supportedLanguageCodes: ["en"],
         downloadSize: "~153.7 MiB",
-        cardDescription: "Built for speech with background noise.",
+        cardDescription: "Our smallest model. Light enough for older Macs, and still clear in noisy places.",
         performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 1.0, accuracyPercent: 0.91),
         manifestSHA256: "a87ee649edc18aca6d30f251e75237f48c995448b865ffee35ab343ed3e66121"
     )

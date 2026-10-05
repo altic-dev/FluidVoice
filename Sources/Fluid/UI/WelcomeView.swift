@@ -1116,6 +1116,15 @@ struct OnboardingFlowView: View {
                             }
                             .frame(width: 608)
 
+                            if let credit = self.visibleOnboardingModelCredit {
+                                Text(credit)
+                                    .font(self.theme.typography.caption)
+                                    .foregroundStyle(Color.white.opacity(0.44))
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.top, self.theme.metrics.spacing.xs)
+                            }
+
                             if self.isModelPreparationInProgress {
                                 Label("First-time setup can take a few minutes while your Mac prepares the model. Please keep FluidVoice open.", systemImage: "clock.arrow.circlepath")
                                     .font(self.theme.typography.captionStrong)
@@ -1535,7 +1544,7 @@ struct OnboardingFlowView: View {
             ? Color(red: 0.042, green: 0.052, blue: 0.074)
             : Color(red: 0.030, green: 0.038, blue: 0.056)
 
-        return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.sm : 10) {
+        return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.xs : 10) {
             HStack(alignment: .top, spacing: 10) {
                 if model.brandName == "FluidVoice" {
                     FluidVoiceBrandIcon(size: 22)
@@ -1573,8 +1582,8 @@ struct OnboardingFlowView: View {
                 Text(model.cardDescription)
                     .font(self.theme.typography.caption)
                     .foregroundStyle(Color.white.opacity(0.72))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if model.hasPerformanceRatings {
@@ -1992,7 +2001,8 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelTooltip(for route: VoiceEngineLanguageRoute) -> String {
         let model = route.model
-        return "\(self.onboardingModelSubtitle(for: model)) - \(model.downloadSize)\n\(model.cardDescription)"
+        let credit = model.parakeetDescriptor.map { "\n\($0.creditLine)" } ?? ""
+        return "\(self.onboardingModelSubtitle(for: model)) - \(model.downloadSize)\n\(model.cardDescription)\(credit)"
     }
 
     private func onboardingModelTitle(for model: SettingsStore.SpeechModel) -> String {
@@ -2611,5 +2621,15 @@ private struct OnboardingMicrophoneSetupPanel: View {
                 .fill(Color.white.opacity(0.040))
                 .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 1))
         )
+    }
+}
+
+extension OnboardingFlowView {
+    private var visibleOnboardingModelCredit: String? {
+        let page = min(self.otherModelsPage, max(0, (self.otherModelRoutes.count - 1) / 2))
+        let routes = self.isShowingOtherModelRoutes
+            ? Array(self.otherModelRoutes.dropFirst(page * 2).prefix(2))
+            : self.defaultDisplayedModelRoutes
+        return routes.first { $0.model == .fluidParakeetMini || $0.model == .fluidParakeetPico }?.model.parakeetDescriptor?.creditLine
     }
 }

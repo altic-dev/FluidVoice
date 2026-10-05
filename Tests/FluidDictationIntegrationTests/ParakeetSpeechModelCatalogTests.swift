@@ -165,6 +165,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             XCTAssertTrue(model.hasPerformanceRatings)
             XCTAssertNotNil(descriptor.performanceRatings)
             XCTAssertEqual(descriptor.attribution, "NVIDIA Parakeet · Moondream Parakeet Ultra")
+            XCTAssertEqual(descriptor.creditLine, "Made by FluidVoice, built on NVIDIA Parakeet and Moondream’s Parakeet Ultra.")
             XCTAssertEqual(model.accuracyPercent, model == .fluidParakeetMini ? 0.95 : 0.91)
             XCTAssertEqual(model.speedPercent, model == .fluidParakeetMini ? 0.99 : 1.0)
             XCTAssertTrue(model.supportsPronunciationMatching, "Real split encoders produce compatible 1024-dimensional embeddings")
@@ -210,8 +211,8 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(available.map(\.model), models)
         XCTAssertEqual(Set((displayed + other).map(\.id)), Set(available.map(\.id)))
         XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
-        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "Built for speech with background noise.")
-        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "Built for speech with background noise.")
+        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "Clear dictation in noisy places, at half the size of Blazing Fast. Runs on your Mac.")
+        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "Our smallest model. Light enough for older Macs, and still clear in noisy places.")
     }
 
     func testOnboardingRecommendationsPreserveUnavailableMiniIntelAndNonEnglishFallbacks() {
