@@ -1051,6 +1051,11 @@ final class ASRService: ObservableObject {
     @Published private(set) var deletingModelID: String?
     #if DEBUG
     var modelProvidersForTesting: [SettingsStore.SpeechModel: TranscriptionProvider] = [:]
+
+    func prepareProviderRecoveryForTesting(_ provider: TranscriptionProvider, modelsAlreadyCached: Bool) async throws {
+        try await self.prepareProviderWithRecovery(provider: provider, modelsAlreadyCached: modelsAlreadyCached, progressHandler: { _ in })
+    }
+
     #endif
 
     var hasActiveModelPreparation: Bool {
@@ -1280,7 +1285,7 @@ final class ASRService: ObservableObject {
 
     /// Gets a provider for a specific model (without changing the active selection)
     /// Used for downloading models without switching the active model.
-    private func getProvider(for model: SettingsStore.SpeechModel) -> TranscriptionProvider {
+    private func getProvider(for model: SettingsStore.SpeechModel, updateWeights: Bool = false) -> TranscriptionProvider {
         #if DEBUG
         if let injected = self.modelProvidersForTesting[model] { return injected }
         #endif
@@ -1295,7 +1300,7 @@ final class ASRService: ObservableObject {
             return AppleSpeechProvider()
         case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
             // Create a new provider configured for the specific model
-            return FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+            return FluidAudioProvider(modelOverride: model, configureWordBoosting: false, updateCompactWeights: updateWeights)
         case .parakeetRealtime:
             return ParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
@@ -1318,8 +1323,28 @@ final class ASRService: ObservableObject {
     func downloadModel(
         _ model: SettingsStore.SpeechModel,
         source: AnalyticsModelDownloadSource = .settings,
+        updateWeights: Bool = false,
         progressHandler: ((Double) -> Void)?
     ) async throws {
+        try Task.checkCancellation()
+        let updateLease: ASRActivityLease?
+        if updateWeights {
+            guard model == .fluidParakeetMini || model == .fluidParakeetPico else {
+                throw NSError(domain: "ASRService", code: -2003, userInfo: [NSLocalizedDescriptionKey: "Only Mini and Pico support weight updates."])
+            }
+            guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+                  !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
+                  !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
+                  self.providerResetDrain == nil, !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+                  !self.meetingModelResidency.isExclusive
+            else {
+                throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .modelMaintenance)
+            }
+            updateLease = try self.acquireExclusiveActivity(.modelMaintenance)
+        } else {
+            updateLease = nil
+        }
+        defer { if let updateLease { self.releaseExclusiveActivity(updateLease) } }
         guard self.activeExclusiveActivity != .settingsRestore else {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
@@ -1337,7 +1362,7 @@ final class ASRService: ObservableObject {
         }
 
         let operationID = UUID()
-        let provider = self.getProvider(for: model)
+        let provider = self.getProvider(for: model, updateWeights: updateWeights)
         self.modelDownloadOperationID = operationID
         self.downloadingModelId = model.id
         self.downloadProgress = nil
@@ -1366,12 +1391,12 @@ final class ASRService: ObservableObject {
                         )
                     }
                 })
-                try Task.checkCancellation()
+                if !updateWeights { try Task.checkCancellation() }
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
             } catch {
                 if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
                 let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
-                if wasCancelled,
+                if wasCancelled, !updateWeights,
                    provider.shouldClearCacheAfterCancellation,
                    provider.modelsExistOnDisk() == false
                 {
@@ -1403,11 +1428,22 @@ final class ASRService: ObservableObject {
             } onCancel: {
                 task.cancel()
             }
+            if updateWeights, SettingsStore.shared.selectedSpeechModel == model {
+                // Release the update lease only after progress and operation cleanup;
+                // the normal deferred reset then retires the old active checkpoint.
+                self.providerResetPending = true
+            }
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .succeeded)
         } catch is CancellationError {
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .cancelled)
             throw CancellationError()
         } catch {
+            if updateWeights, SettingsStore.shared.selectedSpeechModel == model,
+               let failure = error as? ParakeetArchiveDownloader.DownloadError,
+               case .replacementCleanupFailed = failure
+            {
+                self.providerResetPending = true
+            }
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .failed)
             throw error
         }
@@ -6742,6 +6778,11 @@ final class ASRService: ObservableObject {
             if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             if Task.isCancelled || Self.isModelPreparationCancellation(error) {
                 throw CancellationError()
+            }
+            if let compact = provider as? FluidAudioProvider, compact.preservesInstalledCompactWeights {
+                // Repairing by deletion could silently upgrade an installed older
+                // checkpoint. Explicit Update/Delete owns that choice instead.
+                throw error
             }
             firstError = error
             DebugLogger.shared.error("ASRService: First prepare attempt for \(provider.name) failed after \(String(format: "%.2f", Date().timeIntervalSince(start)))s", source: "ASRService")

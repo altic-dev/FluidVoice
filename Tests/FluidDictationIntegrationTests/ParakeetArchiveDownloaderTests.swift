@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -82,6 +83,204 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         XCTAssertTrue(ParakeetSpeechModelCatalog.v2.installationRevisionMatches(at: fixture.base))
         XCTAssertTrue(ParakeetSpeechModelCatalog.v3.installationRevisionMatches(at: fixture.base))
         try fixture.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testExplicitUpdateValidatesUnpublishedStageThenSwapsAndRemovesOldFiles() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let result = try await ParakeetArchiveDownloader.ensurePresent(
+            descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+            stageValidator: { stage in
+                XCTAssertNotEqual(stage, old.target)
+                XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: stage))
+                XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target), "Old weights stay usable during validation")
+            }, transport: { _, progress in try newer.transport(progress) }
+        )
+        XCTAssertEqual(result, old.target)
+        XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: result))
+        XCTAssertFalse(old.descriptor.artifactsAreComplete(at: result))
+        XCTAssertEqual(try String(contentsOf: result.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "new trained checkpoint")
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testUpdateValidatorFailureAndCancellationPreserveInstalledOldRevision() async throws {
+        for cancel in [false, true] {
+            let old = try Fixture()
+            let newer = try Fixture(artifactContents: "new trained checkpoint")
+            defer { old.cleanup(); newer.cleanup() }
+            _ = try await old.install()
+            do {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(
+                    descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                    stageValidator: { _ in
+                        if cancel { withUnsafeCurrentTask { $0?.cancel() } }
+                        else { throw ProbeFailure.injected }
+                    }, transport: { _, progress in try newer.transport(progress) }
+                )
+                XCTFail("Failed or cancelled Core ML validation must not publish")
+            } catch {}
+            XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+            XCTAssertEqual(try String(contentsOf: old.target.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "fixture")
+            try old.assertPreservedSiblingsAndNoStage()
+            try newer.assertPreservedSiblingsAndNoStage()
+        }
+    }
+
+    func testUpdateTransferFailureAndBadChecksumPreserveOldFiles() async throws {
+        for badChecksum in [false, true] {
+            let old = try Fixture()
+            let newer = try Fixture(checksum: badChecksum ? String(repeating: "0", count: 64) : nil, artifactContents: "new trained checkpoint")
+            defer { old.cleanup(); newer.cleanup() }
+            _ = try await old.install()
+            await self.expectFailure {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(descriptor: newer.descriptor, in: old.models, replaceExisting: true, transport: { _, progress in
+                    if !badChecksum { throw ProbeFailure.injected }
+                    return try newer.transport(progress)
+                })
+            }
+            XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+            try old.assertPreservedSiblingsAndNoStage()
+            try newer.assertPreservedSiblingsAndNoStage()
+        }
+    }
+
+    func testUpdateCancellationDuringTransferKeepsOldModel() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let started = Started()
+        let task = Task {
+            try await ParakeetArchiveDownloader.ensurePresent(descriptor: newer.descriptor, in: old.models, replaceExisting: true, transport: { _, _ in
+                await started.signal()
+                try await Task.sleep(for: .seconds(30))
+                throw ProbeFailure.injected
+            })
+        }
+        await started.wait()
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        try old.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testUpdateIncompleteArchivePreservesOldModel() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(omitLastArtifact: true, artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        await self.expectFailure {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(descriptor: newer.descriptor, in: old.models, replaceExisting: true, transport: { _, progress in try newer.transport(progress) })
+        }
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testCompetingUpdatesPublishOnceAndRejectStaleOriginalIdentity() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let gate = UpdateValidationGate()
+        let operation: @Sendable () async throws -> Bool = {
+            do {
+                _ = try await ParakeetArchiveDownloader.ensurePresent(
+                    descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                    stageValidator: { _ in await gate.enter() }, transport: { _, progress in try newer.transport(progress) }
+                )
+                return true
+            } catch let error as ParakeetArchiveDownloader.DownloadError {
+                guard case .targetChanged = error else { throw error }
+                return false
+            }
+        }
+        let first = Task { try await operation() }
+        let second = Task { try await operation() }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while await gate.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(1)) }
+        let arrived = await gate.count
+        await gate.releaseAll()
+        XCTAssertEqual(arrived, 2, "Both stages must validate before either publishes")
+        let results = try await [first.value, second.value]
+        XCTAssertEqual(results.filter { $0 }.count, 1)
+        XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: old.target))
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testPostCommitCleanupFailureReportsInstalledNewAndRetainedOldFiles() async throws {
+        guard geteuid() != 0 else { throw XCTSkip("Filesystem permission failure requires a non-root user") }
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                stageValidator: { stage in
+                    let ownedStage = stage.deletingLastPathComponent().deletingLastPathComponent()
+                    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ownedStage.path)
+                }, transport: { _, progress in try newer.transport(progress) }
+            )
+            XCTFail("Cleanup failure must not be returned as success")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case let .replacementCleanupFailed(installed, retainedOld) = error else { return XCTFail("Expected post-commit cleanup failure, got \(error)") }
+            XCTAssertEqual(installed, old.target)
+            XCTAssertTrue(newer.descriptor.artifactsAreComplete(at: installed))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: retainedOld.path), "A post-commit cleanup error names the owned remainder, not a rollback")
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: retainedOld.path)
+            try FileManager.default.removeItem(at: retainedOld)
+        }
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testUpdateRejectsChangedTargetIdentityEvenWithTheSameRevision() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                stageValidator: { _ in
+                    let replacement = old.models.appendingPathComponent("competing-target")
+                    try FileManager.default.copyItem(at: old.target, to: replacement)
+                    try FileManager.default.removeItem(at: old.target)
+                    try FileManager.default.moveItem(at: replacement, to: old.target)
+                }, transport: { _, progress in try newer.transport(progress) }
+            )
+            XCTFail("A replaced directory must not be overwritten")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case .targetChanged = error else { return XCTFail("Expected targetChanged") }
+        }
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        try old.assertPreservedSiblingsAndNoStage()
+    }
+
+    func testUpdateRejectsRevisionChangedDuringValidation() async throws {
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        defer { old.cleanup(); newer.cleanup() }
+        _ = try await old.install()
+        let competingHash = String(repeating: "a", count: 64)
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: newer.descriptor, in: old.models, replaceExisting: true,
+                stageValidator: { _ in
+                    try Data(competingHash.utf8).write(to: old.target.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName))
+                }, transport: { _, progress in try newer.transport(progress) }
+            )
+            XCTFail("A changed checkpoint must be preserved")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case .targetChanged = error else { return XCTFail("Expected targetChanged") }
+        }
+        XCTAssertEqual(old.descriptor.installedArchiveSHA256(at: old.target), competingHash)
+        try old.assertPreservedSiblingsAndNoStage()
     }
 
     func testRevisionWriteFailureCleansStageAndNeverPublishes() async throws {
@@ -264,6 +463,23 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         func wait() async {
             if self.started { return }
             await withCheckedContinuation { self.continuation = $0 }
+        }
+    }
+
+    private actor UpdateValidationGate {
+        private(set) var count = 0
+        private var continuations: [CheckedContinuation<Void, Never>] = []
+        private var released = false
+        func enter() async {
+            self.count += 1
+            guard !self.released else { return }
+            await withCheckedContinuation { self.continuations.append($0) }
+        }
+        func releaseAll() {
+            self.released = true
+            let pending = self.continuations
+            self.continuations = []
+            for continuation in pending { continuation.resume() }
         }
     }
 

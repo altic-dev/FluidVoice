@@ -8,6 +8,56 @@ import FluidAudio
 
 @MainActor
 final class ParakeetCompactModelSmokeTests: XCTestCase {
+    func testHostedOldWeightsStayUsableUntilExplicitValidatedUpdate() async throws {
+        #if arch(arm64)
+        guard ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_AUDIO"] != nil else {
+            throw XCTSkip("Explicitly enable hosted compact model runtime checks")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoiceCompactUpdate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selection = SettingsStore.shared.selectedSpeechModel
+        let fixtures: [(SettingsStore.SpeechModel, Int64, String)] = [
+            (.fluidParakeetMini, 254_126_592, "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36"),
+            (.fluidParakeetPico, 161_201_152, "afcdd76d4aba0328c97c858ee5c4c227ab5e23cc6885de5299d009c3671fe5d6"),
+        ]
+        for (model, bytes, oldHash) in fixtures {
+            let latest = try XCTUnwrap(model.parakeetDescriptor)
+            let oldURL = try XCTUnwrap(URL(string: "https://models.fluidvoice.app/parakeet/fluid-\(latest.variant.rawValue)/1.0.0/\(latest.folderName).tar"))
+            let old = latest.replacingArchive(url: oldURL, sha256: oldHash, byteCount: bytes)
+            let directory = try await ParakeetArchiveDownloader.ensurePresent(descriptor: old, in: root)
+            let probe = SpeechModelInstallationSnapshot.Probe(modelID: model.id, kind: .parakeet(latest))
+            let before = try await SpeechModelInstallationSnapshot.scanResult([probe], modelsDirectory: root)
+            XCTAssertEqual(before.installedIDs, [model.id])
+            XCTAssertEqual(before.updateAvailableIDs, [model.id])
+            XCTAssertEqual(before.installedArchiveHashes[model.id], oldHash)
+            do {
+                let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+                provider.modelCacheRootForTesting = root
+                try await provider.prepare()
+                XCTAssertTrue(provider.isReady)
+                XCTAssertEqual(provider.pronunciationModelKeyForTesting, old.pronunciationModelKey)
+                XCTAssertEqual(latest.installedArchiveSHA256(at: directory), oldHash)
+            }
+            let updater = FluidAudioProvider(modelOverride: model, configureWordBoosting: false, updateCompactWeights: true)
+            updater.modelCacheRootForTesting = root
+            try await updater.prepare()
+            XCTAssertTrue(latest.artifactsAreComplete(at: directory))
+            let after = try await SpeechModelInstallationSnapshot.scanResult([probe], modelsDirectory: root)
+            XCTAssertEqual(after.installedIDs, [model.id])
+            XCTAssertTrue(after.updateAvailableIDs.isEmpty)
+            XCTAssertEqual(after.installedArchiveHashes[model.id], latest.archiveSHA256)
+            let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+            provider.modelCacheRootForTesting = root
+            try await provider.prepare()
+            XCTAssertTrue(provider.isReady)
+            XCTAssertEqual(provider.pronunciationModelKeyForTesting, latest.pronunciationModelKey)
+            XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
+        }
+        #else
+        throw XCTSkip("Compact Parakeet models require Apple silicon")
+        #endif
+    }
+
     func testHostedCompactModelsDownloadLoadTranscribeAndExtractDictionaryFrames() async throws {
         #if arch(arm64)
         guard let audioPath = ProcessInfo.processInfo.environment["FLUIDVOICE_COMPACT_MODEL_AUDIO"] else {

@@ -24,6 +24,7 @@ struct CustomDictionaryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appServices: AppServices
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var modelInstallations = SpeechModelInstallationSnapshot.shared
     @State private var pronunciationRevisionNotice: String?
     @State private var pronunciationRevisionNoticeRefresh: UInt64 = 0
 
@@ -324,13 +325,13 @@ struct CustomDictionaryView: View {
         .task(id: self.pronunciationRevisionNoticeRequest) {
             self.pronunciationRevisionNotice = nil
             guard !self.formattingOnly,
-                  let descriptor = self.settings.selectedSpeechModel.parakeetDescriptor,
+                  let descriptor = self.modelInstallations.installedDescriptor(for: self.settings.selectedSpeechModel),
                   descriptor.variant == .mini || descriptor.variant == .pico
             else { return }
             let entryIDs = Set(self.settings.customDictionaryEntries.map(\.id))
             let profiles = await PronunciationDictionaryStore.shared.allProfiles()
             guard !Task.isCancelled,
-                  descriptor.pronunciationModelKey == self.settings.selectedSpeechModel.parakeetDescriptor?.pronunciationModelKey
+                  descriptor.pronunciationModelKey == self.modelInstallations.installedDescriptor(for: self.settings.selectedSpeechModel)?.pronunciationModelKey
             else { return }
             self.pronunciationRevisionNotice = DictionaryPronunciationRevisionPolicy.notice(profiles: profiles, descriptor: descriptor, entryIDs: entryIDs)
         }
@@ -853,7 +854,7 @@ struct CustomDictionaryView: View {
     }
 
     private var pronunciationRevisionNoticeRequest: String {
-        "\(self.settings.selectedSpeechModel.rawValue):\(self.pronunciationRevisionNoticeRefresh)"
+        "\(self.settings.selectedSpeechModel.rawValue):\(self.modelInstallations.installedArchiveHashes[self.settings.selectedSpeechModel.id] ?? ""): \(self.pronunciationRevisionNoticeRefresh)"
     }
 
     private var trainingRecorderPanel: some View {

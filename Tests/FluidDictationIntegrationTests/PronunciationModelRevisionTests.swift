@@ -135,6 +135,57 @@ final class PronunciationModelRevisionTests: XCTestCase {
     }
     #endif
 
+    #if arch(arm64)
+    func testLoadedOldCompactRevisionMatchesOnlyItsOwnEnrollmentVectors() {
+        let descriptor = ParakeetSpeechModelCatalog.mini
+        let oldKey = descriptor.modelID + ":sha256:" + String(repeating: "a", count: 64)
+        let old = Self.profile(entryID: UUID(), key: oldKey)
+        let latest = Self.profile(entryID: UUID(), key: descriptor.pronunciationModelKey)
+        XCTAssertTrue(DictionaryPronunciationReferences.make(profiles: [old]).isEmpty)
+        let oldReferences = DictionaryPronunciationReferences.make(profiles: [old, latest], compatibleModelKey: oldKey)
+        XCTAssertEqual(oldReferences.count, 3)
+        XCTAssertTrue(oldReferences.allSatisfy { $0.profile.modelKey == oldKey })
+        let latestReferences = DictionaryPronunciationReferences.make(profiles: [old, latest], compatibleModelKey: descriptor.pronunciationModelKey)
+        XCTAssertEqual(latestReferences.count, 3)
+        XCTAssertTrue(latestReferences.allSatisfy { $0.profile.modelKey == descriptor.pronunciationModelKey })
+        var mixed = old
+        mixed.enrollments[0] = latest.enrollments[0]
+        XCTAssertTrue(DictionaryPronunciationReferences.make(profiles: [mixed], compatibleModelKey: oldKey).isEmpty)
+        let unversioned = Self.profile(entryID: UUID(), key: descriptor.modelID)
+        XCTAssertTrue(DictionaryPronunciationReferences.make(profiles: [unversioned], compatibleModelKey: descriptor.modelID).isEmpty)
+    }
+
+    func testNormalProviderPreparationKeepsCompleteOldWeightsAndTheirActualPronunciationKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+            let descriptor = try XCTUnwrap(model.parakeetDescriptor)
+            let installed = descriptor.cacheDirectory(in: root)
+            try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+            let oldHash = String(repeating: "a", count: 64)
+            try Data(oldHash.utf8).write(to: installed.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName))
+            try Data("{}".utf8).write(to: installed.appendingPathComponent(descriptor.vocabularyFile))
+            for name in descriptor.requiredModelNames {
+                let folder = installed.appendingPathComponent(name)
+                try FileManager.default.createDirectory(at: folder.appendingPathComponent("weights"), withIntermediateDirectories: true)
+                for file in ["coremldata.bin", "metadata.json", "weights/weight.bin"] {
+                    try Data("fixture".utf8).write(to: folder.appendingPathComponent(file))
+                }
+            }
+            XCTAssertEqual(descriptor.installedArchiveSHA256(at: installed), oldHash)
+            let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
+            provider.modelCacheRootForTesting = root
+            do {
+                try await ASRService().prepareProviderRecoveryForTesting(provider, modelsAlreadyCached: true)
+                XCTFail("Dummy Core ML files must fail locally without deleting old weights for recovery")
+            } catch {}
+            XCTAssertEqual(provider.pronunciationModelKeyForTesting, descriptor.modelID + ":sha256:" + oldHash)
+            XCTAssertEqual(descriptor.installedArchiveSHA256(at: installed), oldHash, "Normal loading must never erase an older complete download")
+            XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent(descriptor.vocabularyFile)), Data("{}".utf8))
+        }
+    }
+    #endif
+
     private static func profile(entryID: UUID, key: String) -> PronunciationDictionaryProfile {
         let captures = Array(repeating: PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 6, modelKey: key), count: 3)
         return PronunciationDictionaryProfile(dictionaryEntryID: entryID, label: "FluidVoice", modelKey: key, hiddenSize: 2, enrollments: captures)

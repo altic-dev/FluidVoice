@@ -28,14 +28,37 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         let kind: Kind
     }
 
+    nonisolated struct ScanResult: Equatable, Sendable {
+        let installedIDs: Set<String>
+        let updateAvailableIDs: Set<String>
+        let installedArchiveHashes: [String: String]
+
+        init(installedIDs: Set<String>, updateAvailableIDs: Set<String> = [], installedArchiveHashes: [String: String] = [:]) {
+            self.installedIDs = installedIDs
+            self.updateAvailableIDs = updateAvailableIDs
+            self.installedArchiveHashes = installedArchiveHashes
+        }
+    }
+
+    nonisolated struct Value: Equatable, Sendable {
+        let state: State
+        let result: ScanResult
+        let latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor]
+    }
+
     typealias Scanner = @Sendable ([Probe]) async throws -> Set<String>
-    @Published private(set) var installedIDs: Set<String> = []
-    @Published private(set) var state: State = .checking
+    typealias ResultScanner = @Sendable ([Probe]) async throws -> ScanResult
+    @Published private(set) var value = Value(state: .checking, result: ScanResult(installedIDs: []), latestDescriptors: [:])
+    var installedIDs: Set<String> { self.value.result.installedIDs }
+    var updateAvailableIDs: Set<String> { self.value.result.updateAvailableIDs }
+    var installedArchiveHashes: [String: String] { self.value.result.installedArchiveHashes }
+    var latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor] { self.value.latestDescriptors }
+    var state: State { self.value.state }
     var isChecking: Bool { self.state == .checking }
     var canUseModelActions: Bool { self.state == .ready }
 
     private let capture: @MainActor () -> [Probe]
-    private let scanner: Scanner
+    private let scanner: ResultScanner
     private let timeoutNanoseconds: UInt64
     private var generation: UInt64 = 0
     private var pending: (generation: UInt64, probes: [Probe])?
@@ -46,20 +69,32 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     init(
         timeoutNanoseconds: UInt64 = 5_000_000_000,
         capture: @escaping @MainActor () -> [Probe] = SpeechModelInstallationSnapshot.captureProbes,
-        scanner: @escaping Scanner = { try await SpeechModelInstallationSnapshot.scan($0) }
+        scanner: Scanner? = nil,
+        resultScanner: @escaping ResultScanner = { try await SpeechModelInstallationSnapshot.scanResult($0) }
     ) {
         self.timeoutNanoseconds = timeoutNanoseconds
         self.capture = capture
-        self.scanner = scanner
+        if let scanner {
+            self.scanner = { try ScanResult(installedIDs: await scanner($0)) }
+        } else {
+            self.scanner = resultScanner
+        }
     }
 
     func isInstalled(modelID: String) -> Bool { self.installedIDs.contains(modelID) }
+    func isUpdateAvailable(modelID: String) -> Bool { self.updateAvailableIDs.contains(modelID) }
+
+    /// A display/profile key lookup only; it never starts download or reads disk.
+    func installedDescriptor(for model: SettingsStore.SpeechModel) -> ParakeetSpeechModelCatalog.Descriptor? {
+        guard let descriptor = self.latestDescriptors[model.id], let hash = self.installedArchiveHashes[model.id] else { return nil }
+        return descriptor.replacingArchive(url: nil, sha256: hash)
+    }
 
     /// Keep at most one worker and one latest request. Byte-progress callbacks never call this.
     func refresh() {
         self.generation &+= 1
         self.pending = (self.generation, self.capture())
-        self.state = .checking
+        self.value = Value(state: .checking, result: self.value.result, latestDescriptors: self.value.latestDescriptors)
         if self.deadline == nil {
             let id = UUID()
             self.deadlineID = id
@@ -81,8 +116,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         self.deadline?.cancel()
         self.deadline = nil
         self.deadlineID = nil
-        self.installedIDs = []
-        self.state = .failed
+        self.value = Value(state: .failed, result: ScanResult(installedIDs: []), latestDescriptors: self.value.latestDescriptors)
     }
 
     private func startWorkerIfNeeded() {
@@ -94,13 +128,15 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                 do {
                     let installed = try await self.scanner(request.probes)
                     guard !Task.isCancelled, request.generation == self.generation else { continue }
-                    self.installedIDs = installed
-                    self.state = .ready
+                    let descriptors = Dictionary(request.probes.compactMap { probe -> (String, ParakeetSpeechModelCatalog.Descriptor)? in
+                        guard case let .parakeet(descriptor) = probe.kind else { return nil }
+                        return (probe.modelID, descriptor)
+                    }, uniquingKeysWith: { _, latest in latest })
+                    self.value = Value(state: .ready, result: installed, latestDescriptors: descriptors)
                     self.finishDeadline()
                 } catch {
                     guard !Task.isCancelled, request.generation == self.generation else { continue }
-                    self.installedIDs = []
-                    self.state = .failed
+                    self.value = Value(state: .failed, result: ScanResult(installedIDs: []), latestDescriptors: self.value.latestDescriptors)
                     self.finishDeadline()
                 }
             }
@@ -118,7 +154,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     private static func captureProbes() -> [Probe] {
         SettingsStore.SpeechModel.availableModels.map { model in
             let kind: Probe.Kind
-            if let descriptor = model.parakeetDescriptor {
+            if let descriptor = CompactSpeechModelReleaseCatalog.shared.descriptor(for: model) ?? model.parakeetDescriptor {
                 kind = .parakeet(descriptor)
             } else if let spec = model.externalCoreMLSpec {
                 kind = .cohere(spec, storedPath: SettingsStore.shared.storedExternalCoreMLArtifactsPath(for: model))
@@ -147,7 +183,13 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     }
 
     @concurrent static func scan(_ probes: [Probe], cachesDirectory: URL? = nil, modelsDirectory: URL? = nil) async throws -> Set<String> {
+        try await self.scanResult(probes, cachesDirectory: cachesDirectory, modelsDirectory: modelsDirectory).installedIDs
+    }
+
+    @concurrent static func scanResult(_ probes: [Probe], cachesDirectory: URL? = nil, modelsDirectory: URL? = nil) async throws -> ScanResult {
         var installed: Set<String> = []
+        var updates: Set<String> = []
+        var hashes: [String: String] = [:]
         let fm = FileManager.default
         let caches = cachesDirectory ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first
         let models = modelsDirectory ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -159,7 +201,16 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             case .builtIn:
                 exists = true
             case let .parakeet(descriptor):
-                exists = models.map { descriptor.artifactsAreComplete(at: descriptor.cacheDirectory(in: $0)) } ?? false
+                if descriptor.variant == .mini || descriptor.variant == .pico {
+                    let hash = models.flatMap { descriptor.installedArchiveSHA256(at: descriptor.cacheDirectory(in: $0)) }
+                    exists = hash != nil
+                    if let hash {
+                        hashes[probe.modelID] = hash
+                        if hash != descriptor.archiveSHA256 { updates.insert(probe.modelID) }
+                    }
+                } else {
+                    exists = models.map { descriptor.artifactsAreComplete(at: descriptor.cacheDirectory(in: $0)) } ?? false
+                }
             case let .realtime(folder, requiredModels):
                 let directory = models?.appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
                     .appendingPathComponent(folder, isDirectory: true)
@@ -187,6 +238,6 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             if exists { installed.insert(probe.modelID) }
         }
         try Task.checkCancellation()
-        return installed
+        return ScanResult(installedIDs: installed, updateAvailableIDs: updates, installedArchiveHashes: hashes)
     }
 }

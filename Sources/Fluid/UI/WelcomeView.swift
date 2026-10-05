@@ -116,6 +116,7 @@ struct OnboardingFlowView: View {
         case primary
         case secondary
         case destructive
+        case update
     }
 
     private struct OnboardingPillButtonConfiguration {
@@ -273,6 +274,7 @@ struct OnboardingFlowView: View {
         }
         return self.preparingModelRouteID != nil
             || self.asr.hasActiveModelPreparation
+            || self.asr.hasActiveModelDownload
             || self.asr.isCancellingModelPreparation
             || self.asr.isDownloadingModel
             || (self.asr.isLoadingModel && !self.asr.isAsrReady)
@@ -355,6 +357,12 @@ struct OnboardingFlowView: View {
         }
         .onAppear {
             self.installations.refresh()
+            Task {
+                let catalog = CompactSpeechModelReleaseCatalog.shared
+                let revision = catalog.revision
+                await catalog.refreshIfNeeded()
+                if catalog.revision != revision { self.installations.refresh() }
+            }
             self.isOnboardingFlowVisible = true
             self.syncOnboardingSelectionFromSettings()
             self.playLandingWelcomeSoundIfNeeded()
@@ -1478,7 +1486,11 @@ struct OnboardingFlowView: View {
 
     private func cancelOnboardingModelPreparation() {
         self.modelPreparationTask?.cancel()
-        self.asr.cancelModelPreparation()
+        if self.asr.hasActiveModelDownload {
+            self.asr.cancelModelDownload()
+        } else {
+            self.asr.cancelModelPreparation()
+        }
     }
 
     private func uninstallOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
@@ -1512,7 +1524,7 @@ struct OnboardingFlowView: View {
         let isHovered = enablesHover && self.hoveredModelRouteID == route.id
         let isRouteActiveInSettings = self.isRouteSelectedInSettings(route)
         let isDownloaded = self.isOnboardingModelBundledOrInstalled(model) || (isRouteActiveInSettings && (self.asr.isAsrReady || self.asr.modelsExistOnDisk))
-        let isPreparing = self.preparingModelRouteID == route.id || (isRouteActiveInSettings && (self.asr.isDownloadingModel || (self.asr.isLoadingModel && !self.asr.isAsrReady)))
+        let isPreparing = self.preparingModelRouteID == route.id || self.asr.downloadingModelId == model.id || (isRouteActiveInSettings && (self.asr.isDownloadingModel || (self.asr.isLoadingModel && !self.asr.isAsrReady)))
         let isReady = self.isOnboardingRouteReady(route)
         let isUninstalling = self.uninstallingModelRouteID == route.id
         let areModelActionsBlocked = !self.installations.canUseModelActions || self.asr.isRunning || self.uninstallingModelRouteID != nil || self.preparingModelRouteID != nil || isPreparing || self.isModelPreparationInProgress
@@ -1585,7 +1597,7 @@ struct OnboardingFlowView: View {
 
                 Spacer()
 
-                Text(model.downloadSize)
+                Text(self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize)
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -1599,11 +1611,11 @@ struct OnboardingFlowView: View {
                     if isPreparing {
                         self.onboardingModelActionButton(
                             id: "\(route.id)-cancel",
-                            title: self.asr.isCancellingModelPreparation ? "Cancelling…" : "Cancel",
+                            title: self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload ? "Cancelling…" : "Cancel",
                             systemImage: "xmark",
                             tone: .secondary,
                             width: 104,
-                            isDisabled: self.asr.isCancellingModelPreparation
+                            isDisabled: self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload
                         ) {
                             self.cancelOnboardingModelPreparation()
                         }
@@ -1638,28 +1650,34 @@ struct OnboardingFlowView: View {
                     ) { self.installations.refresh() }
                 }
             } else if isDownloaded {
+                let hasUpdate = self.installations.updateAvailableIDs.contains(model.id)
                 HStack(spacing: 8) {
+                    if hasUpdate {
+                        self.onboardingModelActionButton(
+                            id: "\(route.id)-update",
+                            title: "Update",
+                            systemImage: "arrow.down.circle",
+                            tone: .update,
+                            width: 84,
+                            isDisabled: areModelActionsBlocked
+                        ) { self.updateOnboardingRoute(route) }
+                    }
                     self.onboardingModelActionButton(
                         id: "\(route.id)-activate",
-                        title: self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: true, isReady: isReady),
+                        title: hasUpdate && isReady ? "Active" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: true, isReady: isReady),
                         systemImage: isReady ? "checkmark" : "bolt.fill",
-                        tone: .primary,
-                        width: 124,
+                        tone: hasUpdate ? .secondary : .primary,
+                        width: hasUpdate ? 88 : 124,
                         isDisabled: areModelActionsBlocked || isReady
-                    ) {
-                        self.prepareOnboardingRoute(route)
-                    }
-
+                    ) { self.prepareOnboardingRoute(route) }
                     self.onboardingModelActionButton(
                         id: "\(route.id)-uninstall",
                         title: "Delete",
                         systemImage: "trash",
                         tone: .destructive,
-                        width: 124,
+                        width: hasUpdate ? 72 : 124,
                         isDisabled: areModelActionsBlocked
-                    ) {
-                        self.uninstallOnboardingRoute(route)
-                    }
+                    ) { self.uninstallOnboardingRoute(route) }
                 }
             } else {
                 self.onboardingModelActionButton(
@@ -1698,7 +1716,7 @@ struct OnboardingFlowView: View {
             }
         }
         .onTapGesture {
-            guard !areModelActionsBlocked else { return }
+            guard !areModelActionsBlocked, !self.isModelPreparationInProgress else { return }
             self.selectOnboardingRoute(route)
         }
         .onHover { isHovered in
@@ -1732,7 +1750,7 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelPreparationStatus(isUninstalling: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            if self.asr.isCancellingModelPreparation {
+            if self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
@@ -1742,7 +1760,7 @@ struct OnboardingFlowView: View {
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(Color.white.opacity(0.62))
                 }
-            } else if self.asr.isDownloadingModel,
+            } else if self.asr.isDownloadingModel || self.asr.hasActiveModelDownload,
                       self.asr.modelPreparationPhase == .downloading,
                       let progress = self.asr.downloadProgress
             {
@@ -1891,11 +1909,15 @@ struct OnboardingFlowView: View {
         onHover: @escaping (Bool) -> Void
     ) -> some View {
         let shape = Capsule()
-        let accentColor: Color = configuration.tone == .destructive ? .red : FluidOnboardingLandingColors.blue
-        let isFilledTone = configuration.tone == .primary || configuration.tone == .destructive
+        let accentColor: Color = switch configuration.tone {
+        case .destructive: .red
+        case .update: .orange
+        default: FluidOnboardingLandingColors.blue
+        }
+        let isFilledTone = configuration.tone != .secondary
         let fillColor: Color = {
             switch configuration.tone {
-            case .primary, .destructive:
+            case .primary, .destructive, .update:
                 return accentColor.opacity(configuration.isEnabled ? 1 : 0.34)
             case .secondary:
                 return Color.white.opacity(configuration.isEnabled ? (configuration.isHovered ? 0.11 : 0.07) : 0.045)
@@ -1903,7 +1925,7 @@ struct OnboardingFlowView: View {
         }()
         let borderColor: Color = {
             switch configuration.tone {
-            case .primary, .destructive:
+            case .primary, .destructive, .update:
                 return Color.white.opacity(configuration.isHovered && configuration.isEnabled ? 0.30 : 0)
             case .secondary:
                 return configuration.isHovered && configuration.isEnabled ? FluidOnboardingLandingColors.blue.opacity(0.30) : Color.white.opacity(0.07)
@@ -1913,7 +1935,7 @@ struct OnboardingFlowView: View {
         let shadowOpacity: Double = {
             guard configuration.isEnabled else { return 0 }
             switch configuration.tone {
-            case .primary, .destructive:
+            case .primary, .destructive, .update:
                 return configuration.isHovered ? 0.56 : 0.26
             case .secondary:
                 return configuration.isHovered ? 0.08 : 0
@@ -2250,6 +2272,30 @@ struct OnboardingFlowView: View {
 }
 
 private extension OnboardingFlowView {
+    func updateOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
+        guard self.installations.canUseModelActions, !self.asr.isRunning,
+              self.asr.activeExclusiveActivity == nil, !self.isModelPreparationInProgress,
+              self.uninstallingModelRouteID == nil
+        else { return }
+        self.preparingModelRouteID = route.id
+        self.modelPreparationTask = Task { @MainActor in
+            defer { self.preparingModelRouteID = nil; self.modelPreparationTask = nil }
+            do {
+                try await self.asr.downloadModel(route.model, source: .onboarding, updateWeights: true, progressHandler: nil)
+            } catch is CancellationError {
+                // The retained installation remains available.
+            } catch {
+                if let failure = error as? ParakeetArchiveDownloader.DownloadError, case .replacementCleanupFailed = failure {
+                    self.asr.errorTitle = "Model Updated"
+                } else {
+                    self.asr.errorTitle = "Model Update Failed"
+                }
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
+    }
+
     var aiEnhancementStep: some View {
         OnboardingAIEnhancementStepView(
             setup: self.aiSetup,

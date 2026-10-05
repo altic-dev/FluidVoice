@@ -72,9 +72,16 @@ actor DictionaryMatchPlayground {
 
     /// Resolve before loading a model: an older checkpoint's vectors remain saved
     /// but cannot be replayed through a different encoder with the same dimensions.
-    nonisolated static func targetProfile(from profiles: [PronunciationDictionaryProfile], target: String) throws -> PronunciationDictionaryProfile {
+    nonisolated static func targetProfile(
+        from profiles: [PronunciationDictionaryProfile],
+        target: String,
+        compatibleModelKeys: Set<String> = Set(ParakeetSpeechModelCatalog.descriptors.map(\.pronunciationModelKey))
+    ) throws -> PronunciationDictionaryProfile {
         let matching = profiles.filter { $0.label.caseInsensitiveCompare(target) == .orderedSame }
-        if let current = matching.first(where: { ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: $0.modelKey) != nil }) {
+        if let current = matching.first(where: {
+            compatibleModelKeys.contains($0.modelKey)
+                && ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: $0.modelKey) != nil
+        }) {
             return current
         }
         if matching.contains(where: { ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey($0.modelKey) }) {
@@ -112,7 +119,14 @@ actor DictionaryMatchPlayground {
         let duration = Double(samples.count) / 16_000
         #if arch(arm64)
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
-        let targetProfile = try Self.targetProfile(from: allProfiles, target: target)
+        var compatibleModelKeys: Set<String> = ["parakeet-v2", "parakeet-v3"]
+        for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
+            let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+            if let hash = descriptor.installedArchiveSHA256(at: directory) {
+                compatibleModelKeys.insert(descriptor.modelID + ":sha256:" + hash)
+            }
+        }
+        let targetProfile = try Self.targetProfile(from: allProfiles, target: target, compatibleModelKeys: compatibleModelKeys)
         let matching = allProfiles.filter { $0.modelKey == targetProfile.modelKey }.sorted {
             let lhsTarget = $0.dictionaryEntryID == targetProfile.dictionaryEntryID
             let rhsTarget = $1.dictionaryEntryID == targetProfile.dictionaryEntryID
@@ -121,15 +135,21 @@ actor DictionaryMatchPlayground {
         }
         let profiles = Array(matching.prefix(64))
         try Task.checkCancellation()
-        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: targetProfile.modelKey) else {
+        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: targetProfile.modelKey) else {
             throw DictionaryMatchPlaygroundError.unavailable("This pronunciation model is unavailable.")
         }
         let version = descriptor.asrModelVersion
         let directory = AsrModels.defaultCacheDirectory(for: version)
-        guard descriptor.installationRevisionMatches(at: directory) else {
+        guard descriptor.installationRevisionMatches(at: directory),
+              descriptor.variant == .v2 || descriptor.variant == .v3 || descriptor.installedArchiveSHA256(at: directory) == descriptor.archiveSHA256
+        else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
         let models = try await AsrModels.loadLocalOnly(from: directory, version: version)
+        try Task.checkCancellation()
+        guard descriptor.installationRevisionMatches(at: directory) else {
+            throw PronunciationDictionaryStoreError.outdatedModelRevision
+        }
         let manager = AsrManager(config: ASRConfig(tdtConfig: TdtConfig(blankId: version.blankId), encoderHiddenSize: version.encoderHiddenSize))
         do {
             try await manager.initialize(models: models)
@@ -164,7 +184,7 @@ actor DictionaryMatchPlayground {
         samples: [Float], manager: AsrManager, profiles: [PronunciationDictionaryProfile],
         targetProfile: PronunciationDictionaryProfile, context: ReplayContext
     ) async throws -> DictionaryMatchReport {
-        let references = DictionaryPronunciationReferences.make(profiles: profiles)
+        let references = DictionaryPronunciationReferences.make(profiles: profiles, compatibleModelKey: targetProfile.modelKey)
         let vectors = references.map(\.embedding)
         var rows = references.map { reference in
             DictionaryMatchReport.Candidate(

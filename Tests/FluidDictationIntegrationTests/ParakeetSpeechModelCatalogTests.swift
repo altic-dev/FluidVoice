@@ -4,6 +4,54 @@ import XCTest
 
 @MainActor
 final class ParakeetSpeechModelCatalogTests: XCTestCase {
+    func testInstalledCompactRevisionCanBeOlderButMustHaveCompleteRegularArtifacts() throws {
+        let descriptor = ParakeetSpeechModelCatalog.mini
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for model in descriptor.requiredModelNames {
+            let root = directory.appendingPathComponent(model)
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("weights"), withIntermediateDirectories: true)
+            for file in ["coremldata.bin", "metadata.json", "weights/weight.bin"] {
+                try Data("fixture".utf8).write(to: root.appendingPathComponent(file))
+            }
+        }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
+        let oldHash = "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36"
+        let marker = directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+        try Data(oldHash.utf8).write(to: marker)
+        XCTAssertEqual(descriptor.installedArchiveSHA256(at: directory), oldHash)
+        XCTAssertFalse(descriptor.artifactsAreComplete(at: directory), "A usable old checkpoint is not the latest installation")
+        let link = directory.appendingPathComponent("unexpected-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: marker)
+        XCTAssertNil(descriptor.installedArchiveSHA256(at: directory))
+        try FileManager.default.removeItem(at: link)
+        for invalid in [String(repeating: "g", count: 64), String(repeating: "a", count: 65), ""] {
+            try Data(invalid.utf8).write(to: marker)
+            XCTAssertNil(descriptor.installedArchiveSHA256(at: directory))
+        }
+        try Data(oldHash.utf8).write(to: marker)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"))
+        XCTAssertNil(descriptor.installedArchiveSHA256(at: directory))
+        XCTAssertNil(ParakeetSpeechModelCatalog.v2.installedArchiveSHA256(at: directory))
+    }
+
+    func testInstalledPronunciationDescriptorIsOnlyALocalCandidate() throws {
+        let oldHash = "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36"
+        let key = ParakeetSpeechModelCatalog.mini.modelID + ":sha256:" + oldHash
+        let candidate = try XCTUnwrap(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: key))
+        XCTAssertEqual(candidate.pronunciationModelKey, key)
+        XCTAssertEqual(candidate.archiveSHA256, oldHash)
+        XCTAssertNil(candidate.archiveURL, "An old checkpoint may never be downloaded from the latest archive URL")
+        XCTAssertEqual(candidate.requiredModelNames, ParakeetSpeechModelCatalog.mini.requiredModelNames)
+        XCTAssertNil(ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: key))
+        XCTAssertTrue(ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(key))
+        for invalid in [ParakeetSpeechModelCatalog.mini.modelID, key + "x", "fluid-parakeet-mini:sha256:" + String(repeating: "G", count: 64)] {
+            XCTAssertNil(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: invalid))
+        }
+        XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: "parakeet-v2"), ParakeetSpeechModelCatalog.v2)
+    }
+
     func testAllOfflineParakeetVariantsHaveIndependentStableCacheAndPronunciationKeys() throws {
         let descriptors = ParakeetSpeechModelCatalog.descriptors
         XCTAssertEqual(Set(descriptors.map(\.variant)), Set(ParakeetSpeechModelCatalog.Variant.allCases))
@@ -72,14 +120,14 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
 
     func testHostedSmallVariantsUseExactArchivesAndNoInventedPerformanceRatings() throws {
         let fixtures: [(SettingsStore.SpeechModel, Int64, String, String)] = [
-            (.fluidParakeetMini, 254_126_592, "fluid-mini", "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36"),
-            (.fluidParakeetPico, 161_201_152, "fluid-pico", "afcdd76d4aba0328c97c858ee5c4c227ab5e23cc6885de5299d009c3671fe5d6"),
+            (.fluidParakeetMini, 254_136_320, "fluid-mini", "7f811554cc670ded812937502f928ae6aad946bbf6e4c2eecd6fcffbe76f4d16"),
+            (.fluidParakeetPico, 161_208_320, "fluid-pico", "542f74f639438bf37ff134a7a75daddb50d301deb87696994e11ff272df21512"),
         ]
         for (model, bytes, path, hash) in fixtures {
             let descriptor = try XCTUnwrap(model.parakeetDescriptor)
             XCTAssertEqual(descriptor.expectedDownloadBytes, bytes)
             XCTAssertEqual(descriptor.archiveSHA256, hash)
-            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.0.0/\(descriptor.folderName).tar")
+            XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/\(path)/1.1.1/\(descriptor.folderName).tar")
             XCTAssertEqual(descriptor.archiveURL?.scheme, "https")
             XCTAssertEqual(descriptor.supportedLanguageCodes, ["en"])
             XCTAssertTrue(descriptor.isEnglishOnly)

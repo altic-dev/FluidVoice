@@ -167,7 +167,7 @@ extension VoiceEngineSettingsView {
                     }
 
                     HStack(spacing: 8) {
-                        Label(model.downloadSize, systemImage: "internaldrive")
+                        Label(self.viewModel.speechModelDownloadSize(model), systemImage: "internaldrive")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
@@ -401,6 +401,15 @@ extension VoiceEngineSettingsView {
                 }
             } else if self.viewModel.isSpeechModelInstalled(model) {
                 HStack(spacing: 8) {
+                    if self.viewModel.isSpeechModelUpdateAvailable(model) {
+                        Button("Update") {
+                            self.viewModel.downloadSpeechModel(model, updateWeights: true)
+                        }
+                        .fluidGlassAction(prominent: true, tone: .orange)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
+                        .accessibilityLabel("Update \(model.humanReadableName)")
+                    }
+
                     if isActive {
                         self.speechModelLanguagePicker(for: model)
                             .disabled(self.viewModel.areSpeechModelActionsBlocked)

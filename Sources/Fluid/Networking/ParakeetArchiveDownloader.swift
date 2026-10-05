@@ -6,10 +6,21 @@ import Foundation
 nonisolated enum ParakeetArchiveDownloader {
     typealias Transport = @Sendable (URL, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
     typealias RevisionWriter = @Sendable (URL, ParakeetSpeechModelCatalog.Descriptor) throws -> Void
+    typealias StageValidator = @Sendable (URL) async throws -> Void
+    private static let publicationLock = NSLock()
+
+    private struct InstalledIdentity: Equatable {
+        let device: UInt64
+        let inode: UInt64
+        let revision: String
+    }
 
     enum DownloadError: LocalizedError {
         case invalidDescriptor, invalidResponse, checksumMismatch, invalidArchive, incompleteModel, targetExists
         case cleanupFailed(URL)
+        case targetChanged
+        case replacementCleanupFailed(installed: URL, retainedOld: URL)
+        case updateFailedWithCleanup(reason: String, installed: URL, temporaryFiles: URL)
 
         var errorDescription: String? {
             switch self {
@@ -20,6 +31,12 @@ nonisolated enum ParakeetArchiveDownloader {
             case .incompleteModel: return "The voice model archive is incomplete."
             case .targetExists: return "A different or incomplete voice model is already cached. Delete this model in Voice Engine settings, then download it again."
             case let .cleanupFailed(url): return "Voice model temporary files could not be removed: \(url.path)"
+            case .targetChanged: return "The installed voice model changed during this update. Its files were preserved. Please try again."
+            case let .replacementCleanupFailed(installed, retainedOld): return "The updated voice model is installed at \(installed.path), but its old files could not be removed: \(retainedOld.path)"
+            case let .updateFailedWithCleanup(reason, installed, temporaryFiles):
+                return "The voice model update failed: \(reason). "
+                    + "This update did not replace the installed model at \(installed.path). "
+                    + "Temporary files could not be removed: \(temporaryFiles.path)"
             }
         }
     }
@@ -28,11 +45,13 @@ nonisolated enum ParakeetArchiveDownloader {
         descriptor: ParakeetSpeechModelCatalog.Descriptor,
         in modelsDirectory: URL,
         progressHandler: @escaping @Sendable (ModelPreparationProgress) -> Void = { _ in },
+        replaceExisting: Bool = false,
+        stageValidator: StageValidator? = nil,
         transport: Transport? = nil,
         revisionWriter: @escaping RevisionWriter = { directory, descriptor in try descriptor.writeInstallationRevision(at: directory) }
     ) async throws -> URL {
         let task = Task.detached(priority: .utility) {
-            try await self.install(descriptor: descriptor, modelsDirectory: modelsDirectory, progressHandler: progressHandler, transport: transport, revisionWriter: revisionWriter)
+            try await self.install(descriptor: descriptor, modelsDirectory: modelsDirectory, progressHandler: progressHandler, replaceExisting: replaceExisting, stageValidator: stageValidator, transport: transport, revisionWriter: revisionWriter)
         }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -44,6 +63,8 @@ nonisolated enum ParakeetArchiveDownloader {
     static func isCleanupFailure(_ error: Error) -> Bool {
         guard let failure = error as? DownloadError else { return false }
         if case .cleanupFailed = failure { return true }
+        if case .replacementCleanupFailed = failure { return true }
+        if case .updateFailedWithCleanup = failure { return true }
         return false
     }
 
@@ -58,6 +79,8 @@ nonisolated enum ParakeetArchiveDownloader {
         descriptor: ParakeetSpeechModelCatalog.Descriptor,
         modelsDirectory: URL,
         progressHandler: @escaping @Sendable (ModelPreparationProgress) -> Void,
+        replaceExisting: Bool,
+        stageValidator: StageValidator?,
         transport: Transport?,
         revisionWriter: RevisionWriter
     ) async throws -> URL {
@@ -82,7 +105,13 @@ nonisolated enum ParakeetArchiveDownloader {
         else { throw DownloadError.invalidDescriptor }
         try manager.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         try self.requireDirectory(modelsDirectory)
-        guard !self.pathExists(target) else { throw DownloadError.targetExists }
+        let original: InstalledIdentity?
+        if self.pathExists(target) {
+            guard replaceExisting else { throw DownloadError.targetExists }
+            original = try self.installedIdentity(at: target, descriptor: descriptor)
+        } else {
+            original = nil
+        }
         let stage = modelsDirectory.appendingPathComponent(".\(descriptor.folderName)-\(UUID().uuidString).staging", isDirectory: true)
         try manager.createDirectory(at: stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         var retainedDownload: URL?
@@ -115,15 +144,24 @@ nonisolated enum ParakeetArchiveDownloader {
             try revisionWriter(extracted, descriptor)
             try Task.checkCancellation()
             guard self.artifactsAreComplete(at: extracted, descriptor: descriptor) else { throw DownloadError.incompleteModel }
+            if let stageValidator { try await stageValidator(extracted) }
             try Task.checkCancellation()
-            // Both directories are on the cache filesystem; exclusive rename publishes
-            // the complete tree at once and cannot overwrite a competing target.
-            let result = extracted.withUnsafeFileSystemRepresentation { source in
-                target.withUnsafeFileSystemRepresentation { destination in
-                    renameatx_np(AT_FDCWD, source, AT_FDCWD, destination, UInt32(RENAME_EXCL))
+            guard self.artifactsAreComplete(at: extracted, descriptor: descriptor) else { throw DownloadError.incompleteModel }
+            // Serialize only publication, not transfers or Core ML validation. Identity
+            // and revision checks reject a competing completed update in this process.
+            try self.publicationLock.withLock {
+                try Task.checkCancellation()
+                try self.requireDirectory(modelsDirectory)
+                if let original {
+                    guard try self.installedIdentity(at: target, descriptor: descriptor) == original else { throw DownloadError.targetChanged }
                 }
+                let result = extracted.withUnsafeFileSystemRepresentation { source in
+                    target.withUnsafeFileSystemRepresentation { destination in
+                        renameatx_np(AT_FDCWD, source, AT_FDCWD, destination, UInt32(original == nil ? RENAME_EXCL : RENAME_SWAP))
+                    }
+                }
+                guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
             }
-            guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         } catch {
             let originalError = error
             var cleanupFailure: DownloadError?
@@ -131,12 +169,33 @@ nonisolated enum ParakeetArchiveDownloader {
                 do { try manager.removeItem(at: retainedDownload) } catch { cleanupFailure = .cleanupFailed(retainedDownload) }
             }
             do { try manager.removeItem(at: stage) } catch { cleanupFailure = .cleanupFailed(stage) }
-            if let cleanupFailure { throw cleanupFailure }
+            if let cleanupFailure {
+                if original != nil {
+                    throw DownloadError.updateFailedWithCleanup(reason: originalError.localizedDescription, installed: target, temporaryFiles: stage)
+                }
+                throw cleanupFailure
+            }
             throw originalError
         }
-        do { try manager.removeItem(at: stage) } catch { throw DownloadError.cleanupFailed(stage) }
+        do { try manager.removeItem(at: stage) } catch {
+            if original != nil { throw DownloadError.replacementCleanupFailed(installed: target, retainedOld: stage) }
+            throw DownloadError.cleanupFailed(stage)
+        }
         progressHandler(.loading)
         return target
+    }
+
+    private static func installedIdentity(at directory: URL, descriptor: ParakeetSpeechModelCatalog.Descriptor) throws -> InstalledIdentity {
+        guard let revision = descriptor.installedArchiveSHA256(at: directory),
+              self.contentsAreComplete(at: directory, descriptor: descriptor),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path),
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber
+        else {
+            try Task.checkCancellation()
+            throw DownloadError.targetChanged
+        }
+        return InstalledIdentity(device: device.uint64Value, inode: inode.uint64Value, revision: revision)
     }
 
     /// Mirrors compiled-artifact readiness while rejecting links anywhere in the tree.

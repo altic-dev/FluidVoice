@@ -150,7 +150,7 @@ actor OriginalAudioEmbeddingExtractor {
     @concurrent static func extract(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
         try Task.checkCancellation()
         #if arch(arm64)
-        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: evidence.modelKey) else {
+        guard let descriptor = ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: evidence.modelKey) else {
             if ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(evidence.modelKey) {
                 throw PronunciationDictionaryStoreError.outdatedModelRevision
             }
@@ -158,13 +158,19 @@ actor OriginalAudioEmbeddingExtractor {
         }
         let version = descriptor.asrModelVersion
         let directory = AsrModels.defaultCacheDirectory(for: version)
-        guard descriptor.installationRevisionMatches(at: directory) else {
+        guard descriptor.installationRevisionMatches(at: directory),
+              descriptor.variant == .v2 || descriptor.variant == .v3 || descriptor.installedArchiveSHA256(at: directory) == descriptor.archiveSHA256
+        else {
             throw PronunciationDictionaryStoreError.outdatedModelRevision
         }
         let models = try await AsrModels.loadLocalOnly(
             from: directory,
             version: version
         )
+        try Task.checkCancellation()
+        guard descriptor.installationRevisionMatches(at: directory) else {
+            throw PronunciationDictionaryStoreError.outdatedModelRevision
+        }
         try Task.checkCancellation()
         let manager = AsrManager(config: ASRConfig(
             tdtConfig: TdtConfig(blankId: version.blankId),

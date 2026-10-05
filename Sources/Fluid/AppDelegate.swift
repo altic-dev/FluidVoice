@@ -80,6 +80,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         _ = FileLogger.shared
         TypingService.startKeyboardLayoutTracking()
         _ = TranscriptionHistoryStore.shared
+        #if arch(arm64)
+        Task {
+            await CompactSpeechModelReleaseCatalog.shared.refreshIfNeeded()
+            SpeechModelInstallationSnapshot.shared.refresh()
+        }
+        #endif
         #if DEBUG
         MeetingDetectorFeasibilityProbe.startIfRequested()
         #endif

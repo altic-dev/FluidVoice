@@ -80,6 +80,45 @@ nonisolated enum ParakeetSpeechModelCatalog {
             return (try? input.read(upToCount: 65)) == Data(hash.utf8)
         }
 
+        /// Explicit background-only disk inspection. Older compact checkpoints remain
+        /// usable, but must not be mistaken for the currently advertised download.
+        func installedArchiveSHA256(at directory: URL) -> String? {
+            guard self.variant == .mini || self.variant == .pico,
+                  let rootAttributes = try? FileManager.default.attributesOfItem(atPath: directory.path),
+                  rootAttributes[.type] as? FileAttributeType == .typeDirectory
+            else { return nil }
+            let marker = directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: marker.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.size] as? NSNumber)?.intValue == 64,
+                  let input = try? FileHandle(forReadingFrom: marker)
+            else { return nil }
+            defer { try? input.close() }
+            guard let bytes = try? input.read(upToCount: 65), bytes.count == 64,
+                  bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                  let hash = String(data: bytes, encoding: .utf8),
+                  HuggingFaceModelDownloader.artifactIsComplete(at: directory.appendingPathComponent(self.vocabularyFile), isDirectory: false),
+                  self.requiredModelNames.allSatisfy({ name in
+                      HuggingFaceModelDownloader.artifactIsComplete(at: directory.appendingPathComponent(name, isDirectory: true), isDirectory: true)
+                  })
+            else { return nil }
+            var enumerationFailed = false
+            guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil, options: [], errorHandler: { _, _ in
+                enumerationFailed = true
+                return false
+            }) else { return nil }
+            var count = 0
+            for case let item as URL in enumerator {
+                if Task.isCancelled { return nil }
+                count += 1
+                guard count <= 50_000,
+                      let type = (try? FileManager.default.attributesOfItem(atPath: item.path))?[.type] as? FileAttributeType,
+                      type == .typeRegular || type == .typeDirectory
+                else { return nil }
+            }
+            return enumerationFailed ? nil : hash
+        }
+
         /// Only the downloader calls this on its validated, unpublished stage.
         /// Exclusive creation rejects any marker supplied by the archive itself.
         func writeInstallationRevision(at directory: URL) throws {
@@ -145,9 +184,9 @@ nonisolated enum ParakeetSpeechModelCatalog {
         modelID: "fluid-parakeet-mini",
         variant: .mini,
         folderName: "fluid-parakeet-mini-coreml",
-        expectedDownloadBytes: 254_126_592,
-        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-mini/1.0.0/fluid-parakeet-mini-coreml.tar"),
-        archiveSHA256: "12109f89c80b959847ac80ae963714a00af08f029144c3e4a2a8c1641f528a36",
+        expectedDownloadBytes: 254_136_320,
+        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-mini/1.1.1/fluid-parakeet-mini-coreml.tar"),
+        archiveSHA256: "7f811554cc670ded812937502f928ae6aad946bbf6e4c2eecd6fcffbe76f4d16",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
         displayName: "Blazing Fast Mini",
@@ -162,9 +201,9 @@ nonisolated enum ParakeetSpeechModelCatalog {
         modelID: "fluid-parakeet-pico",
         variant: .pico,
         folderName: "fluid-parakeet-pico-coreml",
-        expectedDownloadBytes: 161_201_152,
-        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-pico/1.0.0/fluid-parakeet-pico-coreml.tar"),
-        archiveSHA256: "afcdd76d4aba0328c97c858ee5c4c227ab5e23cc6885de5299d009c3671fe5d6",
+        expectedDownloadBytes: 161_208_320,
+        archiveURL: URL(string: "https://models.fluidvoice.app/parakeet/fluid-pico/1.1.1/fluid-parakeet-pico-coreml.tar"),
+        archiveSHA256: "542f74f639438bf37ff134a7a75daddb50d301deb87696994e11ff272df21512",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
         displayName: "Blazing Fast Pico",
@@ -184,6 +223,39 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
     static func descriptor(forPronunciationModelKey modelKey: String) -> Descriptor? {
         self.descriptors.first { $0.pronunciationModelKey == modelKey }
+    }
+
+    /// A candidate for loading an existing checkpoint, never a download instruction.
+    /// Callers must verify its hash against the installed marker before loadLocalOnly.
+    static func descriptor(forInstalledPronunciationModelKey modelKey: String) -> Descriptor? {
+        if modelKey == self.v2.pronunciationModelKey { return self.v2 }
+        if modelKey == self.v3.pronunciationModelKey { return self.v3 }
+        for source in [self.mini, self.pico] {
+            let prefix = source.modelID + ":sha256:"
+            guard modelKey.hasPrefix(prefix) else { continue }
+            let hash = String(modelKey.dropFirst(prefix.count))
+            guard hash.utf8.count == 64,
+                  hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+            else { return nil }
+            return Descriptor(
+                modelID: source.modelID,
+                variant: source.variant,
+                folderName: source.folderName,
+                expectedDownloadBytes: source.expectedDownloadBytes,
+                archiveURL: nil,
+                archiveSHA256: hash,
+                requiredModelNames: source.requiredModelNames,
+                vocabularyFile: source.vocabularyFile,
+                displayName: source.displayName,
+                humanReadableName: source.humanReadableName,
+                languageSupport: source.languageSupport,
+                supportedLanguageCodes: source.supportedLanguageCodes,
+                downloadSize: source.downloadSize,
+                cardDescription: source.cardDescription,
+                performanceRatings: source.performanceRatings
+            )
+        }
+        return nil
     }
 
     static func isOutdatedCompactPronunciationModelKey(_ modelKey: String) -> Bool {
