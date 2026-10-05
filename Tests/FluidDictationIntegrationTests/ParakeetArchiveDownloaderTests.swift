@@ -280,6 +280,47 @@ final nonisolated class ParakeetArchiveDownloaderTests: XCTestCase {
         try newer.assertPreservedSiblingsAndNoStage()
     }
 
+    func testUpdateCleanupFailureNamesRetainedArchiveWhenStageRemovalSucceeds() async throws {
+        guard geteuid() != 0 else { throw XCTSkip("Filesystem permission failure requires a non-root user") }
+        let old = try Fixture()
+        let newer = try Fixture(artifactContents: "new trained checkpoint")
+        let directory = newer.base.appendingPathComponent("owned-ready", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            old.cleanup()
+            newer.cleanup()
+        }
+        _ = try await old.install()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let ready = directory.appendingPathComponent("archive.tar")
+        do {
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: newer.descriptor,
+                in: old.models,
+                replaceExisting: true,
+                transport: { url, _ in
+                    try newer.archive.write(to: ready)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+                    // Reject this handoff before moving it into staging. Its parent
+                    // blocks archive deletion while the independent stage can be removed.
+                    return try (ready, XCTUnwrap(HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)))
+                }
+            )
+            XCTFail("Expected an update failure with retained archive cleanup")
+        } catch let error as ParakeetArchiveDownloader.DownloadError {
+            guard case let .updateFailedWithCleanup(_, installed, temporaryFiles) = error else {
+                return XCTFail("Expected failed-update cleanup error, got \(error)")
+            }
+            XCTAssertEqual(installed, old.target)
+            XCTAssertEqual(temporaryFiles, ready)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: temporaryFiles.path))
+        }
+        XCTAssertTrue(old.descriptor.artifactsAreComplete(at: old.target))
+        XCTAssertEqual(try String(contentsOf: old.target.appendingPathComponent("Encoder-1.mlmodelc/weights/weight.bin"), encoding: .utf8), "fixture")
+        try old.assertPreservedSiblingsAndNoStage()
+        try newer.assertPreservedSiblingsAndNoStage()
+    }
+
     func testUpdateRejectsChangedTargetIdentityEvenWithTheSameRevision() async throws {
         let old = try Fixture()
         let newer = try Fixture(artifactContents: "new trained checkpoint")

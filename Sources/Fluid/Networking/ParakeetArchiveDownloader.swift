@@ -194,16 +194,16 @@ nonisolated enum ParakeetArchiveDownloader {
             }
         } catch {
             let originalError = error
-            var cleanupFailure: DownloadError?
+            var failedTemporaryURL: URL?
             if let retainedDownload {
-                do { try manager.removeItem(at: retainedDownload) } catch { cleanupFailure = .cleanupFailed(retainedDownload) }
+                do { try manager.removeItem(at: retainedDownload) } catch { failedTemporaryURL = retainedDownload }
             }
-            do { try manager.removeItem(at: stage) } catch { cleanupFailure = .cleanupFailed(stage) }
-            if let cleanupFailure {
+            do { try manager.removeItem(at: stage) } catch { failedTemporaryURL = stage }
+            if let failedTemporaryURL {
                 if original != nil {
-                    throw DownloadError.updateFailedWithCleanup(reason: originalError.localizedDescription, installed: target, temporaryFiles: stage)
+                    throw DownloadError.updateFailedWithCleanup(reason: originalError.localizedDescription, installed: target, temporaryFiles: failedTemporaryURL)
                 }
-                throw cleanupFailure
+                throw DownloadError.cleanupFailed(failedTemporaryURL)
             }
             throw originalError
         }
