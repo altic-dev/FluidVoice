@@ -1984,8 +1984,9 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelTooltip(for route: VoiceEngineLanguageRoute) -> String {
         let model = route.model
+        let downloadSize = self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize
         let credit = model.parakeetDescriptor.map { "\n\($0.creditLine)" } ?? ""
-        return "\(self.onboardingModelSubtitle(for: model)) - \(model.downloadSize)\n\(model.cardDescription)\(credit)"
+        return "\(self.onboardingModelSubtitle(for: model)) - \(downloadSize)\n\(model.cardDescription)\(credit)"
     }
 
     private func onboardingModelTitle(for model: SettingsStore.SpeechModel) -> String {

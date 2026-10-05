@@ -186,7 +186,8 @@ final class WindowSizingRegressionTests: XCTestCase {
         XCTAssertEqual(window.boundsWrites, 0, "Full-screen sizing belongs entirely to macOS")
         XCTAssertEqual(window.frameWrites, 0)
         window.isFullScreenForTest = false
-        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: window)
+        // Exit must restore the pending bounds even without a final resize event.
+        NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: window)
         await self.drainSizing()
         XCTAssertEqual(window.minSize, NSSize(width: 940, height: 700))
         window.contentView = nil

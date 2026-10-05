@@ -45,7 +45,7 @@ final class FluidWindowSizingNSView: NSView {
     }
 
     private weak var observedWindow: NSWindow?
-    private var resizeObserver: NSObjectProtocol?
+    private var windowObservers: [NSObjectProtocol] = []
     private var isApplyingSizing = false
     private var isSizingScheduled = false
 
@@ -76,20 +76,18 @@ final class FluidWindowSizingNSView: NSView {
         self.observedWindow = self.window
 
         guard let window else { return }
-        self.resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            self?.scheduleSizing()
+        self.windowObservers = [NSWindow.didResizeNotification, NSWindow.didExitFullScreenNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.scheduleSizing()
+            }
         }
     }
 
     private func removeResizeObserver() {
-        if let resizeObserver {
-            NotificationCenter.default.removeObserver(resizeObserver)
+        for observer in self.windowObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
-        self.resizeObserver = nil
+        self.windowObservers.removeAll()
     }
 
     private func scheduleSizing() {

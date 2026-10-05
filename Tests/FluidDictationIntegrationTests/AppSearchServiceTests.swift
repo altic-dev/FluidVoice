@@ -62,7 +62,7 @@ final class AppSearchServiceTests: XCTestCase {
 
         service.query = "launch at startup"
         service.query = "accent color"
-        try await Task.sleep(for: .milliseconds(600))
+        try await self.waitUntil { !service.isSearching && !service.groups.isEmpty }
 
         let settings = try XCTUnwrap(service.groups.first { $0.kind == .settings })
         XCTAssertTrue(settings.hits.contains { $0.target == .settings(.accentColor) })
@@ -79,7 +79,7 @@ final class AppSearchServiceTests: XCTestCase {
         let service = AppSearchService(index: SearchIndex(root: FluidZeppelinRoot(root: root)))
 
         service.query = "launch at startup"
-        try await Task.sleep(for: .milliseconds(600))
+        try await self.waitUntil { !service.isSearching && !service.groups.isEmpty }
         XCTAssertFalse(service.groups.isEmpty)
 
         service.query = "accent color"
