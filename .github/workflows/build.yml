@@ -94,6 +94,9 @@ jobs:
     - name: Run release highlights regressions
       run: sh Tests/run_release_highlights_tests.sh
 
+    - name: Run history decode recovery regressions
+      run: sh Tests/run_history_decode_recovery_tests.sh
+
     # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
     # Keep this E2E assertion in the suite for local validation, but skip it in CI.
     - name: Build and test (excluding flaky Tiny Whisper E2E)

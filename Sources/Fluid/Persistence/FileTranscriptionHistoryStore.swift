@@ -225,13 +225,21 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     // MARK: - Persistence
 
     private func loadEntries() {
+        // Skip an entry this build cannot read instead of emptying the history;
+        // the next save would persist an empty list.
         guard let data = self.defaults.data(forKey: Keys.fileTranscriptionHistory),
-              let decoded = try? JSONDecoder().decode([FileTranscriptionEntry].self, from: data)
+              let decoded = PersistedHistory.decode(FileTranscriptionEntry.self, from: data)
         else {
             self.entries = []
             return
         }
-        self.entries = decoded
+        self.entries = decoded.entries
+        if decoded.skipped > 0 {
+            DebugLogger.shared.info(
+                "Skipped \(decoded.skipped) unreadable file transcription entries",
+                source: "FileTranscriptionHistoryStore"
+            )
+        }
     }
 
     private func saveEntries() {
