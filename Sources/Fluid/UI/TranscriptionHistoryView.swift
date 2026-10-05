@@ -2,6 +2,20 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A hidden existing row can be selected from sidebar search even when the list is empty.
+nonisolated enum HistorySelectionRevealPolicy {
+    static func needsFilterReset(
+        requestedID: UUID?,
+        selectedID: UUID?,
+        allEntries: [TranscriptionHistoryEntry],
+        visibleEntries: [TranscriptionHistoryEntry]
+    ) -> Bool {
+        guard let selectedID, requestedID == selectedID else { return false }
+        return !visibleEntries.contains { $0.id == selectedID }
+            && allEntries.contains { $0.id == selectedID }
+    }
+}
+
 struct TranscriptionHistoryView: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
@@ -104,7 +118,10 @@ struct TranscriptionHistoryView: View {
                     .frame(minWidth: 400)
             }
         }
-        .onChange(of: self.filteredEntries.map(\.id), initial: true) { _, visibleIDs in
+        .onChange(of: self.historyStore.searchSelectionRequest) { _, _ in
+            self.revealExternalSelection()
+        }
+        .onChange(of: self.filteredEntries.map(\.id)) { _, visibleIDs in
             if let selectedEntryID = self.selectedEntryID, visibleIDs.contains(selectedEntryID) { return }
             self.selectedEntryID = visibleIDs.first
         }
@@ -119,6 +136,7 @@ struct TranscriptionHistoryView: View {
         }
         .onAppear {
             self.audioAvailabilityRevision = UUID()
+            self.revealExternalSelection()
             if self.selectedEntryID == nil {
                 self.selectedEntryID = self.filteredEntries.first?.id
             }
@@ -212,19 +230,28 @@ struct TranscriptionHistoryView: View {
         }
     }
 
-    /// Scrolls to a row chosen elsewhere (the sidebar search). A local filter that
-    /// hides it is cleared first, or the selection would fall back to the first row.
+    /// Parent-level handling also runs when no list exists to observe the selection.
+    private func revealExternalSelection() {
+        guard let request = self.historyStore.searchSelectionRequest else { return }
+        defer { self.historyStore.consumeSearchSelectionRequest(request) }
+        guard HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: request.entryID,
+            selectedID: self.selectedEntryID,
+            allEntries: self.historyStore.entries,
+            visibleEntries: self.filteredEntries
+        ) else { return }
+        self.searchQuery = ""
+        self.starredOnly = false
+    }
+
+    /// The parent clears a hidden selection's filters; scroll after that view update.
     private func reveal(_ id: UUID?, with proxy: ScrollViewProxy) {
         guard let id else { return }
         if !self.filteredEntries.contains(where: { $0.id == id }) {
-            self.searchQuery = ""
-            self.starredOnly = false
-            DispatchQueue.main.async {
-                proxy.scrollTo(id)
-            }
-            return
+            DispatchQueue.main.async { proxy.scrollTo(id) }
+        } else {
+            proxy.scrollTo(id)
         }
-        proxy.scrollTo(id)
     }
 
     private func entryRow(_ entry: TranscriptionHistoryEntry) -> some View {

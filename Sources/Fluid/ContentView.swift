@@ -1541,7 +1541,7 @@ struct ContentView: View {
     private func open(searchHit hit: AppSearchHit) {
         switch hit.target {
         case let .history(id):
-            TranscriptionHistoryStore.shared.selectedEntryID = id
+            TranscriptionHistoryStore.shared.selectEntryFromSearch(id: id)
             self.navigateToApp(.history)
         case let .transcript(id):
             FileTranscriptionHistoryStore.shared.selectedEntryID = id
