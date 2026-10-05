@@ -36,6 +36,13 @@ nonisolated enum ParakeetSpeechModelCatalog {
 
         var isEnglishOnly: Bool { self.supportedLanguageCodes == ["en"] }
 
+        var attribution: String {
+            switch self.variant {
+            case .v2, .v3: "NVIDIA Parakeet"
+            case .mini, .pico: "NVIDIA Parakeet · Moondream Parakeet Ultra"
+            }
+        }
+
         /// Encoder vectors are compatible only with the checkpoint that produced them.
         /// Legacy v2/v3 keep their established persisted keys byte for byte.
         var pronunciationModelKey: String {
@@ -175,7 +182,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         supportedLanguageCodes: ["en"],
         downloadSize: "~442.9 MiB",
         cardDescription: "Optimized for English accuracy and fastest transcription.",
-        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 1.0, accuracyPercent: 0.96)
+        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.96)
     )
     static let v3 = Descriptor(
         modelID: "parakeet-tdt",
@@ -198,7 +205,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
             "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
             "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
             "Slovenian, Spanish, Swedish, and Ukrainian.",
-        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 1.0, accuracyPercent: 0.92)
+        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.92)
     )
     static let mini = Descriptor(
         modelID: "fluid-parakeet-mini",
@@ -209,13 +216,13 @@ nonisolated enum ParakeetSpeechModelCatalog {
         archiveSHA256: "7f811554cc670ded812937502f928ae6aad946bbf6e4c2eecd6fcffbe76f4d16",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
-        displayName: "Fluid Blazing Fast Mini",
-        humanReadableName: "Fluid Blazing Fast Mini",
+        displayName: "Fluid Speech Mini",
+        humanReadableName: "Fluid Speech Mini",
         languageSupport: "English Only",
         supportedLanguageCodes: ["en"],
         downloadSize: "~242.4 MiB",
-        cardDescription: "In-house model by FluidVoice, with improved recognition amid background speech.",
-        performanceRatings: nil,
+        cardDescription: "Built for speech with background noise.",
+        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.95),
         manifestSHA256: "32193c4cec7f5daf92fd617c424e7a157ea8dfcfa832a0db2cfcfa5cb9b674b8"
     )
     static let pico = Descriptor(
@@ -227,13 +234,13 @@ nonisolated enum ParakeetSpeechModelCatalog {
         archiveSHA256: "542f74f639438bf37ff134a7a75daddb50d301deb87696994e11ff272df21512",
         requiredModelNames: ParakeetSpeechModelCatalog.splitModelNames,
         vocabularyFile: "parakeet_vocab.json",
-        displayName: "Fluid Blazing Fast Pico",
-        humanReadableName: "Fluid Blazing Fast Pico",
+        displayName: "Fluid Speech Pico",
+        humanReadableName: "Fluid Speech Pico",
         languageSupport: "English Only",
         supportedLanguageCodes: ["en"],
         downloadSize: "~153.7 MiB",
-        cardDescription: "English-only local transcription with the smallest Parakeet model download.",
-        performanceRatings: nil,
+        cardDescription: "Built for speech with background noise.",
+        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 1.0, accuracyPercent: 0.91),
         manifestSHA256: "a87ee649edc18aca6d30f251e75237f48c995448b865ffee35ab343ed3e66121"
     )
 

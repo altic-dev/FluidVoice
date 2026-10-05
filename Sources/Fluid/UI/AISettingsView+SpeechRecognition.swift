@@ -164,6 +164,13 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
+
+                        if let descriptor = model.parakeetDescriptor {
+                            Text("Built on \(descriptor.attribution)")
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     HStack(spacing: 8) {
@@ -240,6 +247,7 @@ extension VoiceEngineSettingsView {
                         )
                     }
                     .frame(width: 140, alignment: .center)
+                    .help("Relative ratings for comparing models, not measured transcription accuracy.")
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 }
             }

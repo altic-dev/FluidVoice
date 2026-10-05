@@ -1520,6 +1520,7 @@ struct OnboardingFlowView: View {
         enablesHover: Bool = true
     ) -> some View {
         let model = route.model
+        let isCompactModel = model == .fluidParakeetMini || model == .fluidParakeetPico
         let isSelected = self.isOnboardingRouteSelected(route)
         let isHovered = enablesHover && self.hoveredModelRouteID == route.id
         let isRouteActiveInSettings = self.isRouteSelectedInSettings(route)
@@ -1534,7 +1535,7 @@ struct OnboardingFlowView: View {
             ? Color(red: 0.042, green: 0.052, blue: 0.074)
             : Color(red: 0.030, green: 0.038, blue: 0.056)
 
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.sm : 10) {
             HStack(alignment: .top, spacing: 10) {
                 if model.brandName == "FluidVoice" {
                     FluidVoiceBrandIcon(size: 22)
@@ -1560,7 +1561,7 @@ struct OnboardingFlowView: View {
             }
             .frame(height: 38, alignment: .top)
 
-            if model == .fluidParakeetMini || model == .fluidParakeetPico {
+            if isCompactModel {
                 Text(model.languageSupport)
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(Color.white.opacity(0.62))
@@ -1568,12 +1569,12 @@ struct OnboardingFlowView: View {
 
             self.onboardingModelMetadataRow(badgeText: route.badgeText)
 
-            if model == .fluidParakeetMini {
+            if isCompactModel {
                 Text(model.cardDescription)
-                    .font(self.theme.typography.bodySmall)
+                    .font(self.theme.typography.caption)
                     .foregroundStyle(Color.white.opacity(0.72))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
 
             if model.hasPerformanceRatings {
@@ -1744,6 +1745,7 @@ struct OnboardingFlowView: View {
             )
         }
         .padding(.vertical, 2)
+        .help("Relative ratings for comparing models, not measured transcription accuracy.")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Speed \(Int(model.speedPercent * 100)) percent. Accuracy \(Int(model.accuracyPercent * 100)) percent.")
     }

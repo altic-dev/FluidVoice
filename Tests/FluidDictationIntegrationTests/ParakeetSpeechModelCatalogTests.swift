@@ -104,7 +104,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertNil(SettingsStore.SpeechModel.whisperBase.parakeetDescriptor)
     }
 
-    func testLegacyV2V3MetadataAndArchitectureDefaultRemainUnchanged() {
+    func testLegacyV2V3IdentityAndArchitectureDefaultRemainUnchanged() {
         let v2 = ParakeetSpeechModelCatalog.v2
         let v3 = ParakeetSpeechModelCatalog.v3
         XCTAssertEqual(v2.modelID, "parakeet-tdt-v2")
@@ -121,6 +121,8 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDT.humanReadableName, "Blazing Fast - Multilingual")
         XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDTv2.accuracyPercent, 0.96)
         XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDT.accuracyPercent, 0.92)
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDTv2.speedPercent, 0.99)
+        XCTAssertEqual(SettingsStore.SpeechModel.parakeetTDT.speedPercent, 0.99)
         XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDTv2.hasPerformanceRatings)
         XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDT.hasPerformanceRatings)
         for model: SettingsStore.SpeechModel in [.parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming] {
@@ -160,18 +162,19 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             XCTAssertFalse(model.usesAppleLogo)
             XCTAssertEqual(model.supportedLanguageCodes, "EN")
             XCTAssertEqual(model.supportedLanguageNames, "English")
-            XCTAssertFalse(model.hasPerformanceRatings)
-            XCTAssertNil(descriptor.performanceRatings)
-            XCTAssertEqual(model.accuracyPercent, 0)
-            XCTAssertEqual(model.speedPercent, 0)
+            XCTAssertTrue(model.hasPerformanceRatings)
+            XCTAssertNotNil(descriptor.performanceRatings)
+            XCTAssertEqual(descriptor.attribution, "NVIDIA Parakeet · Moondream Parakeet Ultra")
+            XCTAssertEqual(model.accuracyPercent, model == .fluidParakeetMini ? 0.95 : 0.91)
+            XCTAssertEqual(model.speedPercent, model == .fluidParakeetMini ? 0.99 : 1.0)
             XCTAssertTrue(model.supportsPronunciationMatching, "Real split encoders produce compatible 1024-dimensional embeddings")
             XCTAssertTrue(model.supportsCustomVocabulary, "Real CTC110m boosting is verified for both variants")
             XCTAssertEqual(model.streamingPreviewIntervalSeconds, SettingsStore.SpeechModel.parakeetTDTv2.streamingPreviewIntervalSeconds)
             XCTAssertEqual(model.minimumStreamingPreviewSeconds, SettingsStore.SpeechModel.parakeetTDTv2.minimumStreamingPreviewSeconds)
             XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
         }
-        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetMini.humanReadableName, "Fluid Blazing Fast Mini")
-        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Fluid Blazing Fast Pico")
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetMini.humanReadableName, "Fluid Speech Mini")
+        XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Fluid Speech Pico")
     }
 
     func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
@@ -207,8 +210,8 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(available.map(\.model), models)
         XCTAssertEqual(Set((displayed + other).map(\.id)), Set(available.map(\.id)))
         XCTAssertEqual(SettingsStore.shared.selectedSpeechModel, selection)
-        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "In-house model by FluidVoice, with improved recognition amid background speech.")
-        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "English-only local transcription with the smallest Parakeet model download.")
+        XCTAssertEqual(ParakeetSpeechModelCatalog.mini.cardDescription, "Built for speech with background noise.")
+        XCTAssertEqual(ParakeetSpeechModelCatalog.pico.cardDescription, "Built for speech with background noise.")
     }
 
     func testOnboardingRecommendationsPreserveUnavailableMiniIntelAndNonEnglishFallbacks() {

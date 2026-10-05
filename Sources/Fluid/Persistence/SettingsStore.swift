@@ -5094,7 +5094,7 @@ final class SettingsStore: ObservableObject {
             ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
         }
 
-        /// Small variants have no published comparative performance ratings yet.
+        /// Relative product ratings for display and sorting, not benchmark accuracy.
         var hasPerformanceRatings: Bool {
             guard let descriptor = self.parakeetDescriptor else { return true }
             return descriptor.performanceRatings != nil
