@@ -2048,11 +2048,9 @@ struct ContentView: View {
         if self.settings.shouldShowOnboarding {
             return .minimum(width: window.onboardingMinWidth, height: window.onboardingMinHeight)
         }
-        return FluidWindowSizing(
-            minWidth: window.mainMinWidth,
-            minHeight: window.mainMinHeight,
-            maximumSize: NSSize(width: 1440, height: 1000)
-        )
+        // Let SwiftUI and the screen choose the upper size; a hard cap can
+        // fight the hosting view's content bounds while switching pages.
+        return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
     }
 
     @ViewBuilder

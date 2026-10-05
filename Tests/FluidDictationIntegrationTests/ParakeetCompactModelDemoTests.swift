@@ -138,3 +138,122 @@ private struct CompactModelReviewView: View {
         return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
     }
 }
+
+@MainActor
+final class WindowSizingRegressionTests: XCTestCase {
+    func testRepeatedLayoutAndResizeEventsDoNotRewriteStableBounds() async {
+        let window = SizingRecordingWindow()
+        let view = FluidWindowSizingNSView(sizing: .minimum(width: 800, height: 500))
+        window.contentView = view
+        await self.drainSizing()
+        window.resetWrites()
+        for _ in 0..<100 {
+            view.sizing = .minimum(width: 800, height: 500)
+            NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: window)
+        }
+        XCTAssertEqual(window.boundsWrites, 0, "A SwiftUI update must not synchronously invalidate window constraints")
+        await self.drainSizing()
+        XCTAssertEqual(window.boundsWrites, 0, "Stable bounds must stay untouched after the coalesced update")
+        XCTAssertEqual(window.frameWrites, 0)
+        window.contentView = nil
+    }
+
+    func testRapidSizingChangesApplyOnlyTheLatestBoundsAfterLayout() async {
+        let window = SizingRecordingWindow()
+        let view = FluidWindowSizingNSView(sizing: .minimum(width: 800, height: 500))
+        window.contentView = view
+        await self.drainSizing()
+        window.resetWrites()
+        view.sizing = .minimum(width: 900, height: 550)
+        view.sizing = .minimum(width: 940, height: 700)
+        XCTAssertEqual(window.boundsWrites, 0)
+        await self.drainSizing()
+        XCTAssertEqual(window.minSize, NSSize(width: 940, height: 700))
+        XCTAssertEqual(window.minimumWrites, 1)
+        window.contentView = nil
+    }
+
+    func testFullScreenLayoutDoesNotChangeAnyWindowBoundsOrFrame() async {
+        let window = SizingRecordingWindow()
+        let view = FluidWindowSizingNSView(sizing: .minimum(width: 800, height: 500))
+        window.contentView = view
+        await self.drainSizing()
+        window.isFullScreenForTest = true
+        window.resetWrites()
+        view.sizing = .minimum(width: 940, height: 700)
+        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: window)
+        await self.drainSizing()
+        XCTAssertEqual(window.boundsWrites, 0, "Full-screen sizing belongs entirely to macOS")
+        XCTAssertEqual(window.frameWrites, 0)
+        window.isFullScreenForTest = false
+        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: window)
+        await self.drainSizing()
+        XCTAssertEqual(window.minSize, NSSize(width: 940, height: 700))
+        window.contentView = nil
+    }
+
+    func testQueuedSizingDoesNotWriteToThePreviousWindow() async {
+        let oldWindow = SizingRecordingWindow()
+        let newWindow = SizingRecordingWindow()
+        let view = FluidWindowSizingNSView(sizing: .minimum(width: 800, height: 500))
+        oldWindow.contentView = view
+        await self.drainSizing()
+        oldWindow.resetWrites()
+        view.sizing = .minimum(width: 940, height: 700)
+        oldWindow.contentView = nil
+        newWindow.contentView = view
+        await self.drainSizing()
+        XCTAssertEqual(oldWindow.boundsWrites, 0)
+        XCTAssertEqual(oldWindow.frameWrites, 0)
+        XCTAssertEqual(newWindow.minSize, NSSize(width: 940, height: 700))
+        newWindow.contentView = nil
+    }
+
+    private func drainSizing() async {
+        for _ in 0..<3 {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+        }
+    }
+}
+
+@MainActor
+private final class SizingRecordingWindow: NSWindow {
+    var minimumWrites = 0
+    var maximumWrites = 0
+    var frameWrites = 0
+    var isFullScreenForTest = false
+    var boundsWrites: Int { self.minimumWrites + self.maximumWrites }
+
+    init() {
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        self.isReleasedWhenClosed = false
+    }
+
+    override var minSize: NSSize {
+        get { super.minSize }
+        set { self.minimumWrites += 1; super.minSize = newValue }
+    }
+
+    override var maxSize: NSSize {
+        get { super.maxSize }
+        set { self.maximumWrites += 1; super.maxSize = newValue }
+    }
+
+    override var styleMask: NSWindow.StyleMask {
+        get { self.isFullScreenForTest ? super.styleMask.union(.fullScreen) : super.styleMask }
+        set { super.styleMask = newValue }
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool, animate animateFlag: Bool) {
+        self.frameWrites += 1
+        super.setFrame(frameRect, display: flag, animate: animateFlag)
+    }
+
+    func resetWrites() {
+        self.minimumWrites = 0
+        self.maximumWrites = 0
+        self.frameWrites = 0
+    }
+}
