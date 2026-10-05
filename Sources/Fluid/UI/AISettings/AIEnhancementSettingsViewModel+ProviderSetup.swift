@@ -38,6 +38,21 @@ extension AIEnhancementSettingsViewModel {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Apple Intelligence has no credentials or model choice, so adding it only lists it.
+    /// Does not select it, change shortcuts, or verify anything.
+    func addAppleIntelligenceProvider() {
+        guard !self.isTestingConnection, !self.isFetchingModels else { return }
+        let id = AppleIntelligenceProvider.providerID
+        let key = self.providerKey(for: id)
+        self.availableModelsByProvider[key] = [AppleIntelligenceProvider.modelID]
+        self.selectedModelByProvider[key] = AppleIntelligenceProvider.modelID
+        var added = Set(UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
+        added.insert(id)
+        UserDefaults.standard.set(added.sorted(), forKey: Self.addedProviderIDsKey)
+        self.saveSavedProviders()
+        self.refreshAppleIntelligenceAvailability()
+    }
+
     /// Saves credentials first. Failure keeps the form open and creates no provider/model record.
     /// Does not select a provider, change shortcuts, fetch models, or start a network request.
     func addProvider(_ draft: ProviderSetupDraft) -> Bool {

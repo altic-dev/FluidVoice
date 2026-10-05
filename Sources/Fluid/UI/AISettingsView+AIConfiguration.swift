@@ -79,13 +79,16 @@ extension AIEnhancementSettingsView {
             }
             ForEach(self.viewModel.cachedAddedProviderItems) { provider in
                 let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
-                let setupIssue = DictationDefaultProvider.setupIssue(
-                    requiresAPIKey: !self.viewModel.isLocalEndpoint(self.providerBaseURL(for: item)),
-                    hasAPIKey: !self.viewModel.providerAPIKey(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    hasModel: !self.viewModel.selectedModel(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    isVerified: self.viewModel.connectionStatus(for: provider.id) == .success,
-                    verificationFailed: self.viewModel.connectionStatus(for: provider.id) == .failed
-                )
+                let appleIntelligenceAvailability = self.viewModel.appleIntelligenceAvailability
+                let setupIssue = AppleIntelligenceProvider.matches(provider.id)
+                    ? (appleIntelligenceAvailability.isAvailable ? nil : appleIntelligenceAvailability.shortStatus)
+                    : DictationDefaultProvider.setupIssue(
+                        requiresAPIKey: !self.viewModel.isLocalEndpoint(self.providerBaseURL(for: item)),
+                        hasAPIKey: !self.viewModel.providerAPIKey(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        hasModel: !self.viewModel.selectedModel(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        isVerified: self.viewModel.connectionStatus(for: provider.id) == .success,
+                        verificationFailed: self.viewModel.connectionStatus(for: provider.id) == .failed
+                    )
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     self.providerLogoView(for: item).frame(width: 30, height: 30)
                     Text(provider.name).font(self.theme.typography.bodySmallStrong)
@@ -646,6 +649,12 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerStatus(for item: ProviderItem) -> (text: String, color: Color, icon: String) {
+        if AppleIntelligenceProvider.matches(item.id) {
+            let availability = self.viewModel.appleIntelligenceAvailability
+            return availability.isAvailable
+                ? (availability.shortStatus, Color.fluidGreen, "checkmark.circle.fill")
+                : (availability.shortStatus, .orange, "exclamationmark.circle.fill")
+        }
         switch self.viewModel.connectionStatus(for: item.id) {
         case .success:
             return ("Connection verified", Color.fluidGreen, "checkmark.circle.fill")
@@ -1089,6 +1098,9 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerDetailsSection(for item: ProviderItem, managementLayout: Bool = false) -> AnyView {
+        if AppleIntelligenceProvider.matches(item.id) {
+            return AnyView(self.appleIntelligenceDetailsSection(managementLayout: managementLayout))
+        }
         let providerKey = self.viewModel.providerKey(for: item.id)
         let isCustom = !ModelRepository.shared.isBuiltIn(item.id)
         let baseURL = self.viewModel.openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1447,6 +1459,7 @@ extension AIEnhancementSettingsView {
         let providerKey = self.viewModel.providerKey(for: item.id)
         let models = self.viewModel.availableModelsByProvider[providerKey] ?? []
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
+        let isAppleIntelligence = AppleIntelligenceProvider.matches(item.id)
         let primaryPromptSelection = self.viewModel.dictationPromptSelection(for: .primary)
         let isDefaultProvider = isPrivateAIProvider
             ? primaryPromptSelection == .privateAI
@@ -1561,6 +1574,11 @@ extension AIEnhancementSettingsView {
                         .buttonStyle(SquareIconButtonStyle())
                         .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         .help("Edit provider")
+                    } else if isAppleIntelligence {
+                        Text(AppleIntelligenceProvider.modelDisplayName)
+                            .font(.fluidSystem(size: 12, weight: .medium))
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .frame(width: 180, height: AISettingsLayout.providerRowControlHeight, alignment: .leading)
                     } else {
                         SearchableModelPicker(
                             models: models,
@@ -1627,7 +1645,7 @@ extension AIEnhancementSettingsView {
                     isBusy: isFluidBusy,
                     isVerified: isFluidVerified
                 )
-            } else if !isPrivateAIProvider, isEditing {
+            } else if !isPrivateAIProvider, !isAppleIntelligence, isEditing {
                 Divider()
                     .background(self.theme.palette.separator.opacity(0.5))
                     .padding(.vertical, 10)
@@ -1635,7 +1653,7 @@ extension AIEnhancementSettingsView {
                 self.editProviderSection
             }
 
-            if !isPrivateAIProvider,
+            if !isPrivateAIProvider, !isAppleIntelligence,
                self.viewModel.showingReasoningConfig,
                self.viewModel.selectedProviderID == item.id
             {
@@ -1703,6 +1721,9 @@ extension AIEnhancementSettingsView {
 
         if id.contains(PrivateAIProviderFeature.shared.providerID) || name.contains("fluid") {
             return Color(red: 0.1, green: 0.1, blue: 0.12) // Dark/black
+        }
+        if AppleIntelligenceProvider.matches(item.id) {
+            return Color(red: 0.6, green: 0.4, blue: 0.7) // Purple
         }
         if id.contains("anthropic") || name.contains("anthropic") {
             return Color(red: 0.85, green: 0.75, blue: 0.62) // Warm tan
@@ -1774,6 +1795,9 @@ extension AIEnhancementSettingsView {
         }
         if id.contains("lmstudio") || name.contains("lm studio") || name.contains("lmstudio") {
             return "Provider_LMStudio"
+        }
+        if AppleIntelligenceProvider.matches(item.id) {
+            return "Provider_AppleIntelligence"
         }
         if id.contains("compatible") || name.contains("compatible") {
             return "Provider_Compatible"
@@ -2282,9 +2306,54 @@ extension AIEnhancementSettingsView {
     var appleIntelligenceModelRow: some View {
         HStack(spacing: 12) {
             self.formLabel("Model:")
-            Text("System Language Model").foregroundStyle(.secondary).font(.fluidSystem(.body))
+            Text(AppleIntelligenceProvider.modelDisplayName).foregroundStyle(.secondary).font(.fluidSystem(.body))
             Spacer()
         }
+    }
+
+    /// Apple Intelligence has no key, endpoint, model list, reasoning or verification to manage.
+    private func appleIntelligenceDetailsSection(managementLayout: Bool) -> some View {
+        let availability = self.viewModel.appleIntelligenceAvailability
+        return VStack(alignment: .leading, spacing: managementLayout ? 20 : 10) {
+            self.appleIntelligenceBadge
+            self.appleIntelligenceModelRow
+
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: availability.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.fluidSystem(size: 13))
+                    .foregroundStyle(availability.isAvailable ? Color.fluidGreen : .orange)
+                Text(availability.unavailableReason ?? "Ready. Dictation is cleaned up on this Mac without an API key.")
+                    .font(.fluidSystem(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if AppleIntelligenceProvider.isSupportedOS, let url = AppleIntelligenceProvider.systemSettingsURL {
+                    Button("Open System Settings") { NSWorkspace.shared.open(url) }
+                        .fluidGlassAction()
+                        .help("Open Apple Intelligence & Siri settings")
+                }
+            }
+
+            if managementLayout {
+                Divider()
+                    .background(self.theme.palette.separator.opacity(0.5))
+
+                Button(role: .destructive) {
+                    self.showingRemoveProviderConfirmation = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash")
+                        Text("Remove provider")
+                    }
+                    .font(self.theme.typography.bodyStrong)
+                }
+                .fluidGlassAction()
+                .foregroundStyle(.red)
+                .tint(.red)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+        .onAppear { self.viewModel.refreshAppleIntelligenceAvailability() }
     }
 
     var standardModelRow: some View {

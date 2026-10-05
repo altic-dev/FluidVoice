@@ -75,6 +75,7 @@ final class DictationE2ETests: XCTestCase {
 
     private let verifiedProviderFingerprintsKey = "VerifiedProviderFingerprints"
     private let verifiedPrivateAIModelFingerprintsKey = "VerifiedPrivateAIModelFingerprints"
+    private let retiredAppleIntelligenceStatePurgedKey = "RetiredAppleIntelligenceStatePurged"
 
     private var punctuationFormattingDefaultsKeys: [String] {
         [
@@ -1874,12 +1875,16 @@ extension DictationE2ETests {
         }
     }
 
-    func testAppleIntelligenceIsNotAvailableAsABuiltInProvider() {
-        XCTAssertFalse(ModelRepository.builtInProviderIDs.contains("apple-intelligence"))
-        XCTAssertFalse(ModelRepository.shared.builtInProvidersList().contains { $0.id.contains("apple-intelligence") })
+    func testAppleIntelligenceIsABuiltInProviderOfferedOnlyOnSupportedOS() {
+        XCTAssertTrue(ModelRepository.builtInProviderIDs.contains("apple-intelligence"))
+        XCTAssertEqual(
+            ModelRepository.shared.builtInProvidersList().contains { $0.id == "apple-intelligence" },
+            AppleIntelligenceProvider.isSupportedOS
+        )
+        XCTAssertFalse(ModelRepository.shared.builtInProvidersList().contains { $0.id == "apple-intelligence-disabled" })
     }
 
-    func testRetiredAppleIntelligenceStateIsPurgedWithoutSelectingAFallbackProvider() {
+    func testRetiredAppleIntelligenceStateIsPurgedOnceWithoutSelectingAFallbackProvider() {
         self.withRestoredDefaults(
             keys: [
                 self.selectedProviderIDKey,
@@ -1892,10 +1897,12 @@ extension DictationE2ETests {
                 self.rewriteModeSelectedProviderIDKey,
                 self.rewriteModeSelectedModelKey,
                 self.dictationPromptConfigurationsKey,
+                self.retiredAppleIntelligenceStatePurgedKey,
             ]
         ) {
             let settings = SettingsStore.shared
             let shortcut = HotkeyShortcut(keyCode: 1, modifierFlags: [.command])
+            UserDefaults.standard.removeObject(forKey: self.retiredAppleIntelligenceStatePurgedKey)
             settings.selectedProviderID = "apple-intelligence"
             settings.selectedModel = "System Model"
             settings.availableModelsByProvider = ["apple-intelligence": ["System Model"]]
@@ -1913,8 +1920,7 @@ extension DictationE2ETests {
                 ),
             ]
 
-            settings.purgeRetiredAppleIntelligenceState()
-            settings.purgeRetiredAppleIntelligenceState()
+            settings.migrateRetiredAppleIntelligenceStateIfNeeded()
 
             XCTAssertEqual(settings.selectedProviderID, "")
             XCTAssertNil(settings.selectedModel)
@@ -1929,6 +1935,23 @@ extension DictationE2ETests {
             XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.providerID, "")
             XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.modelName, "")
             XCTAssertFalse(DictationAIPostProcessingGate.isProviderConfigured())
+
+            // Later launches keep the current provider and only drop the dead placeholder.
+            settings.selectedProviderID = "apple-intelligence"
+            settings.rewriteModeSelectedProviderID = "apple-intelligence"
+            settings.commandModeSelectedProviderID = "apple-intelligence-disabled"
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(providerID: "apple-intelligence", modelName: "apple-system-model"),
+                for: .default
+            )
+
+            settings.migrateRetiredAppleIntelligenceStateIfNeeded()
+            settings.migrateRetiredAppleIntelligenceStateIfNeeded()
+
+            XCTAssertEqual(settings.selectedProviderID, "apple-intelligence")
+            XCTAssertEqual(settings.rewriteModeSelectedProviderID, "apple-intelligence")
+            XCTAssertEqual(settings.dictationPromptConfiguration(for: .default).providerID, "apple-intelligence")
+            XCTAssertEqual(settings.commandModeSelectedProviderID, "")
         }
     }
 

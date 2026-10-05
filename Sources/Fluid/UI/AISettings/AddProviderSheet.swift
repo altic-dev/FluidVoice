@@ -51,6 +51,11 @@ struct AddProviderSheet<Logo: View>: View {
                             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                                 ForEach(self.providers) { provider in
                                     Button {
+                                        if AppleIntelligenceProvider.matches(provider.id) {
+                                            self.viewModel.addAppleIntelligenceProvider()
+                                            self.dismiss()
+                                            return
+                                        }
                                         self.draft = ProviderSetupDraft(
                                             providerID: provider.id,
                                             name: provider.name,
@@ -62,7 +67,7 @@ struct AddProviderSheet<Logo: View>: View {
                                             self.logo(provider.id, provider.name).accessibilityHidden(true)
                                             VStack(alignment: .leading, spacing: 5) {
                                                 Text(provider.name).font(self.theme.typography.bodyStrong)
-                                                Text(["ollama", "lmstudio"].contains(provider.id) ? "Local connection" : "Connect with an API key")
+                                                Text(self.subtitle(for: provider.id))
                                                     .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                             }
                                             Spacer()
@@ -192,6 +197,14 @@ struct AddProviderSheet<Logo: View>: View {
                     .textSelection(.enabled)
             }
         }
+    }
+
+    private func subtitle(for providerID: String) -> String {
+        if AppleIntelligenceProvider.matches(providerID) {
+            let availability = self.viewModel.appleIntelligenceAvailability
+            return availability.isAvailable ? "On this Mac, no API key" : availability.shortStatus
+        }
+        return ["ollama", "lmstudio"].contains(providerID) ? "Local connection" : "Connect with an API key"
     }
 
     private func cancelModelFetch() {

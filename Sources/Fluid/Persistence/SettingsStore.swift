@@ -57,7 +57,7 @@ final class SettingsStore: ObservableObject {
         self.migrateSecondaryPromptShortcutIfNeeded()
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
-        self.purgeRetiredAppleIntelligenceState()
+        self.migrateRetiredAppleIntelligenceStateIfNeeded()
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
@@ -1631,8 +1631,19 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    func purgeRetiredAppleIntelligenceState() {
-        let retiredProviderIDs = Set(["apple-intelligence", "apple-intelligence-disabled"])
+    /// Clears state left by the pre-#604 Apple Intelligence provider exactly once, so selections
+    /// made with the current provider survive later launches. The dead disabled-picker ID is
+    /// always removed.
+    func migrateRetiredAppleIntelligenceStateIfNeeded() {
+        var retiredProviderIDs: Set<String> = [AppleIntelligenceProvider.retiredDisabledProviderID]
+        if !self.defaults.bool(forKey: Keys.retiredAppleIntelligenceStatePurged) {
+            retiredProviderIDs.insert(AppleIntelligenceProvider.providerID)
+        }
+        self.purgeProviderState(for: retiredProviderIDs)
+        self.defaults.set(true, forKey: Keys.retiredAppleIntelligenceStatePurged)
+    }
+
+    private func purgeProviderState(for retiredProviderIDs: Set<String>) {
         let rawSelectedProviderID = self.defaults.string(forKey: Keys.selectedProviderID)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -1811,6 +1822,9 @@ final class SettingsStore: ObservableObject {
     /// Check if the current AI provider is fully configured (API key/baseURL + selected model)
     var isAIConfigured: Bool {
         let providerID = self.selectedProviderID
+        if AppleIntelligenceProvider.matches(providerID) {
+            return AppleIntelligenceProvider.availability.isAvailable
+        }
 
         // Get base URL to check for local endpoints
         var baseURL = ""
@@ -3906,7 +3920,7 @@ final class SettingsStore: ObservableObject {
         self.promptModeSelectedPromptID = payload.promptModeSelectedPromptID
         self.isSecondaryDictationPromptOff = payload.secondaryDictationPromptOff ?? false
         self.normalizePromptSelectionsIfNeeded()
-        self.purgeRetiredAppleIntelligenceState()
+        self.purgeProviderState(for: [AppleIntelligenceProvider.retiredDisabledProviderID])
     }
 
     // MARK: - Private Methods
@@ -4296,6 +4310,9 @@ final class SettingsStore: ObservableObject {
            trimmed == PrivateAIProviderFeature.shared.providerID
         {
             return PrivateAIProviderPromptFormat.verifiedModelID(settings: self) != nil
+        }
+        if AppleIntelligenceProvider.matches(trimmed) {
+            return AppleIntelligenceProvider.availability.isAvailable
         }
 
         let key = self.canonicalProviderKey(for: trimmed)
@@ -5813,6 +5830,7 @@ private extension SettingsStore {
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
         static let verifiedProviderFingerprints = "VerifiedProviderFingerprints"
+        static let retiredAppleIntelligenceStatePurged = "RetiredAppleIntelligenceStatePurged"
         static let verifiedPrivateAIModelFingerprints = "VerifiedPrivateAIModelFingerprints"
         static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
         static let privateAIInterestCaptured = "PrivateAIProviderInterestCaptured"

@@ -13,6 +13,21 @@ struct DictationProviderRoute: Equatable {
             self.providerKey == "custom:\(PrivateAIProviderFeature.shared.providerID)"
     }
 
+    /// True only when the route itself names Apple Intelligence; nothing falls back to it.
+    var usesAppleIntelligence: Bool {
+        AppleIntelligenceProvider.matches(self.providerID)
+    }
+
+    static func appleIntelligenceRoute() -> Self {
+        Self(
+            providerID: AppleIntelligenceProvider.providerID,
+            providerKey: AppleIntelligenceProvider.providerID,
+            baseURL: "",
+            model: AppleIntelligenceProvider.modelID,
+            apiKey: ""
+        )
+    }
+
     static func resolve(
         settings: SettingsStore,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
@@ -57,6 +72,9 @@ struct DictationProviderRoute: Equatable {
     }
 
     private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?) -> Self {
+        if AppleIntelligenceProvider.matches(selectedProviderID) {
+            return self.appleIntelligenceRoute()
+        }
         let selectedModels = settings.selectedModelByProvider
         let providerKeys = settings.providerAPIKeys
 
@@ -137,6 +155,9 @@ struct DictationProviderRoute: Equatable {
 
     static func resolve(settings: SettingsStore, providerID: String, model: String) -> Self {
         let trimmedProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if AppleIntelligenceProvider.matches(trimmedProviderID) {
+            return self.appleIntelligenceRoute()
+        }
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let providerKeys = settings.providerAPIKeys
         if let saved = settings.savedProviders.first(where: { $0.id == trimmedProviderID }) {
@@ -270,6 +291,17 @@ final class DictationPostProcessingService {
         }
 
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
+        if resolved.usesAppleIntelligence {
+            let text = try await AppleIntelligenceService.transform(
+                AppleIntelligencePrompt.dictation(promptText: promptText, transcript: trimmed)
+            )
+            return Result(
+                text: ASRService.applyGAAVFormatting(text),
+                providerID: resolved.providerID,
+                model: resolved.model
+            )
+        }
+
         let request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
 
         guard !resolved.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

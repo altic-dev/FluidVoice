@@ -14,10 +14,13 @@ final class ModelRepository {
 
     private init() {}
 
-    /// All built-in provider IDs (not including custom/saved providers)
+    /// All built-in provider IDs (not including custom/saved providers).
+    /// Apple Intelligence stays registered on every OS so stored keys keep their meaning;
+    /// pickers only offer it where the OS supports it.
     static var builtInProviderIDs: [String] {
         var providers = [
             "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
+            AppleIntelligenceProvider.providerID,
         ]
         if PrivateFeatures.privateAIProvider {
             providers.insert(PrivateAIProviderFeature.shared.providerID, at: 0)
@@ -50,6 +53,8 @@ final class ModelRepository {
         case "ollama", "lmstudio":
             // Local providers - models vary per user, they must add their own
             return []
+        case AppleIntelligenceProvider.providerID:
+            return [AppleIntelligenceProvider.modelID]
         default:
             // Custom providers start with no default models; user must add them
             return []
@@ -114,6 +119,7 @@ final class ModelRepository {
         case "openrouter": return "OpenRouter"
         case "ollama": return "Ollama"
         case "lmstudio": return "LM Studio"
+        case AppleIntelligenceProvider.providerID: return AppleIntelligenceProvider.displayName
         default: return providerID.capitalized
         }
     }
@@ -179,11 +185,20 @@ final class ModelRepository {
             ("lmstudio", "LM Studio"),
         ]
 
+        if AppleIntelligenceProvider.isSupportedOS {
+            list.append((AppleIntelligenceProvider.providerID, AppleIntelligenceProvider.displayName))
+        }
+
         if PrivateFeatures.privateAIProvider {
             list.insert((PrivateAIProviderFeature.shared.providerID, PrivateAIProviderFeature.shared.providerName), at: 0)
         }
 
         return list
+    }
+
+    /// Command Mode needs OpenAI-style tool calling, which Apple Intelligence does not offer here.
+    func commandModeProvidersList() -> [(id: String, name: String)] {
+        self.builtInProvidersList().filter { !AppleIntelligenceProvider.matches($0.id) }
     }
 
     /// Converts a provider ID to a storage key for UserDefaults
@@ -241,6 +256,9 @@ final class ModelRepository {
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
+        }
+        if AppleIntelligenceProvider.matches(providerID) {
+            return [AppleIntelligenceProvider.modelID]
         }
 
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")

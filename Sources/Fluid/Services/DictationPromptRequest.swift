@@ -3,6 +3,14 @@ import Foundation
 /// Separates cleanup instructions from untrusted transcript data while keeping
 /// explicitly authored transcript templates and blank prompts compatible.
 struct DictationPromptRequest {
+    enum Layout: Equatable {
+        case systemInstructions
+        case transcriptTemplate
+        case blankPrompt
+    }
+
+    static let transcriptPlaceholder = "${transcript}"
+
     let systemPrompt: String
     let userContent: String
 
@@ -11,12 +19,23 @@ struct DictationPromptRequest {
         self.userContent = userContent
     }
 
+    static func layout(for promptText: String) -> Layout {
+        if promptText.contains(self.transcriptPlaceholder) {
+            return .transcriptTemplate
+        }
+        if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .blankPrompt
+        }
+        return .systemInstructions
+    }
+
     init(promptText: String, transcript: String) {
-        if promptText.contains("${transcript}") {
+        switch Self.layout(for: promptText) {
+        case .transcriptTemplate:
             self.init(systemPrompt: "", userContent: Self.renderTemplate(promptText: promptText, transcript: transcript))
-        } else if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        case .blankPrompt:
             self.init(systemPrompt: "", userContent: transcript)
-        } else {
+        case .systemInstructions:
             // JSON escaping prevents quotes, newlines, or transcript-supplied
             // delimiters from escaping the data envelope.
             let data: Data
@@ -43,8 +62,8 @@ struct DictationPromptRequest {
     }
 
     static func renderTemplate(promptText: String, transcript: String) -> String {
-        if promptText.contains("${transcript}") {
-            return promptText.replacingOccurrences(of: "${transcript}", with: transcript)
+        if promptText.contains(self.transcriptPlaceholder) {
+            return promptText.replacingOccurrences(of: self.transcriptPlaceholder, with: transcript)
         }
         if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return transcript }
         return promptText + "\n\n" + transcript
