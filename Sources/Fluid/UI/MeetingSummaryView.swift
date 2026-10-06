@@ -16,7 +16,11 @@ struct MeetingSummaryView: View {
     @State private var readinessIssue: String?
 
     private var refreshID: String {
-        "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)"
+        // A prompt edit re-checks the saved custom summary, so an older result never stays on screen.
+        let prompt = self.kind == .custom
+            ? MeetingSummaryInput.fingerprint(self.preferences.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+            : ""
+        return "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(prompt)"
     }
 
     private var providerID: String {
@@ -61,6 +65,11 @@ struct MeetingSummaryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, self.theme.metrics.spacing.md)
         .task(id: self.refreshID) {
+            if self.kind == .custom {
+                // Coalesce typing; a newer keystroke cancels this task before it reads the saved file.
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
             await self.controller.refresh(session: self.session, kind: self.kind, customPrompt: self.preferences.customPrompt)
         }
         .task { self.reloadProviders() }
