@@ -90,6 +90,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Non-streaming completion metadata; callers can reject partial text without changing other workflows.
+        var isIncomplete = false
     }
 
     struct ToolCall: @unchecked Sendable {
@@ -514,15 +516,23 @@ final nonisolated class LLMClient: @unchecked Sendable {
             throw LLMError.invalidResponse
         }
 
-        let parsed: Response
+        var parsed: Response
         if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            parsed.isIncomplete = (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
                   let choice = choices.first,
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            if let reason = choice["finish_reason"] as? String {
+                parsed.isIncomplete = reason != "stop"
+            }
         }
         self.benchmark(config, "response_decoded")
         return parsed

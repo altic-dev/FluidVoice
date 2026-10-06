@@ -2024,7 +2024,6 @@ private struct MeetingSetupCanvas: View {
     let onEditSetup: () -> Void
 
     @Environment(\.theme) private var theme
-    @State private var documentSection = MeetingDocumentSection.transcript
 
     private var systemsReady: Bool {
         !self.readiness.isCheckingSources &&
@@ -2088,13 +2087,7 @@ private struct MeetingSetupCanvas: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            MeetingDocumentTabs(selection: self.$documentSection, primaryTitle: "Meeting home", primaryIcon: "house", isEnabled: !self.isStarting)
-
-            if self.documentSection == .summary {
-                MeetingSummaryView()
-            } else {
-                self.recordingSetup
-            }
+            self.recordingSetup
         }
     }
 
