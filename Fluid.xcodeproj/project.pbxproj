@@ -52,6 +52,7 @@
 		F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD00000000000000000001 /* StripThinkingTagsTests.swift */; };
 		D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */; };
 		D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600000000000000000205 /* MeetingRecoveryTests.swift */; };
+		B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */; };
 		BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */; };
 		C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* MeetingResultSidecarTests.swift */; };
 		C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */; };
@@ -200,6 +201,7 @@
 		F1BD00000000000000000001 /* StripThinkingTagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripThinkingTagsTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowSelectorTests.swift; sourceTree = "<group>"; };
 		D1A600000000000000000205 /* MeetingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecoveryTests.swift; sourceTree = "<group>"; };
+		B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAPIControllerTests.swift; sourceTree = "<group>"; };
 		BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptionBackendTests.swift; sourceTree = "<group>"; };
 		C1A000000000000000000001 /* MeetingResultSidecarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingResultSidecarTests.swift; sourceTree = "<group>"; };
 		C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAnalysisManifestTests.swift; sourceTree = "<group>"; };
@@ -428,6 +430,7 @@
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
 				D1A600000000000000000205 /* MeetingRecoveryTests.swift */,
+				B149D69C5977426AB8600001 /* MeetingAPIControllerTests.swift */,
 				BE0A00000000000000000001 /* MeetingTranscriptionBackendTests.swift */,
 				C1A000000000000000000001 /* MeetingResultSidecarTests.swift */,
 				C2A000000000000000000001 /* MeetingAnalysisManifestTests.swift */,
@@ -799,6 +802,7 @@
 				F1BD00000000000000000002 /* StripThinkingTagsTests.swift in Sources */,
 				D1A600000000000000000204 /* MeetingWindowSelectorTests.swift in Sources */,
 				D1A600000000000000000206 /* MeetingRecoveryTests.swift in Sources */,
+				B149D69C5977426AB8600002 /* MeetingAPIControllerTests.swift in Sources */,
 				BE0A00000000000000000002 /* MeetingTranscriptionBackendTests.swift in Sources */,
 				C1A000000000000000000002 /* MeetingResultSidecarTests.swift in Sources */,
 				C2A000000000000000000002 /* MeetingAnalysisManifestTests.swift in Sources */,

@@ -8,11 +8,15 @@ final class LocalAPIRouter {
 
     private var routes: [RouteKey: LocalAPIRouteHandler] = [:]
 
-    init() {
+    init(meetingStore: any MeetingSessionStoring = MeetingSessionStore.shared) {
         self.register(method: "GET", path: "/v1/health", handler: HealthController())
 
         let history = HistoryAPIController()
         self.register(method: "GET", path: "/v1/history", handler: history)
+
+        let meetings = MeetingAPIController(store: meetingStore)
+        self.register(method: "GET", path: "/v1/meetings", handler: meetings)
+        self.register(method: "GET", path: "/v1/meetings/transcript", handler: meetings)
 
         let dictionary = DictionaryAPIController()
         self.register(method: "GET", path: "/v1/dictionary/replacements", handler: dictionary)
