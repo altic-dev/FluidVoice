@@ -7,7 +7,12 @@ if [ ! -d "$task_developer_dir/Platforms/MacOSX.platform" ]; then
     exit 1
 fi
 export DEVELOPER_DIR="$task_developer_dir"
-task_test_dir=$(mktemp -d /tmp/fluidvoice-file-rename.XXXXXX)
+task_test_dir=$(mktemp -d /tmp/fluidvoice-history-decode.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
-xcrun swiftc -parse-as-library Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift Sources/Fluid/Persistence/PersistedHistory.swift Tests/FileTranscriptRenameTests.swift -o "$task_test_dir/tests"
+xcrun swiftc -parse-as-library \
+    Sources/Fluid/Persistence/ChatHistoryStore.swift \
+    Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
+    Sources/Fluid/Persistence/PersistedHistory.swift \
+    Tests/HistoryDecodeRecoveryTests.swift \
+    -o "$task_test_dir/tests"
 "$task_test_dir/tests"

@@ -131,7 +131,7 @@ final class ChatHistoryStore: ObservableObject {
     static let shared = ChatHistoryStore()
     static let maxArchivedChats = 30
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let maxChats = 30
 
     private enum Keys {
@@ -142,7 +142,8 @@ final class ChatHistoryStore: ObservableObject {
     @Published private(set) var sessions: [ChatSession] = []
     @Published var currentChatID: String?
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.loadSessions()
 
         // Archived sessions remain saved, but cannot become the active conversation on launch.
@@ -307,13 +308,21 @@ final class ChatHistoryStore: ObservableObject {
     // MARK: - Private Methods
 
     private func loadSessions() {
+        // Skip a chat this build cannot read instead of emptying the list;
+        // the launch save in init would persist an empty list.
         guard let data = defaults.data(forKey: Keys.chatSessions),
-              let decoded = try? JSONDecoder().decode([ChatSession].self, from: data)
+              let decoded = PersistedHistory.decode(ChatSession.self, from: data)
         else {
             self.sessions = []
             return
         }
-        self.sessions = decoded
+        self.sessions = decoded.entries
+        if decoded.skipped > 0 {
+            DebugLogger.shared.info(
+                "Skipped \(decoded.skipped) unreadable chat sessions",
+                source: "ChatHistoryStore"
+            )
+        }
 
         // Load current chat ID
         self.currentChatID = self.defaults.string(forKey: Keys.currentChatID)

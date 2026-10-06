@@ -26,6 +26,7 @@ PYCODE
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Services/CommandModeService.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
+    Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandCancellationTests.swift \
     "$task_test_dir/CommandUI.swift" \
     -o "$task_test_dir/cancellation-tests"

@@ -2,6 +2,16 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+nonisolated struct HistoryPinRevealRequest: Equatable {
+    let entryID: UUID
+    private let nonce = UUID()
+
+    func target(selectedID: UUID?, visibleIDs: [UUID]) -> UUID? {
+        guard selectedID == self.entryID, visibleIDs.contains(self.entryID) else { return nil }
+        return self.entryID
+    }
+}
+
 /// A hidden existing row can be selected from sidebar search even when the list is empty.
 nonisolated enum HistorySelectionRevealPolicy {
     static func needsFilterReset(
@@ -23,6 +33,7 @@ struct TranscriptionHistoryView: View {
 
     @State private var searchQuery: String = ""
     @State private var pinnedOnly = false
+    @State private var pinRevealRequest: HistoryPinRevealRequest?
     @State private var showClearConfirmation: Bool = false
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
@@ -128,6 +139,7 @@ struct TranscriptionHistoryView: View {
             self.audioEntryID = nil
         }
         .onDisappear {
+            self.pinRevealRequest = nil
             self.availableAudioFiles = []
             self.audioEntryID = nil
             self.copyFeedbackTask?.cancel()
@@ -226,6 +238,16 @@ struct TranscriptionHistoryView: View {
             }
             .onAppear { self.reveal(self.selectedEntryID, with: proxy) }
             .onChange(of: self.historyStore.selectedEntryID) { _, id in self.reveal(id, with: proxy) }
+            .task(id: self.pinRevealRequest) {
+                guard let request = self.pinRevealRequest else { return }
+                // Let the reordered rows reach the list before following the selected one.
+                await Task.yield()
+                guard !Task.isCancelled, self.pinRevealRequest == request else { return }
+                if let id = request.target(selectedID: self.selectedEntryID, visibleIDs: self.filteredEntries.map(\.id)) {
+                    proxy.scrollTo(id)
+                }
+                if self.pinRevealRequest == request { self.pinRevealRequest = nil }
+            }
         }
     }
 
@@ -314,7 +336,7 @@ struct TranscriptionHistoryView: View {
                 .accessibilityAction(named: Text("Copy final text")) { self.copyFinalText(entry) }
                 .accessibilityAction(named: Text("Report issue")) { self.openFeedbackReport(for: entry) }
                 .accessibilityAction(named: Text(entry.isStarred ? "Unpin transcription" : "Pin transcription")) {
-                    self.historyStore.toggleStar(id: entry.id)
+                    self.togglePin(entry)
                 }
                 HStack(spacing: 8) {
                     Button {
@@ -348,7 +370,7 @@ struct TranscriptionHistoryView: View {
             }
             .overlay(alignment: .topTrailing) {
                 Button {
-                    self.historyStore.toggleStar(id: entry.id)
+                    self.togglePin(entry)
                 } label: {
                     Image(systemName: entry.isStarred ? "pin.fill" : "pin")
                         .font(self.theme.typography.body)
@@ -372,7 +394,7 @@ struct TranscriptionHistoryView: View {
     @ViewBuilder
     private func entryActions(_ entry: TranscriptionHistoryEntry) -> some View {
         Button {
-            self.historyStore.toggleStar(id: entry.id)
+            self.togglePin(entry)
         } label: {
             Label(entry.isStarred ? "Unpin" : "Pin", systemImage: entry.isStarred ? "pin.slash" : "pin")
         }
@@ -434,6 +456,13 @@ struct TranscriptionHistoryView: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
+    }
+
+    private func togglePin(_ entry: TranscriptionHistoryEntry) {
+        self.pinRevealRequest = nil
+        self.historyStore.toggleStar(id: entry.id)
+        guard self.selectedEntryID == entry.id, self.filteredEntries.contains(where: { $0.id == entry.id }) else { return }
+        self.pinRevealRequest = HistoryPinRevealRequest(entryID: entry.id)
     }
 
     // MARK: - Empty State

@@ -15,6 +15,15 @@ enum PrivateAIModelRegistry {
 @main
 struct HistoryPresentationTests {
     static func main() async throws {
+        let pinID = UUID()
+        let otherID = UUID()
+        let pinRequest = HistoryPinRevealRequest(entryID: pinID)
+        precondition(pinRequest.target(selectedID: pinID, visibleIDs: [otherID, pinID]) == pinID)
+        precondition(pinRequest.target(selectedID: otherID, visibleIDs: [pinID, otherID]) == nil, "Pin must not navigate to an unrelated selection")
+        precondition(pinRequest.target(selectedID: pinID, visibleIDs: [otherID]) == nil, "Unpinned, filtered, or deleted rows must not be revealed")
+        precondition(pinRequest.target(selectedID: nil, visibleIDs: [pinID]) == nil)
+        precondition(pinRequest != HistoryPinRevealRequest(entryID: pinID), "Rapid toggles need distinct requests to cancel stale scroll work")
+        print("PASS: selected pin reveal, unrelated/hidden/deleted/nil non-effects and rapid request identity")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

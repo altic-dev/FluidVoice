@@ -94,6 +94,9 @@ jobs:
     - name: Run release highlights regressions
       run: sh Tests/run_release_highlights_tests.sh
 
+    - name: Run history decode recovery regressions
+      run: sh Tests/run_history_decode_recovery_tests.sh
+
     - name: Run settings backup concurrency regressions
       run: python3 Tests/run_settings_backup_concurrency_tests.py
 
