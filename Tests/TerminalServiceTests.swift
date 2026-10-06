@@ -12,17 +12,28 @@ private func expect(_ condition: Bool, _ message: String) {
     print("ok: \(message)")
 }
 
-private func isAlive(_ pid: pid_t) -> Bool {
-    kill(pid, 0) == 0
+/// Whether the process has stopped running. A killed process stays visible to
+/// kill(pid, 0) as a zombie until launchd reaps it, so a zombie counts as stopped.
+private func isStopped(_ pid: pid_t) -> Bool {
+    guard kill(pid, 0) == 0 else { return true }
+    let ps = Process()
+    ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+    ps.arguments = ["-o", "stat=", "-p", "\(pid)"]
+    let pipe = Pipe()
+    ps.standardOutput = pipe
+    guard (try? ps.run()) != nil else { return false }
+    ps.waitUntilExit()
+    let state = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return state.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Z")
 }
 
-/// Killed processes are reparented to launchd and reaped shortly after, so give them a moment.
-private func waitUntilGone(_ pid: pid_t) async -> Bool {
-    for _ in 0..<40 {
-        if !isAlive(pid) { return true }
+private func waitUntilStopped(_ pid: pid_t) async -> Bool {
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline {
+        if isStopped(pid) { return true }
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
-    return false
+    return isStopped(pid)
 }
 
 private func readPID(_ url: URL) -> pid_t? {
@@ -62,7 +73,7 @@ enum TerminalServiceTests {
             expect(result.output == "started", "keeps output written before the timeout")
             expect(!result.success, "a timed-out command is not a success even though the shell exited 0")
             expect(result.error?.contains("Timed out after 1s") == true, "reports the timeout")
-            let gone = await waitUntilGone(pid)
+            let gone = await waitUntilStopped(pid)
             expect(gone, "descendant holding the pipes is killed")
         }
 
@@ -79,7 +90,7 @@ enum TerminalServiceTests {
             guard let pid = readPID(pidFile) else { return expect(false, "stderr holder pid recorded") }
             expect(elapsed < 5, "returns shortly after the timeout when only stderr is held open (\(elapsed)s)")
             expect(result.error == "diagnostic\nTimed out after 1s.", "keeps stderr and appends the timeout note")
-            let gone = await waitUntilGone(pid)
+            let gone = await waitUntilStopped(pid)
             expect(gone, "process holding only stderr is killed")
         }
 
@@ -95,7 +106,7 @@ enum TerminalServiceTests {
             guard let pid = readPID(pidFile) else { return expect(false, "child pid recorded") }
             expect(elapsed < 5, "returns shortly after the timeout while the shell is still running (\(elapsed)s)")
             expect(!result.success, "a command stopped by the timeout is not a success")
-            let gone = await waitUntilGone(pid)
+            let gone = await waitUntilStopped(pid)
             expect(gone, "child of a timed-out shell is killed")
         }
 
@@ -110,7 +121,7 @@ enum TerminalServiceTests {
             let elapsed = Date().timeIntervalSince(started)
             guard let pid = readPID(pidFile) else { return expect(false, "stubborn pid recorded") }
             expect(elapsed >= 2.5 && elapsed < 7, "escalates to SIGKILL after the grace period (\(elapsed)s)")
-            let gone = await waitUntilGone(pid)
+            let gone = await waitUntilStopped(pid)
             expect(gone, "descendant ignoring SIGTERM is killed")
         }
 
@@ -128,7 +139,7 @@ enum TerminalServiceTests {
             expect(elapsed < 2.5, "returns without waiting for the timeout when no descendant holds the pipes (\(elapsed)s)")
             expect(result.success && result.error == nil, "detached command succeeds without a timeout note")
             try? await Task.sleep(nanoseconds: UInt64((4 - elapsed) * 1_000_000_000))
-            expect(isAlive(pid), "background process that released the pipes survives past the timeout")
+            expect(!isStopped(pid), "background process that released the pipes survives past the timeout")
         }
     }
 }
