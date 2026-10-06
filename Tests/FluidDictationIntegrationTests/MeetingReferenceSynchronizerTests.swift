@@ -185,7 +185,7 @@ final class MeetingReferenceSynchronizerTests: XCTestCase {
     }
 
     func testStereoContinuityUsesDownmixedCountAndMalformedArrayIsGap() {
-        let stereo = (0..<2).map { index in
+        let stereo = (0..<2).map { (index: Int) in
             MeetingMicrophonePCMFrame(
                 sequenceNumber: index,
                 sampleTime: Int64(index * 160),
@@ -303,12 +303,12 @@ final class MeetingReferenceSynchronizerTests: XCTestCase {
             referenceScope: .authorizedFullMix,
             referenceCompleteness: .measuredComplete
         )
-        let microphone = (0..<frameCount).map {
+        let microphone = (0..<frameCount).map { (index: Int) in
             self.mic(
-                $0,
-                start: Int64($0 * 160),
-                host: Double($0) * 0.01,
-                value: Float(($0 % 13) + 1)
+                index,
+                start: Int64(index * 160),
+                host: Double(index) * 0.01,
+                value: Float((index % 13) + 1)
             )
         }
         let reference = (0..<frameCount).map { index in
