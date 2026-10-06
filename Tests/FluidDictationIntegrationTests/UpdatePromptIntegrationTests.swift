@@ -38,6 +38,11 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         )
     }
 
+    func testForceQuitWaitsLongerThanTheOldCopysShutdownBudget() {
+        // AppDelegate.applicationWillTerminate: 8s private AI + 12s ASR and meeting + 2s Zeppelin.
+        XCTAssertGreaterThan(SupersededInstanceRetirement.forceQuitGracePeriod, .seconds(8 + 12 + 2))
+    }
+
     func testOfferWithQueuedFailureTransitionsToOnlyInstallStatus() async throws {
         let presenter = UpdatePromptPresenter.shared
         let updater = SimpleUpdater()

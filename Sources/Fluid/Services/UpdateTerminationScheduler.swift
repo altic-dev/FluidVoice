@@ -23,7 +23,11 @@ enum SupersededInstanceRetirement {
         let launchDate: Date?
     }
 
-    nonisolated static let quitGracePeriod: Duration = .seconds(5)
+    /// The old copy normally quits itself about two seconds after launching this one.
+    nonisolated static let quitRequestDelay: Duration = .seconds(5)
+    /// A copy that accepted the quit may still be saving: AppDelegate allows 8s for private AI,
+    /// 12s for ASR and meeting shutdown, and 2s for Zeppelin. Never cut that short.
+    nonisolated static let forceQuitGracePeriod: Duration = .seconds(30)
 
     /// Only copies already running when this one launched: never this process, a newer copy,
     /// or one whose age is unknown.
@@ -54,12 +58,12 @@ enum SupersededInstanceRetirement {
                 ))
                 return applications.filter { superseded.contains($0.processIdentifier) }
             }
-            try? await Task.sleep(for: Self.quitGracePeriod)
+            try? await Task.sleep(for: Self.quitRequestDelay)
             let lingering = supersededApplications()
             guard !lingering.isEmpty else { return }
             await DebugLogger.shared.info("Asking \(lingering.count) superseded app instance(s) to quit", source: "AppDelegate")
             lingering.forEach { $0.terminate() }
-            try? await Task.sleep(for: Self.quitGracePeriod)
+            try? await Task.sleep(for: Self.forceQuitGracePeriod)
             let stuck = supersededApplications()
             guard !stuck.isEmpty else { return }
             await DebugLogger.shared.warning("Force quitting \(stuck.count) superseded app instance(s)", source: "AppDelegate")
