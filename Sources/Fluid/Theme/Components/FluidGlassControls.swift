@@ -192,26 +192,35 @@ private struct FluidQuietActionStyle: ButtonStyle {
     }
 }
 
-/// Menus ignore the native glass ButtonStyle on macOS. Style their outer surface instead.
+/// Glass stays outside the menu label; macOS flattens anything drawn inside it.
 private struct FluidGlassMenuActionModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.theme) private var theme
 
     @ViewBuilder func body(content: Content) -> some View {
         let menu = content
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(.plain)
-            .padding(.horizontal, 14)
-            .frame(height: 32)
+            .buttonStyle(FluidGlassMenuActionStyle())
             .fixedSize(horizontal: true, vertical: false)
+        // Stationary glass: native menu tracking swallows the release that interactive glass waits for.
         if #available(macOS 26, *), !self.reduceTransparency {
-            menu.glassEffect(.regular.interactive(), in: .capsule)
+            menu.glassEffect(.regular, in: .capsule)
         } else {
             menu
                 .background(self.theme.palette.cardBackground, in: Capsule())
                 .overlay { Capsule().strokeBorder(self.theme.palette.cardBorder, lineWidth: 1).allowsHitTesting(false) }
         }
+    }
+}
+
+/// Padding lives in the label so the whole pill opens the menu.
+private struct FluidGlassMenuActionStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .contentShape(Capsule())
     }
 }
 
