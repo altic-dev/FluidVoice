@@ -4455,7 +4455,7 @@ struct ContentView: View {
         self.rewriteModeService.setPromptAppBundleID(appInfo.bundleId)
         let hasOriginalText = !self.rewriteModeService.originalText.isEmpty
         DebugLogger.shared.info(
-            "Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction: '\(instruction)', originalText length: \(self.rewriteModeService.originalText.count)",
+            "Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction length: \(instruction.count), originalText length: \(self.rewriteModeService.originalText.count)",
             source: "ContentView"
         )
 
