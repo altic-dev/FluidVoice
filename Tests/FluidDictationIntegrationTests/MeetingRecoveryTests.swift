@@ -2228,17 +2228,19 @@ final class MeetingRecoveryTests: XCTestCase {
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
         var continuation: CheckedContinuation<Void, Never>?
+        let preflightReached = self.expectation(description: "preflight suspended")
         capture.onPreflight = {
-            await withCheckedContinuation { continuation = $0 }
+            await withCheckedContinuation {
+                continuation = $0
+                preflightReached.fulfill()
+            }
         }
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
             store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
         )
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
 
         do {
             _ = try await coordinator.retryProcessing(sessionID: UUID())
@@ -2282,7 +2284,13 @@ final class MeetingRecoveryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
         var continuation: CheckedContinuation<Void, Never>?
-        capture.onPreflight = { await withCheckedContinuation { continuation = $0 } }
+        let preflightReached = self.expectation(description: "preflight suspended")
+        capture.onPreflight = {
+            await withCheckedContinuation {
+                continuation = $0
+                preflightReached.fulfill()
+            }
+        }
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore(rootDirectory: dir),
             capture: capture,
@@ -2290,9 +2298,7 @@ final class MeetingRecoveryTests: XCTestCase {
             audioArbiter: StubArbiter()
         )
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
         await coordinator.shutdownForTermination()
         continuation?.resume()
         do {
@@ -4114,8 +4120,12 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
         let arbiter = StubArbiter()
         var continuation: CheckedContinuation<Void, Never>?
+        let preflightReached = self.expectation(description: "preflight suspended")
         capture.onPreflight = {
-            await withCheckedContinuation { continuation = $0 }
+            await withCheckedContinuation {
+                continuation = $0
+                preflightReached.fulfill()
+            }
         }
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore(rootDirectory: dir),
@@ -4125,9 +4135,7 @@ final class MeetingRecoveryTests: XCTestCase {
         )
 
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
         XCTAssertEqual(arbiter.acquireCount, 0, "permission prompt must not hold the meeting audio lease")
 
         continuation?.resume()
