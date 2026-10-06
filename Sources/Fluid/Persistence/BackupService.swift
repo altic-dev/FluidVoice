@@ -49,6 +49,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let showThinkingTokens: Bool
     let hideFromDockAndAppSwitcher: Bool
     let showMainWindowAtLoginLaunch: Bool?
+    // Missing in older backups; preserve the current manual-launch preference on restore.
+    let showMainWindowAtLaunch: Bool?
     let accentColorOption: SettingsStore.AccentColorOption
     let transcriptionStartSound: SettingsStore.TranscriptionStartSound
     let transcriptionSoundVolume: Float

@@ -14,6 +14,7 @@ enum SettingsSearchTarget: Hashable {
     case general
     case launchAtStartup
     case showWindowAtLogin
+    case showWindowAtLaunch
     case dockVisibility
     case accentColor
     case transcriptionSounds
@@ -76,6 +77,7 @@ enum SettingsSearchTarget: Hashable {
         case .general,
              .launchAtStartup,
              .showWindowAtLogin,
+             .showWindowAtLaunch,
              .dockVisibility,
              .accentColor,
              .transcriptionSounds,
@@ -238,6 +240,11 @@ enum SettingsSearchIndex {
             target: .showWindowAtLogin,
             title: "Show window when launched at login",
             terms: ["starts silently in the menu bar", "login window visibility"]
+        ),
+        .init(
+            target: .showWindowAtLaunch,
+            title: "Show window when opening FluidVoice",
+            terms: ["manual launch window visibility", "invisible launch", "start silently in menu bar"]
         ),
         .init(
             target: .dockVisibility,

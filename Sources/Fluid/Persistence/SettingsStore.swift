@@ -1482,10 +1482,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Show the main window when macOS launches FluidVoice at login (default: ON, matching
-    /// current behavior). When off, login launches boot silently in the menu bar. Manual
-    /// launches always show the window. Default-true semantics so existing installs keep
-    /// their current behavior.
+    /// Manual launches retain their existing visible behavior until the user opts out.
+    var showMainWindowAtLaunch: Bool {
+        get {
+            self.defaults.object(forKey: Keys.showMainWindowAtLaunch) as? Bool ?? true
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.showMainWindowAtLaunch)
+        }
+    }
+
+    /// Login launches have a separate preference, defaulting to visible.
     var showMainWindowAtLoginLaunch: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.showMainWindowAtLoginLaunch)
@@ -1496,6 +1504,11 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.showMainWindowAtLoginLaunch)
         }
+    }
+
+    func shouldShowMainWindowOnLaunch(isLoginItem: Bool) -> Bool {
+        guard self.onboardingCompleted else { return true }
+        return isLoginItem ? self.showMainWindowAtLoginLaunch : self.showMainWindowAtLaunch
     }
 
     /// Label speakers ("Speaker 1", "Speaker 2") in file transcriptions (default: OFF).
@@ -3604,6 +3617,7 @@ final class SettingsStore: ObservableObject {
             showThinkingTokens: self.showThinkingTokens,
             hideFromDockAndAppSwitcher: self.hideFromDockAndAppSwitcher,
             showMainWindowAtLoginLaunch: self.showMainWindowAtLoginLaunch,
+            showMainWindowAtLaunch: self.showMainWindowAtLaunch,
             accentColorOption: self.accentColorOption,
             transcriptionStartSound: self.transcriptionStartSound,
             transcriptionSoundVolume: self.transcriptionSoundVolume,
@@ -3761,6 +3775,9 @@ final class SettingsStore: ObservableObject {
         self.showThinkingTokens = payload.showThinkingTokens
         self.hideFromDockAndAppSwitcher = payload.hideFromDockAndAppSwitcher
         self.showMainWindowAtLoginLaunch = payload.showMainWindowAtLoginLaunch ?? true
+        if let showMainWindowAtLaunch = payload.showMainWindowAtLaunch {
+            self.showMainWindowAtLaunch = showMainWindowAtLaunch
+        }
         self.accentColorOption = payload.accentColorOption
         self.transcriptionStartSound = payload.transcriptionStartSound
         self.transcriptionSoundVolume = payload.transcriptionSoundVolume
@@ -5795,6 +5812,7 @@ private extension SettingsStore {
     enum Keys {
         static let enableAIProcessing = "EnableAIProcessing"
         static let showMainWindowAtLoginLaunch = "ShowMainWindowAtLoginLaunch"
+        static let showMainWindowAtLaunch = "ShowMainWindowAtLaunch"
         static let fileTranscriptionSpeakerLabelsEnabled = "FileTranscriptionSpeakerLabelsEnabled"
         static let fileTranscriptionExpectedSpeakerCount = "FileTranscriptionExpectedSpeakerCount"
         static let dictationPromptOff = "DictationPromptOff"

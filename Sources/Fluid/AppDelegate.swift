@@ -45,7 +45,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var analyticsActivationSuppressionDeadline: Date?
 
     var shouldPresentStartupMicrophoneNotice: Bool {
-        !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
+        SettingsStore.shared.shouldShowMainWindowOnLaunch(isLoginItem: self.wasLaunchedAsLoginItem)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -121,7 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Schedule periodic update checks every hour while app is running
         self.schedulePeriodicUpdateChecks()
 
-        // Login Items can launch hidden; reveal the real SwiftUI window so ContentView startup runs.
+        // Realize the SwiftUI window even on silent launches so ContentView startup runs.
         self.openMainWindowOnLaunch()
         self.scheduleMeetingAutoDetectorStart()
 
@@ -320,11 +320,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func openMainWindowOnLaunch() {
         self.applyDockVisibilityPolicy()
 
-        // Users can opt out of showing the window for login-item launches (#369).
         // The window must still be CREATED either way - ContentView's appearance
         // bootstraps the menu bar and services - so the silent path realizes it
         // invisibly instead of skipping it.
-        let revealWindow = !self.wasLaunchedAsLoginItem || SettingsStore.shared.showMainWindowAtLoginLaunch
+        let revealWindow = SettingsStore.shared.shouldShowMainWindowOnLaunch(isLoginItem: self.wasLaunchedAsLoginItem)
 
         for delay in [0.1, 0.6, 1.2, 2.5, 4.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -361,7 +360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     /// Realize the main window invisibly so ContentView's startup runs, then order it out.
-    /// Used for login-item launches when "Show window when launched at login" is off.
+    /// Used when the preference for this launch type is off.
     @discardableResult
     private func bootMainWindowHiddenIfPresent() -> Bool {
         guard let mainWindow = NSApp.windows.first(where: self.isMainWindow) else { return false }
@@ -378,7 +377,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             mainWindow.orderOut(nil)
             mainWindow.alphaValue = originalAlpha
             DebugLogger.shared.info(
-                "Main window booted hidden (show-at-login-launch disabled)",
+                "Main window booted hidden (launch window disabled)",
                 source: "AppDelegate"
             )
         }
