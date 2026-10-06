@@ -1,175 +1,9 @@
-import Darwin
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
 
 @MainActor
 final class MeetingSummaryProviderTests: XCTestCase {
-    func testCLIArgumentsUseSingleTurnAndKeepModelAsOneArgument() throws {
-        let model = "custom model; $(touch never)"
-        for cli in MeetingSummaryCLI.allCases {
-            let arguments = cli.arguments(model: model, output: URL(fileURLWithPath: "/tmp/summary"))
-            XCTAssertTrue(arguments.contains(model))
-            XCTAssertFalse(arguments.contains("--dangerously-skip-permissions"))
-            XCTAssertFalse(arguments.contains("--dangerously-bypass-approvals-and-sandbox"))
-            if cli == .claude {
-                XCTAssertEqual(arguments.first, "-p")
-                XCTAssertTrue(arguments.contains("--no-session-persistence"))
-                let toolsIndex = try XCTUnwrap(arguments.firstIndex(of: "--tools"))
-                XCTAssertEqual(arguments[toolsIndex + 1], "")
-            } else {
-                XCTAssertEqual(arguments.first, "exec")
-                XCTAssertEqual(arguments.last, "-")
-                XCTAssertTrue(arguments.contains("--ephemeral"))
-                XCTAssertTrue(arguments.contains("read-only"))
-            }
-        }
-    }
-
-    func testCLIParsersRejectErrorAndEmptyResults() throws {
-        XCTAssertEqual(try MeetingSummaryCLI.claude.summary(from: Data(#"{"subtype":"success","is_error":false,"result":"Summary"}"#.utf8)), "Summary")
-        XCTAssertThrowsError(try MeetingSummaryCLI.claude.summary(from: Data(#"{"subtype":"error_max_turns","is_error":true,"result":"Partial"}"#.utf8)))
-        XCTAssertThrowsError(try MeetingSummaryCLI.codex.summary(from: Data(" \n".utf8)))
-    }
-
-    func testClaudeCLIReceivesTranscriptOnStdinWithoutShellExpansion() async throws {
-        let (directory, route) = try self.cliFixture(.claude, script: #"""
-        #!/bin/sh
-        /bin/cat > received-input
-        /usr/bin/grep -q 'Maya: $(touch injected)' received-input || exit 8
-        test ! -e injected || exit 9
-        printf '%s' '{"subtype":"success","is_error":false,"result":"Release agreed"}'
-        """#)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let result = try await MeetingSummaryCLIService.generate(transcript: "Maya: $(touch injected)", kind: .executive, route: route)
-        XCTAssertEqual(result, "Release agreed")
-    }
-
-    func testCodexCLIReadsOnlyFinalMessageFile() async throws {
-        let (directory, route) = try self.cliFixture(.codex, script: #"""
-        #!/bin/sh
-        while [ "$#" -gt 0 ]; do
-          if [ "$1" = '--output-last-message' ]; then shift; output="$1"; fi
-          shift
-        done
-        /bin/cat > /dev/null
-        printf 'diagnostics, not the summary'
-        printf 'Final summary' > "$output"
-        """#)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let result = try await MeetingSummaryCLIService.generate(transcript: "Discuss release", kind: .executive, route: route)
-        XCTAssertEqual(result, "Final summary")
-    }
-
-    func testCLINonzeroExitDoesNotReturnPartialOutputOrDiagnostics() async throws {
-        let (directory, route) = try self.cliFixture(.claude, script: "#!/bin/sh\necho sensitive-diagnostic >&2\necho partial-summary\nexit 17\n")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        do {
-            _ = try await MeetingSummaryCLIService.generate(transcript: "Meeting", kind: .executive, route: route)
-            XCTFail("Failed runs must not produce a summary")
-        } catch {
-            XCTAssertTrue(error.localizedDescription.contains("17"))
-            XCTAssertFalse(error.localizedDescription.contains("sensitive-diagnostic"))
-        }
-    }
-
-    func testCLITimeoutAndCancellationStopTheProcess() async throws {
-        let (directory, route) = try self.cliFixture(.claude, script: "#!/bin/sh\ntrap '' TERM\nexec /bin/sleep 30\n")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let start = Date()
-        do {
-            _ = try await MeetingSummaryCLIService.generate(transcript: "Meeting", kind: .executive, route: route, timeout: 0.1)
-            XCTFail("Expected timeout")
-        } catch { XCTAssertTrue(error.localizedDescription.contains("timed out")) }
-        let task = Task { try await MeetingSummaryCLIService.generate(transcript: "Meeting", kind: .executive, route: route) }
-        try await Task.sleep(for: .milliseconds(200))
-        task.cancel()
-        do {
-            _ = try await task.value
-            XCTFail("Expected cancellation")
-        } catch { XCTAssertTrue(error is CancellationError) }
-        XCTAssertLessThan(Date().timeIntervalSince(start), 8)
-    }
-
-    func testCLICancellationAndTimeoutStopWrapperAndChild() async throws {
-        let (directory, route) = try self.cliFixture(.claude, script: #"""
-        #!/bin/sh
-        trap '' TERM
-        /bin/sh -c 'trap - TERM; exec /bin/sleep 30' &
-        child=$!
-        printf '%s %s' "$$" "$child" > "$(/usr/bin/dirname "$0")/pids"
-        wait "$child"
-        """#)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let pidFile = directory.appendingPathComponent("pids")
-        for cancel in [true, false] {
-            try? FileManager.default.removeItem(at: pidFile)
-            let task = Task {
-                try await MeetingSummaryCLIService.generate(transcript: "Meeting", kind: .executive, route: route, timeout: cancel ? 240 : 1)
-            }
-            defer { task.cancel() }
-            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-            var pids: [Int32] = []
-            while pids.count != 2, ContinuousClock.now < deadline {
-                if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
-                    pids = text.split(separator: " ").compactMap { Int32($0) }
-                }
-                if pids.count != 2 { try await Task.sleep(for: .milliseconds(25)) }
-            }
-            XCTAssertEqual(pids.count, 2, "Wait for a real wrapper and child before cancelling")
-            guard pids.count == 2 else { task.cancel(); _ = try? await task.value; return }
-            defer {
-                // Cleanup still runs if a regression leaves either fixture process alive.
-                for pid in pids where kill(pid, 0) == 0 {
-                    kill(pid, SIGKILL)
-                }
-            }
-            XCTAssertNotEqual(pids[0], pids[1])
-            if cancel { task.cancel() }
-            do {
-                _ = try await task.value
-                XCTFail("Expected cancellation or timeout")
-            } catch {
-                if cancel {
-                    XCTAssertTrue(error is CancellationError)
-                } else {
-                    XCTAssertTrue(error.localizedDescription.contains("timed out"))
-                }
-            }
-            for pid in pids {
-                XCTAssertEqual(kill(pid, 0), -1, "Both the wrapper and its child must exit before generation returns")
-                XCTAssertEqual(errno, ESRCH)
-            }
-        }
-    }
-
-    private func cliFixture(_ cli: MeetingSummaryCLI, script: String) throws -> (URL, MeetingSummaryRoute) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingSummaryCLITest-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let executable = directory.appendingPathComponent(cli.command)
-        try Data(script.utf8).write(to: executable)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        return (directory, MeetingSummaryRoute(
-            providerID: cli.rawValue,
-            providerName: cli.title,
-            modelID: MeetingSummaryCLI.defaultModel,
-            baseURL: executable.path,
-            apiKey: "",
-            reasoning: nil,
-            supportsTemperature: false
-        ))
-    }
-
-    func testLegacyAISettingsSelectionBecomesIndependent() {
-        var selection = MeetingSummarySelection(providerID: MeetingSummarySelection.useAISettings)
-        selection.detachAISettings(providerID: "openai", modelID: "summary-model")
-        XCTAssertEqual(selection.providerID, "openai")
-        XCTAssertEqual(selection.modelsByProvider["openai"], "summary-model")
-        selection.detachAISettings(providerID: "anthropic", modelID: "different-model")
-        XCTAssertEqual(selection.providerID, "openai")
-        XCTAssertEqual(selection.modelsByProvider["openai"], "summary-model")
-    }
-
     func testMeetingSelectionPersistsWithoutChangingGlobalSelections() throws {
         let suite = "MeetingSummaryTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -177,15 +11,24 @@ final class MeetingSummaryProviderTests: XCTestCase {
         defaults.set("openai", forKey: "SelectedProviderID")
         defaults.set("dictation-model", forKey: "SelectedModel")
         let preferences = MeetingSummaryPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.selection.providerID, MeetingSummarySelection.onDevice)
+        XCTAssertEqual(preferences.selection.providerID, "", "A new install has no summary provider until one is chosen")
         preferences.selection.providerID = "openrouter"
         preferences.selection.modelsByProvider["openrouter"] = "summary-model"
         let restored = MeetingSummaryPreferences(defaults: defaults)
         XCTAssertEqual(restored.selection, preferences.selection)
         XCTAssertEqual(defaults.string(forKey: "SelectedProviderID"), "openai")
         XCTAssertEqual(defaults.string(forKey: "SelectedModel"), "dictation-model")
-        restored.selection.providerID = MeetingSummarySelection.useAISettings
-        XCTAssertEqual(restored.selection.modelsByProvider["openrouter"], "summary-model")
+    }
+
+    func testPreReleaseSelectionsStartFresh() throws {
+        let suite = "MeetingSummaryTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let stale = MeetingSummarySelection(providerID: "meeting:claude-cli", modelsByProvider: ["openai": "summary-model"])
+        try defaults.set(JSONEncoder().encode(stale), forKey: "MeetingSummarySelection")
+        let preferences = MeetingSummaryPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.selection.providerID, "")
+        XCTAssertEqual(preferences.selection.modelsByProvider["openai"], "summary-model")
     }
 
     func testLegacySummaryLoadsWithoutProviderMetadata() throws {
@@ -228,20 +71,6 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertNil(config.temperature)
         let request = try LLMClient.shared.buildRequest(config)
         XCTAssertEqual(request.url?.absoluteString, "https://gateway.example/v1/chat/completions")
-    }
-
-    func testAnthropicUsesMessagesFormatAndStripsThinkingBlocks() throws {
-        let service = MeetingSummaryRemoteService()
-        let request = try service.anthropicRequest(transcript: "Transcript", kind: .decisions, route: self.route(baseURL: "https://api.anthropic.com/v1/"))
-        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/v1/messages")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "fixture-key-never-persist")
-        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
-        XCTAssertNotNil(body["system"])
-        XCTAssertEqual(body["max_tokens"] as? Int, 8192)
-        let data = Data(#"{"content":[{"type":"thinking","thinking":"private"},{"type":"text","text":"Decision"}],"stop_reason":"end_turn"}"#.utf8)
-        XCTAssertEqual(try MeetingSummaryRemoteService.anthropicText(data), "Decision")
-        XCTAssertThrowsError(try MeetingSummaryRemoteService.anthropicText(Data(#"{"content":[],"stop_reason":"max_tokens"}"#.utf8)))
     }
 
     func testRemoteGenerationWorksWithoutLocalModelAndRejectsEmptyOutput() async throws {
@@ -301,6 +130,39 @@ final class MeetingSummaryProviderTests: XCTestCase {
         } catch { XCTAssertTrue(error is CancellationError) }
     }
 
+    func testProviderSpecificNormalStopsAreNotTreatedAsIncomplete() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let service = MeetingSummaryRemoteService(session: session)
+        for endpoint in ["https://eos.example/v1", "https://end-turn.example/v1"] {
+            let summary = try await service.generate(transcript: "Discuss release", kind: .executive, route: self.route(baseURL: endpoint))
+            XCTAssertEqual(summary, "Release agreed", endpoint)
+        }
+    }
+
+    func testReasoningModelsGetCommandModeOutputBudget() {
+        var route = self.route()
+        XCTAssertNil(MeetingSummaryRemoteService().configuration(transcript: "Meeting", kind: .executive, route: route).maxTokens)
+        route.isReasoningModel = true
+        XCTAssertEqual(MeetingSummaryRemoteService().configuration(transcript: "Meeting", kind: .executive, route: route).maxTokens, 32_000)
+    }
+
+    func testRouteRequiresProviderAndVerifiedModel() {
+        let settings = SettingsStore.shared
+        XCTAssertThrowsError(try MeetingSummaryRoute.resolve(.init(), settings: settings)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Choose a provider"), "\(error)")
+        }
+        XCTAssertThrowsError(try MeetingSummaryRoute.resolve(.init(providerID: "openai"), settings: settings)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Choose a summary model"), "\(error)")
+        }
+        let unverified = MeetingSummarySelection(providerID: "openai", modelsByProvider: ["openai": "model-\(UUID().uuidString)"])
+        XCTAssertThrowsError(try MeetingSummaryRoute.resolve(unverified, settings: settings)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("unavailable"), "\(error)")
+        }
+    }
+
     private func route(baseURL: String = "https://gateway.example/v1/") -> MeetingSummaryRoute {
         MeetingSummaryRoute(
             providerID: "fixture",
@@ -343,6 +205,8 @@ private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
             switch url.host {
             case "length.example": reason = "length"
             case "filtered.example": reason = "content_filter"
+            case "eos.example": reason = "eos"
+            case "end-turn.example": reason = "end_turn"
             default: reason = "stop"
             }
             json = ["choices": [["message": ["content": text], "finish_reason": reason]]]

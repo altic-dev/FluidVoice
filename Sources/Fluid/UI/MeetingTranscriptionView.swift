@@ -218,8 +218,7 @@ struct MeetingTranscriptionView: View {
                         onRepairSetup: self.repairRecordingSetup,
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
-                        onCloseSelection: self.closeCanvasAction,
-                        summaryASRService: self.asrService
+                        onCloseSelection: self.closeCanvasAction
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -1362,8 +1361,6 @@ struct MeetingTranscriptionCanvas: View {
     let isRetrying: Bool
     let onCloseSelection: (() -> Void)?
 
-    var summaryASRService: ASRService? = nil
-
     @Environment(\.theme) private var theme
 
     /// Recording renders outside the ScrollView so the live captions card can fill the height;
@@ -1464,8 +1461,7 @@ struct MeetingTranscriptionCanvas: View {
                         onUndo: { self.onUndoCorrection(session.id) },
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
-                        onClose: self.onCloseSelection,
-                        summaryASRService: self.summaryASRService
+                        onClose: self.onCloseSelection
                     )
                 }
             case let .failed(session, message):

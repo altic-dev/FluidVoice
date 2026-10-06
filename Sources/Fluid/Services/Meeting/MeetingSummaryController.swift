@@ -58,6 +58,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     private var processing: Set<UUID> = []
     @Published private(set) var isProcessing = false
     private var summary: UUID?
+    private var remoteSummary: UUID?
     @Published private(set) var selectionLock: UUID?
 
     /// Acquired synchronously by the button action, before generation's task starts.
@@ -93,9 +94,24 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         asr.showError = true
     }
 
+    /// Cloud summaries hold neither the audio lease nor the processing gate that on-device
+    /// summaries need, so dictation, Command Mode, and Rewrite keep working while a provider responds.
+    func withRemoteSummary<T>(work: () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        guard self.remoteSummary == nil, self.summary == nil else { throw MeetingModelResidencyError.busy }
+        let token = UUID()
+        self.remoteSummary = token
+        defer {
+            if self.remoteSummary == token {
+                self.remoteSummary = nil
+            }
+        }
+        return try await work()
+    }
+
     func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        guard self.summary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
+        guard self.summary == nil, self.remoteSummary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
         let token = UUID()
         self.summary = token
         defer { if self.summary == token { self.summary = nil } }
@@ -164,6 +180,8 @@ final class MeetingSummaryController: ObservableObject {
                   let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
+                  // On-device summaries stay hidden while that path is disabled for accuracy.
+                  saved.providerID != nil,
                   saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
             else { return (installed, nil) }
             return (installed, saved)
@@ -224,8 +242,8 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService, route: MeetingSummaryRoute) {
-        guard !self.busy, !self.checking, !route.isOnDevice || self.installed,
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute) {
+        guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
@@ -236,26 +254,14 @@ final class MeetingSummaryController: ObservableObject {
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
             }
             do {
-                try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
+                try await MeetingSummaryActivityCoordinator.shared.withRemoteSummary {
                     let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
                     }
                     try Task.checkCancellation()
-                    let text: String
-                    if route.isOnDevice {
-                        guard transcript.utf8.count <= 96_000 else { throw MeetingPostProcessingError.inputTooLarge }
-                        text = try await asr.withMeetingModelResidency(attemptID: UUID()) {
-                            try MeetingModelResidencyCoordinator.shared.markSummary()
-                            return try await PrivateAIIntegrationService.summarizeMeeting(transcript, style: kind.rawValue)
-                        }
-                    } else if route.cli != nil {
-                        text = try await MeetingSummaryCLIService.generate(transcript: transcript, kind: kind, route: route)
-                    } else {
-                        text = try await MeetingSummaryRemoteService.shared.generate(transcript: transcript, kind: kind, route: route)
-                    }
+                    let text = try await MeetingSummaryRemoteService.shared.generate(transcript: transcript, kind: kind, route: route)
                     try Task.checkCancellation()
-                    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
                     guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
                     }

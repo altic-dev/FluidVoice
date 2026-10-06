@@ -530,8 +530,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            // Only truncation counts; compatible servers use varied names for a normal stop.
             if let reason = choice["finish_reason"] as? String {
-                parsed.isIncomplete = reason != "stop"
+                parsed.isIncomplete = ["length", "max_tokens", "content_filter"].contains(reason.lowercased())
             }
         }
         self.benchmark(config, "response_decoded")
