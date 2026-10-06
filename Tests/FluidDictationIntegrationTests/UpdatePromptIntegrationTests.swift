@@ -15,6 +15,29 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).showUpdatePopups)
     }
 
+    func testOnlyOlderCopiesOfTheAppAreSuperseded() {
+        let launch = Date(timeIntervalSinceReferenceDate: 1000)
+        let instances = [
+            SupersededInstanceRetirement.Instance(processID: 10, launchDate: launch.addingTimeInterval(-60)),
+            SupersededInstanceRetirement.Instance(processID: 20, launchDate: launch),
+            SupersededInstanceRetirement.Instance(processID: 30, launchDate: launch.addingTimeInterval(60)),
+            SupersededInstanceRetirement.Instance(processID: 40, launchDate: nil),
+            SupersededInstanceRetirement.Instance(processID: 50, launchDate: launch),
+        ]
+        let superseded = SupersededInstanceRetirement.superseded(among: instances, currentProcessID: 20, currentLaunchDate: launch)
+        XCTAssertEqual(superseded, [10], "only the copy that was already running is retired")
+        XCTAssertEqual(
+            SupersededInstanceRetirement.superseded(among: [instances[1]], currentProcessID: 20, currentLaunchDate: launch),
+            [],
+            "a lone instance never retires itself"
+        )
+        XCTAssertEqual(
+            SupersededInstanceRetirement.superseded(among: instances, currentProcessID: 10, currentLaunchDate: launch.addingTimeInterval(-60)),
+            [],
+            "the older copy never retires the newer ones"
+        )
+    }
+
     func testOfferWithQueuedFailureTransitionsToOnlyInstallStatus() async throws {
         let presenter = UpdatePromptPresenter.shared
         let updater = SimpleUpdater()

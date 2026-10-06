@@ -100,6 +100,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             source: "AppDelegate"
         )
         UNUserNotificationCenter.current().delegate = self
+        SupersededInstanceRetirement.start()
 
         // Initialize app settings (dock visibility, etc.)
         SettingsStore.shared.initializeAppSettings()
