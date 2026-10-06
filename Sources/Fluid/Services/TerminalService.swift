@@ -100,11 +100,18 @@ final class TerminalService {
         do {
             try process.run()
 
-            // Wait off the main actor: waitUntilExit() and the pipe reads block,
-            // and the timeout has to be able to fire while they do.
-            let (outputData, errorData, timedOut) = await Task.detached {
-                await Self.waitForExit(of: process, outputPipe: outputPipe, errorPipe: errorPipe, timeout: timeout)
-            }.value
+            // waitUntilExit() and the pipe reads block, so they run on a dispatch
+            // queue rather than on the main actor or a Swift concurrency thread.
+            let (outputData, errorData, timedOut) = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: Self.waitForExit(
+                        of: process,
+                        outputPipe: outputPipe,
+                        errorPipe: errorPipe,
+                        timeout: timeout
+                    ))
+                }
+            }
 
             let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             var errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -137,38 +144,16 @@ final class TerminalService {
         }
     }
 
-    nonisolated private static let terminationGracePeriod: TimeInterval = 2
-
-    /// Waits for the command and reads its output. Returns whether the timeout fired.
+    /// Waits for the command and reads its output. Blocks; returns whether the timeout fired.
     nonisolated private static func waitForExit(
         of process: Process,
         outputPipe: Pipe,
         errorPipe: Pipe,
         timeout: TimeInterval
-    ) async -> (Data, Data, Bool) {
-        // On macOS, Process launches the shell as the leader of a new process
-        // group (pgid == pid), and whatever the command starts inherits that
-        // group unless it moves itself out (setsid, setpgid).
-        // Signal the group directly: a descendant can outlive the shell and
-        // keep stdout/stderr open, and once the shell has exited there is
-        // nothing left for process.terminate() to reach.
-        let processGroup = process.processIdentifier
-
-        let timeoutTask = Task { () -> Bool in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            } catch {
-                return false
-            }
-            Self.signal(SIGTERM, processGroup: processGroup, process: process)
-            // Escalate if something ignored SIGTERM and still holds the pipes.
-            // Cancelled as soon as the reads below finish.
-            try? await Task.sleep(nanoseconds: UInt64(Self.terminationGracePeriod * 1_000_000_000))
-            if !Task.isCancelled {
-                Self.signal(SIGKILL, processGroup: processGroup, process: process)
-            }
-            return true
-        }
+    ) -> (Data, Data, Bool) {
+        let deadline = TerminalCommandDeadline(process: process)
+        let timeoutWork = DispatchWorkItem { deadline.expire() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
 
         process.waitUntilExit()
 
@@ -176,16 +161,9 @@ final class TerminalService {
         // ends has been closed, so keep the timeout armed until both finish.
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        timeoutTask.cancel()
-        return (outputData, errorData, await timeoutTask.value)
-    }
-
-    nonisolated private static func signal(_ signal: Int32, processGroup: pid_t, process: Process) {
-        // kill(0, ...) would signal FluidVoice's own process group.
-        guard processGroup > 0 else { return }
-        if kill(-processGroup, signal) != 0, process.isRunning {
-            kill(processGroup, signal)
-        }
+        let timedOut = deadline.finish()
+        timeoutWork.cancel()
+        return (outputData, errorData, timedOut)
     }
 
     /// Convert result to JSON string for AI processing
@@ -214,5 +192,50 @@ final class TerminalService {
 
         // If serialization fails for any reason, return minimal safe JSON
         return #"{"success":false,"output":"<json-serialization-failed>","exitCode":-1}"#
+    }
+}
+
+/// Stops a timed-out command. On macOS, Process launches the shell as the leader
+/// of a new process group (pgid == pid), and whatever the command starts inherits
+/// that group unless it moves itself out (setsid, setpgid). Signal the group
+/// directly: a descendant can outlive the shell and keep stdout/stderr open, and
+/// once the shell has exited there is nothing left for process.terminate() to reach.
+private final nonisolated class TerminalCommandDeadline: @unchecked Sendable {
+    private static let killGracePeriod: TimeInterval = 2
+
+    private let lock = NSLock()
+    private let process: Process
+    private var finished = false
+    private var expired = false
+
+    init(process: Process) { self.process = process }
+
+    /// SIGTERM now, then SIGKILL after the grace period if the reads still haven't finished.
+    func expire() {
+        guard self.signal(SIGTERM, expiring: true) else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.killGracePeriod) {
+            _ = self.signal(SIGKILL, expiring: false)
+        }
+    }
+
+    /// Marks the reads finished so no further signal is sent. Returns whether the timeout fired.
+    func finish() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.finished = true
+        return self.expired
+    }
+
+    private func signal(_ signal: Int32, expiring: Bool) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        // kill(0, ...) would signal FluidVoice's own process group.
+        let processGroup = self.process.processIdentifier
+        guard !self.finished, processGroup > 0 else { return false }
+        if expiring { self.expired = true }
+        if kill(-processGroup, signal) != 0, self.process.isRunning {
+            kill(processGroup, signal)
+        }
+        return true
     }
 }
