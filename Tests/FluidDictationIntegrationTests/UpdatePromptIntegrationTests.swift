@@ -15,24 +15,29 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).showUpdatePopups)
     }
 
-    func testOnlyOlderCopiesOfTheAppAreSuperseded() {
+    func testOnlyOlderCopiesAtTheSameLocationAreSuperseded() {
+        typealias Instance = SupersededInstanceRetirement.Instance
         let launch = Date(timeIntervalSinceReferenceDate: 1000)
+        let path = "/Applications/FluidVoice.app"
         let instances = [
-            SupersededInstanceRetirement.Instance(processID: 10, launchDate: launch.addingTimeInterval(-60)),
-            SupersededInstanceRetirement.Instance(processID: 20, launchDate: launch),
-            SupersededInstanceRetirement.Instance(processID: 30, launchDate: launch.addingTimeInterval(60)),
-            SupersededInstanceRetirement.Instance(processID: 40, launchDate: nil),
-            SupersededInstanceRetirement.Instance(processID: 50, launchDate: launch),
+            Instance(processID: 10, launchDate: launch.addingTimeInterval(-60), bundlePath: path),
+            Instance(processID: 20, launchDate: launch, bundlePath: path),
+            Instance(processID: 30, launchDate: launch.addingTimeInterval(60), bundlePath: path),
+            Instance(processID: 40, launchDate: nil, bundlePath: path),
+            Instance(processID: 50, launchDate: launch.addingTimeInterval(-60), bundlePath: "/Users/me/Downloads/FluidVoice.app"),
+            Instance(processID: 60, launchDate: launch.addingTimeInterval(-60), bundlePath: nil),
         ]
-        let superseded = SupersededInstanceRetirement.superseded(among: instances, currentProcessID: 20, currentLaunchDate: launch)
-        XCTAssertEqual(superseded, [10], "only the copy that was already running is retired")
+        func superseded(_ instances: [Instance], as processID: pid_t, launchedAt date: Date) -> [pid_t] {
+            SupersededInstanceRetirement.superseded(among: instances, currentProcessID: processID, currentLaunchDate: date, currentBundlePath: path)
+        }
         XCTAssertEqual(
-            SupersededInstanceRetirement.superseded(among: [instances[1]], currentProcessID: 20, currentLaunchDate: launch),
-            [],
-            "a lone instance never retires itself"
+            superseded(instances, as: 20, launchedAt: launch),
+            [10],
+            "only the copy already running from this location is retired; a second install, a rollback copy and unknowns are left alone"
         )
+        XCTAssertEqual(superseded([instances[1]], as: 20, launchedAt: launch), [], "a lone instance never retires itself")
         XCTAssertEqual(
-            SupersededInstanceRetirement.superseded(among: instances, currentProcessID: 10, currentLaunchDate: launch.addingTimeInterval(-60)),
+            superseded(instances, as: 10, launchedAt: launch.addingTimeInterval(-60)),
             [],
             "the older copy never retires the newer ones"
         )
