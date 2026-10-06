@@ -4,13 +4,13 @@ import ZeppelinEmbed
 /// The full-text index behind the sidebar search: one record-only Zeppelin
 /// namespace per `SearchIndexKind`.
 ///
-/// This is a derived copy. The stores in `UserDefaults` remain the source of truth,
+/// This is a derived copy. The app's history stores remain the source of truth,
 /// so a namespace that is missing, reset, or from another build is simply rebuilt
 /// from its store.
 ///
 /// The one write operation is `reconcile`: compare what the store has with what the
 /// namespace has, delete the rest, upsert the difference. It is idempotent, so the
-/// same call is the launch backfill, the write-through after a change, the cleanup
+/// same call is the first-search backfill, the write-through after a change, the cleanup
 /// after a store evicts rows past its cap, and the recovery after a reset. An
 /// interrupted run leaves nothing to undo; the next run finishes it.
 actor SearchIndex {
@@ -27,9 +27,11 @@ actor SearchIndex {
     }
 
     private let root: FluidZeppelinRoot
+    private let maintenanceActiveRowLimit: UInt64?
 
-    init(root: FluidZeppelinRoot = .shared) {
+    init(root: FluidZeppelinRoot = .shared, maintenanceActiveRowLimit: UInt64? = 256) {
         self.root = root
+        self.maintenanceActiveRowLimit = maintenanceActiveRowLimit
     }
 
     /// No attributes: there is no filtered lexical query, and grouping is by
@@ -82,6 +84,9 @@ actor SearchIndex {
             _ = try await store.upsert(pending.map(Self.document))
             report.upserted = pending.count
         }
+        // Finish the document scan before sealing: its cursor belongs to the old
+        // generation. Also migrate unchanged indexes left entirely in the WAL.
+        await self.sealLargeActiveIndex(store, kind: kind)
         if report != ReconcileReport() {
             await DebugLogger.shared.info(
                 "Search index \(kind.rawValue): +\(report.upserted) -\(report.deleted)",
@@ -89,6 +94,19 @@ actor SearchIndex {
             )
         }
         return report
+    }
+
+    private func sealLargeActiveIndex(_ store: ZeppelinStore, kind: SearchIndexKind) async {
+        guard let limit = self.maintenanceActiveRowLimit else { return }
+        do {
+            let stats = try await store.stats()
+            guard stats.activeRowCount >= limit, stats.activeRowCount > 0 else { return }
+            _ = try await store.seal()
+        } catch {
+            // This is a derived index. Failed maintenance must not turn a
+            // successful update into missing results; retry on the next update.
+            DebugLogger.shared.warning("Search index \(kind.rawValue) maintenance deferred: \(error)", source: "SearchIndex")
+        }
     }
 
     private static func document(_ record: SearchIndexRecord) -> IngestDocument {

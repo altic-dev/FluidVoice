@@ -80,6 +80,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         _ = FileLogger.shared
         TypingService.startKeyboardLayoutTracking()
         _ = TranscriptionHistoryStore.shared
+        #if arch(arm64)
+        Task {
+            await CompactSpeechModelReleaseCatalog.shared.refreshIfNeeded()
+            SpeechModelInstallationSnapshot.shared.refresh()
+        }
+        #endif
         #if DEBUG
         MeetingDetectorFeasibilityProbe.startIfRequested()
         #endif
@@ -107,7 +113,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         SettingsStore.shared.bootstrapOnboardingState(isTrueFirstOpen: isTrueFirstOpen)
 
         AnalyticsService.shared.bootstrap()
-        SearchIndexCoordinator.shared.start()
 
         // Check for updates automatically if enabled (initial check on launch)
         self.checkForUpdatesAutomatically()
@@ -178,7 +183,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func closeZeppelinForTermination() {
         var didClose = false
         Task {
-            await FluidZeppelinRoot.shared.closeAll()
+            AppSearchService.shared.stop()
+            await SearchIndexCoordinator.shared.stop()
+            await FluidZeppelinRoot.shared.shutdown()
             didClose = true
         }
 

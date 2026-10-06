@@ -238,12 +238,30 @@ final class DebugLogger {
             return entry
         }
         precondition(normalizedRestore == backup, "Backup restore must retain stars and metadata while refreshing search revisions")
+        store.selectEntryFromSearch(id: older.id)
+        guard let firstRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting a search result must create a request")
+        }
+        store.selectEntryFromSearch(id: older.id)
+        guard let repeatedRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting the same result again must create a request")
+        }
+        precondition(firstRequest != repeatedRequest, "Repeated clicks on the same result must create a fresh bounded request")
+        store.consumeSearchSelectionRequest(firstRequest)
+        precondition(store.searchSelectionRequest == repeatedRequest, "A stale consumer must not clear the latest search request")
+        store.consumeSearchSelectionRequest(repeatedRequest)
+        precondition(store.searchSelectionRequest == nil, "The active consumer clears its request")
+        store.selectedEntryID = older.id
+        store.toggleStar(id: older.id)
+        precondition(store.searchSelectionRequest == nil, "Unstar is a local edit, not a sidebar reveal")
         store.deleteEntry(id: older.id)
+        precondition(store.selectedEntryID == newer.id, "Deleting the selected row retains the existing store fallback")
+        precondition(store.searchSelectionRequest == nil, "Delete fallback must not reset History filters")
         store.toggleStar(id: older.id)
         await store.finishPendingWrites()
         let afterDelete = try await writer.load()
         precondition(afterDelete == restored.filter { $0.id == newer.id }, "A stale star action must not resurrect a deleted entry")
-        print("PASS: star filtering/search, chronology, audio preservation, unstar/restart, backup restore and deletion")
+        print("PASS: star filtering/search, chronology, audio preservation, unstar/restart, backup restore, deletion and bounded explicit search requests")
     }
 
     @MainActor static func testTodaySummary(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {

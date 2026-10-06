@@ -12,7 +12,7 @@ extension VoiceEngineSettingsView {
 
     var speechRecognitionCard: some View {
         let selectedModel = self.settings.selectedSpeechModel
-        let activeModel = selectedModel.isInstalled ? selectedModel : nil
+        let activeModel = self.viewModel.isSpeechModelInstalled(selectedModel) ? selectedModel : nil
         let hasActiveModel = activeModel != nil
         let otherModels = self.viewModel.filteredSpeechModels.filter { model in
             guard let activeModel else { return true }
@@ -51,12 +51,12 @@ extension VoiceEngineSettingsView {
                             Spacer()
                             Menu {
                                 ForEach(SpeechProviderFilter.allCases) { option in
-                                    Button(option.rawValue) {
+                                    Button(option.displayName) {
                                         self.viewModel.providerFilter = option
                                     }
                                 }
                             } label: {
-                                Text("Filter: \(self.viewModel.providerFilter.rawValue)")
+                                Text("Filter: \(self.viewModel.providerFilter.displayName)")
                             }
                             .fluidDropdownStyle()
                             Menu {
@@ -85,9 +85,17 @@ extension VoiceEngineSettingsView {
                                     Text("Active Model")
                                         .font(self.theme.typography.sectionTitle)
                                         .foregroundStyle(self.voiceEngineTitleText)
-                                    Label("No active model yet. Download and activate one below.", systemImage: "arrow.down.circle")
-                                        .font(self.theme.typography.bodySmall)
-                                        .foregroundStyle(self.voiceEngineSecondaryText)
+                                    Label(
+                                        self.viewModel.installations.isChecking ? "Checking downloaded models…"
+                                            : (self.viewModel.installations.state == .failed ? "Couldn't check downloaded models. Try again." : "No active model yet. Download and activate one below."),
+                                        systemImage: self.viewModel.installations.canUseModelActions ? "arrow.down.circle" : "info.circle"
+                                    )
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.voiceEngineSecondaryText)
+                                    if self.viewModel.installations.state == .failed {
+                                        Button("Retry check") { self.viewModel.installations.refresh() }
+                                            .fluidGlassAction(quiet: true)
+                                    }
                                 }
                             }
 
@@ -156,10 +164,17 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
+
+                        if let descriptor = model.parakeetDescriptor {
+                            Text(descriptor.creditLine)
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     HStack(spacing: 8) {
-                        Label(model.downloadSize, systemImage: "internaldrive")
+                        Label(self.viewModel.speechModelDownloadSize(model), systemImage: "internaldrive")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
@@ -213,25 +228,28 @@ extension VoiceEngineSettingsView {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 16) {
-                    LiquidBar(
-                        fillPercent: model.speedPercent,
-                        color: .yellow,
-                        secondaryColor: .orange,
-                        icon: "bolt.fill",
-                        label: "Speed"
-                    )
+                if model.hasPerformanceRatings {
+                    HStack(spacing: 16) {
+                        LiquidBar(
+                            fillPercent: model.speedPercent,
+                            color: .yellow,
+                            secondaryColor: .orange,
+                            icon: "bolt.fill",
+                            label: "Speed"
+                        )
 
-                    LiquidBar(
-                        fillPercent: model.accuracyPercent,
-                        color: Color.fluidGreen,
-                        secondaryColor: .cyan,
-                        icon: "target",
-                        label: "Accuracy"
-                    )
+                        LiquidBar(
+                            fillPercent: model.accuracyPercent,
+                            color: Color.fluidGreen,
+                            secondaryColor: .cyan,
+                            icon: "target",
+                            label: "Accuracy"
+                        )
+                    }
+                    .frame(width: 140, alignment: .center)
+                    .help("Relative ratings for comparing models, not measured transcription accuracy.")
+                    .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 }
-                .frame(width: 140, alignment: .center)
-                .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
             }
         }
         .padding(.vertical, 6)
@@ -240,7 +258,7 @@ extension VoiceEngineSettingsView {
     func speechModelCard(for model: SettingsStore.SpeechModel) -> some View {
         let isSelected = self.viewModel.previewSpeechModel == model
         let isConfiguredActive = self.viewModel.isActiveSpeechModel(model)
-        let isActive = isConfiguredActive && model.isInstalled && self.viewModel.asr.isAsrReady
+        let isActive = isConfiguredActive && self.viewModel.isSpeechModelInstalled(model) && self.viewModel.asr.isAsrReady
 
         return HStack(alignment: .top, spacing: 10) {
             Circle()
@@ -263,22 +281,24 @@ extension VoiceEngineSettingsView {
                     .foregroundStyle(self.voiceEngineSecondaryText)
 
                 HStack(spacing: 12) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.fluidSystem(size: 11))
-                            .foregroundStyle(.yellow)
-                        Text("Speed \(Int(model.speedPercent * 100))%")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
-                    }
+                    if model.hasPerformanceRatings {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bolt.fill")
+                                .font(.fluidSystem(size: 11))
+                                .foregroundStyle(.yellow)
+                            Text("Speed \(Int(model.speedPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
 
-                    HStack(spacing: 4) {
-                        Image(systemName: "target")
-                            .font(.fluidSystem(size: 11))
-                            .foregroundStyle(Color.fluidGreen)
-                        Text("Acc \(Int(model.accuracyPercent * 100))%")
-                            .font(self.theme.typography.bodyStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
+                        HStack(spacing: 4) {
+                            Image(systemName: "target")
+                                .font(.fluidSystem(size: 11))
+                                .foregroundStyle(Color.fluidGreen)
+                            Text("Acc \(Int(model.accuracyPercent * 100))%")
+                                .font(self.theme.typography.bodyStrong)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        }
                     }
 
                     if isSelected && !isActive {
@@ -375,8 +395,29 @@ extension VoiceEngineSettingsView {
                     .controlSize(.small)
                     .disabled(self.viewModel.asr.isCancellingModelPreparation)
                 }
-            } else if model.isInstalled {
+            } else if !self.viewModel.installations.canUseModelActions {
+                if self.viewModel.installations.isChecking {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Checking downloads…")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.voiceEngineSecondaryText)
+                    }
+                } else {
+                    Button("Retry check") { self.viewModel.installations.refresh() }
+                        .fluidGlassAction(quiet: true)
+                }
+            } else if self.viewModel.isSpeechModelInstalled(model) {
                 HStack(spacing: 8) {
+                    if self.viewModel.isSpeechModelUpdateAvailable(model) {
+                        Button("Update") {
+                            self.viewModel.downloadSpeechModel(model, updateWeights: true)
+                        }
+                        .fluidGlassAction(prominent: true, tone: .orange)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
+                        .accessibilityLabel("Update \(model.humanReadableName)")
+                    }
+
                     if isActive {
                         self.speechModelLanguagePicker(for: model)
                             .disabled(self.viewModel.areSpeechModelActionsBlocked)
@@ -391,7 +432,7 @@ extension VoiceEngineSettingsView {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
                         }
-                        .fluidGlassAction(quiet: true)
+                        .fluidGlassAction(prominent: true)
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
                     }
 
@@ -626,6 +667,9 @@ extension VoiceEngineSettingsView {
     }
 
     private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
+        if model == .fluidParakeetMini || model == .fluidParakeetPico {
+            return model.languageSupport
+        }
         switch model {
         case .nemotronStreaming, .nemotronStreaming320:
             return "Nemotron Speech 3.5 - Streaming Capable"
@@ -761,7 +805,9 @@ extension VoiceEngineSettingsView {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(bgColor)
 
-            if model.usesAppleLogo {
+            if model.brandName == "FluidVoice" {
+                FluidVoiceBrandIcon(size: 28)
+            } else if model.usesAppleLogo {
                 Image(systemName: "apple.logo")
                     .font(.fluidSystem(size: 14, weight: .medium))
                     .foregroundStyle(.primary)

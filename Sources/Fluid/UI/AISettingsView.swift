@@ -75,6 +75,7 @@ enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
 
     var id: String { self.rawValue }
+    var displayName: String { self == .nvidia ? "FluidVoice / NVIDIA" : self.rawValue }
 }
 
 enum AISettingsLayout {

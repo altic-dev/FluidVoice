@@ -15,6 +15,23 @@ final class SearchIndex: Sendable {
     static let shared = SearchIndex()
 }
 
+@MainActor final class SearchIndexCoordinator {
+    static let shared = SearchIndexCoordinator()
+    func prepareForSearch() async throws {}
+}
+
+enum ParakeetVocabularyStore {
+    enum VocabularyConfig {
+        struct Term: Sendable {}
+    }
+
+    static func readSearchTerms() async throws -> [VocabularyConfig.Term] { [] }
+}
+
+extension Notification.Name {
+    static let parakeetVocabularyDidChange = Notification.Name("ArchiveSearchTests.vocabularyDidChange")
+}
+
 final class DebugLogger {
     static let shared = DebugLogger()
     func info(_: String, source _: String) {}
@@ -30,6 +47,11 @@ struct TranscriptionHistoryEntry {
     let processedText: String
     let appName: String
     let windowTitle: String
+}
+
+@MainActor enum TranscriptionHistoryStore {
+    static let shared = Self.self
+    static func retryLoadingIfNeeded() {}
 }
 
 struct FileTranscriptionEntry {

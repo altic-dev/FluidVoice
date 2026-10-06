@@ -263,7 +263,10 @@ struct ContentView: View {
     /// This maintains backward compatibility with the existing code while
     /// removing the duplicate service instances that cause startup crashes.
     private var asr: ASRService {
-        self.appServices.asr
+        #if DEBUG
+        if let fixture = self.dictationModeSwitchASRForTesting { return fixture }
+        #endif
+        return self.appServices.asr
     }
 
     private var audioObserver: AudioHardwareObserver {
@@ -406,7 +409,55 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var toolbarTrailingInset: CGFloat = 80
 
+    #if DEBUG
+    private var dictationModeSwitchASRForTesting: ASRService?
+    private var dictationModeSwitchOnReadyForTesting: ((ContentView) -> Void)?
+
+    /// Install real SwiftUI state while avoiding the app page's startup/hardware observers.
+    static func dictationModeSwitchFixture(
+        asr: ASRService,
+        hasActiveMode: Bool = true,
+        onReady: @escaping (ContentView) -> Void
+    ) -> ContentView {
+        let commandFixture = CommandModeService()
+        var view = ContentView()
+        view._commandModeService = StateObject(wrappedValue: commandFixture)
+        view.dictationModeSwitchASRForTesting = asr
+        view.dictationModeSwitchOnReadyForTesting = onReady
+        view._activeRecordingMode = State(initialValue: hasActiveMode ? .edit : .none)
+        view._isRecordingForRewrite = State(initialValue: hasActiveMode)
+        return view
+    }
+
+    func beginDictationModeSwitchForTesting(selection: SettingsStore.DictationPromptSelection? = nil) -> Task<Void, Never>? {
+        if let selection { return self.beginDictationRecording(for: selection, mode: .promptMode) }
+        return self.beginDictationRecording(for: .primary, mode: .dictate)
+    }
+
+    func blockDictationModeSwitchForTesting(savingCancellation: Bool = false, processing: Bool = false) {
+        self.isSavingCancelledRecording = savingCancellation
+        self.processingDictationLifecycleID = processing ? self.overlayLifecycleID : nil
+    }
+
+    var dictationModeSwitchStateForTesting: (mode: String, slot: SettingsStore.DictationShortcutSlot?, generation: UInt64) {
+        (self.activeRecordingMode.rawValue, self.activeDictationShortcutSlot, self.overlayLifecycleID)
+    }
+    #endif
+
+    @ViewBuilder
     var body: some View {
+        #if DEBUG
+        if let onReady = self.dictationModeSwitchOnReadyForTesting {
+            Color.clear.onAppear { onReady(self) }
+        } else {
+            self.appBody
+        }
+        #else
+        self.appBody
+        #endif
+    }
+
+    private var appBody: some View {
         let layout = AnyView(
             Group {
                 if self.settings.shouldShowOnboarding {
@@ -1490,7 +1541,7 @@ struct ContentView: View {
     private func open(searchHit hit: AppSearchHit) {
         switch hit.target {
         case let .history(id):
-            TranscriptionHistoryStore.shared.selectedEntryID = id
+            TranscriptionHistoryStore.shared.selectEntryFromSearch(id: id)
             self.navigateToApp(.history)
         case let .transcript(id):
             FileTranscriptionHistoryStore.shared.selectedEntryID = id
@@ -1997,11 +2048,9 @@ struct ContentView: View {
         if self.settings.shouldShowOnboarding {
             return .minimum(width: window.onboardingMinWidth, height: window.onboardingMinHeight)
         }
-        return FluidWindowSizing(
-            minWidth: window.mainMinWidth,
-            minHeight: window.mainMinHeight,
-            maximumSize: NSSize(width: 1440, height: 1000)
-        )
+        // Let SwiftUI and the screen choose the upper size; a hard cap can
+        // fight the hosting view's content bounds while switching pages.
+        return .minimum(width: window.mainMinWidth, height: window.mainMinHeight)
     }
 
     @ViewBuilder
@@ -5308,17 +5357,29 @@ extension ContentView {
         }
     }
 
+    private var canSwitchActiveDictationCaptureMode: Bool {
+        self.activeRecordingMode != .none && self.asr.canSwitchOwnedDictationCaptureMode
+    }
+
+    private func canBeginDictationRecording() -> Bool {
+        guard !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil else { return false }
+        if self.canSwitchActiveDictationCaptureMode { return true }
+        guard !self.presentExclusiveActivityBlockIfNeeded() else { return false }
+        return !self.asr.isRunningOrStarting && !self.asr.isDictionaryTrainingCaptureActive
+    }
+
     private func beginDictationRecording(
         for slot: SettingsStore.DictationShortcutSlot,
         mode: ActiveRecordingMode,
         startMethod: AnalyticsOnboardingTryoutStartMethod = .hotkey
     ) -> Task<Void, Never>? {
-        guard !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil else { return nil }
-        guard !self.presentExclusiveActivityBlockIfNeeded() else { return nil }
+        guard self.canBeginDictationRecording() else { return nil }
+        let switchesOwnedCapture = self.canSwitchActiveDictationCaptureMode
+        let previousMode = self.activeRecordingMode
         DebugLogger.shared.debug("Begin dictation recording for slot \(slot.rawValue)", source: "ContentView")
         DebugLogger.shared.debug("CLOSE_DETAIL nextStartRequested uptime=\(ProcessInfo.processInfo.systemUptime)", source: "StopTiming")
         self.appBench("begin_recording slot=\(slot.rawValue) mode=\(mode.rawValue)")
-        if self.isOnboardingVoicePlaygroundStepActive {
+        if !switchesOwnedCapture, self.isOnboardingVoicePlaygroundStepActive {
             self.asr.finalText = ""
             self.settings.onboardingPlaygroundValidated = false
             self.settings.onboardingPlaygroundSkipped = false
@@ -5329,6 +5390,17 @@ extension ContentView {
         self.setActiveRecordingMode(mode)
         self.rewriteModeService.clearState()
 
+        if switchesOwnedCapture {
+            if self.asr.showError, self.asr.errorTitle == "Dictation Unavailable",
+               self.asr.errorMessage == "Wait for the active dictation to finish."
+            { self.asr.showError = false }
+            self.menuBarManager.setOverlayMode(.dictation)
+            DebugLogger.shared.info(
+                "Dictation capture mode switched from=\(previousMode.rawValue) to=\(mode.rawValue) slot=\(slot.rawValue)",
+                source: "ContentView"
+            )
+            return nil
+        }
         guard !self.asr.isRunningOrStarting else {
             self.appBench("asr_start_skipped reason=already_running_or_starting")
             return nil
@@ -5383,6 +5455,7 @@ extension ContentView {
     }
 
     private func beginDictationRecording(for selection: SettingsStore.DictationPromptSelection, mode: ActiveRecordingMode) -> Task<Void, Never>? {
+        guard self.canBeginDictationRecording() else { return nil }
         let settings = SettingsStore.shared
         settings.setDictationPromptSelection(selection, for: .secondary)
         return self.beginDictationRecording(for: .secondary, mode: mode)

@@ -146,6 +146,8 @@ struct MeetingTranscriptionView: View {
 
     @State private var setupDraft: MeetingTranscriptionSetupDraft
     @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
+    @State private var pendingBackupSetupRefresh = false
+    @State private var cachedSystemDefaultMicrophoneUID: String?
     @State private var isShowingMeetingSettings: Bool
     @State private var applications: [MeetingApplicationOption] = []
     @State private var microphones: [MeetingMicrophoneOption] = []
@@ -302,6 +304,13 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
             self.regenerateDefaultTitleIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
+            self.pendingBackupSetupRefresh = true
+            self.applyPendingBackupSetupRefresh()
+        }
+        .onChange(of: self.canRefreshSetupAfterBackupRestore) { _, canRefresh in
+            if canRefresh { self.applyPendingBackupSetupRefresh() }
         }
         .onChange(of: self.setupDraft.selectedApplicationID) { _, _ in
             self.regenerateDefaultTitleIfNeeded()
@@ -575,6 +584,7 @@ struct MeetingTranscriptionView: View {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
             let snapshot = await MeetingCaptureSourceCatalog.microphoneSnapshot()
             let identities = snapshot.identities
+            self.cachedSystemDefaultMicrophoneUID = snapshot.defaultCoreAudioUID
             self.microphones = identities.map(MeetingMicrophoneOption.init)
             self.selectPreferredMicrophone(from: identities, systemDefaultUID: snapshot.defaultCoreAudioUID)
         } else {
@@ -1108,6 +1118,41 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    // Restore updates future setup only; a running meeting and an open editing sheet
+    // keep their draft until the existing activity/dismissal events reach a safe point.
+    private var canRefreshSetupAfterBackupRestore: Bool {
+        self.coordinator.isQuiescent && !self.isStarting && !self.isStopping &&
+            !self.isRetrying && !self.isRefreshingSources && !self.isShowingMeetingSettings
+    }
+
+    private func applyPendingBackupSetupRefresh() {
+        guard self.pendingBackupSetupRefresh, self.canRefreshSetupAfterBackupRestore else { return }
+        self.pendingBackupSetupRefresh = false
+        var restoredDraft = MeetingTranscriptionSetupDraft(settings: .shared)
+        if self.setupDraft.titleWasEdited {
+            restoredDraft.title = self.setupDraft.title
+            restoredDraft.titleWasEdited = true
+        }
+        self.setupDraft = restoredDraft
+        self.selectPreferredMicrophone(
+            from: self.microphones.map(\.identity),
+            systemDefaultUID: self.cachedSystemDefaultMicrophoneUID
+        )
+        self.selectPreferredApplication(from: self.applications.map(\.identity))
+        self.regenerateDefaultTitleIfNeeded()
+        self.setupDraftBeforeEditing = self.setupDraft
+        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+    }
+
+    private func finishRestoredMeetingSettingsIfPending() -> Bool {
+        guard self.pendingBackupSetupRefresh else { return false }
+        // A backup imported in another window supersedes this older sheet. Closing
+        // it must not write its stale language/mode over the restored preferences.
+        self.isShowingMeetingSettings = false
+        self.applyPendingBackupSetupRefresh()
+        return true
+    }
+
     private func openMeetingSettings() {
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
@@ -1127,6 +1172,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func cancelMeetingSettings() {
+        if self.finishRestoredMeetingSettingsIfPending() { return }
         self.setupDraft = self.setupDraftBeforeEditing
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = false
@@ -1134,6 +1180,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func saveMeetingSettings() {
+        if self.finishRestoredMeetingSettingsIfPending() { return }
         guard let microphone = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID }) else {
             self.actionErrorMessage = "Choose an available microphone before saving."
             return

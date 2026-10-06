@@ -45,7 +45,7 @@ extension TranscriptionHistoryEntry {
     ///
     /// An entry is immutable, so its revision only moves when a restore replaces the
     /// id with different text; everything else stays at the revision it was indexed at.
-    var searchRecord: SearchIndexRecord {
+    nonisolated var searchRecord: SearchIndexRecord {
         SearchIndexRecord(
             id: self.id,
             revision: self.searchRevision ?? 1,
@@ -60,7 +60,7 @@ extension FileTranscriptionEntry {
     /// joined together, so indexing both would count every word twice.
     ///
     /// Renaming advances the persisted revision without changing the recording date.
-    var searchRecord: SearchIndexRecord {
+    nonisolated var searchRecord: SearchIndexRecord {
         SearchIndexRecord(
             id: self.id,
             revision: self.searchRevision ?? 1,

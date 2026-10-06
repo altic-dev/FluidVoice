@@ -8,8 +8,8 @@ import FluidAudio
 final class ParakeetVocabularyStore {
     static let shared = ParakeetVocabularyStore()
 
-    struct VocabularyConfig: Codable, Sendable {
-        struct Term: Codable, Hashable, Sendable {
+    nonisolated struct VocabularyConfig: Codable, Sendable {
+        nonisolated struct Term: Codable, Hashable, Sendable {
             let text: String
             let weight: Float?
             let aliases: [String]
@@ -74,7 +74,7 @@ final class ParakeetVocabularyStore {
         }
     }
 
-    private enum Defaults {
+    private nonisolated enum Defaults {
         // Balanced defaults to reduce over-biasing while still improving rare terms.
         static let alpha: Float = 2.8
         static let minCtcScore: Float = -2.2
@@ -145,6 +145,19 @@ final class ParakeetVocabularyStore {
     func loadUserBoostTerms() throws -> [VocabularyConfig.Term] {
         let rawJSON = try self.loadRawJSON()
         let parsed = try self.validateJSON(rawJSON)
+        return Self.normalizeUserTerms(parsed.terms, maxTerms: Defaults.maxTerms)
+    }
+
+    /// Search reads a bounded snapshot without creating files or blocking the UI.
+    @concurrent nonisolated static func readSearchTerms() async throws -> [VocabularyConfig.Term] {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
+        let url = base.appendingPathComponent("FluidVoice/parakeet_custom_vocabulary.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let limit = 2 * 1024 * 1024
+        guard let data = try handle.read(upToCount: limit + 1), data.count <= limit else { return [] }
+        let parsed = try JSONDecoder().decode(VocabularyConfig.self, from: data)
         return Self.normalizeUserTerms(parsed.terms, maxTerms: Defaults.maxTerms)
     }
 
@@ -256,7 +269,7 @@ final class ParakeetVocabularyStore {
         }
     }
 
-    private static func normalizeUserTerms(_ terms: [VocabularyConfig.Term], maxTerms: Int) -> [VocabularyConfig.Term] {
+    private nonisolated static func normalizeUserTerms(_ terms: [VocabularyConfig.Term], maxTerms: Int) -> [VocabularyConfig.Term] {
         var seen: Set<String> = []
         var normalized: [VocabularyConfig.Term] = []
         normalized.reserveCapacity(min(terms.count, maxTerms))

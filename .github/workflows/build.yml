@@ -97,6 +97,12 @@ jobs:
     - name: Run history decode recovery regressions
       run: sh Tests/run_history_decode_recovery_tests.sh
 
+    - name: Run settings backup concurrency regressions
+      run: python3 Tests/run_settings_backup_concurrency_tests.py
+
+    - name: Run meeting backup refresh regressions
+      run: python3 Tests/run_meeting_backup_refresh_tests.py
+
     # Tiny Whisper GGUF output is nondeterministic on hosted macOS runners.
     # Keep this E2E assertion in the suite for local validation, but skip it in CI.
     - name: Build and test (excluding flaky Tiny Whisper E2E)

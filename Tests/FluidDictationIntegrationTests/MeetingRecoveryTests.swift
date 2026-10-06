@@ -1,6 +1,7 @@
 // Existing end-to-end fixture suite is kept together to share its setup and helpers.
 // swiftlint:disable file_length
 import AppKit
+import Combine
 import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
@@ -11,6 +12,50 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(
+            tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil
+        )
+        let leasing = SuspendedHandbackASRActivityLeasing()
+        defer { leasing.resumeHandback() }
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: capture,
+            processing: StubProcessingController(),
+            audioArbiter: AudioActivityArbiter { leasing }
+        )
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        capture.emit(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: "Fixture stop"))
+        for _ in 0..<200 {
+            if leasing.handbackStarted { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(leasing.handbackStarted, "Unexpected stop must reach audio handback")
+        XCTAssertEqual(coordinator.state, .interrupted(session.id))
+        XCTAssertFalse(coordinator.isQuiescent, "Retry/settings refresh must wait for handback")
+        await self.drainCaptureEvents()
+        var notifications = 0
+        let subscription = coordinator.objectWillChange.sink { notifications += 1 }
+        defer { subscription.cancel() }
+        leasing.resumeHandback()
+        for _ in 0..<200 {
+            if coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertGreaterThan(notifications, 0, "Views must be told when retry/settings refresh becomes safe")
+        XCTAssertEqual(coordinator.state, .interrupted(session.id), "Completion must not restart recording")
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(leasing.handbackCount, 1)
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.state, .interrupted)
+        XCTAssertTrue(saved?.failures.isEmpty == true)
+    }
+
     func testVoiceProcessingFallbackDoesNotDegradeHealthyRecording() async throws {
         for deliverDuringStart in [false, true] {
             let dir = self.makeTempDirectory()
@@ -2468,17 +2513,111 @@ final class MeetingRecoveryTests: XCTestCase {
         try Data("{}".utf8).write(to: checkpointURL)
         XCTAssertTrue(FileManager.default.fileExists(atPath: checkpointURL.path))
 
+        var lines: [String] = []
         let coordinator = MeetingSessionCoordinator(
             store: store,
             capture: StubCaptureController(),
             processing: StubProcessingController(),
-            audioArbiter: StubArbiter()
+            audioArbiter: StubArbiter(),
+            processingLogger: { lines.append($0) }
         )
         await coordinator.ensureRestored()
         let result = try await coordinator.retryProcessing()
 
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines.first?.contains("outcome=completed") == true)
+        XCTAssertTrue(lines.first?.contains("stage=completed") == true)
+        XCTAssertFalse(lines.first?.contains("errorCode=") == true)
         XCTAssertEqual(result.state, .completed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: checkpointURL.path))
+    }
+
+    func testProcessingDiagnosticsPreserveFailureAndTranscriptAcrossRetries() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = self.makeCorrectionSession(state: .interrupted).session
+        session.title = "Private meeting title"
+        session.transcriptSegments[0].text = "Private transcript content"
+        try await store.create(session)
+        let message = "Missing model\n" + String(repeating: "x", count: 1000)
+        let error = NSError(domain: "MeetingProbe\r", code: 42, userInfo: [NSLocalizedDescriptionKey: message])
+        var lines: [String] = []
+        let arbiter = StubArbiter()
+        let processing = DiagnosticFailingProcessingController(error: error)
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: StubCaptureController(),
+            processing: processing,
+            audioArbiter: arbiter,
+            processingLogger: { lines.append($0) }
+        )
+        await coordinator.ensureRestored()
+        for attempt in 1...2 {
+            do {
+                _ = try await coordinator.retryProcessing(sessionID: session.id)
+                XCTFail("Expected the processing error")
+            } catch {
+                XCTAssertEqual((error as NSError).code, 42)
+            }
+            XCTAssertEqual(lines.count, attempt, "Exactly one terminal diagnostic per attempt")
+            let line = try XCTUnwrap(lines.last)
+            XCTAssertTrue(line.contains("outcome=failed"))
+            XCTAssertTrue(line.contains("stage=transcribing"))
+            XCTAssertTrue(line.contains("errorCode=MeetingProbe .42"))
+            XCTAssertTrue(line.contains("elapsedMs="))
+            XCTAssertLessThan(line.count, 800)
+            XCTAssertFalse(line.contains("\n"))
+            XCTAssertFalse(line.contains("\r"))
+            XCTAssertFalse(line.contains(session.title))
+            XCTAssertFalse(line.contains("Private transcript content"))
+            let saved = try await store.load(id: session.id)
+            let persisted = try XCTUnwrap(saved)
+            XCTAssertEqual(persisted.state, .failed)
+            XCTAssertEqual(persisted.failures.last?.message, message, "Only log details are shortened")
+            XCTAssertEqual(persisted.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(persisted.audioTracks, session.audioTracks)
+            XCTAssertEqual(arbiter.releaseCount, attempt)
+        }
+        XCTAssertEqual(arbiter.acquireCount, 2)
+        processing.emitLateProgress(.completed)
+        XCTAssertEqual(lines.count, 2, "Stale progress must not produce a second outcome")
+        XCTAssertEqual(coordinator.activeSession?.state, .failed)
+        XCTAssertEqual(coordinator.activeSession?.transcriptSegments, session.transcriptSegments)
+    }
+
+    func testProcessingCancellationLogsWithoutAddingFailureOrLosingTranscript() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeCorrectionSession(state: .interrupted).session
+        try await store.create(session)
+        var lines: [String] = []
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: StubCaptureController(),
+            processing: DiagnosticFailingProcessingController(error: CancellationError()),
+            audioArbiter: arbiter,
+            processingLogger: { lines.append($0) }
+        )
+        await coordinator.ensureRestored()
+        do {
+            _ = try await coordinator.retryProcessing(sessionID: session.id)
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines.first?.contains("outcome=cancelled") == true)
+        XCTAssertFalse(lines.first?.contains("errorCode=") == true)
+        let saved = try await store.load(id: session.id)
+        let persisted = try XCTUnwrap(saved)
+        XCTAssertEqual(persisted.state, .interrupted)
+        XCTAssertTrue(persisted.failures.isEmpty)
+        XCTAssertEqual(persisted.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(persisted.audioTracks, session.audioTracks)
+        XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
     // MARK: - Slice 3, test 4: checkpoint survives a failed retry
@@ -4783,6 +4922,27 @@ private final class StubProcessingController: MeetingProcessingControlling {
     }
 }
 
+@MainActor
+private final class DiagnosticFailingProcessingController: MeetingProcessingControlling {
+    private let error: Error
+    private var lastProgress: (@MainActor (MeetingProcessingStage) -> Void)?
+
+    init(error: Error) { self.error = error }
+
+    func emitLateProgress(_ stage: MeetingProcessingStage) { self.lastProgress?(stage) }
+
+    func process(
+        session: MeetingSession,
+        sessionDirectory: URL,
+        progress: @escaping @MainActor (MeetingProcessingStage) -> Void
+    ) async throws -> MeetingProcessingResult {
+        self.lastProgress = progress
+        progress(.identifyingSpeakers)
+        progress(.transcribing)
+        throw self.error
+    }
+}
+
 private struct ProcessingFailure: Error {}
 
 @MainActor
@@ -4873,12 +5033,13 @@ private final class GatedProcessingController: MeetingProcessingControlling {
 @MainActor
 private final class StubArbiter: MeetingAudioActivityArbitrating {
     private(set) var acquireCount = 0
+    private(set) var releaseCount = 0
     func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
         self.acquireCount += 1
         return MeetingAudioActivityLease(id: UUID())
     }
 
-    func release(_ lease: MeetingAudioActivityLease) async {}
+    func release(_ lease: MeetingAudioActivityLease) async { self.releaseCount += 1 }
 }
 
 /// Records acquire/release calls without touching a real ASRService.

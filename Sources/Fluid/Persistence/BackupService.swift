@@ -139,6 +139,12 @@ struct SettingsBackupPayload: Codable, Equatable {
     let defaultEditPromptOverride: String?
     let fileTranscriptionSpeakerLabelsEnabled: Bool?
     let fileTranscriptionExpectedSpeakerCount: Int?
+    // Additive fields: absence in an older backup preserves current preferences.
+    var meetingRecordingDefaults: MeetingRecordingDefaults? = nil
+    var privateAIIdleUnload: SettingsStore.PrivateAIIdleUnload? = nil
+    // A present empty map clears prompt overrides; an absent map preserves them.
+    // swiftlint:disable:next discouraged_optional_collection
+    var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {
@@ -157,6 +163,7 @@ struct AppBackupDocument: Codable, Equatable {
 enum BackupServiceError: LocalizedError {
     case unsupportedSchemaVersion(BackupFileVersion)
     case invalidJSON
+    case operationInProgress
 
     var errorDescription: String? {
         switch self {
@@ -164,6 +171,8 @@ enum BackupServiceError: LocalizedError {
             return "This backup uses an unsupported schema version (\(version.major).\(version.minor))."
         case .invalidJSON:
             return "The selected backup file is not a valid FluidVoice backup."
+        case .operationInProgress:
+            return "A backup import or export is already running. Wait for it to finish, then try again."
         }
     }
 }
@@ -172,11 +181,23 @@ enum BackupServiceError: LocalizedError {
 final class BackupService {
     static let shared = BackupService()
 
+    private var operationInProgress = false
+
     private init() {}
 
+    private func beginOperation() throws {
+        guard !self.operationInProgress else { throw BackupServiceError.operationInProgress }
+        self.operationInProgress = true
+    }
+
     func makeBackupDocument() async throws -> AppBackupDocument {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
         try await TranscriptionHistoryStore.shared.waitUntilLoaded()
+        try Task.checkCancellation()
         let pronunciationProfiles = await PronunciationDictionaryStore.shared.allProfiles()
+        try Task.checkCancellation()
         return AppBackupDocument(
             schemaVersion: .current,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown",
@@ -213,20 +234,41 @@ final class BackupService {
     }
 
     func restore(_ document: AppBackupDocument) async throws {
+        try self.beginOperation()
+        defer { self.operationInProgress = false }
+        try Task.checkCancellation()
         try self.validate(document)
+        let asr = AppServices.shared.asr
+        let activityLease = try asr.beginSettingsBackupRestore()
+        defer { asr.releaseExclusiveActivity(activityLease) }
         // A legacy backup represents the complete state from before voice
         // profiles existed. Restoring it must therefore clear newer profiles
         // instead of leaving them attached to restored dictionary entry IDs.
         try await PronunciationDictionaryStore.shared.replaceAllProfiles(
             document.pronunciationProfiles ?? []
         )
+        // Profile replacement is a synchronous actor write once admitted. Finish
+        // the matching settings/History commit even if cancellation arrives during
+        // its actor hop; stopping here would leave a partially restored document.
+        let previousIdleUnload = SettingsStore.shared.privateAIIdleUnload
         SettingsStore.shared.restore(
             from: document.settings,
             promptProfiles: document.promptProfiles,
             appPromptBindings: document.appPromptBindings
         )
+        // Commit settings, History and synchronous observers together before
+        // yielding to another actor, keeping the settings/History snapshot consistent.
         TranscriptionHistoryStore.shared.restore(from: document.transcriptionHistory)
+        // Arm model retirement before admission reopens, including imports whose
+        // unchanged idle preference has no further actor hop. UI notification
+        // delivery must never decide whether the next capture uses stale state.
+        asr.handleSettingsBackupDidRestore()
         NotificationCenter.default.post(name: .settingsBackupDidRestore, object: nil)
+        if let idleUnload = document.settings.privateAIIdleUnload, idleUnload != previousIdleUnload {
+            // Match the preference UI's targeted rescheduling; do not use the
+            // general restore notification to change model timers.
+            await PrivateAIIntegrationService.idleUnloader.settingsChanged()
+        }
     }
 
     func suggestedFilename(for date: Date = Date()) -> String {

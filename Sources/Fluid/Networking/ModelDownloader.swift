@@ -14,7 +14,7 @@ final class HuggingFaceModelDownloader {
         let size: Int64?
     }
 
-    struct ModelItem {
+    nonisolated struct ModelItem: Sendable {
         let path: String
         let isDirectory: Bool
     }
@@ -324,7 +324,7 @@ final class HuggingFaceModelDownloader {
         }
     }
 
-    static func artifactsAreComplete(root: URL, items: [ModelItem]) -> Bool {
+    nonisolated static func artifactsAreComplete(root: URL, items: [ModelItem]) -> Bool {
         items.allSatisfy { item in
             Self.artifactIsComplete(
                 at: root.appendingPathComponent(item.path, isDirectory: item.isDirectory),
@@ -333,7 +333,7 @@ final class HuggingFaceModelDownloader {
         }
     }
 
-    static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
+    nonisolated static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
         guard isDirectory else { return self.fileHasContents(at: url) }
 
         if url.pathExtension == "mlpackage" {
@@ -386,7 +386,7 @@ final class HuggingFaceModelDownloader {
         return false
     }
 
-    private static func fileHasContents(at url: URL) -> Bool {
+    private nonisolated static func fileHasContents(at url: URL) -> Bool {
         guard
             let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
             let type = attributes[.type] as? FileAttributeType,
@@ -464,7 +464,7 @@ final class HuggingFaceModelDownloader {
     /// only 512 bytes are read). There is no `URLResponse` for a cached file, so only the
     /// content is inspected, not a `Content-Type`. Returns `false` (treat as valid) on any
     /// read error, so an unreadable file is never deleted on uncertainty.
-    static func cachedFileIsMarkup(at fileURL: URL) -> Bool {
+    nonisolated static func cachedFileIsMarkup(at fileURL: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
             return false
         }
@@ -531,7 +531,7 @@ final class HuggingFaceModelDownloader {
     /// catches `<!doctype`, `<html`, `<head>`, `<body>`, `<script>`, `<meta>`, comments
     /// (`<!-- -->`) and XML / `<?xml` declarations, not just the two prefixes we used to
     /// match. See issue #353.
-    static func looksLikeHTML(_ data: Data) -> Bool {
+    nonisolated static func looksLikeHTML(_ data: Data) -> Bool {
         var bytes = [UInt8](data.prefix(512))
         if bytes.starts(with: [0xef, 0xbb, 0xbf]) {
             bytes.removeFirst(3)
@@ -644,19 +644,23 @@ final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
         }
     }
 
-    private final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         typealias Completion = @Sendable (Result<(URL, URLResponse), Error>) -> Void
 
         private let onProgress: @Sendable (Int64, Int64) -> Void
+        private let maximumBytes: Int64?
         private let lock = NSLock()
         private var completion: Completion?
         private var downloadResult: Result<(URL, URLResponse), Error>?
+        private var exceededByteLimit = false
         weak var session: URLSession?
 
         init(
+            maximumBytes: Int64?,
             onProgress: @escaping @Sendable (Int64, Int64) -> Void,
             completion: @escaping Completion
         ) {
+            self.maximumBytes = maximumBytes
             self.onProgress = onProgress
             self.completion = completion
         }
@@ -668,6 +672,11 @@ final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
             totalBytesWritten: Int64,
             totalBytesExpectedToWrite: Int64
         ) {
+            if let maximumBytes, totalBytesWritten > maximumBytes || totalBytesExpectedToWrite > maximumBytes {
+                self.lock.withLock { self.exceededByteLimit = true }
+                downloadTask.cancel()
+                return
+            }
             self.onProgress(totalBytesWritten, totalBytesExpectedToWrite)
         }
 
@@ -681,11 +690,26 @@ final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
                 return
             }
 
+            self.retainDownload(at: location, response: response)
+        }
+
+        @discardableResult
+        func retainDownload(at location: URL, response: URLResponse) -> URL? {
             do {
+                if let maximumBytes {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: location.path)
+                    guard let size = attributes[.size] as? NSNumber, size.int64Value <= maximumBytes else {
+                        self.lock.withLock { self.exceededByteLimit = true }
+                        self.storeResult(.failure(URLError(.dataLengthExceedsMaximum)))
+                        return nil
+                    }
+                }
                 let retainedURL = try ProgressiveFileDownloader.retainDownloadedFile(at: location)
                 self.storeResult(.success((retainedURL, response)))
+                return retainedURL
             } catch {
                 self.storeResult(.failure(error))
+                return nil
             }
         }
 
@@ -695,7 +719,14 @@ final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
             didCompleteWithError error: Error?
         ) {
             if let error {
-                self.finish(.failure(error))
+                let retainedFile = self.lock.withLock { () -> URL? in
+                    defer { self.downloadResult = nil }
+                    if case let .success((url, _)) = self.downloadResult { return url }
+                    return nil
+                }
+                if let retainedFile { try? FileManager.default.removeItem(at: retainedFile) }
+                let exceedsLimit = self.lock.withLock { self.exceededByteLimit }
+                self.finish(.failure(exceedsLimit ? URLError(.dataLengthExceedsMaximum) : error))
             } else {
                 let result = self.lock.withLock { self.downloadResult }
                 self.finish(result ?? .failure(URLError(.badServerResponse)))
@@ -731,12 +762,14 @@ final nonisolated class ProgressiveFileDownloader: @unchecked Sendable {
     static func download(
         from url: URL,
         configuration: URLSessionConfiguration,
+        maximumBytes: Int64? = nil,
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (URL, URLResponse) {
         let taskHolder = TaskHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let delegate = Delegate(
+                    maximumBytes: maximumBytes,
                     onProgress: onProgress,
                     completion: { continuation.resume(with: $0) }
                 )

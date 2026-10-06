@@ -90,6 +90,69 @@ final class ZeppelinDataLayerTests: XCTestCase {
         await database.closeAll()
     }
 
+    func testCloseAllAllowsReopeningWithPersistedRows() async throws {
+        let database = FluidZeppelinRoot(root: self.root)
+        let first = try await database.namespace("first", spec: Self.spec)
+        try await self.seed(first, ids: 1...3)
+        await database.closeAll()
+
+        let reopened = try await database.namespace("first", spec: Self.spec)
+        XCTAssertFalse(first === reopened, "Closing releases the cached handle")
+        let count = try await reopened.count().count
+        XCTAssertEqual(count, 3, "A reusable close must preserve indexed rows")
+        await database.closeAll()
+    }
+
+    func testShutdownRejectsCachedAndNewNamespacesWithoutLosingPersistedRows() async throws {
+        let database = FluidZeppelinRoot(root: self.root)
+        let opened = try await database.namespace("first", spec: Self.spec)
+        try await self.seed(opened, ids: 1...3)
+        await database.shutdown()
+
+        for name in ["first", "new-after-shutdown"] {
+            do {
+                _ = try await database.namespace(name, spec: Self.spec)
+                XCTFail("A terminated root must reject \(name)")
+            } catch {
+                XCTAssertTrue(error is CancellationError, "Shutdown must reject opens explicitly")
+            }
+        }
+        XCTAssertEqual(try self.directories(), ["first"], "A rejected open must not create a directory")
+
+        // A fresh instance, as on the next launch, can open the checkpointed data.
+        let relaunched = FluidZeppelinRoot(root: self.root)
+        let count = try await relaunched.namespace("first", spec: Self.spec).count().count
+        XCTAssertEqual(count, 3, "Shutdown must close handles without deleting rows")
+        await relaunched.closeAll()
+    }
+
+    func testShutdownAfterReusableCloseStillRejectsReopening() async throws {
+        let database = FluidZeppelinRoot(root: self.root)
+        _ = try await database.namespace("first", spec: Self.spec)
+        await database.closeAll()
+        await database.shutdown()
+        await database.closeAll()
+
+        do {
+            _ = try await database.namespace("first", spec: Self.spec)
+            XCTFail("A reusable close after shutdown must not restart the root")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testShutdownBeforeOpeningCreatesNoIndexFiles() async throws {
+        let database = FluidZeppelinRoot(root: self.root)
+        await database.shutdown()
+        do {
+            _ = try await database.namespace("first", spec: Self.spec)
+            XCTFail("A never-opened terminated root must reject its first namespace")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: self.root.path))
+    }
+
     // MARK: - Unreadable namespaces are reset
 
     func testACorruptNamespaceIsResetAndReopenedEmpty() async throws {

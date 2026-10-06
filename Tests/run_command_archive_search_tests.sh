@@ -41,6 +41,7 @@ filter_source = service[filter_start:filter_end]
 (output / "AppSearchSnapshot.swift").write_text(
     prefix
     + "    private func schedule() {}\n"
+    + "    func refresh() { self.schedule() }\n"
     + "    func publishForTests(_ groups: [AppSearchGroup]) { self.groups = groups }\n"
     + filter_source
     + "}\n"

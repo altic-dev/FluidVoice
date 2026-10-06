@@ -59,6 +59,35 @@ struct HistoryPresentationTests {
             aiTokensPerSecond: 746,
             audio: audio
         )
+        precondition(HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "An empty Starred or text-filter result must still reveal an existing external selection")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: [enhanced]
+        ), "Already visible selections must preserve active filters")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: nil, allEntries: [enhanced], visibleEntries: []
+        ), "An empty selection must preserve filters")
+        let missingID = UUID()
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: missingID, selectedID: missingID, allEntries: [enhanced], visibleEntries: []
+        ), "Missing or deleted selections must preserve filters")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: nil, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "Local deletion fallback, unstar and restore selection must not clear Starred without a search request")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: missingID, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "An older search request cannot override a newer local selection")
+        let viewSource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
+        let parent = viewSource.components(separatedBy: "private var entryListView:").first ?? ""
+        precondition(parent.contains(".onChange(of: self.historyStore.searchSelectionRequest)"), "External selection must be observed outside the conditionally absent list")
+        precondition(!parent.contains(".onChange(of: self.historyStore.selectedEntryID)"), "Local selection must not become an external reveal event")
+        precondition(parent.contains("self.revealExternalSelection()"), "Parent must use the tested policy")
+        precondition(parent.contains("self.audioAvailabilityRevision = UUID()\n            self.revealExternalSelection()"), "Initial appearance must reveal the already-selected row")
+        precondition(!parent.contains("filteredEntries.map(\\.id), initial: true"), "Initial filter fallback must not erase an external selection before appearance")
+        let contentSource = try String(contentsOfFile: "Sources/Fluid/ContentView.swift", encoding: .utf8)
+        precondition(contentSource.contains("TranscriptionHistoryStore.shared.selectEntryFromSearch(id: id)"), "Sidebar navigation must produce the explicit request before opening History")
+        print("PASS: hidden/empty external reveal, visible/nil/deleted/local/stale non-effects and explicit parent/appearance wiring")
         let before = enhanced
         precondition(enhanced.clipboardText == "final words")
         precondition(enhanced == before, "Reading copy text must not mutate an entry")

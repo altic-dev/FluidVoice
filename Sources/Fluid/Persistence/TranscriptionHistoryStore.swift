@@ -239,6 +239,12 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// One pending sidebar reveal. Repeated clicks replace it; it is never persisted.
+nonisolated struct HistorySearchSelectionRequest: Equatable {
+    let token = UUID()
+    let entryID: UUID
+}
+
 // MARK: - Transcription History Store
 
 @MainActor
@@ -265,6 +271,18 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     @Published var selectedEntryID: UUID?
+    @Published private(set) var searchSelectionRequest: HistorySearchSelectionRequest?
+
+    func selectEntryFromSearch(id: UUID) {
+        self.selectedEntryID = id
+        self.searchSelectionRequest = HistorySearchSelectionRequest(entryID: id)
+    }
+
+    func consumeSearchSelectionRequest(_ request: HistorySearchSelectionRequest) {
+        guard self.searchSelectionRequest == request else { return }
+        self.searchSelectionRequest = nil
+    }
+
     /// Last completed snapshot while a coalesced background refresh is pending.
     /// Rendering must never scan history or schedule work.
     @Published private(set) var todaySummary = TodaySummary(words: 0, transcriptions: 0)
@@ -458,7 +476,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     func restore(from payload: [TranscriptionHistoryEntry]) {
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
-        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRecord.revision) }) { first, _ in first }
+        let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
         self.entries = payload
             .map { entry in
                 var entry = entry
@@ -642,6 +660,12 @@ final class TranscriptionHistoryStore: ObservableObject {
             "HISTORY_BENCH enqueueMs=\((ProcessInfo.processInfo.systemUptime - startedAt) * 1000) upserts=\(upserts.count) deletes=\(deletes.count)",
             source: "TranscriptionHistoryStore"
         )
+    }
+
+    /// Search retries may reload unavailable history, but must never rewrite it.
+    func retryLoadingIfNeeded() {
+        guard !self.hasLoaded else { return }
+        self.retryPersistence()
     }
 
     func retryPersistence() {

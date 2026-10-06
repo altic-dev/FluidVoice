@@ -9,8 +9,13 @@ enum DictionaryPronunciationReferences {
         let embedding: PronunciationEmbedding
     }
 
-    static func make(profiles: [PronunciationDictionaryProfile], hiddenSize: Int? = nil) -> [Reference] {
+    static func make(profiles: [PronunciationDictionaryProfile], hiddenSize: Int? = nil, compatibleModelKey: String? = nil) -> [Reference] {
         profiles.flatMap { profile -> [Reference] in
+            let compatible = compatibleModelKey.map {
+                profile.modelKey == $0 && ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: $0) != nil
+            } ?? !ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(profile.modelKey)
+            guard compatible, profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
+            else { return [] }
             guard hiddenSize == nil || profile.hiddenSize == hiddenSize else { return [] }
             if let calibration = profile.edgeCalibration {
                 let frames = profile.enrollments.compactMap(\.edgeFrameCount)

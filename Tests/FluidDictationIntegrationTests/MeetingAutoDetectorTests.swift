@@ -109,7 +109,7 @@ private final class DetectorHarness {
         set { self.flags.browserEnabled = newValue }
     }
 
-    init() {
+    init(rejectionLogger: @escaping (String) -> Void = { _ in }) {
         let flags = self.flags
         self.detector = MeetingAutoDetector(
             workspaceEvents: self.workspace,
@@ -120,7 +120,8 @@ private final class DetectorHarness {
             activityGate: self.gate,
             clock: self.clock,
             isNativeDetectionEnabled: { flags.nativeEnabled },
-            isBrowserDetectionEnabled: { flags.browserEnabled }
+            isBrowserDetectionEnabled: { flags.browserEnabled },
+            rejectionLogger: rejectionLogger
         )
         self.detector.onPromptRequested = { [weak self] request in self?.prompts.append(request) }
         self.detector.onStillRecordingNudge = { [weak self] in self?.nudges += 1 }
@@ -795,7 +796,7 @@ final class MeetingAutoDetectorTests: XCTestCase {
         let h = DetectorHarness()
         let firstEpisode = h.confirmZoom()
         XCTAssertNotNil(firstEpisode)
-        h.detector.timeoutDismissed(episodeID: try XCTUnwrap(firstEpisode))
+        try h.detector.timeoutDismissed(episodeID: XCTUnwrap(firstEpisode))
 
         // Window disappears; after grace + the 60s release window the episode is evicted.
         h.detector.handleWindowSnapshot([], at: h.clock.now())
@@ -958,6 +959,65 @@ final class MeetingAutoDetectorTests: XCTestCase {
         )
         XCTAssertEqual(h.prompts.count, 1)
         XCTAssertEqual(h.prompts.first?.cta, .record)
+    }
+
+    func testRepeatedBusyEvidenceLogsOnceWithoutBlockingLaterPrompt() {
+        var lines: [String] = []
+        let h = DetectorHarness(rejectionLogger: { lines.append($0) })
+        h.gate.isIdle = false
+        h.confirmZoom()
+        let target = h.detector.automaticTarget
+        for _ in 0..<100 {
+            h.detector.handleWindowSnapshot(
+                [.init(processID: 100, windowID: 900, title: "Zoom Meeting", layer: 0)],
+                at: h.clock.now()
+            )
+        }
+        XCTAssertEqual(lines.filter { $0.contains("reason=busy") }.count, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
+        XCTAssertEqual(h.detector.automaticTarget, target)
+        h.gate.isIdle = true
+        h.detector.handleWindowSnapshot(
+            [.init(processID: 100, windowID: 900, title: "Zoom Meeting", layer: 0)],
+            at: h.clock.now()
+        )
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.prompts.first?.cta, .record)
+    }
+
+    func testRejectionLoggingResetsOnTerminationStopAndSleep() {
+        var lines: [String] = []
+        let h = DetectorHarness(rejectionLogger: { lines.append($0) })
+        h.gate.isIdle = false
+        h.confirmZoom()
+        h.detector.handleWorkspaceEvent(.init(kind: .terminated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+        h.confirmZoom()
+        XCTAssertEqual(lines.filter { $0.contains("reason=busy") }.count, 2)
+        h.detector.stop()
+        h.confirmZoom()
+        XCTAssertEqual(lines.filter { $0.contains("reason=busy") }.count, 3)
+        h.detector.disarmAndClearTransientState()
+        h.confirmZoom()
+        XCTAssertEqual(lines.filter { $0.contains("reason=busy") }.count, 4)
+        XCTAssertTrue(h.prompts.isEmpty)
+    }
+
+    func testRejectionLoggingIsIndependentPerCandidateAndReason() {
+        var lines: [String] = []
+        let h = DetectorHarness(rejectionLogger: { lines.append($0) })
+        h.gate.isIdle = false
+        h.confirmZoom(pid: 100)
+        h.confirmZoom(pid: 200)
+        XCTAssertEqual(lines.filter { $0.contains("reason=busy") }.count, 2)
+        h.advance(31)
+        for _ in 0..<2 {
+            h.detector.handleWindowSnapshot(
+                [.init(processID: 200, windowID: 900, title: "Zoom Meeting", layer: 0)],
+                at: h.clock.now()
+            )
+        }
+        XCTAssertEqual(lines.filter { $0.contains("reason=deadline") }.count, 1)
+        XCTAssertTrue(h.prompts.isEmpty)
     }
 
     func testRedactedZoomUsesAXMeetingTitleEvenWhenWorkplaceComesFirst() async {

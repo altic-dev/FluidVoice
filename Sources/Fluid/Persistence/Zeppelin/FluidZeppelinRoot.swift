@@ -16,6 +16,7 @@ actor FluidZeppelinRoot {
 
     private let root: URL
     private var namespaces: [String: Task<ZeppelinStore, Error>] = [:]
+    private var stopped = false
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default
@@ -28,6 +29,7 @@ actor FluidZeppelinRoot {
     /// A second open of the same directory fails on its writer lock, so the open is
     /// cached as a task: concurrent first callers share one open instead of racing.
     func namespace(_ name: String, spec: NamespaceSpec) async throws -> ZeppelinStore {
+        guard !self.stopped else { throw CancellationError() }
         if let open = self.namespaces[name] {
             return try await open.value
         }
@@ -55,8 +57,8 @@ actor FluidZeppelinRoot {
         }
     }
 
-    /// Closes every open namespace so their logs are checkpointed rather than
-    /// replayed on the next launch. Called from `applicationWillTerminate`.
+    /// Closes cached handles. This is reusable; app termination uses `shutdown`.
+    /// SearchIndex seals large active indexes before closure to avoid WAL replay.
     func closeAll() async {
         for (name, open) in self.namespaces {
             do {
@@ -69,5 +71,11 @@ actor FluidZeppelinRoot {
             }
         }
         self.namespaces.removeAll()
+    }
+
+    /// App termination permanently rejects new opens before draining old ones.
+    func shutdown() async {
+        self.stopped = true
+        await self.closeAll()
     }
 }
