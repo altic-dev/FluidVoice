@@ -3113,7 +3113,7 @@ struct ContentView: View {
                 self.rewriteModeService.clearState()
                 return
             }
-            DebugLogger.shared.info("Processing rewrite with instruction: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing rewrite instruction (\(transcribedText.count) chars)", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .edit,
@@ -3127,7 +3127,7 @@ struct ContentView: View {
         // If this was a command recording, process the command
         if wasCommandMode {
             guard !cancelledAtASRStop else { return }
-            DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing command (\(transcribedText.count) chars)", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .command,
@@ -4592,7 +4592,7 @@ struct ContentView: View {
     private func processCommandWithVoice(_ command: String, lifecycleID: UInt64) async {
         let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
-        DebugLogger.shared.info("Processing voice command: '\(command)'", source: "ContentView")
+        DebugLogger.shared.info("Processing voice command (\(command.count) chars)", source: "ContentView")
 
         // Show processing animation
         self.menuBarManager.setProcessing(true)
