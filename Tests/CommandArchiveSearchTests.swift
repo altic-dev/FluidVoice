@@ -15,6 +15,11 @@ final class SearchIndex: Sendable {
     static let shared = SearchIndex()
 }
 
+final class DebugLogger {
+    static let shared = DebugLogger()
+    func info(_: String, source _: String) {}
+}
+
 final class ZeppelinCancellationToken {}
 enum SettingsSearchTarget: Hashable, Sendable { case test }
 

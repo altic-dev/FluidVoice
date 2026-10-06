@@ -317,6 +317,12 @@ final class ChatHistoryStore: ObservableObject {
             return
         }
         self.sessions = decoded.entries
+        if decoded.skipped > 0 {
+            DebugLogger.shared.info(
+                "Skipped \(decoded.skipped) unreadable chat sessions",
+                source: "ChatHistoryStore"
+            )
+        }
 
         // Load current chat ID
         self.currentChatID = self.defaults.string(forKey: Keys.currentChatID)
