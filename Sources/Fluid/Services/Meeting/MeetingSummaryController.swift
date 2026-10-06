@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
-    case executive, detailed, actions, decisions, participants, topics
+    case executive, detailed, actions, decisions, participants, topics, custom
     var id: String {
         self.rawValue
     }
@@ -16,6 +16,7 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .decisions: "Key decisions"
         case .participants: "Participants"
         case .topics: "Topics discussed"
+        case .custom: "Custom prompt"
         }
     }
 }
@@ -159,13 +160,20 @@ final class MeetingSummaryController: ObservableObject {
         var configurationHash: String?
         var promptVersion: Int?
         var generatedAt: Date?
+        /// Set for custom-prompt summaries, so an edited prompt does not show an older result.
+        var promptHash: String?
 
         var provenance: String {
             "\(self.providerName ?? "Fluid Intelligence") · \(self.modelID)"
         }
+
+        /// On-device summaries stay hidden while that path is disabled for accuracy.
+        func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
+            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+        }
     }
 
-    func refresh(session: MeetingSession?, kind: MeetingSummaryKind) async {
+    func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
@@ -174,15 +182,17 @@ final class MeetingSummaryController: ObservableObject {
         self.error = nil
         self.checking = true
         let model = self.model
+        let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
             guard let session,
                   let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
-                  // On-device summaries stay hidden while that path is disabled for accuracy.
-                  saved.providerID != nil,
-                  saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+                  saved.isCurrent(
+                      transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+                      promptHash: promptHash
+                  )
             else { return (installed, nil) }
             return (installed, saved)
         }.value
@@ -242,7 +252,7 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute) {
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
         guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
@@ -260,7 +270,13 @@ final class MeetingSummaryController: ObservableObject {
                         throw MeetingPostProcessingError.invalidOutput
                     }
                     try Task.checkCancellation()
-                    let text = try await MeetingSummaryRemoteService.shared.generate(transcript: transcript, kind: kind, route: route)
+                    let instructions = kind == .custom ? customPrompt.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    let text = try await MeetingSummaryRemoteService.shared.generate(
+                        transcript: transcript,
+                        kind: kind,
+                        route: route,
+                        customInstructions: instructions
+                    )
                     try Task.checkCancellation()
                     guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
@@ -273,7 +289,8 @@ final class MeetingSummaryController: ObservableObject {
                         providerName: route.providerName,
                         configurationHash: route.configurationHash,
                         promptVersion: 1,
-                        generatedAt: Date()
+                        generatedAt: Date(),
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
                     )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)

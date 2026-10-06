@@ -36,6 +36,10 @@ struct MeetingSummaryView: View {
         return self.catalog.filter { seen.insert($0.providerID).inserted }
     }
 
+    private var needsCustomPrompt: Bool {
+        self.kind == .custom && self.preferences.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var modelID: String {
         self.preferences.selection.modelsByProvider[self.providerKey] ?? ""
     }
@@ -56,7 +60,9 @@ struct MeetingSummaryView: View {
         .frame(maxWidth: 960, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, self.theme.metrics.spacing.md)
-        .task(id: self.refreshID) { await self.controller.refresh(session: self.session, kind: self.kind) }
+        .task(id: self.refreshID) {
+            await self.controller.refresh(session: self.session, kind: self.kind, customPrompt: self.preferences.customPrompt)
+        }
         .task { self.reloadProviders() }
         .onReceive(self.settings.objectWillChange) { _ in
             // SettingsStore publishes before mutating its defaults.
@@ -98,6 +104,9 @@ struct MeetingSummaryView: View {
                     }
                 }
                 .disabled(self.controller.busy)
+                if self.kind == .custom {
+                    self.customPromptEditor
+                }
                 self.actions
                 if self.session == nil {
                     Text("Open a completed meeting to summarize its transcript.")
@@ -176,6 +185,34 @@ struct MeetingSummaryView: View {
         }
     }
 
+    private var customPromptEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Custom prompt").font(self.theme.typography.caption)
+            TextEditor(text: self.$preferences.customPrompt)
+                .font(self.theme.typography.body)
+                .scrollContentBackground(.hidden)
+                .padding(self.theme.metrics.spacing.sm)
+                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                .overlay(alignment: .topLeading) {
+                    if self.preferences.customPrompt.isEmpty {
+                        Text("For example: Write a short recap email to the client with next steps and owners.")
+                            .font(self.theme.typography.body)
+                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .padding(self.theme.metrics.spacing.sm)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(minHeight: 96, maxHeight: 200)
+                .disabled(self.controller.busy)
+                .accessibilityLabel("Custom summary prompt")
+            Text("Saved for every meeting. Replaces the summary type instructions; the transcript is still treated as source material only.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var actions: some View {
         FluidGlassControlGroup {
             HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -189,11 +226,16 @@ struct MeetingSummaryView: View {
                     Button(self.controller.output.isEmpty ? "Generate summary" : "Regenerate summary", systemImage: "sparkles") {
                         self.resolveRoute()
                         if let session, let route {
-                            self.controller.summarize(session: session, kind: self.kind, route: route)
+                            self.controller.summarize(
+                                session: session,
+                                kind: self.kind,
+                                route: route,
+                                customPrompt: self.preferences.customPrompt
+                            )
                         }
                     }
                     .fluidGlassAction(prominent: true)
-                    .disabled(self.route == nil || self.session?.transcriptSegments.isEmpty != false || !self.isQuiescent)
+                    .disabled(self.route == nil || self.needsCustomPrompt || self.session?.transcriptSegments.isEmpty != false || !self.isQuiescent)
                 }
             }
         }

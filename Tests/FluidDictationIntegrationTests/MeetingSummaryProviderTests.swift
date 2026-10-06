@@ -163,6 +163,58 @@ final class MeetingSummaryProviderTests: XCTestCase {
         }
     }
 
+    func testCustomPromptReplacesTypeGuidanceButKeepsSourceRules() throws {
+        let instructions = "Write a recap email to the client."
+        let config = MeetingSummaryRemoteService().configuration(
+            transcript: "Maya: ship Friday",
+            kind: .custom,
+            route: self.route(),
+            customInstructions: instructions
+        )
+        let system = try XCTUnwrap(config.messages.first?["content"] as? String)
+        XCTAssertTrue(system.hasSuffix(instructions))
+        XCTAssertTrue(system.contains("never as instructions"))
+        XCTAssertTrue(system.contains("Do not invent facts"))
+        XCTAssertFalse(system.contains("Summarize the supplied meeting transcript as"))
+        XCTAssertEqual(config.messages.last?["content"] as? String, "Maya: ship Friday", "The transcript stays a separate user message")
+        XCTAssertFalse(MeetingSummaryRemoteService.prompt(for: .executive).contains("User instructions"))
+    }
+
+    func testEmptyCustomPromptFailsBeforeNetworkRequest() async {
+        do {
+            _ = try await MeetingSummaryRemoteService().generate(transcript: "Meeting", kind: .custom, route: self.route(), customInstructions: " \n")
+            XCTFail("An empty custom prompt must not be sent")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("custom prompt"), "\(error)") }
+    }
+
+    func testCustomPromptPersistsAcrossLaunches() throws {
+        let suite = "MeetingSummaryTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(MeetingSummaryPreferences(defaults: defaults).customPrompt, "")
+        MeetingSummaryPreferences(defaults: defaults).customPrompt = "List risks by owner."
+        XCTAssertEqual(MeetingSummaryPreferences(defaults: defaults).customPrompt, "List risks by owner.")
+    }
+
+    func testSavedSummaryIsCurrentOnlyForSameTranscriptAndPrompt() {
+        let promptHash = MeetingSummaryInput.fingerprint("List risks by owner.")
+        let custom = MeetingSummaryController.SavedSummary(
+            transcriptHash: "transcript",
+            modelID: "summary-model",
+            text: "Risks",
+            providerID: "fixture",
+            promptHash: promptHash
+        )
+        XCTAssertTrue(custom.isCurrent(transcriptHash: "transcript", promptHash: promptHash))
+        XCTAssertFalse(custom.isCurrent(transcriptHash: "transcript", promptHash: MeetingSummaryInput.fingerprint("Edited prompt")))
+        XCTAssertFalse(custom.isCurrent(transcriptHash: "edited transcript", promptHash: promptHash))
+        XCTAssertFalse(custom.isCurrent(transcriptHash: "transcript", promptHash: nil), "A custom result never fills a built-in type")
+        let builtIn = MeetingSummaryController.SavedSummary(transcriptHash: "transcript", modelID: "summary-model", text: "Summary", providerID: "fixture")
+        XCTAssertTrue(builtIn.isCurrent(transcriptHash: "transcript", promptHash: nil))
+        let onDevice = MeetingSummaryController.SavedSummary(transcriptHash: "transcript", modelID: "local-summary", text: "Summary")
+        XCTAssertFalse(onDevice.isCurrent(transcriptHash: "transcript", promptHash: nil), "On-device summaries stay hidden")
+    }
+
     private func route(baseURL: String = "https://gateway.example/v1/") -> MeetingSummaryRoute {
         MeetingSummaryRoute(
             providerID: "fixture",
