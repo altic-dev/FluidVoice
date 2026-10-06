@@ -22,7 +22,7 @@ struct TranscriptionHistoryView: View {
     @Environment(\.theme) private var theme
 
     @State private var searchQuery: String = ""
-    @State private var starredOnly = false
+    @State private var pinnedOnly = false
     @State private var showClearConfirmation: Bool = false
     @State private var showReportConfirmation: Bool = false
     @State private var selectedReportEntry: TranscriptionHistoryEntry?
@@ -52,7 +52,7 @@ struct TranscriptionHistoryView: View {
     }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
-        self.historyStore.search(query: self.searchQuery, starredOnly: self.starredOnly)
+        self.historyStore.search(query: self.searchQuery, starredOnly: self.pinnedOnly, pinnedFirst: true)
     }
 
     private var selectedEntry: TranscriptionHistoryEntry? {
@@ -65,15 +65,14 @@ struct TranscriptionHistoryView: View {
             // MARK: - Left Panel: Entry List
 
             VStack(spacing: 0) {
-                VStack(spacing: 10) {
+                HStack(spacing: 8) {
                     self.searchBar
-
-                    Picker("History filter", selection: self.$starredOnly) {
+                    FluidDropdownPicker("History filter", selectedTitle: self.pinnedOnly ? "Pinned" : "All", selection: self.$pinnedOnly) {
                         Text("All").tag(false)
-                        Text("Starred").tag(true)
+                        Text("Pinned").tag(true)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    .fluidDropdownStyle()
+                    .fixedSize()
                 }
                 .padding(12)
 
@@ -164,7 +163,7 @@ struct TranscriptionHistoryView: View {
                 }
             }
         } message: {
-            Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries, including starred entries. This action cannot be undone.")
+            Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries, including pinned entries. This action cannot be undone.")
         }
         .alert("Report Sent", isPresented: self.$showReportConfirmation) {
             Button("OK", role: .cancel) {}
@@ -241,7 +240,7 @@ struct TranscriptionHistoryView: View {
             visibleEntries: self.filteredEntries
         ) else { return }
         self.searchQuery = ""
-        self.starredOnly = false
+        self.pinnedOnly = false
     }
 
     /// The parent clears a hidden selection's filters; scroll after that view update.
@@ -263,17 +262,13 @@ struct TranscriptionHistoryView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(spacing: 8) {
-                            if entry.isStarred {
-                                Image(systemName: "star.fill")
-                                    .font(self.theme.typography.captionStrong)
-                                    .foregroundStyle(self.theme.palette.accent)
-                                    .accessibilityLabel("Starred")
-                            }
                             HistoryAppIcon(appName: entry.appName)
                             Spacer(minLength: 4)
                             Text(entry.relativeTimeString)
                                 .font(self.theme.typography.caption).foregroundStyle(.secondary)
                         }
+                        .padding(.trailing, 36)
+                        .frame(minHeight: 28)
                         Text(entry.previewText)
                             .font(self.theme.typography.body)
                             .lineLimit(2).multilineTextAlignment(.leading)
@@ -318,6 +313,9 @@ struct TranscriptionHistoryView: View {
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityAction(named: Text("Copy final text")) { self.copyFinalText(entry) }
                 .accessibilityAction(named: Text("Report issue")) { self.openFeedbackReport(for: entry) }
+                .accessibilityAction(named: Text(entry.isStarred ? "Unpin transcription" : "Pin transcription")) {
+                    self.historyStore.toggleStar(id: entry.id)
+                }
                 HStack(spacing: 8) {
                     Button {
                         self.copyFinalText(entry)
@@ -348,6 +346,21 @@ struct TranscriptionHistoryView: View {
                 .allowsHitTesting(showsActions)
                 .accessibilityHidden(!showsActions)
             }
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    self.historyStore.toggleStar(id: entry.id)
+                } label: {
+                    Image(systemName: entry.isStarred ? "pin.fill" : "pin")
+                        .font(self.theme.typography.body)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(entry.isStarred ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                .help(entry.isStarred ? "Unpin transcription" : "Pin transcription")
+                .accessibilityLabel(entry.isStarred ? "Unpin transcription" : "Pin transcription")
+                .accessibilityIdentifier("History.Pin.\(entry.id.uuidString)")
+            }
         }
         .padding(12)
         .background(self.theme.palette.accent.opacity(isSelected ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 14))
@@ -361,7 +374,7 @@ struct TranscriptionHistoryView: View {
         Button {
             self.historyStore.toggleStar(id: entry.id)
         } label: {
-            Label(entry.isStarred ? "Unstar" : "Star", systemImage: entry.isStarred ? "star.slash" : "star")
+            Label(entry.isStarred ? "Unpin" : "Pin", systemImage: entry.isStarred ? "pin.slash" : "pin")
         }
 
         Divider()
@@ -427,18 +440,18 @@ struct TranscriptionHistoryView: View {
 
     private var emptyStateIcon: String {
         if !self.searchQuery.isEmpty { return "magnifyingglass" }
-        return self.starredOnly ? "star" : "clock.arrow.circlepath"
+        return self.pinnedOnly ? "pin" : "clock.arrow.circlepath"
     }
 
     private var emptyStateTitle: String {
         if !self.searchQuery.isEmpty { return "No Results" }
-        return self.starredOnly ? "No Starred Transcriptions" : "No History Yet"
+        return self.pinnedOnly ? "No Pinned Transcriptions" : "No History Yet"
     }
 
     private var emptyStateMessage: String {
         if !self.searchQuery.isEmpty { return "Try a different search term" }
-        return self.starredOnly
-            ? "Star a transcription to find it here quickly"
+        return self.pinnedOnly
+            ? "Pin a transcription to keep it at the top of History"
             : "Your transcriptions will appear here"
     }
 
@@ -515,19 +528,6 @@ struct TranscriptionHistoryView: View {
                         self.detailHeading(entry)
                         self.detailActions(entry)
                     }
-                }
-                HStack {
-                    Spacer()
-                    Button {
-                        self.historyStore.toggleStar(id: entry.id)
-                    } label: {
-                        Label(entry.isStarred ? "Starred" : "Star", systemImage: entry.isStarred ? "star.fill" : "star")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .tint(entry.isStarred ? self.theme.palette.accent : nil)
-                    .accessibilityLabel(entry.isStarred ? "Unstar transcription" : "Star transcription")
-                    .help(entry.isStarred ? "Remove from Starred" : "Save to Starred")
                 }
                 if self.audioEntryID == entry.id {
                     HistoryInlineAudioView(entry: entry)

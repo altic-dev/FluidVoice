@@ -218,6 +218,18 @@ final class DebugLogger {
         )
         store.restore(from: [older, newer])
         precondition(store.search(query: "").map(\.id) == [newer.id, older.id], "Stars must preserve chronological order")
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [older.id, newer.id], "History displays pins first")
+        precondition(store.search(query: "prompt", pinnedFirst: true).map(\.id) == [older.id, newer.id], "Pin ordering applies after text filtering")
+        precondition(store.search(query: "Another", pinnedFirst: true).map(\.id) == [newer.id], "Pins must not bypass the search filter")
+        let storedOrder = store.entries
+        let selectedID = store.selectedEntryID
+        store.toggleStar(id: newer.id)
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [newer.id, older.id], "Multiple pins retain newest-first order")
+        store.toggleStar(id: older.id)
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [newer.id, older.id], "Unpin returns the entry to its date position")
+        store.toggleStar(id: newer.id)
+        store.toggleStar(id: older.id)
+        precondition(store.entries == storedOrder && store.selectedEntryID == selectedID, "Pinning must preserve persisted chronology, all metadata, and selection")
         precondition(store.search(query: " ", starredOnly: true).map(\.id) == [older.id])
         for query in ["PROMPT", "Original", "Editor", "Reference"] {
             precondition(store.search(query: query, starredOnly: true).map(\.id) == [older.id], "Search must intersect with stars across every field")

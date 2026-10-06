@@ -439,19 +439,23 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     /// Search entries by text content
-    func search(query: String, starredOnly: Bool = false) -> [TranscriptionHistoryEntry] {
+    func search(query: String, starredOnly: Bool = false, pinnedFirst: Bool = false) -> [TranscriptionHistoryEntry] {
         let entries = starredOnly ? self.entries.filter(\.isStarred) : self.entries
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return entries
+        let matches: [TranscriptionHistoryEntry]
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            matches = entries
+        } else {
+            let lowercased = query.lowercased()
+            matches = entries.filter { entry in
+                entry.rawText.lowercased().contains(lowercased) ||
+                    entry.processedText.lowercased().contains(lowercased) ||
+                    entry.appName.lowercased().contains(lowercased) ||
+                    entry.windowTitle.lowercased().contains(lowercased)
+            }
         }
-
-        let lowercased = query.lowercased()
-        return entries.filter { entry in
-            entry.rawText.lowercased().contains(lowercased) ||
-                entry.processedText.lowercased().contains(lowercased) ||
-                entry.appName.lowercased().contains(lowercased) ||
-                entry.windowTitle.lowercased().contains(lowercased)
-        }
+        guard pinnedFirst, !starredOnly else { return matches }
+        // Stable, linear partition for History's display; stored chronology and other readers stay unchanged.
+        return matches.filter(\.isStarred) + matches.filter { !$0.isStarred }
     }
 
     /// Get entries filtered by date range
