@@ -397,18 +397,10 @@ extension VoiceEngineSettingsView {
 
                     if !model.usesAppleLogo {
                         if isSelected {
-                            Button {
-                                self.viewModel.deleteSpeechModel(model)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.fluidSystem(size: 15))
-                                    .foregroundStyle(.red.opacity(0.7))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(self.viewModel.areSpeechModelActionsBlocked)
-                            .opacity(isSelected ? 1 : 0)
-                            .allowsHitTesting(isSelected)
-                            .accessibilityHidden(!isSelected)
+                            self.speechModelTrashButton(for: model)
+                                .opacity(isSelected ? 1 : 0)
+                                .allowsHitTesting(isSelected)
+                                .accessibilityHidden(!isSelected)
                         }
                     }
                 }
@@ -417,13 +409,13 @@ extension VoiceEngineSettingsView {
                     if model.requiresExternalArtifacts {
                         HStack(spacing: 8) {
                             if model.externalCoreMLSpec?.sourceURL != nil {
-                                Button {
+                                SpeechModelRowIconButton(
+                                    systemName: "arrow.up.right.square",
+                                    fontSize: 14,
+                                    accessibilityLabel: "Open \(model.humanReadableName) source"
+                                ) {
                                     self.viewModel.openExternalModelSource(for: model)
-                                } label: {
-                                    Image(systemName: "arrow.up.right.square")
-                                        .font(.fluidSystem(size: 14))
                                 }
-                                .buttonStyle(.plain)
                                 .foregroundStyle(self.voiceEngineTertiaryText)
                                 .disabled(self.viewModel.areSpeechModelActionsBlocked)
                             }
@@ -479,6 +471,18 @@ extension VoiceEngineSettingsView {
         }
         .opacity(self.viewModel.asr.isRunning ? 0.6 : 1.0)
         .allowsHitTesting(!self.viewModel.asr.isRunning)
+    }
+
+    private func speechModelTrashButton(for model: SettingsStore.SpeechModel) -> some View {
+        SpeechModelRowIconButton(
+            systemName: "trash",
+            fontSize: 15,
+            accessibilityLabel: "Delete \(model.humanReadableName)"
+        ) {
+            self.viewModel.deleteSpeechModel(model)
+        }
+        .foregroundStyle(.red.opacity(0.7))
+        .disabled(self.viewModel.areSpeechModelActionsBlocked)
     }
 
     @ViewBuilder
@@ -768,7 +772,7 @@ extension VoiceEngineSettingsView {
             } else if let imageName {
                 Image(imageName)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .scaledToFit()
                     // NVIDIA logo larger to fill more of the container
                     .frame(width: isNvidia ? 24 : 18, height: isNvidia ? 24 : 18)
             } else {
@@ -812,4 +816,24 @@ extension VoiceEngineSettingsView {
 
 extension Notification.Name {
     static let openCustomDictionaryFromVoiceEngine = Notification.Name("OpenCustomDictionaryFromVoiceEngine")
+}
+
+/// Icon-only action inside a speech model row. The 24x24pt target meets the
+/// HIG minimum and keeps clicks on the button instead of the row's tap gesture.
+struct SpeechModelRowIconButton: View {
+    let systemName: String
+    let fontSize: CGFloat
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: self.action) {
+            Image(systemName: self.systemName)
+                .font(.fluidSystem(size: self.fontSize))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.accessibilityLabel)
+    }
 }
