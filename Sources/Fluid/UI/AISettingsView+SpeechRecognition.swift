@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+@MainActor
 extension VoiceEngineSettingsView {
     // MARK: - Speech Recognition Card
 
@@ -525,7 +526,7 @@ extension VoiceEngineSettingsView {
     @ViewBuilder
     private func speechModelLanguagePicker(for model: SettingsStore.SpeechModel) -> some View {
         if model.isWhisperModel {
-            self.whisperLanguagePickerButton
+            self.whisperLanguagePickerButton(isPresented: self.$isShowingWhisperLanguagePicker)
         } else if model == .cohereTranscribeSixBit {
             Menu {
                 ForEach(SettingsStore.CohereLanguage.allCases) { language in
@@ -548,16 +549,16 @@ extension VoiceEngineSettingsView {
         }
     }
 
-    private var whisperLanguagePickerButton: some View {
+    func whisperLanguagePickerButton(isPresented: Binding<Bool>) -> some View {
         Button {
             self.whisperLanguageSearchText = ""
-            self.isShowingWhisperLanguagePicker.toggle()
+            isPresented.wrappedValue.toggle()
         } label: {
             self.languageChipLabel(self.selectedWhisperLanguageName)
         }
         .buttonStyle(.plain)
-        .popover(isPresented: self.$isShowingWhisperLanguagePicker, arrowEdge: .bottom) {
-            self.whisperLanguagePickerPopover
+        .popover(isPresented: isPresented, arrowEdge: .bottom) {
+            self.whisperLanguagePickerPopover(isPresented: isPresented)
         }
     }
 
@@ -584,7 +585,7 @@ extension VoiceEngineSettingsView {
         self.whisperLanguageSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private var whisperLanguagePickerPopover: some View {
+    private func whisperLanguagePickerPopover(isPresented: Binding<Bool>) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -604,7 +605,7 @@ extension VoiceEngineSettingsView {
                     {
                         Button {
                             self.settings.selectedWhisperLanguageCode = nil
-                            self.isShowingWhisperLanguagePicker = false
+                            isPresented.wrappedValue = false
                         } label: {
                             self.whisperLanguagePickerRow(
                                 title: "Automatic",
@@ -621,7 +622,7 @@ extension VoiceEngineSettingsView {
                         let languageCode = VoiceEngineLanguageCatalog.whisperLanguageCode(for: language.id)
                         Button {
                             self.settings.selectedWhisperLanguageCode = languageCode
-                            self.isShowingWhisperLanguagePicker = false
+                            isPresented.wrappedValue = false
                         } label: {
                             self.whisperLanguagePickerRow(
                                 title: language.displayName,
@@ -637,32 +638,40 @@ extension VoiceEngineSettingsView {
         .frame(width: 280, height: 420)
     }
 
-    private func whisperLanguagePickerRow(title: String, isSelected: Bool) -> some View {
+    func whisperLanguagePickerRow(title: String, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
             Text(title)
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer(minLength: 12)
             if isSelected {
                 Image(systemName: "checkmark")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.accent)
+                    .accessibilityHidden(true)
             }
         }
-        .contentShape(Rectangle())
         .padding(.horizontal, 12)
         .frame(height: 28)
+        .contentShape(Rectangle())
     }
 
     private func languageChipLabel(_ title: String) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "globe").foregroundStyle(self.theme.palette.accent)
-            Text(title).lineLimit(1)
+            Image(systemName: "globe")
+                .foregroundStyle(self.theme.palette.accent)
+                .accessibilityHidden(true)
+            Text(title)
+                .lineLimit(1)
+                .help(title)
             FluidDropdownChevron()
         }
         .font(self.theme.typography.bodySmall)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .fluidDropdownSurface()
     }
 
@@ -702,16 +711,19 @@ extension VoiceEngineSettingsView {
                             Text(language.displayName)
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             Spacer(minLength: 12)
                             if language == self.settings.selectedNemotronLanguage {
                                 Image(systemName: "checkmark")
                                     .font(self.theme.typography.bodySmall)
                                     .foregroundStyle(self.theme.palette.accent)
+                                    .accessibilityHidden(true)
                             }
                         }
-                        .contentShape(Rectangle())
                         .padding(.horizontal, 12)
                         .frame(height: 26)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
