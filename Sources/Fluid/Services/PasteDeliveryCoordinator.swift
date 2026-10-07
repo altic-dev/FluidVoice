@@ -13,6 +13,7 @@ enum TextDeliveryFailure: String, Equatable {
     case targetRestoreFailed = "target_restore_failed"
     case noEditableTarget = "no_editable_target"
     case pasteNotLanded = "paste_not_landed"
+    case insertionUnconfirmed = "insertion_unconfirmed"
 
     var userFacingMessage: String? {
         switch self {
@@ -20,6 +21,8 @@ enum TextDeliveryFailure: String, Equatable {
             "Enable Accessibility to insert text"
         case .noEditableTarget:
             "No text field focused"
+        case .insertionUnconfirmed:
+            "Couldn't confirm insertion — Enter skipped"
         case .pasteNotLanded, .clipboardSnapshotFailed, .clipboardWriteFailed,
              .pasteCommandFailed, .targetUnavailable, .targetRestoreFailed:
             "Oops, text wasn't inserted"
@@ -33,6 +36,8 @@ enum TextDeliveryFailure: String, Equatable {
         switch message {
         case TextDeliveryFailure.accessibilityNotTrusted.userFacingMessage:
             nil
+        case TextDeliveryFailure.insertionUnconfirmed.userFacingMessage:
+            "Check the text field before copying your saved transcript."
         default:
             "Your transcript is saved. Copy it and paste it into a text field."
         }

@@ -871,6 +871,17 @@ struct SettingsView: View {
                                         .settingsSearchTarget(.textInsertionMode)
                                         Divider().opacity(0.2)
 
+                                        self.optionToggleRow(
+                                            title: "Automatically Press Enter",
+                                            description: "Press Enter after each confirmed dictation insertion. No phrase is needed. Skips terminal apps and unreadable fields. This can send messages or submit forms.",
+                                            isOn: Binding(
+                                                get: { self.settings.automaticEnterEnabled },
+                                                set: { self.settings.automaticEnterEnabled = $0 }
+                                            )
+                                        )
+                                        .settingsSearchTarget(.automaticEnter)
+                                        Divider().opacity(0.2)
+
                                         self.spokenSendSettings
                                             .settingsSearchTarget(.spokenSend)
                                         Divider().opacity(0.2)

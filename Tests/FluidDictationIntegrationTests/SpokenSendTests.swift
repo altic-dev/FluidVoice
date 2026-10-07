@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class SpokenSendTests: XCTestCase {
+    func testAutomaticEnterDefaultsOffAndBacksUpEnabledChoice() throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: "AutomaticEnterEnabled")
+        defer {
+            if let saved {
+                defaults.set(saved, forKey: "AutomaticEnterEnabled")
+            } else {
+                defaults.removeObject(forKey: "AutomaticEnterEnabled")
+            }
+        }
+        defaults.removeObject(forKey: "AutomaticEnterEnabled")
+        let settings = SettingsStore.shared
+        XCTAssertFalse(settings.automaticEnterEnabled)
+        settings.automaticEnterEnabled = true
+        XCTAssertTrue(defaults.bool(forKey: "AutomaticEnterEnabled"))
+        let payload = settings.makeBackupPayload()
+        let data = try JSONEncoder().encode(payload)
+        XCTAssertEqual(try JSONDecoder().decode(SettingsBackupPayload.self, from: data).automaticEnterEnabled, true)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "automaticEnterEnabled")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).automaticEnterEnabled)
+    }
+
+    func testAutomaticEnterSearchFindsDictationSetting() {
+        XCTAssertEqual(SettingsSearchIndex.results(for: "Automatically Press Enter").first?.target, .automaticEnter)
+        XCTAssertEqual(SettingsSearchTarget.automaticEnter.section, .dictation)
+    }
+
     func testDisabledFeatureLeavesTextUntouched() {
         XCTAssertEqual(
             SpokenSendParser.parse("Hello send it", phrase: "send it", enabled: false),
@@ -565,6 +594,27 @@ final class SpokenSendTests: XCTestCase {
         XCTAssertFalse(TypingService.DeliveryOutcome.actionDispatched.didInsert)
         XCTAssertTrue(TypingService.DeliveryOutcome.insertedActionSuppressed.didInsert)
         XCTAssertFalse(TypingService.DeliveryOutcome.insertedActionSuppressed.didDispatchAction)
+        XCTAssertFalse(TypingService.DeliveryOutcome.insertionUnconfirmed.didInsert)
+        XCTAssertFalse(TypingService.DeliveryOutcome.insertionUnconfirmed.didDispatchAction)
+    }
+
+    func testUnconfirmedInsertionRetainsRecoverableTranscriptWithoutClaimingFailure() {
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertionUnconfirmed.textDeliveryResult, .recoverableFailure(.insertionUnconfirmed))
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertionFailed.textDeliveryResult, .recoverableFailure(.pasteCommandFailed))
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertedAndActionDispatched.textDeliveryResult, .commandPosted)
+        XCTAssertEqual(TypingService.DeliveryOutcome.insertedActionSuppressed.textDeliveryResult, .commandPosted)
+        let state = NotchContentState.shared
+        defer { state.clearTextDeliveryFailure() }
+        state.recordTextDeliveryFailure(.insertionUnconfirmed, transcript: "exact saved transcript")
+        XCTAssertTrue(state.isTextDeliveryFailureVisible)
+        XCTAssertEqual(state.textDeliveryFailureTranscript, "exact saved transcript")
+        XCTAssertEqual(state.textDeliveryFailureMessage, "Couldn't confirm insertion — Enter skipped")
+        XCTAssertEqual(TextDeliveryFailure.userFacingDetail(forMessage: state.textDeliveryFailureMessage), "Check the text field before copying your saved transcript.")
+        let kind = DeliveryFailureOverlayController.Kind(failure: .insertionUnconfirmed)
+        XCTAssertEqual(kind, .insertionUnconfirmed)
+        XCTAssertEqual(kind?.title, "Couldn't confirm insertion — Enter skipped")
+        XCTAssertEqual(kind?.recoveryHint, "Check the field. Your transcript is saved.")
+        XCTAssertTrue(MenuBarManager.usesTransientFailureCard(kind: .insertionUnconfirmed, overlayVisible: false))
     }
 
     func testHeldModifierDoesNotBlockSafeTextInsertionBeforeSendDecision() {
