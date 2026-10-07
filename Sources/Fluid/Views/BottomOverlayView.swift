@@ -33,6 +33,15 @@ final class BottomOverlayWindowController {
     private var localMouseDownMonitor: Any?
     private var globalMouseDownMonitor: Any?
     private var targetScreen: NSScreen?
+    private var userDragObserver: Any?
+    private var pendingOriginSave: DispatchWorkItem?
+    /// The dragged origin as of the last pointer movement, ahead of the coalesced write
+    /// to settings. A reposition triggered mid-drag — the preview text growing, say —
+    /// would otherwise read the pre-drag origin and snap the overlay out from under the
+    /// pointer. It carries its own arrangement because settings still holds the previous
+    /// one until the write lands.
+    private var liveCustomOrigin: OverlayPlacedOrigin?
+    private var isApplyingProgrammaticFrame = false
     private var releaseTransitionActiveUntil: Date?
     private var deferredResizePending = false
     private var presentationGeneration: UInt64 = 0
@@ -70,6 +79,23 @@ final class BottomOverlayWindowController {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayOffsetChanged"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.positionWindow()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlayCustomOriginChanged"), object: nil, queue: .main) { [weak self] _ in
+            // Handled on the run loop turn that posted it, as the drag observer is.
+            // Deferring into a Task would let a save scheduled for the tail of the
+            // debounce window run first and write the dragged origin back over a reset.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Only ever an external change — Reset Position, or a restored backup — as
+                // this controller's own writes go through `storeDraggedOverlayOrigin` and
+                // post nothing. A save still queued from a drag would otherwise land
+                // afterwards and undo it, and a live origin left in place would outrank
+                // the new one for the rest of the process.
+                self.pendingOriginSave?.cancel()
+                self.pendingOriginSave = nil
+                self.liveCustomOrigin = OverlayPlacement.storedOrigin()
+                self.positionWindow()
             }
         }
         NotificationCenter.default.addObserver(forName: NSNotification.Name("OverlaySizeChanged"), object: nil, queue: .main) { [weak self] _ in
@@ -661,7 +687,8 @@ final class BottomOverlayWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false // SwiftUI handles shadow
-        panel.isMovableByWindowBackground = false
+        panel.isMovableByWindowBackground = true
+        panel.allowsUserDragging = true
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
@@ -682,6 +709,53 @@ final class BottomOverlayWindowController {
         hostingView.display()
 
         self.window = panel
+        self.observeUserDrags(of: panel)
+    }
+
+    /// Remembers where the user dragged the overlay so the choice survives the next
+    /// presentation and the next launch. Programmatic moves must not be recorded,
+    /// otherwise the anchored default would immediately overwrite itself.
+    private func observeUserDrags(of panel: NSPanel) {
+        if let observer = self.userDragObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        self.userDragObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self,
+                      !self.isApplyingProgrammaticFrame,
+                      NotchContentState.shared.isBottomOverlayPresented,
+                      let window = self.window
+                else { return }
+                // didMove fires on every step of a drag; only the write is coalesced,
+                // so that the position in memory is never behind the pointer.
+                let origin = window.frame.origin
+                // Sampled now rather than when the write runs: a display unplugged inside
+                // the debounce window would otherwise pair this origin with an arrangement
+                // it was never chosen on, which reads as a match and strands the overlay.
+                let screens = OverlayPlacement.currentScreenFrames()
+                self.liveCustomOrigin = OverlayPlacedOrigin(point: origin, screenFrames: screens)
+                self.pendingOriginSave?.cancel()
+                let save = DispatchWorkItem {
+                    MainActor.assumeIsolated {
+                        SettingsStore.shared.storeDraggedOverlayOrigin(origin, screenFrames: screens)
+                    }
+                }
+                self.pendingOriginSave = save
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: save)
+            }
+        }
+    }
+
+    /// Moves the panel without the move being mistaken for a user drag.
+    private func setFrameOriginProgrammatically(_ origin: NSPoint) {
+        guard let window = self.window else { return }
+        self.isApplyingProgrammaticFrame = true
+        window.setFrameOrigin(origin)
+        self.isApplyingProgrammaticFrame = false
     }
 
     private var isReleaseTransitionActive: Bool {
@@ -748,11 +822,21 @@ final class BottomOverlayWindowController {
         guard NotchContentState.shared.isBottomOverlayPresented else { return }
         (window as? BottomOverlayPanel)?.allowsOffscreenParking = false
 
+        // A position the user dragged to wins over the anchored default, including
+        // positions past a screen edge. Settings offers "Reset Position" to undo it.
+        // The in-memory origin comes first: during a drag it is ahead of settings.
+        if let customOrigin = self.liveCustomOrigin ?? OverlayPlacement.storedOrigin(),
+           OverlayPlacement.originIsUsable(customOrigin, size: window.frame.size)
+        {
+            self.setFrameOriginProgrammatically(customOrigin.point)
+            return
+        }
+
         let screen = self.targetScreen ?? window.screen ?? OverlayScreenResolver.screenForCurrentPointer()
         guard let screen = screen else { return }
 
         // Apply position directly to avoid implicit frame animations during hover-driven resizes.
-        window.setFrameOrigin(Self.origin(for: window.frame.size, on: screen))
+        self.setFrameOriginProgrammatically(Self.origin(for: window.frame.size, on: screen))
     }
 
     private static func origin(for windowSize: CGSize, on screen: NSScreen) -> NSPoint {
@@ -782,7 +866,7 @@ final class BottomOverlayWindowController {
             y: desktopFrame.maxY + window.frame.height + 1024
         )
         let originStartedAt = ProcessInfo.processInfo.systemUptime
-        window.setFrameOrigin(edge)
+        self.setFrameOriginProgrammatically(edge)
         DebugLogger.shared.debug(
             "HIDE_TRACE phase=parking_detail accessibilityUs=\(Int((accessibilityClearedAt - parkingStartedAt) * 1_000_000)) " +
                 "geometryUs=\(Int((originStartedAt - accessibilityClearedAt) * 1_000_000)) " +
