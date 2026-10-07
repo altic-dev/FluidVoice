@@ -556,6 +556,7 @@ extension VoiceEngineSettingsView {
             self.languageChipLabel(self.selectedWhisperLanguageName)
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .popover(isPresented: self.$isShowingWhisperLanguagePicker, arrowEdge: .bottom) {
             self.whisperLanguagePickerPopover
         }
@@ -685,6 +686,7 @@ extension VoiceEngineSettingsView {
             self.languageChipLabel(self.settings.selectedNemotronLanguage.compactDisplayName)
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .popover(isPresented: self.$isShowingNemotronLanguagePicker, arrowEdge: .bottom) {
             self.nemotronLanguagePickerPopover
         }
