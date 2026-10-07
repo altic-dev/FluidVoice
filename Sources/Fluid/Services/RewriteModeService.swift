@@ -419,18 +419,15 @@ final class RewriteModeService: ObservableObject {
     }
 
     private func logPromptTrace(_ title: String, value: String) {
-        let line = "[PromptTrace][Edit] \(title):\n\(value)"
-        if self.forcePromptTraceToConsole {
-            print(line)
+        let body = "[PromptTrace][Edit] \(title):\n\(value)"
+        if self.forcePromptTraceToConsole, !DebugLogger.diagnosticsEnabled {
+            print(body)
         }
-        self.appendDiagnosticLog(line)
+        DebugLogger.shared.debug(body, source: "RewriteModeService")
     }
 
     private func appendDiagnosticLog(_ message: String) {
-        guard self.diagnosticsEnabled || self.forcePromptTraceToConsole else { return }
-        let line = "[RewriteModeService] \(message)"
-        FileLogger.shared.append(line: line)
-        DebugLogger.shared.debug(line, source: "RewriteModeService")
+        DebugLogger.shared.debug(message, source: "RewriteModeService")
     }
 
     private func providerKey(for providerID: String) -> String {
