@@ -206,33 +206,38 @@ extension AIEnhancementSettingsView {
 
                 Spacer()
 
-                Button(action: { self.viewModel.showHelp.toggle() }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
-                            .font(.fluidSystem(size: 14))
-                        Text("Help")
-                            .font(.fluidSystem(.caption))
-                            .fontWeight(.medium)
-                    }
-                    .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
-                            .overlay(
-                                Capsule()
-                                    .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
+                self.helpButton
             }
 
             if self.viewModel.showHelp { self.helpSectionView }
 
             self.providerStepContent
         }
+    }
+
+    var helpButton: some View {
+        Button(action: { self.viewModel.showHelp.toggle() }) {
+            HStack(spacing: 5) {
+                Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
+                    .font(.fluidSystem(size: 14))
+                Text("Help")
+                    .font(.fluidSystem(.caption))
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Capsule())
+            .background(
+                Capsule()
+                    .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
+                    .overlay(
+                        Capsule()
+                            .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var aiSetupSummaryBar: some View {
@@ -601,12 +606,12 @@ extension AIEnhancementSettingsView {
                         .font(.fluidSystem(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary.opacity(0.7))
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
 
             if !isExpanded,
                self.viewModel.connectionStatus(for: item.id) == .failed,
