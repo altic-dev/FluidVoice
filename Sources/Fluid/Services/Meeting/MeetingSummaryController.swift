@@ -3,8 +3,11 @@ import CryptoKit
 import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
-    case executive, detailed, actions, decisions, participants, topics
-    var id: String { self.rawValue }
+    case executive, detailed, actions, decisions, participants, topics, custom
+    var id: String {
+        self.rawValue
+    }
+
     var title: String {
         switch self {
         case .executive: "Executive summary"
@@ -13,6 +16,7 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .decisions: "Key decisions"
         case .participants: "Participants"
         case .topics: "Topics discussed"
+        case .custom: "Custom prompt"
         }
     }
 }
@@ -55,6 +59,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     private var processing: Set<UUID> = []
     @Published private(set) var isProcessing = false
     private var summary: UUID?
+    private var remoteSummary: UUID?
     @Published private(set) var selectionLock: UUID?
 
     /// Acquired synchronously by the button action, before generation's task starts.
@@ -90,9 +95,24 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         asr.showError = true
     }
 
+    /// Cloud summaries hold neither the audio lease nor the processing gate that on-device
+    /// summaries need, so dictation, Command Mode, and Rewrite keep working while a provider responds.
+    func withRemoteSummary<T>(work: () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        guard self.remoteSummary == nil, self.summary == nil else { throw MeetingModelResidencyError.busy }
+        let token = UUID()
+        self.remoteSummary = token
+        defer {
+            if self.remoteSummary == token {
+                self.remoteSummary = nil
+            }
+        }
+        return try await work()
+    }
+
     func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        guard self.summary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
+        guard self.summary == nil, self.remoteSummary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
         let token = UUID()
         self.summary = token
         defer { if self.summary == token { self.summary = nil } }
@@ -119,43 +139,67 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var deleting = false
     @Published private(set) var progress: PrivateAIModelDownloadProgress?
     @Published private(set) var output = ""
+    @Published private(set) var outputProvenance = ""
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
-    var busy: Bool { self.downloading || self.generating || self.deleting }
+    var busy: Bool {
+        self.downloading || self.generating || self.deleting
+    }
+
     var model: PrivateAIRegisteredModel? {
         PrivateAIModelRegistry.modelIDs(for: .meetingSummary).first.flatMap { PrivateAIModelRegistry.model(id: $0) }
     }
 
-    private nonisolated struct SavedSummary: Codable, Sendable {
+    nonisolated struct SavedSummary: Codable {
         let transcriptHash: String
         let modelID: String
         let text: String
+        var providerID: String?
+        var providerName: String?
+        var configurationHash: String?
+        var promptVersion: Int?
+        var generatedAt: Date?
+        /// Set for custom-prompt summaries, so an edited prompt does not show an older result.
+        var promptHash: String?
+
+        var provenance: String {
+            "\(self.providerName ?? "Fluid Intelligence") · \(self.modelID)"
+        }
+
+        /// On-device summaries stay hidden while that path is disabled for accuracy.
+        func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
+            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+        }
     }
 
-    func refresh(session: MeetingSession?, kind: MeetingSummaryKind) async {
+    func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
         self.output = ""
+        self.outputProvenance = ""
         self.error = nil
         self.checking = true
         let model = self.model
-        let modelID = model?.id
-        let snapshot = await Task.detached(priority: .utility) { () -> (Bool, String) in
+        let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
+        let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
-            guard let session, let modelID,
+            guard let session,
                   let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
-                  saved.modelID == modelID,
-                  saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
-            else { return (installed, "") }
-            return (installed, saved.text)
+                  saved.isCurrent(
+                      transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+                      promptHash: promptHash
+                  )
+            else { return (installed, nil) }
+            return (installed, saved)
         }.value
         guard self.generation == generation, !Task.isCancelled else { return }
         self.installed = snapshot.0
-        self.output = snapshot.1
+        self.output = snapshot.1?.text ?? ""
+        self.outputProvenance = snapshot.1?.provenance ?? ""
         self.checking = false
     }
 
@@ -208,8 +252,8 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService) {
-        guard !self.busy, self.installed, let model,
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
+        guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
@@ -220,25 +264,39 @@ final class MeetingSummaryController: ObservableObject {
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
             }
             do {
-                try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
+                try await MeetingSummaryActivityCoordinator.shared.withRemoteSummary {
                     let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
-                    guard transcript.utf8.count <= 96_000 else { throw MeetingPostProcessingError.inputTooLarge }
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
                     }
                     try Task.checkCancellation()
-                    let text = try await asr.withMeetingModelResidency(attemptID: UUID()) {
-                        try MeetingModelResidencyCoordinator.shared.markSummary()
-                        return try await PrivateAIIntegrationService.summarizeMeeting(transcript, style: kind.rawValue)
-                    }
+                    let instructions = kind == .custom ? customPrompt.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    let text = try await MeetingSummaryRemoteService.shared.generate(
+                        transcript: transcript,
+                        kind: kind,
+                        route: route,
+                        customInstructions: instructions
+                    )
                     try Task.checkCancellation()
-                    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    self.output = text
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
-                    let saved = SavedSummary(transcriptHash: MeetingSummaryInput.fingerprint(transcript), modelID: model.id, text: text)
+                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                        throw MeetingPostProcessingError.checkpointFailed
+                    }
+                    let saved = SavedSummary(
+                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        modelID: route.modelID,
+                        text: text,
+                        providerID: route.providerID,
+                        providerName: route.providerName,
+                        configurationHash: route.configurationHash,
+                        promptVersion: 1,
+                        generatedAt: Date(),
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
+                    )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                     }.value
+                    self.output = text
+                    self.outputProvenance = saved.provenance
                 }
             } catch is CancellationError {
                 self.error = nil
@@ -248,7 +306,11 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    private func receiveProgress(_ progress: PrivateAIModelDownloadProgress) { self.progress = progress }
+    private func receiveProgress(_ progress: PrivateAIModelDownloadProgress) {
+        self.progress = progress
+    }
 
-    func cancel() { self.operation?.cancel() }
+    func cancel() {
+        self.operation?.cancel()
+    }
 }

@@ -51,7 +51,7 @@ final class UserDefaults {
     func analyticsAIModelDescriptor(for mode: Mode) -> String { "fake" }
     func getAPIKey(for provider: String) -> String? { nil }
     func isReasoningModel(_ model: String) -> Bool { false }
-    func isTemperatureUnsupported(_ model: String) -> Bool { false }
+    func isTemperatureUnsupported(_ model: String, baseURL: String) -> Bool { false }
     func getReasoningConfig(forModel: String, provider: String) -> ReasoningConfig? { nil }
 }
 
