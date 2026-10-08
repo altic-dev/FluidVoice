@@ -1,9 +1,11 @@
 @testable import FluidVoice_Debug
 import XCTest
 
-// Temperature support is learned per model ID instead of only from a hand-kept
-// name list, which broke on each new model release (Opus 4.7, Sonnet 5, Haiku 5.5).
-// Sources: provider /models metadata, then HTTP 400 rejections at request time.
+// Temperature support is learned per provider endpoint and model ID instead of only
+// from a hand-kept name list, which broke on each new model release (Opus 4.7,
+// Sonnet 5, Haiku 5.5). Sources: provider /models metadata, then HTTP 400 rejections
+// at request time. Keyed by endpoint because two providers can serve the same model ID
+// with different parameter support (e.g. generic local IDs like "llama3").
 
 final class ModelTemperatureSupportTests: XCTestCase {
     private var suiteName: String!
@@ -72,20 +74,33 @@ final class ModelTemperatureSupportTests: XCTestCase {
         )
 
         XCTAssertEqual(models, ["anthropic/claude-haiku-5.5", "openai/gpt-4o"])
-        XCTAssertEqual(store.isSupported("anthropic/claude-haiku-5.5"), false)
-        XCTAssertEqual(store.isSupported("openai/gpt-4o"), true)
+        let baseURL = "https://models-listing.test/api/v1"
+        XCTAssertEqual(store.isSupported("anthropic/claude-haiku-5.5", baseURL: baseURL), false)
+        XCTAssertEqual(store.isSupported("openai/gpt-4o", baseURL: baseURL), true)
     }
 
     // MARK: - Store
 
     func testStore_recordsAndReadsCaseInsensitively() {
         let store = ModelTemperatureSupport(defaults: self.defaults)
-        XCTAssertNil(store.isSupported("Vendor/New-Model"))
+        XCTAssertNil(store.isSupported("Vendor/New-Model", baseURL: "https://api.vendor.test/v1"))
 
-        store.record(["Vendor/New-Model": false])
+        store.record(["Vendor/New-Model": false], baseURL: "https://api.vendor.test/v1")
 
-        XCTAssertEqual(store.isSupported("vendor/new-model"), false)
-        XCTAssertEqual(ModelTemperatureSupport(defaults: self.defaults).isSupported("VENDOR/NEW-MODEL"), false)
+        XCTAssertEqual(store.isSupported("vendor/new-model", baseURL: "HTTPS://API.VENDOR.TEST/v1/"), false)
+        XCTAssertEqual(
+            ModelTemperatureSupport(defaults: self.defaults).isSupported("VENDOR/NEW-MODEL", baseURL: " https://api.vendor.test/v1 "),
+            false
+        )
+    }
+
+    func testStore_keepsProvidersWithSameModelIDSeparate() {
+        let store = ModelTemperatureSupport(defaults: self.defaults)
+
+        store.record(["llama3": false], baseURL: "https://strict-gateway.test/v1")
+
+        XCTAssertEqual(store.isSupported("llama3", baseURL: "https://strict-gateway.test/v1"), false)
+        XCTAssertNil(store.isSupported("llama3", baseURL: "http://localhost:11434/v1"))
     }
 
     // MARK: - SettingsStore resolution order
@@ -93,27 +108,32 @@ final class ModelTemperatureSupportTests: XCTestCase {
     @MainActor
     func testIsTemperatureUnsupported_usesLearnedValueForUnknownModel() {
         let store = ModelTemperatureSupport(defaults: self.defaults)
-        XCTAssertFalse(SettingsStore.shared.isTemperatureUnsupported("vendor/future-model", support: store))
+        let baseURL = "https://gateway.test/v1"
+        XCTAssertFalse(SettingsStore.shared.isTemperatureUnsupported("vendor/future-model", baseURL: baseURL, support: store))
 
-        store.record(["vendor/future-model": false])
+        store.record(["vendor/future-model": false], baseURL: baseURL)
 
-        XCTAssertTrue(SettingsStore.shared.isTemperatureUnsupported("vendor/future-model", support: store))
+        XCTAssertTrue(SettingsStore.shared.isTemperatureUnsupported("vendor/future-model", baseURL: baseURL, support: store))
+        XCTAssertFalse(
+            SettingsStore.shared.isTemperatureUnsupported("vendor/future-model", baseURL: "https://other.test/v1", support: store),
+            "Another provider serving the same model ID keeps its own setting"
+        )
     }
 
     @MainActor
     func testIsTemperatureUnsupported_learnedValueOverridesNameList() {
         let store = ModelTemperatureSupport(defaults: self.defaults)
-        store.record(["claude-sonnet-5": true])
+        store.record(["claude-sonnet-5": true], baseURL: "https://gateway.test/v1")
 
-        XCTAssertFalse(SettingsStore.shared.isTemperatureUnsupported("claude-sonnet-5", support: store))
+        XCTAssertFalse(SettingsStore.shared.isTemperatureUnsupported("claude-sonnet-5", baseURL: "https://gateway.test/v1", support: store))
     }
 
     @MainActor
     func testIsTemperatureUnsupported_reasoningModelsIgnoreLearnedValue() {
         let store = ModelTemperatureSupport(defaults: self.defaults)
-        store.record(["o3": true])
+        store.record(["o3": true], baseURL: "https://gateway.test/v1")
 
-        XCTAssertTrue(SettingsStore.shared.isTemperatureUnsupported("o3", support: store))
+        XCTAssertTrue(SettingsStore.shared.isTemperatureUnsupported("o3", baseURL: "https://gateway.test/v1", support: store))
     }
 
     // MARK: - Learning from HTTP 400 at request time
@@ -127,7 +147,7 @@ final class ModelTemperatureSupportTests: XCTestCase {
 
         XCTAssertEqual(response.content, "Summary.")
         XCTAssertEqual(TemperatureRejectingURLProtocol.sentTemperatures, [true, false])
-        XCTAssertEqual(store.isSupported("claude-haiku-5-5"), false)
+        XCTAssertEqual(store.isSupported("claude-haiku-5-5", baseURL: "https://temperature-reject.test/v1"), false)
     }
 
     func testCall_streamingRetriesWithoutTemperature() async throws {
@@ -139,7 +159,7 @@ final class ModelTemperatureSupportTests: XCTestCase {
 
         XCTAssertEqual(response.content, "Summary.")
         XCTAssertEqual(TemperatureRejectingURLProtocol.sentTemperatures, [true, false])
-        XCTAssertEqual(store.isSupported("claude-haiku-5-5"), false)
+        XCTAssertEqual(store.isSupported("claude-haiku-5-5", baseURL: "https://temperature-reject.test/v1"), false)
     }
 
     func testCall_unrelated400IsNotRetried() async {
@@ -159,7 +179,7 @@ final class ModelTemperatureSupportTests: XCTestCase {
         }
 
         XCTAssertEqual(TemperatureRejectingURLProtocol.sentTemperatures, [true])
-        XCTAssertNil(store.isSupported("claude-haiku-5-5"))
+        XCTAssertNil(store.isSupported("claude-haiku-5-5", baseURL: "https://temperature-reject.test/v1"))
     }
 
     // MARK: - Helpers

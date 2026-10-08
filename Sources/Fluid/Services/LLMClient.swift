@@ -212,7 +212,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 "LLMClient: \(config.model) rejected temperature; retrying without it",
                 source: "LLMClient"
             )
-            self.temperatureSupport.record([config.model: false])
+            self.temperatureSupport.record([config.model: false], baseURL: config.baseURL)
             var retryConfig = config
             retryConfig.temperature = nil
             return try await self.call(retryConfig)

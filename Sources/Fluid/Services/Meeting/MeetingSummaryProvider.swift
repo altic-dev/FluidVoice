@@ -80,7 +80,7 @@ nonisolated struct MeetingSummaryRoute {
             baseURL: baseURL,
             apiKey: settings.getAPIKey(for: saved?.id ?? providerID) ?? "",
             reasoning: settings.getReasoningConfig(forModel: model, provider: key),
-            supportsTemperature: !settings.isTemperatureUnsupported(model),
+            supportsTemperature: !settings.isTemperatureUnsupported(model, baseURL: baseURL),
             isReasoningModel: settings.isReasoningModel(model)
         )
     }

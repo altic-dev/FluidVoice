@@ -12,6 +12,22 @@ import XCTest
 
 @MainActor
 final class TemperatureSupportTests: XCTestCase {
+    // These tests cover the name-list fallback, so they read an empty learned store.
+    // `ModelTemperatureSupport.shared` holds the test host's saved values, which win over the name list.
+    private var suiteName: String!
+    private var emptySupport: ModelTemperatureSupport!
+
+    override func setUp() {
+        super.setUp()
+        self.suiteName = "TemperatureSupportTests.\(UUID().uuidString)"
+        self.emptySupport = ModelTemperatureSupport(defaults: UserDefaults(suiteName: self.suiteName)!)
+    }
+
+    override func tearDown() {
+        UserDefaults().removePersistentDomain(forName: self.suiteName)
+        super.tearDown()
+    }
+
     func testTemperatureUnsupported_newerAnthropicModels() {
         let unsupported = [
             "claude-opus-4-7",
@@ -33,7 +49,7 @@ final class TemperatureSupportTests: XCTestCase {
         ]
         for model in unsupported {
             XCTAssertTrue(
-                SettingsStore.shared.isTemperatureUnsupported(model),
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
                 "\(model) rejects `temperature` — sending it fails with HTTP 400"
             )
         }
@@ -42,7 +58,7 @@ final class TemperatureSupportTests: XCTestCase {
     func testTemperatureUnsupported_openAIReasoningModels() {
         for model in ["o1", "o3-mini", "gpt-5", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-oss-120b"] {
             XCTAssertTrue(
-                SettingsStore.shared.isTemperatureUnsupported(model),
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
                 "\(model) is a reasoning model and must not receive `temperature`"
             )
         }
@@ -107,7 +123,7 @@ final class TemperatureSupportTests: XCTestCase {
         ]
         for model in supported {
             XCTAssertFalse(
-                SettingsStore.shared.isTemperatureUnsupported(model),
+                SettingsStore.shared.isTemperatureUnsupported(model, baseURL: "https://api.example.test/v1", support: self.emptySupport),
                 "\(model) still supports `temperature` and should keep receiving it"
             )
         }

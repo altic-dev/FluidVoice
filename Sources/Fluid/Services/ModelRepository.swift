@@ -318,7 +318,7 @@ final class ModelRepository {
         // Try OpenAI/Groq/Cerebras format first
         if let dataArray = json["data"] as? [[String: Any]] {
             let models = dataArray.compactMap { $0["id"] as? String }
-            temperatureSupport.record(ModelTemperatureSupport.entries(fromModelsResponse: json))
+            temperatureSupport.record(ModelTemperatureSupport.entries(fromModelsResponse: json), baseURL: baseURL)
             DebugLogger.shared.debug(
                 "fetchModels: Found \(models.count) models for '\(providerID)' (OpenAI format)",
                 source: "ModelRepository"

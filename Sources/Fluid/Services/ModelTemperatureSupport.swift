@@ -1,15 +1,15 @@
 import Foundation
 
-/// Remembers, per model ID, whether a model accepts the `temperature` parameter.
+/// Remembers, per provider endpoint and model ID, whether a model accepts the `temperature` parameter.
 ///
 /// Filled from provider `/models` listings (see `ModelRepository.fetchModels`) and from
 /// HTTP 400 rejections at request time (see `LLMClient.call`), so new models work without
-/// editing the name list in `SettingsStore.isTemperatureUnsupported`. Keyed by model ID
-/// alone: a model that rejects `temperature` on one provider rejects it on all of them.
+/// editing the name list in `SettingsStore.isTemperatureUnsupported`. Keyed by endpoint too:
+/// two providers can serve the same model ID (e.g. "llama3") with different parameter support.
 final nonisolated class ModelTemperatureSupport: @unchecked Sendable {
     static let shared = ModelTemperatureSupport(defaults: .standard)
 
-    private static let defaultsKey = "ModelTemperatureSupport"
+    private static let defaultsKey = "ModelTemperatureSupportByEndpoint"
 
     private let defaults: UserDefaults
     private let lock = NSLock()
@@ -19,16 +19,16 @@ final nonisolated class ModelTemperatureSupport: @unchecked Sendable {
     }
 
     /// `true` = accepts `temperature`, `false` = rejects it, `nil` = unknown.
-    func isSupported(_ model: String) -> Bool? {
-        self.lock.withLock { self.stored()[Self.key(model)] }
+    func isSupported(_ model: String, baseURL: String) -> Bool? {
+        self.lock.withLock { self.stored()[Self.key(model, baseURL: baseURL)] }
     }
 
-    func record(_ entries: [String: Bool]) {
+    func record(_ entries: [String: Bool], baseURL: String) {
         guard !entries.isEmpty else { return }
         self.lock.withLock {
             var stored = self.stored()
             for (model, supported) in entries {
-                stored[Self.key(model)] = supported
+                stored[Self.key(model, baseURL: baseURL)] = supported
             }
             self.defaults.set(stored, forKey: Self.defaultsKey)
         }
@@ -61,7 +61,11 @@ final nonisolated class ModelTemperatureSupport: @unchecked Sendable {
         self.defaults.dictionary(forKey: Self.defaultsKey) as? [String: Bool] ?? [:]
     }
 
-    private static func key(_ model: String) -> String {
-        model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    private static func key(_ model: String, baseURL: String) -> String {
+        var endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while endpoint.hasSuffix("/") {
+            endpoint.removeLast()
+        }
+        return endpoint + "|" + model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
