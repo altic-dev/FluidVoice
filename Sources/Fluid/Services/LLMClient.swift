@@ -69,16 +69,21 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// URLSession configured with appropriate timeouts
     private let session: URLSession
 
+    /// Learns which models reject `temperature` so later requests stop sending it.
+    private let temperatureSupport: ModelTemperatureSupport
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
         config.timeoutIntervalForResource = Self.defaultTimeoutSeconds * 2 // Allow extra time for resource loading
         self.session = URLSession(configuration: config)
+        self.temperatureSupport = .shared
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
-    init(session: URLSession) {
+    init(session: URLSession, temperatureSupport: ModelTemperatureSupport = .shared) {
         self.session = session
+        self.temperatureSupport = temperatureSupport
     }
 
     // MARK: - Response Types
@@ -127,7 +132,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let apiKey: String
         let streaming: Bool
         let tools: [[String: Any]]
-        let temperature: Double?
+        var temperature: Double?
 
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
@@ -200,6 +205,17 @@ final nonisolated class LLMClient: @unchecked Sendable {
             let response = try await self.executeWithRetry(request: request, config: config)
             self.benchmark(config, "call_return")
             return response
+        } catch LLMError.httpError(400, let body) where config.temperature != nil && body.lowercased().contains("temperature") {
+            // Models keep dropping `temperature` (Opus 4.7+, Haiku 5.5, gpt-5...). The 400 arrives
+            // before any streamed output, so retrying once without it cannot duplicate text.
+            DebugLogger.shared.warning(
+                "LLMClient: \(config.model) rejected temperature; retrying without it",
+                source: "LLMClient"
+            )
+            self.temperatureSupport.record([config.model: false])
+            var retryConfig = config
+            retryConfig.temperature = nil
+            return try await self.call(retryConfig)
         } catch {
             self.benchmark(config, "call_fail")
             throw error
