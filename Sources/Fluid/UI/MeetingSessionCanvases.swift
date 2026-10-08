@@ -357,8 +357,6 @@ struct MeetingResultCanvas: View {
     let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
     let onClose: (() -> Void)?
 
-    var summaryASRService: ASRService? = nil
-
     @Environment(\.theme) private var theme
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
@@ -438,7 +436,7 @@ struct MeetingResultCanvas: View {
                 }
 
                 if self.documentSection == .summary {
-                    MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
+                    MeetingSummaryView(session: self.session, isQuiescent: self.isQuiescent)
                         .id("\(self.session.id)-\(self.session.updatedAt)")
                 } else {
                     if !activeSpeakers.isEmpty {

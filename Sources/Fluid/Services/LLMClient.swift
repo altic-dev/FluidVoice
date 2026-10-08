@@ -69,16 +69,21 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// URLSession configured with appropriate timeouts
     private let session: URLSession
 
+    /// Learns which models reject `temperature` so later requests stop sending it.
+    private let temperatureSupport: ModelTemperatureSupport
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
         config.timeoutIntervalForResource = Self.defaultTimeoutSeconds * 2 // Allow extra time for resource loading
         self.session = URLSession(configuration: config)
+        self.temperatureSupport = .shared
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
-    init(session: URLSession) {
+    init(session: URLSession, temperatureSupport: ModelTemperatureSupport = .shared) {
         self.session = session
+        self.temperatureSupport = temperatureSupport
     }
 
     // MARK: - Response Types
@@ -90,6 +95,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Non-streaming completion metadata; callers can reject partial text without changing other workflows.
+        var isIncomplete = false
     }
 
     struct ToolCall: @unchecked Sendable {
@@ -125,7 +132,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let apiKey: String
         let streaming: Bool
         let tools: [[String: Any]]
-        let temperature: Double?
+        var temperature: Double?
 
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
@@ -198,6 +205,17 @@ final nonisolated class LLMClient: @unchecked Sendable {
             let response = try await self.executeWithRetry(request: request, config: config)
             self.benchmark(config, "call_return")
             return response
+        } catch LLMError.httpError(400, let body) where config.temperature != nil && body.lowercased().contains("temperature") {
+            // Models keep dropping `temperature` (Opus 4.7+, Haiku 5.5, gpt-5...). The 400 arrives
+            // before any streamed output, so retrying once without it cannot duplicate text.
+            DebugLogger.shared.warning(
+                "LLMClient: \(config.model) rejected temperature; retrying without it",
+                source: "LLMClient"
+            )
+            self.temperatureSupport.record([config.model: false], baseURL: config.baseURL)
+            var retryConfig = config
+            retryConfig.temperature = nil
+            return try await self.call(retryConfig)
         } catch {
             self.benchmark(config, "call_fail")
             throw error
@@ -514,15 +532,24 @@ final nonisolated class LLMClient: @unchecked Sendable {
             throw LLMError.invalidResponse
         }
 
-        let parsed: Response
+        var parsed: Response
         if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            parsed.isIncomplete = (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
                   let choice = choices.first,
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            // Only truncation counts; compatible servers use varied names for a normal stop.
+            if let reason = choice["finish_reason"] as? String {
+                parsed.isIncomplete = ["length", "max_tokens", "content_filter"].contains(reason.lowercased())
+            }
         }
         self.benchmark(config, "response_decoded")
         return parsed

@@ -193,6 +193,22 @@ final class MeetingSummaryActivityTests: XCTestCase {
         XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
     }
 
+    func testRemoteSummaryLeavesDictationAndProcessingAvailable() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        try await gate.withRemoteSummary {
+            let processing = try XCTUnwrap(gate.beginProcessing(), "Dictation must be able to finish during a cloud summary")
+            gate.endProcessing(processing)
+            XCTAssertNoThrow(try activity.acquireExclusiveActivity(.dictation))
+            do {
+                try await gate.withRemoteSummary { XCTFail("Must not overlap") }
+                XCTFail("Second summary must fail")
+            } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        }
+        XCTAssertEqual(activity.handoffs, 0)
+        try await gate.withRemoteSummary {}
+    }
+
     func testFailureDrainsHandbackBeforeReleasingAdmission() async {
         let gate = MeetingSummaryActivityCoordinator()
         let activity = Activity()

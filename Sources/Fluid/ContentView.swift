@@ -2874,7 +2874,7 @@ struct ContentView: View {
         }
 
         // Check if this model doesn't support the temperature parameter
-        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel)
+        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel, baseURL: derivedBaseURL)
 
         // Get reasoning config for this model (uses per-model settings or auto-detection)
         // This handles custom parameters like reasoning_effort, enable_thinking, etc.
