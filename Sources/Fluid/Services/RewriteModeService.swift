@@ -428,9 +428,7 @@ final class RewriteModeService: ObservableObject {
 
     private func appendDiagnosticLog(_ message: String) {
         guard self.diagnosticsEnabled || self.forcePromptTraceToConsole else { return }
-        let line = "[RewriteModeService] \(message)"
-        FileLogger.shared.append(line: line)
-        DebugLogger.shared.debug(line, source: "RewriteModeService")
+        DebugLogger.shared.info(message, source: "RewriteModeService")
     }
 
     private func providerKey(for providerID: String) -> String {
