@@ -35,6 +35,67 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
         XCTAssertEqual(completed, 20)
     }
 
+    private actor PreparationGate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+        func wait() async {
+            if self.isOpen { return }
+            await withCheckedContinuation { self.continuation = $0 }
+        }
+        func open() {
+            self.isOpen = true
+            self.continuation?.resume()
+            self.continuation = nil
+        }
+    }
+
+    func testCancelledQueuedPreparationReturnsBeforeActivePreparationFinishes() async throws {
+        let queue = MeetingModelPreparationQueue()
+        let gate = PreparationGate()
+        let active = expectation(description: "active preparation holds the cache")
+        let cancelled = expectation(description: "cancelled waiter returns while cache is occupied")
+        let waiting = expectation(description: "second preparation is admitted to the queue")
+        let first = Task {
+            try await queue.run {
+                active.fulfill()
+                await gate.wait()
+            }
+        }
+        await fulfillment(of: [active], timeout: 2)
+        let second = Task {
+            do {
+                try await queue.run { XCTFail("Cancelled preparation must not load a model") }
+                XCTFail("Expected cancellation")
+            } catch is CancellationError {
+                cancelled.fulfill()
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+        let admission = Task {
+            while !Task.isCancelled {
+                if await queue.queuedPreparationCount == 1 {
+                    waiting.fulfill()
+                    return
+                }
+                await Task.yield()
+            }
+        }
+        await fulfillment(of: [waiting], timeout: 2)
+        admission.cancel()
+        let queuedCount = await queue.queuedPreparationCount
+        XCTAssertEqual(queuedCount, 1)
+        second.cancel()
+        await fulfillment(of: [cancelled], timeout: 2)
+        await gate.open()
+        _ = await first.result
+        _ = await second.result
+        let counter = Counter()
+        try await queue.run { await counter.enter(); await counter.leave() }
+        let completed = await counter.completed
+        XCTAssertEqual(completed, 1)
+    }
+
     func testFailureAndCancellationDoNotPoisonNextPreparation() async throws {
         let queue = MeetingModelPreparationQueue()
         let counter = Counter()
