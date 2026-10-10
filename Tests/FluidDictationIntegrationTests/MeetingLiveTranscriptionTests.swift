@@ -54,7 +54,7 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
         let gate = PreparationGate()
         let active = expectation(description: "active preparation holds the cache")
         let cancelled = expectation(description: "cancelled waiter returns while cache is occupied")
-        let waiting = expectation(description: "second request begins")
+        let waiting = expectation(description: "second preparation is admitted to the queue")
         let first = Task {
             try await queue.run {
                 active.fulfill()
@@ -63,7 +63,6 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
         }
         await fulfillment(of: [active], timeout: 2)
         let second = Task {
-            waiting.fulfill()
             do {
                 try await queue.run { XCTFail("Cancelled preparation must not load a model") }
                 XCTFail("Expected cancellation")
@@ -73,9 +72,19 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
                 XCTFail("Unexpected error: \(error)")
             }
         }
+        let admission = Task {
+            while !Task.isCancelled {
+                if await queue.queuedPreparationCount == 1 {
+                    waiting.fulfill()
+                    return
+                }
+                await Task.yield()
+            }
+        }
         await fulfillment(of: [waiting], timeout: 2)
-        // Give the request an actor turn to queue behind the occupied cache.
-        try await Task.sleep(for: .milliseconds(20))
+        admission.cancel()
+        let queuedCount = await queue.queuedPreparationCount
+        XCTAssertEqual(queuedCount, 1)
         second.cancel()
         await fulfillment(of: [cancelled], timeout: 2)
         await gate.open()

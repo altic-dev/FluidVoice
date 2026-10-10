@@ -10,6 +10,11 @@ actor MeetingModelPreparationQueue {
     private var isPreparing = false
     private var waiters: [Waiter] = []
 
+    #if DEBUG
+    /// Allows regression tests to confirm admission before cancelling a waiter.
+    var queuedPreparationCount: Int { self.waiters.count }
+    #endif
+
     func run(_ operation: @escaping @Sendable () async throws -> Void) async throws {
         try await self.acquire()
         defer { self.release() }
