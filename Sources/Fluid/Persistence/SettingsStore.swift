@@ -3383,17 +3383,37 @@ final class SettingsStore: ObservableObject {
 
     /// Whether the model rejects the `temperature` parameter.
     /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, Sonnet 5, Fable/Mythos 5 — Sonnet 4.6 and older still accept it).
+    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
     func isTemperatureUnsupported(_ model: String) -> Bool {
         if self.isReasoningModel(model) { return true }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
-        return modelLower.contains("claude-opus-4-7")
-            || modelLower.contains("claude-opus-4-8")
-            || modelLower.contains("claude-sonnet-5")
-            || modelLower.contains("claude-fable")
-            || modelLower.contains("claude-mythos")
+        if modelLower.contains("claude-fable") || modelLower.contains("claude-mythos") { return true }
+        // Compare versions instead of listing model IDs: each new Claude release
+        // otherwise fails with HTTP 400 until its ID is added here.
+        guard let version = Self.claudeVersion(in: modelLower) else { return false }
+        if version.major >= 5 { return true }
+        return version.family == "opus" && version.major == 4 && version.minor >= 7
+    }
+
+    /// The minor group is capped at two digits so a date suffix
+    /// (claude-sonnet-4-20250514) is not read as a minor version.
+    private static let claudeVersionRegex = try? NSRegularExpression(
+        pattern: #"claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)"#
+    )
+
+    /// Family and version of a family-first Claude ID (claude-haiku-5-5). Older
+    /// version-first IDs (claude-3-5-haiku) return nil; they all accept temperature.
+    private static func claudeVersion(in modelLower: String) -> (family: String, major: Int, minor: Int)? {
+        let range = NSRange(modelLower.startIndex..., in: modelLower)
+        guard let match = self.claudeVersionRegex?.firstMatch(in: modelLower, range: range),
+              let familyRange = Range(match.range(at: 1), in: modelLower),
+              let majorRange = Range(match.range(at: 2), in: modelLower),
+              let major = Int(modelLower[majorRange])
+        else { return nil }
+        let minor = Range(match.range(at: 3), in: modelLower).flatMap { Int(modelLower[$0]) } ?? 0
+        return (String(modelLower[familyRange]), major, minor)
     }
 
     /// Whether to display thinking tokens in the UI (Command Mode, Rewrite Mode)
