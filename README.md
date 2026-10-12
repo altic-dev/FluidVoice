@@ -113,6 +113,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
 - **Adaptive Theming** — light/dark theme that follows your system, with a compact toolbar switcher
 - **Global Hotkey** — instant voice capture from anywhere, no app switching needed
+- **Hold Space to Mute** — optional temporary mute within a dictation: hold Space while thinking, then release to continue the same recording; quick taps still type spaces
 - **Smart Typing** — direct insertion into any app via accessibility APIs for reliable, app-independent text entry
 - **Menu Bar Integration** — quick access, status, and settings from the menu bar
 - **Auto-Updates** — seamless updates with an optional beta channel for early previews
@@ -179,6 +180,8 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 6. **(Optional) Bring your own AI provider** — add an OpenAI, Groq, or custom provider API key for cloud-based enhancement. Keys are stored securely in macOS Keychain. Select "Always allow" for key access.
 
 7. **(Optional) Opt in to beta builds** — `Settings → Automatic Updates → Beta Releases` for early access to new features.
+
+To pause listening without ending a hands-free dictation, enable **Settings → Dictation → Hold Space to Mute**. Start dictation with your usual shortcut, hold Space to mute, and release it to resume. The overlay shows a muted microphone. A quick tap (up to 250 ms) types one space on release; a longer hold types nothing. Muting starts immediately in both cases. Your normal shortcut still finishes the recording. Muted audio is excluded from live transcription, the final transcript, and saved audio history. Space works normally outside dictation; modifier-plus-Space and configured Space shortcuts keep their existing behavior. The option is off by default and applies to Dictation mode.
 
 ---
 

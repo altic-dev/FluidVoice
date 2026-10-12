@@ -15,6 +15,8 @@ enum SimpleUpdateError: Error, LocalizedError {
     case unzipFailed
     case notAnAppBundle
     case codesignMismatch
+    case backupFailed
+    case installedAppChanged
     case rollbackUnavailable
     case rollbackRestoreFailed
 
@@ -31,6 +33,8 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .unzipFailed: return "Failed to extract the update archive."
         case .notAnAppBundle: return "Extracted content does not contain an app bundle."
         case .codesignMismatch: return "Downloaded app’s code signature does not match current app."
+        case .backupFailed: return "The current app could not be backed up. Nothing was replaced."
+        case .installedAppChanged: return "The installed app changed. Restart FluidVoice before trying the update again."
         case .rollbackUnavailable: return "No rollback backup is available."
         case .rollbackRestoreFailed: return "Failed to restore a previous version."
         }
@@ -214,12 +218,12 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.rollbackUnavailable
         }
 
-        self.createRollbackBackup(beforeRollback: true)
-
         do {
-            try self.performSwapAndRelaunch(
+            try await self.performSwapAndRelaunch(
                 installedAppURL: Bundle.main.bundleURL,
-                downloadedAppURL: rollbackBundleURL
+                downloadedAppURL: rollbackBundleURL,
+                expectedVersion: nil,
+                isRollback: true
             )
             DebugLogger.shared.info(
                 "SimpleUpdater: Rolled back to \(rollbackBundleURL.lastPathComponent)",
@@ -291,7 +295,7 @@ final class SimpleUpdater: ObservableObject {
 
     // Allowed Apple Developer Team IDs for code-sign validation
     // Restrict update transitions to FluidVoice's approved signing teams.
-    private let allowedTeamIDs: Set<String> = [
+    private nonisolated static let allowedTeamIDs: Set<String> = [
         "V4J43B279J",
         "537RRRT57V",
     ]
@@ -646,6 +650,9 @@ final class SimpleUpdater: ObservableObject {
             appropriateFor: Bundle.main.bundleURL,
             create: true
         )
+        defer {
+            Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: tempDir) }
+        }
         let downloadURL = tempDir.appendingPathComponent(asset.browser_download_url.lastPathComponent)
 
         do {
@@ -667,52 +674,12 @@ final class SimpleUpdater: ObservableObject {
             throw SimpleUpdateError.notAnAppBundle
         }
 
-        // Validate code signing identity matches (skip in DEBUG for easier local testing)
-        #if DEBUG
-        // In Debug builds the local app is typically signed with a development cert, while
-        // releases are signed with Developer ID. Skip strict check to enable testing.
-        _ = currentBundle // keep reference used in Release path
-        #else
-        let curID = try await codeSigningIdentity(for: currentBundle.bundleURL)
-        let newID = try await codeSigningIdentity(for: extractedBundleURL)
-
-        func teamID(from identity: String) -> String? {
-            // Handle TeamIdentifier= format first
-            if identity.hasPrefix("TeamIdentifier=") {
-                return String(identity.dropFirst("TeamIdentifier=".count))
-            }
-
-            // Handle Authority= format (extract team ID from parentheses)
-            guard let l = identity.lastIndex(of: "("), let r = identity.lastIndex(of: ")"), l < r else { return nil }
-            let inside = identity[identity.index(after: l)..<r]
-            return String(inside)
-        }
-
-        // Allow update if:
-        // - full identity matches OR
-        // - Team IDs match OR
-        // - both current and new Team IDs are in the allowedTeamIDs set
-        // This enables dev→prod updates across your two known Team IDs.
-        let sameIdentity = curID == newID
-        let curTeam = teamID(from: curID)
-        let newTeam = teamID(from: newID)
-        let sameTeam = (curTeam != nil && curTeam == newTeam)
-        let bothAllowed: Bool = {
-            guard let ct = curTeam, let nt = newTeam else { return false }
-            return self.allowedTeamIDs.contains(ct) && self.allowedTeamIDs.contains(nt)
-        }()
-
-        guard sameIdentity || sameTeam || bothAllowed else {
-            DebugLogger.shared.error("SimpleUpdater: Code-sign mismatch. Current=\(curID) New=\(newID)", source: "SimpleUpdater")
-            DebugLogger.shared.error("SimpleUpdater: Current Team=\(curTeam ?? "none") New Team=\(newTeam ?? "none")", source: "SimpleUpdater")
-            throw SimpleUpdateError.codesignMismatch
-        }
-        #endif
-
-        self.createRollbackBackup(beforeRollback: false)
-
-        // Replace and relaunch
-        try self.performSwapAndRelaunch(installedAppURL: currentBundle.bundleURL, downloadedAppURL: extractedBundleURL)
+        try await self.performSwapAndRelaunch(
+            installedAppURL: currentBundle.bundleURL,
+            downloadedAppURL: extractedBundleURL,
+            expectedVersion: rawVersion,
+            isRollback: false
+        )
         shouldKeepOperationActive = true
     }
 
@@ -913,64 +880,39 @@ final class SimpleUpdater: ObservableObject {
             .replacingOccurrences(of: " ", with: "_")
     }
 
-    private func createRollbackBackup(beforeRollback: Bool) {
-        let currentAppVersion = self.currentAppVersion
-        let appURL = Bundle.main.bundleURL
-        let backupRoot = self.rollbackRootDirectory()
-
-        do {
-            try self.fileManager.createDirectory(
-                at: backupRoot,
-                withIntermediateDirectories: true
-            )
-        } catch {
-            DebugLogger.shared.warning("SimpleUpdater: Failed to create rollback backup folder: \(error.localizedDescription)", source: "SimpleUpdater")
-            return
-        }
-
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let safeVersion = self.sanitizeVersion(currentAppVersion)
-        let backupName = beforeRollback
-            ? "\(self.installedAppName)-\(safeVersion)-rollback-\(timestamp).app"
-            : "\(self.installedAppName)-\(safeVersion)-\(timestamp).app"
-        let backupURL = backupRoot.appendingPathComponent(backupName)
-
-        do {
-            try self.fileManager.copyItem(at: appURL, to: backupURL)
-            try? self.fileManager.setAttributes(
-                [.modificationDate: Date()],
-                ofItemAtPath: backupURL.path
-            )
-            self.pruneRollbackBackups()
-            DebugLogger.shared.info(
-                "SimpleUpdater: Created rollback backup at \(backupURL.path)",
-                source: "SimpleUpdater"
-            )
-        } catch {
-            DebugLogger.shared.warning(
-                "SimpleUpdater: Failed to create rollback backup: \(error.localizedDescription)",
-                source: "SimpleUpdater"
-            )
-        }
-    }
-
-    private func pruneRollbackBackups() {
-        let backups = self.availableRollbackBackups()
-        guard backups.count > self.maxRollbackBackups else { return }
-
-        for oldBackup in backups.dropFirst(self.maxRollbackBackups) {
-            do {
-                try self.fileManager.removeItem(at: oldBackup)
-            } catch {
-                DebugLogger.shared.warning(
-                    "SimpleUpdater: Failed to remove old rollback backup \(oldBackup.lastPathComponent): \(error.localizedDescription)",
-                    source: "SimpleUpdater"
-                )
+    private func pruneRollbackBackups(preserving protectedURLs: Set<URL>) async {
+        let root = self.rollbackRootDirectory()
+        let limit = self.maxRollbackBackups
+        let warnings = await Task.detached(priority: .utility) {
+            let manager = FileManager.default
+            guard let urls = try? manager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { return [String]() }
+            let backups = Self.sortedRollbackBackups(urls.filter { $0.pathExtension == "app" }) {
+                (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             }
+            var retained = Set(backups.filter { protectedURLs.contains($0) })
+            for backup in backups where retained.count < limit {
+                retained.insert(backup)
+            }
+            var failures = [String]()
+            for backup in backups where !retained.contains(backup) {
+                do {
+                    try manager.removeItem(at: backup)
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            return failures
+        }.value
+        for warning in warnings {
+            DebugLogger.shared.warning("SimpleUpdater: Rollback cleanup failed: \(warning)", source: "SimpleUpdater")
         }
     }
 
-    static func sortedRollbackBackups(
+    nonisolated static func sortedRollbackBackups(
         _ urls: [URL],
         modificationDate: (URL) -> Date?
     ) -> [URL] {
@@ -993,7 +935,7 @@ final class SimpleUpdater: ObservableObject {
         return version != currentVersion
     }
 
-    private static func rollbackBackupCreationDate(
+    private nonisolated static func rollbackBackupCreationDate(
         from url: URL,
         fallbackModificationDate: Date?
     ) -> Date? {
@@ -1004,7 +946,7 @@ final class SimpleUpdater: ObservableObject {
         return fallbackModificationDate
     }
 
-    private static func rollbackBackupTimestamp(from url: URL) -> TimeInterval? {
+    private nonisolated static func rollbackBackupTimestamp(from url: URL) -> TimeInterval? {
         let name = url.deletingPathExtension().lastPathComponent
         guard let suffix = name.split(separator: "-").last,
               let timestamp = TimeInterval(suffix)
@@ -1090,110 +1032,184 @@ final class SimpleUpdater: ObservableObject {
         }
     }
 
-    private func codeSigningIdentity(for bundleURL: URL) async throws -> String {
-        let proc = Process()
-        proc.launchPath = "/usr/bin/codesign"
-        proc.arguments = ["-dvvv", bundleURL.path]
-        let pipe = Pipe()
-        proc.standardError = pipe
+    nonisolated struct PreparedInstallation: Sendable {
+        let replacement: UpdateAppReplacement
+        let backupURL: URL
+    }
 
-        return try await withCheckedThrowingContinuation { cont in
-            proc.terminationHandler = { _ in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let s = String(data: data, encoding: .utf8) ?? ""
-
-                // First try to get TeamIdentifier (most reliable)
-                if let teamLine = s.split(separator: "\n").first(where: { $0.hasPrefix("TeamIdentifier=") }) {
-                    cont.resume(returning: String(teamLine))
-                } else {
-                    // Fallback to Authority line
-                    let line = s.split(separator: "\n").first(where: { $0.hasPrefix("Authority=") })
-                    cont.resume(returning: line.map(String.init) ?? "")
+    /// Runs under the replacement's process-shared lock on a background task.
+    nonisolated static func prepareValidatedInstallation(
+        installedAppURL: URL,
+        downloadedAppURL: URL,
+        installedExpectation: UpdateBundleValidator.Expectation,
+        expectedVersion: String?,
+        backupURL: URL,
+        isRollback: Bool
+    ) throws -> PreparedInstallation {
+        let teams = Self.allowedTeamIDs
+        guard isRollback || expectedVersion != nil, installedExpectation.version != nil, installedExpectation.build != nil
+        else { throw UpdateBundleValidator.ValidationError.invalidExpectation }
+        try Task.checkCancellation()
+        let replacement = try UpdateAppReplacement.prepare(
+            installedAppURL: installedAppURL,
+            replacementAppURL: downloadedAppURL,
+            validateInstalledApp: { url in
+                do {
+                    _ = try UpdateBundleValidator.validate(
+                        at: url,
+                        expectation: installedExpectation,
+                        policy: .installedApp(allowedTeamIDs: teams)
+                    )
+                } catch UpdateBundleValidator.ValidationError.versionMismatch {
+                    throw SimpleUpdateError.installedAppChanged
+                } catch UpdateBundleValidator.ValidationError.buildMismatch {
+                    throw SimpleUpdateError.installedAppChanged
                 }
             }
-            do { try proc.run() } catch { cont.resume(throwing: error) }
+        )
+        var backupCreated = false
+        do {
+            try Task.checkCancellation()
+            _ = try UpdateBundleValidator.validate(
+                at: replacement.stagedAppURL,
+                expectation: .init(bundleIdentifier: installedExpectation.bundleIdentifier, version: expectedVersion),
+                policy: isRollback ? .installedApp(allowedTeamIDs: teams) : .developerID(allowedTeamIDs: teams)
+            )
+            do {
+                try UpdateRollbackBackup.create(installedAppURL: installedAppURL, backupURL: backupURL) { url in
+                    _ = try UpdateBundleValidator.validate(
+                        at: url,
+                        expectation: installedExpectation,
+                        policy: .installedApp(allowedTeamIDs: teams)
+                    )
+                }
+                backupCreated = true
+            } catch let failure as UpdateRollbackBackup.Failure where failure.retainedDirectoryURL != nil {
+                throw failure
+            } catch {
+                throw SimpleUpdateError.backupFailed
+            }
+            try Task.checkCancellation()
+            try replacement.commit()
+            return PreparedInstallation(replacement: replacement, backupURL: backupURL)
+        } catch {
+            let originalError = error
+            // A failed atomic exchange leaves the installed app untouched. The owned
+            // duplicate backup is unnecessary until the exchange succeeds.
+            var backupCleanupFailure: Error?
+            if backupCreated {
+                do {
+                    try FileManager.default.removeItem(at: backupURL)
+                } catch {
+                    backupCleanupFailure = UpdateAppReplacement.Failure(
+                        operation: .cleanup, recoveryDirectoryURL: backupURL, underlyingError: error
+                    )
+                }
+            }
+            do {
+                try replacement.discardPrepared()
+            } catch {
+                throw error
+            }
+            if let backupCleanupFailure { throw backupCleanupFailure }
+            throw originalError
         }
     }
 
-    private func performSwapAndRelaunch(installedAppURL: URL, downloadedAppURL: URL) throws {
-        // Handle app name changes: if the downloaded app has a different name,
-        // we need to replace the old app and use the new name
-        let installedAppName = installedAppURL.lastPathComponent
-        let downloadedAppName = downloadedAppURL.lastPathComponent
-
-        DebugLogger.shared.info("SimpleUpdater: Installing app - Current: \(installedAppName), New: \(downloadedAppName)", source: "SimpleUpdater")
-
-        let finalAppURL: URL
-        if installedAppName != downloadedAppName {
-            // App name changed - use the new name
-            finalAppURL = installedAppURL.deletingLastPathComponent().appendingPathComponent(downloadedAppName)
-            DebugLogger.shared.info("SimpleUpdater: App name changed, installing to: \(finalAppURL.path)", source: "SimpleUpdater")
-
-            // Safety check: ensure we don't overwrite an existing app with the new name
-            if FileManager.default.fileExists(atPath: finalAppURL.path) {
-                DebugLogger.shared.info("SimpleUpdater: Removing existing app at new location: \(finalAppURL.path)", source: "SimpleUpdater")
-                try FileManager.default.removeItem(at: finalAppURL)
-            }
-
-            // Remove old app if it exists
-            if FileManager.default.fileExists(atPath: installedAppURL.path) {
-                DebugLogger.shared.info("SimpleUpdater: Removing old app: \(installedAppURL.path)", source: "SimpleUpdater")
-                try FileManager.default.removeItem(at: installedAppURL)
-            }
-
-            // Move new app to Applications with new name
-            try FileManager.default.moveItem(at: downloadedAppURL, to: finalAppURL)
-            DebugLogger.shared.info("SimpleUpdater: Successfully installed new app at: \(finalAppURL.path)", source: "SimpleUpdater")
-        } else {
-            // Same name - normal replacement
-            DebugLogger.shared.info("SimpleUpdater: Same app name, performing normal replacement", source: "SimpleUpdater")
-            if FileManager.default.fileExists(atPath: installedAppURL.path) {
-                try FileManager.default.removeItem(at: installedAppURL)
-            }
-            try FileManager.default.moveItem(at: downloadedAppURL, to: installedAppURL)
-            finalAppURL = installedAppURL
+    private func performSwapAndRelaunch(
+        installedAppURL: URL,
+        downloadedAppURL: URL,
+        expectedVersion: String?,
+        isRollback: Bool
+    ) async throws {
+        guard let identifier = Bundle.main.bundleIdentifier,
+              let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        else { throw SimpleUpdateError.notAnAppBundle }
+        let version = self.currentAppVersion
+        let name = self.installedAppName
+        let safeVersion = self.sanitizeVersion(version)
+        let suffix = "\(isRollback ? "rollback-" : "")\(UUID().uuidString)-\(Int(Date().timeIntervalSince1970))"
+        let backupURL = self.rollbackRootDirectory().appendingPathComponent("\(name)-\(safeVersion)-\(suffix).app")
+        let preparation = Task.detached(priority: .utility) {
+            try Self.prepareValidatedInstallation(
+                installedAppURL: installedAppURL,
+                downloadedAppURL: downloadedAppURL,
+                installedExpectation: .init(bundleIdentifier: identifier, version: version, build: build),
+                expectedVersion: expectedVersion,
+                backupURL: backupURL,
+                isRollback: isRollback
+            )
+        }
+        let installation = try await withTaskCancellationHandler {
+            try await preparation.value
+        } onCancel: {
+            preparation.cancel()
         }
 
         self.availableUpdateVersion = nil
         self.availableChannelRevision = nil
-
-        // Installation is finished. Do not leave the floating progress window owned by
-        // the old process until it exits: quitting may be delayed or cancelled by AppKit.
-        // Keep the operation gate active so that old process cannot start another install.
         self.dismissUpdateInstallStatus()
-
-        // Use modern NSWorkspace API for more reliable app launching
-        DispatchQueue.main.async {
-            DebugLogger.shared.info("SimpleUpdater: Attempting to relaunch app at: \(finalAppURL.path)", source: "SimpleUpdater")
-
-            // Verify the app exists before trying to launch
-            guard FileManager.default.fileExists(atPath: finalAppURL.path) else {
-                DebugLogger.shared.error("SimpleUpdater: ERROR - App not found at expected location: \(finalAppURL.path)", source: "SimpleUpdater")
-                self.resetUpdateOperation()
-                // Don't terminate if we can't find the new app
-                return
-            }
-
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.createsNewApplicationInstance = true
-
-            NSWorkspace.shared.openApplication(at: finalAppURL, configuration: configuration) { _, error in
-                if let error = error {
-                    DebugLogger.shared.error("SimpleUpdater: Failed to relaunch app: \(error)", source: "SimpleUpdater")
-                    DebugLogger.shared.error("SimpleUpdater: App location: \(finalAppURL.path)", source: "SimpleUpdater")
-                    Task { @MainActor in
-                        self.resetUpdateOperation()
-                    }
-                    // Don't terminate if relaunch failed - let user manually restart
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: installedAppURL, configuration: configuration) { application, error in
+            Task { @MainActor in
+                guard error == nil, let application else {
+                    await self.recoverFailedRelaunch(installation, error: error)
                     return
                 }
-
-                DebugLogger.shared.info("SimpleUpdater: Successfully relaunched app, terminating old instance", source: "SimpleUpdater")
-                // Give the new instance time to fully start before terminating
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    UpdateTerminationScheduler.requestTermination()
+                // Keep the outgoing app and shared lock through the existing startup
+                // grace period; a newly launched process must not start another swap.
+                try? await Task.sleep(for: .seconds(2))
+                guard !application.isTerminated else {
+                    await self.recoverFailedRelaunch(installation, error: nil)
+                    return
                 }
+                // Keep the shared lock while pruning so another process cannot
+                // create a backup that this operation mistakes for an old one.
+                var protected: Set<URL> = [installation.backupURL]
+                if isRollback { protected.insert(downloadedAppURL) }
+                await self.pruneRollbackBackups(preserving: protected)
+                guard !application.isTerminated else {
+                    await self.recoverFailedRelaunch(installation, error: nil)
+                    return
+                }
+                let cleanupWarning = await Task.detached(priority: .utility) {
+                    do {
+                        try installation.replacement.finalize()
+                        return String?.none
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }.value
+                if let cleanupWarning {
+                    DebugLogger.shared.warning("SimpleUpdater: Update completed; cleanup failed: \(cleanupWarning)", source: "SimpleUpdater")
+                }
+                UpdateTerminationScheduler.requestTermination()
             }
         }
+    }
+
+    private func recoverFailedRelaunch(_ installation: PreparedInstallation, error: Error?) async {
+        let recoveryWarning = await Task.detached(priority: .utility) {
+            do {
+                try installation.replacement.recover()
+                return String?.none
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        self.resetUpdateOperation()
+        if let error {
+            DebugLogger.shared.error("SimpleUpdater: Relaunch failed: \(error.localizedDescription)", source: "SimpleUpdater")
+        }
+        if let recoveryWarning {
+            DebugLogger.shared.error("SimpleUpdater: Recovery failed; saved app at \(installation.backupURL.path): \(recoveryWarning)", source: "SimpleUpdater")
+        }
+        self.showUpdateCheckResult(
+            title: "Update Failed",
+            message: recoveryWarning == nil
+                ? "The new app could not start. Your previous version has been restored. Please try again."
+                : "The app could not restart. Your previous version is saved at \(installation.backupURL.path)."
+        )
     }
 }

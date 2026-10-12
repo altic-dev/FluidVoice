@@ -646,7 +646,8 @@ final class HotkeyShortcutTests: XCTestCase {
                     promptModeCallback: { starts += 1 },
                     promptSelectionCallback: { _ in starts += 1 },
                     commandModeCallback: { starts += 1 },
-                    rewriteModeCallback: { starts += 1 }
+                    rewriteModeCallback: { starts += 1 },
+                    isSessionLockedProvider: { false }
                 )
                 manager.setHotkeyMode(activationMode)
                 let down = try self.primaryReleaseTestEvent(type: .keyDown)
@@ -856,7 +857,8 @@ final class HotkeyShortcutTests: XCTestCase {
                 promptModeCallback: { otherStarts += 1 },
                 promptSelectionCallback: { _ in otherStarts += 1 },
                 commandModeCallback: { otherStarts += 1 },
-                rewriteModeCallback: { otherStarts += 1 }
+                rewriteModeCallback: { otherStarts += 1 },
+                isSessionLockedProvider: { false }
             )
             manager.setHotkeyMode(.toggle)
             _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 54, modifiers: .maskCommand))
@@ -1031,7 +1033,8 @@ final class HotkeyShortcutTests: XCTestCase {
                 promptModeCallback: { starts += 1 },
                 promptSelectionCallback: { _ in starts += 1 },
                 commandModeCallback: { starts += 1 },
-                rewriteModeCallback: { starts += 1 }
+                rewriteModeCallback: { starts += 1 },
+                isSessionLockedProvider: { false }
             )
             manager.setHotkeyMode(.toggle)
             _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 54, modifiers: .maskCommand))
@@ -1095,7 +1098,8 @@ final class HotkeyShortcutTests: XCTestCase {
                     promptModeCallback: { starts += 1 },
                     promptSelectionCallback: { _ in starts += 1 },
                     commandModeCallback: { starts += 1 },
-                    rewriteModeCallback: { starts += 1 }
+                    rewriteModeCallback: { starts += 1 },
+                    isSessionLockedProvider: { false }
                 )
                 manager.setHotkeyMode(activation)
                 let down = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 31, modifiers: [])
@@ -1278,7 +1282,8 @@ final class HotkeyShortcutTests: XCTestCase {
             promptModeShortcutEnabled: false,
             commandModeShortcutEnabled: false,
             rewriteModeShortcutEnabled: false,
-            promptSelectionCallback: { selections.append($0) }
+            promptSelectionCallback: { selections.append($0) },
+            isSessionLockedProvider: { false }
         )
         manager.setHotkeyMode(.toggle)
         _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 54, modifiers: .maskCommand))
@@ -1330,7 +1335,8 @@ final class HotkeyShortcutTests: XCTestCase {
             startRecordingCallback: { starts += 1; asr.isRunning = true },
             dictationModeCallback: { starts += 1; asr.isRunning = true },
             stopAndProcessCallback: { _ in stops += 1 },
-            isDictateRecordingProvider: { isDictate }
+            isDictateRecordingProvider: { isDictate },
+            isSessionLockedProvider: { false }
         )
         manager.setHotkeyMode(.hold)
         _ = try manager.handleKeyEvent(type: .flagsChanged, event: self.primaryReleaseTestEvent(type: .flagsChanged, keyCode: 55, modifiers: .maskCommand))
@@ -1472,7 +1478,8 @@ final class HotkeyShortcutTests: XCTestCase {
             startRecordingCallback: { asr.isRunning = true },
             dictationModeCallback: { asr.isRunning = true },
             stopAndProcessCallback: { _ in stops += 1; asr.isRunning = false },
-            isDictateRecordingProvider: { isDictate }
+            isDictateRecordingProvider: { isDictate },
+            isSessionLockedProvider: { false }
         )
         manager.setHotkeyMode(.hold)
         _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
@@ -1600,7 +1607,8 @@ final class HotkeyShortcutTests: XCTestCase {
             rewriteModeShortcutEnabled: false,
             stopAndProcessCallback: { _ in stops += 1; asr.isRunning = false },
             promptSelectionCallback: { _ in starts += 1; asr.isRunning = true },
-            isPromptModeRecordingProvider: { true }
+            isPromptModeRecordingProvider: { true },
+            isSessionLockedProvider: { false }
         )
         manager.setHotkeyMode(.hold)
         _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 2, modifiers: .maskControl))
@@ -1735,7 +1743,8 @@ final class HotkeyShortcutTests: XCTestCase {
             promptModeShortcutEnabled: false,
             commandModeShortcutEnabled: false,
             rewriteModeShortcutEnabled: false,
-            promptSelectionCallback: { selections.append($0) }
+            promptSelectionCallback: { selections.append($0) },
+            isSessionLockedProvider: { false }
         )
         _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, modifiers: .maskControl))
         manager.updatePromptShortcutAssignments([(selection: .privateAI, shortcut: shortcut)])
@@ -1772,7 +1781,8 @@ final class HotkeyShortcutTests: XCTestCase {
                 stopAndProcessCallback: { _ in stops += 1; asr.isRunning = false },
                 promptSelectionCallback: { _ in starts += 1; asr.isRunning = true },
                 isDictateRecordingProvider: { !style },
-                isPromptModeRecordingProvider: { style }
+                isPromptModeRecordingProvider: { style },
+                isSessionLockedProvider: { false }
             )
             manager.setHotkeyMode(.hold)
             _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, modifiers: .maskControl))
@@ -1887,7 +1897,7 @@ final class HotkeyShortcutTests: XCTestCase {
         asr.isRunning = true
         defer { asr.isRunning = false }
         var cancellations = 0
-        let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: {})
+        let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: {}, isSessionLocked: { true })
         manager.setCancelCallback { cancellations += 1; return .cancelled }
         let result = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: []))
         XCTAssertNil(result)
@@ -2059,10 +2069,86 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testLockedSessionBlocksPrimaryRecordingStarts() async throws {
+        for activationMode in [HotkeyActivationMode.toggle, .hold, .automatic] {
+            var starts = 0
+            let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 }, isSessionLocked: { true })
+            manager.setHotkeyMode(activationMode)
+            _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+            _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(starts, 0, "A locked session must not start primary recording in \(activationMode)")
+        }
+    }
+
+    @MainActor
+    func testLockedSessionBlocksOtherRecordingStarts() async throws {
+        let shortcut = HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])
+        for mode in [HotkeyHoldModeType.promptMode, .commandMode, .rewriteMode, .promptAssignment] {
+            var starts = 0
+            let manager = GlobalHotkeyManager(
+                asrService: ASRService(),
+                primaryShortcuts: [],
+                promptModeShortcut: shortcut,
+                commandModeShortcut: shortcut,
+                rewriteModeShortcut: shortcut,
+                promptShortcutAssignments: mode == .promptAssignment ? [(selection: SettingsStore.DictationPromptSelection.default, shortcut: shortcut)] : [],
+                promptModeShortcutEnabled: mode == .promptMode,
+                commandModeShortcutEnabled: mode == .commandMode,
+                rewriteModeShortcutEnabled: mode == .rewriteMode,
+                promptModeCallback: { starts += 1 },
+                promptSelectionCallback: { _ in starts += 1 },
+                commandModeCallback: { starts += 1 },
+                rewriteModeCallback: { starts += 1 },
+                isSessionLockedProvider: { true }
+            )
+            manager.setHotkeyMode(.toggle)
+            _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+            _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(starts, 0, "A locked session must not start \(mode)")
+        }
+    }
+
+    @MainActor
+    func testLockingSessionStillAllowsOwnedHoldRelease() async throws {
+        let asr = ASRService()
+        defer { asr.isRunning = false }
+        var isLocked = false
+        var starts = 0
+        var stops = 0
+        let manager = self.makePrimaryReleaseTestManager(
+            asr: asr,
+            onStart: { starts += 1; asr.isRunning = true },
+            onStop: { stops += 1; asr.isRunning = false },
+            isSessionLocked: { isLocked }
+        )
+        manager.setHotkeyMode(.hold)
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(starts, 1)
+        XCTAssertTrue(asr.isRunning)
+        isLocked = true
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp, modifiers: []))
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(stops, 1, "Locking must not strand a recording owned by the held shortcut")
+        XCTAssertFalse(asr.isRunning)
+    }
+
+    @MainActor
     private func makePrimaryReleaseTestManager(
         asr: ASRService,
         onStart: @escaping () async -> Void,
-        onStop: @escaping () async -> Void = {}
+        onStop: @escaping () async -> Void = {},
+        isSessionLocked: @escaping () -> Bool = { false }
     ) -> GlobalHotkeyManager {
         let manager = GlobalHotkeyManager(
             asrService: asr,
@@ -2076,7 +2162,8 @@ final class HotkeyShortcutTests: XCTestCase {
             startRecordingCallback: onStart,
             dictationModeCallback: onStart,
             stopAndProcessCallback: { _ in await onStop() },
-            isDictateRecordingProvider: { true }
+            isDictateRecordingProvider: { true },
+            isSessionLockedProvider: isSessionLocked
         )
         manager.setHotkeyMode(.toggle)
         return manager

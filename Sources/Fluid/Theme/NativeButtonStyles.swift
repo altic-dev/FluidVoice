@@ -165,6 +165,7 @@ struct GlassButtonStyle: ButtonStyle {
                 .padding(.horizontal, self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.theme.metrics.spacing.sm)
                 .frame(height: self.height ?? 36)
+                .contentShape(self.shape)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .background(self.theme.materials.card, in: self.shape)
                 .background(
@@ -244,6 +245,7 @@ struct PremiumButtonStyle: ButtonStyle {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
                 .frame(height: self.height)
+                .contentShape(self.shape)
                 .foregroundStyle(self.isRecording ? Color.white : self.theme.palette.primaryText)
                 .background(
                     self.shape
@@ -328,6 +330,7 @@ struct AccentButtonStyle: ButtonStyle {
                 .padding(.horizontal, self.compact ? 12 : self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.compact ? 8 : self.theme.metrics.spacing.md)
                 .frame(minHeight: self.compact ? 32 : 36)
+                .contentShape(self.shape)
                 .foregroundStyle(Color.white)
                 .background(
                     self.shape
@@ -382,6 +385,7 @@ struct InlineButtonStyle: ButtonStyle {
                 .fontWeight(.medium)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.vertical, self.theme.metrics.spacing.xs)
+                .contentShape(self.shape)
                 .foregroundStyle(Color.white)
                 .background(
                     self.shape
@@ -558,6 +562,8 @@ struct SquareIconButtonStyle: ButtonStyle {
             let foregroundColor = self.foreground ?? self.theme.palette.primaryText
 
             self.configuration.label
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(self.shape)
                 .foregroundStyle(foregroundColor)
                 .background(self.theme.materials.card, in: self.shape)
                 .background(

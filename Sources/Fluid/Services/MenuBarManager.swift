@@ -1544,9 +1544,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func ensureUsableMainWindow(_ window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen) else { return }
         // If the window is too small (e.g., height collapsed), reset to the default frame.
         let minSize = self.mainWindowMinimumSize
-        window.minSize = minSize
+        if window.minSize != minSize { window.minSize = minSize }
 
         let frame = window.frame
         if frame.height < minSize.height || frame.width < minSize.width {

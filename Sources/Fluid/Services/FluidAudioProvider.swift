@@ -1,5 +1,118 @@
 import Foundation
 
+/// A bounded recording and fixed verdict shared by the staged installer and its tests.
+/// This runs only for newly downloaded compact weights, never for a healthy installed copy.
+nonisolated enum CompactSpeechModelRuntimeCheck {
+    static let words = ["quick", "brown", "fox", "jumps", "over", "lazy", "dog", "near", "quiet"]
+    static let maximumSamples = 240_000
+
+    enum Failure: LocalizedError, Equatable {
+        case missingRecording
+        case invalidRecording
+        case incorrectTranscript
+        case timedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .missingRecording, .invalidRecording:
+                "The app's voice model verification recording is unavailable. Your previous model was kept."
+            case .incorrectTranscript:
+                "The updated voice model failed its test sentence. Your previous model was kept."
+            case .timedOut:
+                "The updated voice model took too long to verify. Your previous model was kept."
+            }
+        }
+    }
+
+    static var recordingURL: URL? {
+        #if SWIFT_PACKAGE
+        Bundle.module.url(forResource: "speech-model-check", withExtension: "pcm")
+        #else
+        Bundle(for: FluidAudioProvider.self).url(forResource: "speech-model-check", withExtension: "pcm")
+        #endif
+    }
+
+    static func samples() throws -> [Float] {
+        guard let url = self.recordingURL else { throw Failure.missingRecording }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        // A damaged resource cannot allocate an unbounded audio buffer.
+        let data = try file.read(upToCount: self.maximumSamples * 2 + 1) ?? Data()
+        return try self.decode(data)
+    }
+
+    static func decode(_ data: Data) throws -> [Float] {
+        guard data.count >= 32_000, data.count <= self.maximumSamples * 2,
+              data.count.isMultiple(of: 2)
+        else { throw Failure.invalidRecording }
+        // Byte decoding also works for unaligned Data slices; no Int16 pointer assumptions.
+        return data.withUnsafeBytes { bytes in
+            stride(from: 0, to: bytes.count, by: 2).map { offset in
+                let bits = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+                return Float(Int16(bitPattern: bits)) / 32_768
+            }
+        }
+    }
+
+    static func accepts(_ text: String) -> Bool {
+        let heard = Set(text.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init))
+        return self.words.filter(heard.contains).count * 2 >= self.words.count
+    }
+
+    /// Requests cancellation at the deadline, then joins the work before returning.
+    /// Core ML's in-flight native prediction is cooperative, not forcibly preemptible.
+    static func withDeadline(
+        _ timeout: Duration = .seconds(240),
+        operation: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw Failure.timedOut
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+        try Task.checkCancellation()
+    }
+
+    #if arch(arm64)
+    /// Validate unpublished files. A missing app resource is not evidence that a release is bad.
+    static func validateStagedWeights(
+        at directory: URL,
+        descriptor: ParakeetSpeechModelCatalog.Descriptor
+    ) async throws {
+        let samples = try self.samples()
+        do {
+            try await self.withDeadline {
+                let stagedModels = try await AsrModels.loadLocalOnly(from: directory, version: descriptor.asrModelVersion)
+                let manager = AsrManager(config: ASRConfig.default)
+                do {
+                    try await manager.initialize(models: stagedModels)
+                    try Task.checkCancellation()
+                    // An isolated manager never receives custom vocabulary or dictionary boosting.
+                    let result = try await manager.transcribe(samples, source: .microphone)
+                    try Task.checkCancellation()
+                    guard self.accepts(result.text) else { throw Failure.incorrectTranscript }
+                    await manager.cleanup()
+                } catch {
+                    await manager.cleanup()
+                    throw error
+                }
+            }
+        } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            if let manifestSHA256 = descriptor.manifestSHA256 {
+                await CompactSpeechModelReleaseCatalog.shared.reject(manifestSHA256: manifestSHA256)
+            }
+            throw error
+        }
+    }
+    #endif
+}
+
 /// Rejection of a meeting ASR configuration outside the fixed supported policy.
 nonisolated enum MeetingProviderOptionsError: Error, Equatable {
     case unsupportedASRModel(String)
@@ -153,6 +266,10 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var boostedVocabularyTermsCount: Int = 0
     private var boostedTermLookup: [String] = []
     private var pronunciationModelKey = ""
+    #if DEBUG
+    var modelCacheRootForTesting: URL?
+    var pronunciationModelKeyForTesting: String { self.pronunciationModelKey }
+    #endif
     private var edgeReferenceCache: [UUID: PronunciationEmbedding] = [:]
     private var incrementalSharedFeatures = false
     private var incrementalSharedEvidence: [Int: [(Range<Int>, DictionaryAcousticEvidence)]] = [:]
@@ -166,6 +283,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// Used for downloading specific models without changing the active selection.
     let modelOverride: SettingsStore.SpeechModel?
     private let configureWordBoosting: Bool
+    private let updateCompactWeights: Bool
     /// Opt-in pinned meeting options. When nil (legacy dictation), enhancement switches and
     /// the custom dictionary are still read live from `SettingsStore` at each call site.
     private let meetingOptions: MeetingProviderOptions?
@@ -177,11 +295,13 @@ final class FluidAudioProvider: TranscriptionProvider {
     init(
         modelOverride: SettingsStore.SpeechModel? = nil,
         configureWordBoosting: Bool = true,
+        updateCompactWeights: Bool = false,
         enhancementOptions: FluidAudioProviderEnhancementOptions? = nil,
         pronunciationStore: PronunciationDictionaryStore = .shared
     ) {
         self.modelOverride = modelOverride
         self.configureWordBoosting = configureWordBoosting
+        self.updateCompactWeights = updateCompactWeights
         self.meetingOptions = nil
         self.enhancementOptions = enhancementOptions
         self.pronunciationStore = pronunciationStore
@@ -195,6 +315,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let options = try MeetingProviderOptions.resolve(configuration)
         self.modelOverride = options.model
         self.configureWordBoosting = false
+        self.updateCompactWeights = false
         self.meetingOptions = options
         self.enhancementOptions = nil
         self.pronunciationStore = .shared
@@ -204,6 +325,12 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.meetingOptions?.experimentalUnifiedFinalEnabled
             ?? self.enhancementOptions?.experimentalUnifiedFinalEnabled
             ?? SettingsStore.shared.experimentalParakeetUnifiedFinalEnabled
+    }
+
+    private var resolvedSpeechModel: SettingsStore.SpeechModel {
+        let selected = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        // Preserve the established fallback for old Qwen selections.
+        return selected == .qwen3Asr ? .parakeetTDT : selected
     }
 
     private var explicitPronunciationMatchingEnabled: Bool {
@@ -295,27 +422,77 @@ final class FluidAudioProvider: TranscriptionProvider {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        let asrModelVersion: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
-        let modelVersion = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
-        self.pronunciationModelKey = "parakeet-\(modelVersion)"
+        let selectedModel = self.resolvedSpeechModel
+        if self.updateCompactWeights { await CompactSpeechModelReleaseCatalog.shared.refreshIfNeeded() }
+        try Task.checkCancellation()
+        guard var descriptor = CompactSpeechModelReleaseCatalog.shared.descriptor(for: selectedModel)
+            ?? selectedModel.parakeetDescriptor
+        else {
+            throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])
+        }
+        let asrModelVersion = descriptor.asrModelVersion
+        let modelVersion = descriptor.variant.rawValue
+        #if DEBUG
+        let cacheDirectory = self.modelCacheRootForTesting ?? AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        #else
         let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
-        let modelCacheDirectory = AsrModels.defaultCacheDirectory(for: asrModelVersion)
+        #endif
+        let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
         DebugLogger.shared.info(
             "FluidAudioProvider: Starting model preparation for \(selectedModel.displayName) [version=\(modelVersion)]",
             source: "FluidAudioProvider"
         )
         DebugLogger.shared.debug("FluidAudioProvider: target cache directory=\(cacheDirectory.path)", source: "FluidAudioProvider")
-        try Task.checkCancellation()
-        if FileManager.default.fileExists(atPath: modelCacheDirectory.path), !self.modelsExistOnDisk() {
-            DebugLogger.shared.warning(
-                "FluidAudioProvider: removing incomplete \(modelVersion) cache before download",
-                source: "FluidAudioProvider"
-            )
-            try FileManager.default.removeItem(at: modelCacheDirectory)
-        }
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
         progressRelay.report(.preparingDownload)
+        if self.updateCompactWeights {
+            guard descriptor.variant == .mini || descriptor.variant == .pico else {
+                throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Only Mini and Pico support weight updates."])
+            }
+            let release = descriptor
+            _ = try await ParakeetArchiveDownloader.ensurePresent(
+                descriptor: descriptor,
+                in: cacheDirectory,
+                progressHandler: { progressRelay.report($0) },
+                replaceExisting: true,
+                stageValidator: { directory in
+                    progressRelay.report(.loading)
+                    try await CompactSpeechModelRuntimeCheck.validateStagedWeights(at: directory, descriptor: release)
+                }
+            )
+            // Publication is the commit point. A later cancellation cannot turn a
+            // completed replacement into a failure or remove its validated files.
+            return
+        }
+        let inspectionDescriptor = descriptor
+        let inspection = Task.detached(priority: .userInitiated) { () throws -> String? in
+            try Task.checkCancellation()
+            if let installedHash = inspectionDescriptor.installedArchiveSHA256(at: modelCacheDirectory) {
+                return installedHash
+            }
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: modelCacheDirectory.path),
+               !inspectionDescriptor.artifactsAreComplete(at: modelCacheDirectory)
+            {
+                try FileManager.default.removeItem(at: modelCacheDirectory)
+            }
+            return nil
+        }
+        let installedHash = try await withTaskCancellationHandler {
+            try await inspection.value
+        } onCancel: {
+            inspection.cancel()
+        }
+        try Task.checkCancellation()
+        if installedHash == nil, descriptor.variant == .mini || descriptor.variant == .pico {
+            // Keep an installed checkpoint usable without a network wait. Only a
+            // first download needs the bounded signed-catalog freshness check.
+            await CompactSpeechModelReleaseCatalog.shared.refreshIfNeeded()
+            try Task.checkCancellation()
+            descriptor = CompactSpeechModelReleaseCatalog.shared.descriptor(for: selectedModel) ?? descriptor
+        }
+        self.pronunciationModelKey = installedHash.map { descriptor.modelID + ":sha256:" + $0 }
+            ?? descriptor.pronunciationModelKey
         let fluidAudioProgressHandler: DownloadUtils.ProgressHandler = { progress in
             switch progress.phase {
             case .listing:
@@ -333,11 +510,38 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Download and load models
         let models: AsrModels
         do {
-            models = try await AsrModels.downloadAndLoad(
-                version: asrModelVersion,
-                progressHandler: fluidAudioProgressHandler
-            )
+            if descriptor.archiveURL != nil {
+                if installedHash == nil {
+                    let release = descriptor
+                    let validator: ParakeetArchiveDownloader.StageValidator?
+                    if release.variant == .mini || release.variant == .pico {
+                        validator = { directory in
+                            progressRelay.report(.loading)
+                            try await CompactSpeechModelRuntimeCheck.validateStagedWeights(at: directory, descriptor: release)
+                        }
+                    } else {
+                        validator = nil
+                    }
+                    _ = try await ParakeetArchiveDownloader.ensurePresent(
+                        descriptor: release,
+                        in: cacheDirectory,
+                        progressHandler: { progressRelay.report($0) },
+                        stageValidator: validator
+                    )
+                }
+                try Task.checkCancellation()
+                progressRelay.report(.loading)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+            } else {
+                models = try await AsrModels.downloadAndLoad(
+                    version: asrModelVersion,
+                    progressHandler: fluidAudioProgressHandler
+                )
+            }
         } catch {
+            // A canceled transfer can still leave files that require user cleanup.
+            // Keep that repair path visible instead of reporting an ordinary cancel.
+            if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             let nsError = error as NSError
             if Task.isCancelled
                 || error is CancellationError
@@ -369,7 +573,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Shares the same underlying MLModel objects (reference types) so memory overhead
         // is only the decoder state (~100KB).
         let finalManager: AsrManager
-        if self.configureWordBoosting {
+        if self.configureWordBoosting, selectedModel.supportsCustomVocabulary {
             do {
                 if let vocabBundle = try await ParakeetVocabularyStore.shared.loadTokenizedVocabularyBundle() {
                     DebugLogger.shared.debug(
@@ -870,7 +1074,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let generation = self.recordingGeneration
         let profiles = Self.preparedEdgeProfiles(await self.pronunciationProfiles(), cache: self.edgeReferenceCache)
         try self.requireCurrentRecording(generation)
-        let references = DictionaryPronunciationReferences.make(profiles: profiles)
+        let references = DictionaryPronunciationReferences.make(profiles: profiles, compatibleModelKey: self.pronunciationModelKey)
         let useSharedFeatures = DictionaryMatcherExperiment.sharedFeaturesEnabled
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let refiner: PronunciationChunkRefiner?
@@ -1005,7 +1209,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                     textMayBeCorrected
                 )
             }
-            let references = DictionaryPronunciationReferences.make(profiles: profiles, hiddenSize: features.hiddenSize)
+            let references = DictionaryPronunciationReferences.make(profiles: profiles, hiddenSize: features.hiddenSize, compatibleModelKey: self.pronunciationModelKey)
             let matches = PronunciationEmbeddingMatcher.allMatches(
                 prototypes: references.map(\.embedding),
                 in: features,
@@ -1227,6 +1431,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private func temporalReferences(_ profile: PronunciationDictionaryProfile, key: String, models: AsrModels) async throws -> [DictionaryMatchFrames] {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return [] }
+        guard profile.modelKey == self.pronunciationModelKey,
+              profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
+        else { throw PronunciationDictionaryStoreError.outdatedModelRevision }
         if let cached = self.temporalReferenceCache[key] { return cached }
         guard profile.enrollments.count >= 3 else { return [] }
         // Reserve a worst-case three-reference slot before encoding. Stable admission avoids
@@ -1463,8 +1670,10 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.resolvedSpeechModel
         switch selectedModel {
+        case .fluidParakeetMini, .fluidParakeetPico:
+            return SpeechModelInstallationSnapshot.shared.isInstalled(modelID: selectedModel.id)
         case .parakeetTDT, .parakeetTDTv2:
             return selectedModel.isInstalled
         default:
@@ -1472,8 +1681,32 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
     }
 
+    /// Preparation uses a fresh off-main check; synchronous consumers only read
+    /// the event-refreshed installation snapshot for hosted compact models.
+    func refreshModelsExistOnDiskAsync() async throws -> Bool {
+        let model = self.resolvedSpeechModel
+        guard let descriptor = model.parakeetDescriptor, descriptor.archiveURL != nil else {
+            return self.modelsExistOnDisk()
+        }
+        let installed = try await SpeechModelInstallationSnapshot.scan([
+            .init(modelID: model.id, kind: .parakeet(descriptor)),
+        ])
+        try Task.checkCancellation()
+        return installed.contains(model.id)
+    }
+
+    var preservesInstalledCompactWeights: Bool {
+        self.resolvedSpeechModel == .fluidParakeetMini || self.resolvedSpeechModel == .fluidParakeetPico
+    }
+
+    var shouldClearCacheAfterCancellation: Bool {
+        // Hosted downloads own their unpublished temporary files. A later load
+        // cancellation must retain the verified, atomically published model.
+        self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
+    }
+
     func clearCache() async throws {
-        let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.resolvedSpeechModel
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.recordingGeneration = UUID()
@@ -1493,8 +1726,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.boostedVocabularyTermsCount = 0
         self.boostedTermLookup = []
 
-        let version: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
-        let directory = AsrModels.defaultCacheDirectory(for: version)
+        guard let descriptor = selectedModel.parakeetDescriptor else {
+            throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])
+        }
+        #if DEBUG
+        let directory = self.modelCacheRootForTesting.map { descriptor.cacheDirectory(in: $0) }
+            ?? AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        #else
+        let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        #endif
         try await Task.detached(priority: .userInitiated) {
             if FileManager.default.fileExists(atPath: directory.path) {
                 try FileManager.default.removeItem(at: directory)
@@ -1565,9 +1805,12 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
 
+    var preservesInstalledCompactWeights: Bool { false }
+
     init(
         modelOverride: SettingsStore.SpeechModel? = nil,
         configureWordBoosting: Bool = true,
+        updateCompactWeights: Bool = false,
         enhancementOptions: FluidAudioProviderEnhancementOptions? = nil
     ) {
         // Intel stub - parameters ignored

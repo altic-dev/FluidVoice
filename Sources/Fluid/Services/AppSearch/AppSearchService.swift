@@ -60,7 +60,12 @@ nonisolated struct AppSearchGroup: Identifiable, Equatable, Sendable {
 /// next to one from another, so hits are never merged across kinds.
 @MainActor
 final class AppSearchService: ObservableObject {
-    static let shared = AppSearchService()
+    static let shared = AppSearchService(
+        prepareIndex: { try await SearchIndexCoordinator.shared.prepareForSearch() },
+        retryPreparation: {
+            TranscriptionHistoryStore.shared.retryLoadingIfNeeded()
+        }
+    )
 
     /// Hits fetched per indexed kind. The UI shows a few and offers the rest.
     static let limit = 50
@@ -75,14 +80,48 @@ final class AppSearchService: ObservableObject {
     }
 
     @Published private(set) var groups: [AppSearchGroup] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var searchError: String?
 
     private let index: SearchIndex
+    private let prepareIndex: @MainActor () async throws -> Void
+    private let retryPreparation: @MainActor () -> Void
+    private let performSearch: (@MainActor (String) async -> [AppSearchGroup])?
+    private let readVocabulary: @Sendable () async throws -> [ParakeetVocabularyStore.VocabularyConfig.Term]
     private var task: Task<Void, Never>?
     private var token: ZeppelinCancellationToken?
+    private var tokenID: UUID?
     private var chatAvailabilitySubscription: AnyCancellable?
+    private var vocabularySubscription: AnyCancellable?
+    private var vocabularyTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
+    private var hasVocabularySnapshot = false
+    private var vocabularyGeneration: UInt64 = 0
+    private var stopped = false
 
-    init(index: SearchIndex = .shared) {
+    init(
+        index: SearchIndex = .shared,
+        prepareIndex: @escaping @MainActor () async throws -> Void = {},
+        retryPreparation: @escaping @MainActor () -> Void = {},
+        performSearch: (@MainActor (String) async -> [AppSearchGroup])? = nil,
+        readVocabulary: @escaping @Sendable () async throws -> [ParakeetVocabularyStore.VocabularyConfig.Term] = {
+            try await ParakeetVocabularyStore.readSearchTerms()
+        },
+        notificationCenter: NotificationCenter = .default
+    ) {
         self.index = index
+        self.prepareIndex = prepareIndex
+        self.retryPreparation = retryPreparation
+        self.performSearch = performSearch
+        self.readVocabulary = readVocabulary
+        self.vocabularySubscription = notificationCenter.publisher(for: .parakeetVocabularyDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.vocabularyGeneration &+= 1
+                self.vocabularyTerms = []
+                self.hasVocabularySnapshot = false
+                self.refresh()
+            }
         self.chatAvailabilitySubscription = ChatHistoryStore.shared.$sessions
             .map { Set($0.filter { !$0.isArchived }.map(\.id)) }
             .removeDuplicates()
@@ -100,18 +139,43 @@ final class AppSearchService: ObservableObject {
         self.schedule()
     }
 
+    /// Explicit retries may reload failed history. Ordinary keystrokes never do.
+    func retry() {
+        guard !self.stopped else { return }
+        self.retryPreparation()
+        self.schedule()
+    }
+
+    func stop() {
+        self.stopped = true
+        self.task?.cancel()
+        self.task = nil
+        if let token = self.token { Task { try? await token.cancel() } }
+        self.token = nil
+        self.tokenID = nil
+        self.groups = []
+        self.isSearching = false
+        self.searchError = nil
+    }
+
     private func schedule() {
+        guard !self.stopped else { return }
         self.task?.cancel()
         if let token = self.token {
             self.token = nil
+            self.tokenID = nil
             Task { try? await token.cancel() }
         }
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             self.groups = []
+            self.isSearching = false
+            self.searchError = nil
             return
         }
         self.groups = []
+        self.isSearching = true
+        self.searchError = nil
         self.task = Task { [weak self] in
             try? await Task.sleep(for: Self.debounce)
             guard !Task.isCancelled, let self else { return }
@@ -121,12 +185,39 @@ final class AppSearchService: ObservableObject {
             guard !Task.isCancelled else { return }
             let availableIDs = Set(ChatHistoryStore.shared.sessions.filter { !$0.isArchived }.map(\.id))
             self.groups = Self.removingUnavailableChats(from: groups, availableIDs: availableIDs)
+            self.isSearching = false
         }
     }
 
     func search(_ query: String) async -> [AppSearchGroup] {
+        guard !self.stopped, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        do {
+            try await self.prepareIndex()
+            try Task.checkCancellation()
+        } catch {
+            if !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == query {
+                self.searchError = error is SearchIndexCoordinator.PreparationError
+                    ? "Search is still getting ready. Try again shortly."
+                    : "Search is unavailable right now. Try again."
+            }
+            return []
+        }
+        guard !self.stopped else { return [] }
+        if let performSearch = self.performSearch { return await performSearch(query) }
         let token = try? await ZeppelinCancellationToken.create()
+        guard !Task.isCancelled, !self.stopped else {
+            if let token { try? await token.cancel() }
+            return []
+        }
+        let tokenID = UUID()
         self.token = token
+        self.tokenID = tokenID
+        defer {
+            if self.tokenID == tokenID {
+                self.token = nil
+                self.tokenID = nil
+            }
+        }
 
         async let history = self.hits(.history, query, token)
         async let transcripts = self.hits(.transcripts, query, token)
@@ -136,10 +227,12 @@ final class AppSearchService: ObservableObject {
             self.transcriptGroup(transcripts, query),
             self.chatGroup(chats, query),
         ]
+        guard !Task.isCancelled else { return [] }
+        let vocabulary = await self.vocabularyGroup(query)
         let inMemory = [
             self.dictionaryGroup(query),
             self.promptGroup(query),
-            self.vocabularyGroup(query),
+            vocabulary,
             self.punctuationGroup(query),
             self.settingsGroup(query),
         ]
@@ -191,7 +284,8 @@ final class AppSearchService: ObservableObject {
     }
 
     private func historyGroup(_ hits: [SearchIndex.Hit], _ query: String) -> AppSearchGroup {
-        let rows = Dictionary(TranscriptionHistoryStore.shared.entries.map { ($0.id, $0) }) { first, _ in first }
+        let wanted = Set(hits.map(\.id))
+        let rows = Dictionary(TranscriptionHistoryStore.shared.entries.lazy.filter { wanted.contains($0.id) }.map { ($0.id, $0) }) { first, _ in first }
         return AppSearchGroup(kind: .history, hits: Self.ranked(hits, rows: rows, date: \.timestamp) { entry in
             AppSearchHit(
                 kind: .history,
@@ -204,7 +298,8 @@ final class AppSearchService: ObservableObject {
     }
 
     private func transcriptGroup(_ hits: [SearchIndex.Hit], _ query: String) -> AppSearchGroup {
-        let rows = Dictionary(FileTranscriptionHistoryStore.shared.entries.map { ($0.id, $0) }) { first, _ in first }
+        let wanted = Set(hits.map(\.id))
+        let rows = Dictionary(FileTranscriptionHistoryStore.shared.entries.lazy.filter { wanted.contains($0.id) }.map { ($0.id, $0) }) { first, _ in first }
         return AppSearchGroup(kind: .transcripts, hits: Self.ranked(hits, rows: rows, date: \.timestamp) { entry in
             AppSearchHit(
                 kind: .transcripts,
@@ -217,9 +312,10 @@ final class AppSearchService: ObservableObject {
     }
 
     private func chatGroup(_ hits: [SearchIndex.Hit], _ query: String) -> AppSearchGroup {
+        let wanted = Set(hits.map(\.id))
         let rows = Dictionary(
             ChatHistoryStore.shared.sessions.compactMap { session -> (UUID, ChatSession)? in
-                guard !session.isArchived, let id = UUID(uuidString: session.id) else { return nil }
+                guard !session.isArchived, let id = UUID(uuidString: session.id), wanted.contains(id) else { return nil }
                 return (id, session)
             }
         ) { first, _ in first }
@@ -275,8 +371,23 @@ final class AppSearchService: ObservableObject {
         return AppSearchGroup(kind: .prompts, hits: hits)
     }
 
-    private func vocabularyGroup(_ query: String) -> AppSearchGroup {
-        let terms = (try? ParakeetVocabularyStore.shared.loadUserBoostTerms()) ?? []
+    private func vocabularyGroup(_ query: String) async -> AppSearchGroup {
+        let generation = self.vocabularyGeneration
+        let terms: [ParakeetVocabularyStore.VocabularyConfig.Term]
+        if self.hasVocabularySnapshot {
+            terms = self.vocabularyTerms
+        } else {
+            do {
+                terms = try await self.readVocabulary()
+                if generation == self.vocabularyGeneration {
+                    self.vocabularyTerms = terms
+                    self.hasVocabularySnapshot = true
+                }
+            } catch {
+                // A transient read failure must remain retryable on the next query.
+                terms = []
+            }
+        }
         let hits = terms
             .filter { Self.matches(query, [$0.text] + $0.aliases) }
             .map { term in

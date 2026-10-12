@@ -218,6 +218,18 @@ final class DebugLogger {
         )
         store.restore(from: [older, newer])
         precondition(store.search(query: "").map(\.id) == [newer.id, older.id], "Stars must preserve chronological order")
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [older.id, newer.id], "History displays pins first")
+        precondition(store.search(query: "prompt", pinnedFirst: true).map(\.id) == [older.id, newer.id], "Pin ordering applies after text filtering")
+        precondition(store.search(query: "Another", pinnedFirst: true).map(\.id) == [newer.id], "Pins must not bypass the search filter")
+        let storedOrder = store.entries
+        let selectedID = store.selectedEntryID
+        store.toggleStar(id: newer.id)
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [newer.id, older.id], "Multiple pins retain newest-first order")
+        store.toggleStar(id: older.id)
+        precondition(store.search(query: "", pinnedFirst: true).map(\.id) == [newer.id, older.id], "Unpin returns the entry to its date position")
+        store.toggleStar(id: newer.id)
+        store.toggleStar(id: older.id)
+        precondition(store.entries == storedOrder && store.selectedEntryID == selectedID, "Pinning must preserve persisted chronology, all metadata, and selection")
         precondition(store.search(query: " ", starredOnly: true).map(\.id) == [older.id])
         for query in ["PROMPT", "Original", "Editor", "Reference"] {
             precondition(store.search(query: query, starredOnly: true).map(\.id) == [older.id], "Search must intersect with stars across every field")
@@ -238,12 +250,30 @@ final class DebugLogger {
             return entry
         }
         precondition(normalizedRestore == backup, "Backup restore must retain stars and metadata while refreshing search revisions")
+        store.selectEntryFromSearch(id: older.id)
+        guard let firstRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting a search result must create a request")
+        }
+        store.selectEntryFromSearch(id: older.id)
+        guard let repeatedRequest = store.searchSelectionRequest else {
+            preconditionFailure("Selecting the same result again must create a request")
+        }
+        precondition(firstRequest != repeatedRequest, "Repeated clicks on the same result must create a fresh bounded request")
+        store.consumeSearchSelectionRequest(firstRequest)
+        precondition(store.searchSelectionRequest == repeatedRequest, "A stale consumer must not clear the latest search request")
+        store.consumeSearchSelectionRequest(repeatedRequest)
+        precondition(store.searchSelectionRequest == nil, "The active consumer clears its request")
+        store.selectedEntryID = older.id
+        store.toggleStar(id: older.id)
+        precondition(store.searchSelectionRequest == nil, "Unstar is a local edit, not a sidebar reveal")
         store.deleteEntry(id: older.id)
+        precondition(store.selectedEntryID == newer.id, "Deleting the selected row retains the existing store fallback")
+        precondition(store.searchSelectionRequest == nil, "Delete fallback must not reset History filters")
         store.toggleStar(id: older.id)
         await store.finishPendingWrites()
         let afterDelete = try await writer.load()
         precondition(afterDelete == restored.filter { $0.id == newer.id }, "A stale star action must not resurrect a deleted entry")
-        print("PASS: star filtering/search, chronology, audio preservation, unstar/restart, backup restore and deletion")
+        print("PASS: star filtering/search, chronology, audio preservation, unstar/restart, backup restore, deletion and bounded explicit search requests")
     }
 
     @MainActor static func testTodaySummary(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {

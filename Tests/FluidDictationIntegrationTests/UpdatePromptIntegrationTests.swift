@@ -15,6 +15,39 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).showUpdatePopups)
     }
 
+    func testOnlyOlderCopiesAtTheSameLocationAreSuperseded() {
+        typealias Instance = SupersededInstanceRetirement.Instance
+        let launch = Date(timeIntervalSinceReferenceDate: 1000)
+        let path = "/Applications/FluidVoice.app"
+        let instances = [
+            Instance(processID: 10, launchDate: launch.addingTimeInterval(-60), bundlePath: path),
+            Instance(processID: 20, launchDate: launch, bundlePath: path),
+            Instance(processID: 30, launchDate: launch.addingTimeInterval(60), bundlePath: path),
+            Instance(processID: 40, launchDate: nil, bundlePath: path),
+            Instance(processID: 50, launchDate: launch.addingTimeInterval(-60), bundlePath: "/Users/me/Downloads/FluidVoice.app"),
+            Instance(processID: 60, launchDate: launch.addingTimeInterval(-60), bundlePath: nil),
+        ]
+        func superseded(_ instances: [Instance], as processID: pid_t, launchedAt date: Date) -> [pid_t] {
+            SupersededInstanceRetirement.superseded(among: instances, currentProcessID: processID, currentLaunchDate: date, currentBundlePath: path)
+        }
+        XCTAssertEqual(
+            superseded(instances, as: 20, launchedAt: launch),
+            [10],
+            "only the copy already running from this location is retired; a second install, a rollback copy and unknowns are left alone"
+        )
+        XCTAssertEqual(superseded([instances[1]], as: 20, launchedAt: launch), [], "a lone instance never retires itself")
+        XCTAssertEqual(
+            superseded(instances, as: 10, launchedAt: launch.addingTimeInterval(-60)),
+            [],
+            "the older copy never retires the newer ones"
+        )
+    }
+
+    func testForceQuitWaitsLongerThanTheOldCopysShutdownBudget() {
+        // AppDelegate.applicationWillTerminate: 8s private AI + 12s ASR and meeting + 2s Zeppelin.
+        XCTAssertGreaterThan(SupersededInstanceRetirement.forceQuitGracePeriod, .seconds(8 + 12 + 2))
+    }
+
     func testOfferWithQueuedFailureTransitionsToOnlyInstallStatus() async throws {
         let presenter = UpdatePromptPresenter.shared
         let updater = SimpleUpdater()

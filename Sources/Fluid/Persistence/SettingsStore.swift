@@ -1691,7 +1691,7 @@ final class SettingsStore: ObservableObject {
     }
 
     /// How long the local model may sit unused before its memory is released.
-    enum PrivateAIIdleUnload: Int, CaseIterable, Identifiable {
+    enum PrivateAIIdleUnload: Int, Codable, CaseIterable, Identifiable {
         case never = 0
         case tenMinutes = 10
         case thirtyMinutes = 30
@@ -1923,6 +1923,15 @@ final class SettingsStore: ObservableObject {
     var hotkeyMode: HotkeyActivationMode {
         get { self.defaults.string(forKey: Keys.hotkeyMode).flatMap(HotkeyActivationMode.init(rawValue:)) ?? (self.defaults.bool(forKey: Keys.pressAndHoldMode) ? .hold : .toggle) }
         set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.hotkeyMode); self.defaults.set(newValue == .hold, forKey: Keys.pressAndHoldMode) }
+    }
+
+    var holdSpaceToMute: Bool {
+        get { self.defaults.bool(forKey: Keys.holdSpaceToMute) }
+        set {
+            self.objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.holdSpaceToMute)
+            NotificationCenter.default.post(name: .init("HoldSpaceToMuteChanged"), object: nil)
+        }
     }
 
     var enableStreamingPreview: Bool {
@@ -3383,17 +3392,37 @@ final class SettingsStore: ObservableObject {
 
     /// Whether the model rejects the `temperature` parameter.
     /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, Sonnet 5, Fable/Mythos 5 — Sonnet 4.6 and older still accept it).
+    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
     func isTemperatureUnsupported(_ model: String) -> Bool {
         if self.isReasoningModel(model) { return true }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
-        return modelLower.contains("claude-opus-4-7")
-            || modelLower.contains("claude-opus-4-8")
-            || modelLower.contains("claude-sonnet-5")
-            || modelLower.contains("claude-fable")
-            || modelLower.contains("claude-mythos")
+        if modelLower.contains("claude-fable") || modelLower.contains("claude-mythos") { return true }
+        // Compare versions instead of listing model IDs: each new Claude release
+        // otherwise fails with HTTP 400 until its ID is added here.
+        guard let version = Self.claudeVersion(in: modelLower) else { return false }
+        if version.major >= 5 { return true }
+        return version.family == "opus" && version.major == 4 && version.minor >= 7
+    }
+
+    /// The minor group is capped at two digits so a date suffix
+    /// (claude-sonnet-4-20250514) is not read as a minor version.
+    private static let claudeVersionRegex = try? NSRegularExpression(
+        pattern: #"claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)"#
+    )
+
+    /// Family and version of a family-first Claude ID (claude-haiku-5-5). Older
+    /// version-first IDs (claude-3-5-haiku) return nil; they all accept temperature.
+    private static func claudeVersion(in modelLower: String) -> (family: String, major: Int, minor: Int)? {
+        let range = NSRange(modelLower.startIndex..., in: modelLower)
+        guard let match = self.claudeVersionRegex?.firstMatch(in: modelLower, range: range),
+              let familyRange = Range(match.range(at: 1), in: modelLower),
+              let majorRange = Range(match.range(at: 2), in: modelLower),
+              let major = Int(modelLower[majorRange])
+        else { return nil }
+        let minor = Range(match.range(at: 3), in: modelLower).flatMap { Int(modelLower[$0]) } ?? 0
+        return (String(modelLower[familyRange]), major, minor)
     }
 
     /// Whether to display thinking tokens in the UI (Command Mode, Rewrite Mode)
@@ -3615,6 +3644,7 @@ final class SettingsStore: ObservableObject {
             shareAnonymousAnalytics: self.shareDetailedAnalytics,
             pressAndHoldMode: self.pressAndHoldMode,
             hotkeyMode: self.hotkeyMode,
+            holdSpaceToMute: self.holdSpaceToMute,
             enableStreamingPreview: self.enableStreamingPreview,
             experimentalParakeetUnifiedFinalEnabled: self.experimentalParakeetUnifiedFinalEnabled,
             returnDictationToStartingField: self.returnDictationToStartingField,
@@ -3681,7 +3711,10 @@ final class SettingsStore: ObservableObject {
             defaultDictationPromptOverride: self.defaultDictationPromptOverride,
             defaultEditPromptOverride: self.defaultEditPromptOverride,
             fileTranscriptionSpeakerLabelsEnabled: self.fileTranscriptionSpeakerLabelsEnabled,
-            fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount
+            fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
+            meetingRecordingDefaults: self.meetingRecordingDefaults,
+            privateAIIdleUnload: self.privateAIIdleUnload,
+            dictationPromptConfigurations: self.dictationPromptConfigurations
         )
     }
 
@@ -3710,6 +3743,9 @@ final class SettingsStore: ObservableObject {
         if let privateAIContextTokenLimit = payload.privateAIContextTokenLimit {
             self.privateAIContextTokenLimit = privateAIContextTokenLimit
         }
+        if let privateAIIdleUnload = payload.privateAIIdleUnload {
+            self.privateAIIdleUnload = privateAIIdleUnload
+        }
         self.selectedSpeechModel = payload.selectedSpeechModel
         if let selectedWhisperLanguageCode = payload.selectedWhisperLanguageCode {
             self.selectedWhisperLanguageCode = Self.whisperLanguageCode(fromBackupValue: selectedWhisperLanguageCode)
@@ -3726,6 +3762,9 @@ final class SettingsStore: ObservableObject {
         self.meetingTranscriptionBackendID = payload.meetingTranscriptionBackendID.map {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
+        if let meetingRecordingDefaults = payload.meetingRecordingDefaults {
+            self.meetingRecordingDefaults = meetingRecordingDefaults
+        }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
         self.promptModeShortcutEnabled = payload.promptModeShortcutEnabled
@@ -3763,6 +3802,7 @@ final class SettingsStore: ObservableObject {
         self.enableDebugLogs = payload.enableDebugLogs
         self.shareDetailedAnalytics = payload.shareAnonymousAnalytics
         self.hotkeyMode = payload.hotkeyMode ?? (payload.pressAndHoldMode ? .hold : .toggle)
+        self.holdSpaceToMute = payload.holdSpaceToMute ?? false
         self.enableStreamingPreview = payload.enableStreamingPreview
         if let experimentalParakeetUnifiedFinalEnabled = payload.experimentalParakeetUnifiedFinalEnabled {
             self.experimentalParakeetUnifiedFinalEnabled = experimentalParakeetUnifiedFinalEnabled
@@ -3888,6 +3928,9 @@ final class SettingsStore: ObservableObject {
         self.customDictionaryEntries = payload.customDictionaryEntries
 
         self.dictationPromptProfiles = promptProfiles
+        if let configurations = payload.dictationPromptConfigurations {
+            self.dictationPromptConfigurations = configurations
+        }
         self.appPromptBindings = appPromptBindings
         self.selectedDictationPromptID = payload.selectedDictationPromptID
         self.isDictationPromptOff = payload.dictationPromptOff ?? self.isDictationPromptOff
@@ -3906,6 +3949,11 @@ final class SettingsStore: ObservableObject {
         self.promptModeSelectedPromptID = payload.promptModeSelectedPromptID
         self.isSecondaryDictationPromptOff = payload.secondaryDictationPromptOff ?? false
         self.normalizePromptSelectionsIfNeeded()
+        // Validate imported mappings only after profile migration/normalization.
+        // Legacy backups do not own the newer map, so leave it intact when absent.
+        if payload.dictationPromptConfigurations != nil {
+            self.normalizeDictationPromptConfigurationsIfNeeded()
+        }
         self.purgeRetiredAppleIntelligenceState()
     }
 
@@ -5050,6 +5098,8 @@ final class SettingsStore: ObservableObject {
 
         case parakeetTDT = "parakeet-tdt"
         case parakeetTDTv2 = "parakeet-tdt-v2"
+        case fluidParakeetMini = "fluid-parakeet-mini"
+        case fluidParakeetPico = "fluid-parakeet-pico"
         case parakeetRealtime = "parakeet-realtime"
         case qwen3Asr = "qwen3-asr"
         case cohereTranscribeSixBit = "cohere-transcribe-6bit"
@@ -5071,6 +5121,16 @@ final class SettingsStore: ObservableObject {
         case whisperLargeTurbo = "whisper-large-turbo"
         case whisperLarge = "whisper-large"
 
+        var parakeetDescriptor: ParakeetSpeechModelCatalog.Descriptor? {
+            ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
+        }
+
+        /// Relative product ratings for display and sorting, not benchmark accuracy.
+        var hasPerformanceRatings: Bool {
+            guard let descriptor = self.parakeetDescriptor else { return true }
+            return descriptor.performanceRatings != nil
+        }
+
         var id: String {
             rawValue
         }
@@ -5079,8 +5139,7 @@ final class SettingsStore: ObservableObject {
 
         var displayName: String {
             switch self {
-            case .parakeetTDT: return "Parakeet TDT v3 (Multilingual)"
-            case .parakeetTDTv2: return "Parakeet TDT v2 (English Only)"
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.displayName ?? self.rawValue
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
             case .cohereTranscribeSixBit: return "Cohere Transcribe"
@@ -5100,9 +5159,7 @@ final class SettingsStore: ObservableObject {
 
         var languageSupport: String {
             switch self {
-            case .parakeetTDT:
-                return "25 Languages"
-            case .parakeetTDTv2: return "English Only (Higher Accuracy)"
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.languageSupport ?? "English Only"
             case .parakeetRealtime: return "English Only (Live Streaming)"
             case .qwen3Asr: return "30 Languages"
             case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
@@ -5116,8 +5173,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
-            case .parakeetTDT: return "~460.9 MiB"
-            case .parakeetTDTv2: return "~442.9 MiB"
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
             case .cohereTranscribeSixBit: return "~1.54 GiB"
@@ -5137,8 +5193,7 @@ final class SettingsStore: ObservableObject {
 
         var expectedDownloadBytes: Int64 {
             switch self {
-            case .parakeetTDT: return 483_288_717
-            case .parakeetTDTv2: return 464_421_712
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
             case .parakeetRealtime: return 449_190_189
             case .qwen3Asr: return 2000 * 1024 * 1024
             case .cohereTranscribeSixBit: return 1_650_748_785
@@ -5156,14 +5211,14 @@ final class SettingsStore: ObservableObject {
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
             default: return false
             }
         }
 
         var isWhisperModel: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
             }
@@ -5229,7 +5284,7 @@ final class SettingsStore: ObservableObject {
         /// Requires macOS 15 or later.
         var requiresMacOS15: Bool {
             switch self {
-            case .qwen3Asr, .cohereTranscribeSixBit: return true
+            case .fluidParakeetMini, .fluidParakeetPico, .qwen3Asr, .cohereTranscribeSixBit: return true
             default: return false
             }
         }
@@ -5279,8 +5334,7 @@ final class SettingsStore: ObservableObject {
         /// Human-readable marketing name for the card UI
         var humanReadableName: String {
             switch self {
-            case .parakeetTDT: return "Blazing Fast - Multilingual"
-            case .parakeetTDTv2: return "Blazing Fast - English"
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.humanReadableName ?? self.rawValue
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
             case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
@@ -5301,13 +5355,8 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .parakeetTDT:
-                return "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
-                    "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
-                    "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
-                    "Slovenian, Spanish, Swedish, and Ukrainian."
-            case .parakeetTDTv2:
-                return "Optimized for English accuracy and fastest transcription."
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+                return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
                 return "English-only streaming local dictation with low-latency partial text and end-of-utterance detection."
             case .qwen3Asr:
@@ -5342,7 +5391,7 @@ final class SettingsStore: ObservableObject {
         /// Minimum recommended RAM in GB for this model to run safely
         var requiredMemoryGB: Double {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
                 return 4.0
             case .qwen3Asr:
                 return 8.0
@@ -5386,8 +5435,7 @@ final class SettingsStore: ObservableObject {
         /// Speed rating (1-5, higher is faster)
         var speedRating: Int {
             switch self {
-            case .parakeetTDT: return 5
-            case .parakeetTDTv2: return 5
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
             case .parakeetRealtime: return 5
             case .qwen3Asr: return 3
             case .cohereTranscribeSixBit: return 3
@@ -5407,8 +5455,7 @@ final class SettingsStore: ObservableObject {
         /// Accuracy rating (1-5, higher is more accurate)
         var accuracyRating: Int {
             switch self {
-            case .parakeetTDT: return 5
-            case .parakeetTDTv2: return 5
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
             case .parakeetRealtime: return 4
             case .qwen3Asr: return 4
             case .cohereTranscribeSixBit: return 5
@@ -5428,8 +5475,7 @@ final class SettingsStore: ObservableObject {
         /// Exact speed percentage (0.0 - 1.0) for the liquid bars
         var speedPercent: Double {
             switch self {
-            case .parakeetTDT: return 1.0
-            case .parakeetTDTv2: return 1.0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
             case .parakeetRealtime: return 1.0
             case .qwen3Asr: return 0.45
             case .cohereTranscribeSixBit: return 0.85
@@ -5449,8 +5495,7 @@ final class SettingsStore: ObservableObject {
         /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
         var accuracyPercent: Double {
             switch self {
-            case .parakeetTDT: return 0.92
-            case .parakeetTDTv2: return 0.96
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
             case .parakeetRealtime: return 0.75
             case .qwen3Asr: return 0.90
             case .cohereTranscribeSixBit: return 0.98
@@ -5472,6 +5517,7 @@ final class SettingsStore: ObservableObject {
             switch self {
             case .parakeetTDT: return "FluidVoice Pick"
             case .parakeetTDTv2: return "FluidVoice Pick"
+            case .fluidParakeetMini, .fluidParakeetPico: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
             case .cohereTranscribeSixBit: return "New"
@@ -5484,7 +5530,7 @@ final class SettingsStore: ObservableObject {
         /// Optimization level for Apple Silicon (for display)
         var appleSiliconOptimized: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
                 return true
             default:
                 return false
@@ -5505,7 +5551,7 @@ final class SettingsStore: ObservableObject {
         var supportsPronunciationMatching: Bool {
             #if arch(arm64)
             switch self {
-            case .parakeetTDT, .parakeetTDTv2:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return true
             default:
                 return false
@@ -5557,7 +5603,7 @@ final class SettingsStore: ObservableObject {
         /// Which provider this model belongs to
         var provider: Provider {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
                 return .apple
@@ -5580,15 +5626,10 @@ final class SettingsStore: ObservableObject {
             switch self {
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
-            case .parakeetTDT:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 #if canImport(FluidAudio)
-                return Self.parakeetModelsExist(version: .v3)
-                #else
-                return false
-                #endif
-            case .parakeetTDTv2:
-                #if canImport(FluidAudio)
-                return Self.parakeetModelsExist(version: .v2)
+                guard let descriptor = self.parakeetDescriptor else { return false }
+                return Self.parakeetModelsExist(descriptor: descriptor)
                 #else
                 return false
                 #endif
@@ -5649,22 +5690,10 @@ final class SettingsStore: ObservableObject {
         }
 
         #if canImport(FluidAudio)
-        private static func parakeetModelsExist(version: AsrModelVersion) -> Bool {
-            let directory = AsrModels.defaultCacheDirectory(for: version)
-            let vocabulary = directory.appendingPathComponent(ModelNames.ASR.vocabularyFile)
-            guard
-                AsrModels.modelsExist(at: directory, version: version),
-                HuggingFaceModelDownloader.artifactIsComplete(at: vocabulary, isDirectory: false)
-            else {
-                return false
-            }
-
-            return AsrModels.requiredModelNames.allSatisfy { modelName in
-                HuggingFaceModelDownloader.artifactIsComplete(
-                    at: directory.appendingPathComponent(modelName, isDirectory: true),
-                    isDirectory: true
-                )
-            }
+        private static func parakeetModelsExist(descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
+            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let directory = descriptor.cacheDirectory(in: modelsDirectory)
+            return descriptor.artifactsAreComplete(at: directory)
         }
 
         private static func parakeetRealtimeModelsExist() -> Bool {
@@ -5686,6 +5715,8 @@ final class SettingsStore: ObservableObject {
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {
             switch self {
+            case .fluidParakeetMini, .fluidParakeetPico:
+                return "FluidVoice"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "NVIDIA"
             case .qwen3Asr:
@@ -5710,6 +5741,8 @@ final class SettingsStore: ObservableObject {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
+            case .fluidParakeetMini, .fluidParakeetPico:
+                return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "#76B900"
             case .qwen3Asr:
@@ -5842,6 +5875,7 @@ private extension SettingsStore {
         static let transcriptionSoundVolume = "TranscriptionSoundVolume"
         static let pressAndHoldMode = "PressAndHoldMode"
         static let hotkeyMode = "HotkeyMode"
+        static let holdSpaceToMute = "HoldSpaceToMute"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
         static let returnDictationToStartingField = "ReturnDictationToStartingField"
@@ -6167,7 +6201,7 @@ extension SettingsStore.SpeechModel {
         switch self {
         case .parakeetTDT:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
-        case .parakeetRealtime:
+        case .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
@@ -6186,6 +6220,8 @@ extension SettingsStore.SpeechModel {
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
             """
+        case .fluidParakeetMini, .fluidParakeetPico:
+            return "English"
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
@@ -6340,6 +6376,13 @@ extension SettingsStore {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.selectedNemotronLanguage)
         }
+    }
+
+    /// Read only the persisted choice; callers can resolve the fallback off the main thread.
+    func storedExternalCoreMLArtifactsPath(for model: SpeechModel) -> String? {
+        let paths = self.defaults.dictionary(forKey: Keys.externalCoreMLArtifactsDirectories) as? [String: String] ?? [:]
+        guard let path = paths[model.rawValue], !path.isEmpty else { return nil }
+        return path
     }
 
     func externalCoreMLArtifactsDirectory(for model: SpeechModel) -> URL? {

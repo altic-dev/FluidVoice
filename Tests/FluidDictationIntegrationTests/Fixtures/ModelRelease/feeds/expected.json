@@ -1,0 +1,202 @@
+[
+ {
+  "file": "good.json",
+  "lastSequence": 0,
+  "verdict": "ok"
+ },
+ {
+  "file": "good-same-sequence.json",
+  "lastSequence": 7,
+  "verdict": "ok"
+ },
+ {
+  "file": "good-extra-fields.json",
+  "lastSequence": 0,
+  "verdict": "ok"
+ },
+ {
+  "file": "good-no-models.json",
+  "lastSequence": 0,
+  "verdict": "ok"
+ },
+ {
+  "file": "good-two-releases.json",
+  "lastSequence": 0,
+  "verdict": "ok"
+ },
+ {
+  "file": "not-json.json",
+  "lastSequence": 0,
+  "verdict": "notAnEnvelope"
+ },
+ {
+  "file": "missing-signature.json",
+  "lastSequence": 0,
+  "verdict": "notAnEnvelope"
+ },
+ {
+  "file": "payload-not-base64.json",
+  "lastSequence": 0,
+  "verdict": "notAnEnvelope"
+ },
+ {
+  "file": "oversized.json",
+  "lastSequence": 0,
+  "verdict": "tooLarge"
+ },
+ {
+  "file": "bad-signature.json",
+  "lastSequence": 0,
+  "verdict": "badSignature"
+ },
+ {
+  "file": "unknown-key.json",
+  "lastSequence": 0,
+  "verdict": "badSignature"
+ },
+ {
+  "file": "payload-not-json.json",
+  "lastSequence": 0,
+  "verdict": "unreadablePayload"
+ },
+ {
+  "file": "missing-field.json",
+  "lastSequence": 0,
+  "verdict": "unreadablePayload"
+ },
+ {
+  "file": "bytes-as-text.json",
+  "lastSequence": 0,
+  "verdict": "unreadablePayload"
+ },
+ {
+  "file": "bytes-fraction.json",
+  "lastSequence": 0,
+  "verdict": "unreadablePayload"
+ },
+ {
+  "file": "models-wrong-shape.json",
+  "lastSequence": 0,
+  "verdict": "unreadablePayload"
+ },
+ {
+  "file": "unknown-schema.json",
+  "lastSequence": 0,
+  "verdict": "unknownSchema"
+ },
+ {
+  "file": "sequence-zero.json",
+  "lastSequence": 0,
+  "verdict": "staleSequence"
+ },
+ {
+  "file": "lower-sequence.json",
+  "lastSequence": 8,
+  "verdict": "staleSequence"
+ },
+ {
+  "file": "url-http.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-wrong-host.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-lookalike-host.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-user-info.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-port.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-outside-prefix.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-traversal.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-encoded-traversal.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-not-tar.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "url-query.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "hash-short.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "hash-uppercase.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "hash-not-hex.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "bytes-too-small.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "bytes-too-large.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "bytes-negative.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "format-zero.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "min-build-zero.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "release-empty.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "release-odd-characters.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ },
+ {
+  "file": "bad-entry-other-platform.json",
+  "lastSequence": 0,
+  "verdict": "badEntry"
+ }
+]

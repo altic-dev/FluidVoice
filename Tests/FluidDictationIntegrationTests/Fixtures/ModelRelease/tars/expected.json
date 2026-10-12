@@ -1,0 +1,104 @@
+[
+ {
+  "file": "good.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "ok"
+ },
+ {
+  "file": "pax.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "unsafePath"
+ },
+ {
+  "file": "tampered-file.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "fileMismatch"
+ },
+ {
+  "file": "wrong-size-file.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "fileMismatch"
+ },
+ {
+  "file": "missing-file.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "fileMismatch"
+ },
+ {
+  "file": "extra-file.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "unlistedFile"
+ },
+ {
+  "file": "other-manifest.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "manifestMismatch"
+ },
+ {
+  "file": "no-manifest.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "manifestMismatch"
+ },
+ {
+  "file": "wrong-total.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "71481da01d303c2dea7fb7803d48f3d2b62c6ba6cce2f9977401862615cc5894",
+  "verdict": "manifestMismatch"
+ },
+ {
+  "file": "manifest-names-other-folder.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "70ca01241180a231454f461947e8990d0b0762a5dfb37dd6c956df68758e0e32",
+  "verdict": "manifestMismatch"
+ },
+ {
+  "file": "manifest-path-escapes.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "57ff9b64e417f067daf4d5a40456f91089d7a464af27b1face63716cdbf98145",
+  "verdict": "fileMismatch"
+ },
+ {
+  "file": "wrong-folder.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "missingFolder"
+ },
+ {
+  "file": "two-folders.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "missingFolder"
+ },
+ {
+  "file": "traversal.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "unsafePath"
+ },
+ {
+  "file": "absolute-path.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "unsafePath"
+ },
+ {
+  "file": "symlink.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "unsupportedEntry"
+ },
+ {
+  "file": "truncated.tar",
+  "folderName": "tiny-model",
+  "manifestSHA256": "789c99ff3358b6f881cfccf2e3420533d9ede3145384e86a3a52f4225845416f",
+  "verdict": "truncatedArchive"
+ }
+]

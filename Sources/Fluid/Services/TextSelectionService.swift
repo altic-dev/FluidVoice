@@ -157,8 +157,6 @@ final class TextSelectionService {
     }
 
     private func diag(_ message: String) {
-        let line = "[TextSelectionService] \(message)"
-        FileLogger.shared.append(line: line)
-        DebugLogger.shared.debug(line, source: "TextSelectionService")
+        DebugLogger.shared.debug(message, source: "TextSelectionService")
     }
 }

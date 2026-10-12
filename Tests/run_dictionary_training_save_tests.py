@@ -19,6 +19,9 @@ os.environ["DEVELOPER_DIR"] = developer_dir
 
 source = (repo / 'Sources/Fluid/UI/CustomDictionaryView.swift').read_text()
 method = source[source.index('    private func addTrainedReplacement() async {'):source.index('    private func removeTrainingVariant(')].replace('private func addTrainedReplacement', 'func addTrainedReplacement')
+progress = source[source.index('struct DictionaryTrainingProgress {'):source.index('enum CustomDictionaryTrainingMerge {')]
+readiness = source[source.index('    private var trainingProgress:'):source.index('    private var trainingAlreadyCorrectWithoutReplacement:')]
+can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
 merge = source[source.index('enum CustomDictionaryTrainingMerge {'):source.index('private struct ReplacementConfirmation:')]
 settings = (repo / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
 entry_start = settings.rfind('\n', 0, settings.index('struct CustomDictionaryEntry:')) + 1
@@ -36,8 +39,16 @@ enum DictionaryMatcherExperiment {
     static var generation = UUID()
 }
 struct VoiceTrainingAliasFilter {
-    struct Result { let accepted: [String]; let rejected: [String] = []; let lookupAvailable = true }
-    static func filter(_ values: [String]) async -> Result { Result(accepted: values) }
+    struct Result {
+        let accepted: [String]
+        let rejected: [String] = []
+        let lookupAvailable: Bool
+        init(accepted: [String], lookupAvailable: Bool = true) {
+            self.accepted = accepted; self.lookupAvailable = lookupAvailable
+        }
+    }
+    static var response: Result?
+    static func filter(_ values: [String]) async -> Result { response ?? Result(accepted: values) }
 }
 final class DebugLogger {
     static let shared = DebugLogger()
@@ -56,10 +67,12 @@ actor PronunciationDictionaryStore {
     var lateGate: Gate?
     var forceFailure = false
     var writes: [UUID] = []
+    var calls = 0
     func configure(gate: Gate?, lateGate: Gate? = nil, failure: Bool = false) {
-        self.gate = gate; self.lateGate = lateGate; forceFailure = failure; writes = []
+        self.gate = gate; self.lateGate = lateGate; forceFailure = failure; writes = []; calls = 0
     }
     func upsert(dictionaryEntryID: UUID, label: String, modelKey: String, enrollments: [PronunciationEnrollmentCapture], automaticMatchingEnabled: Bool, canPersist: @Sendable () -> Bool) async throws {
+        calls += 1
         guard canPersist() else { throw CancellationError() }
         if let gate { await gate.pause() }
         guard canPersist(), !forceFailure else { throw CancellationError() }
@@ -67,13 +80,17 @@ actor PronunciationDictionaryStore {
         if let lateGate { await lateGate.pause() }
     }
 }
+PROGRESS
 MERGE
 @MainActor final class SaveHarness {
-    var canAddTrainedReplacement = true
+    READINESS
+    CAN_SAVE
+    var trainingSampleCount = 3
+    var isTrainingRecording = false
     var isTrainingProcessing = false
     var trainingSaveID: UUID?
     var normalizedTrainingReplacement = "FluidVoice"
-    var trainingPronunciationEnrollments = [PronunciationEnrollmentCapture()]
+    var trainingPronunciationEnrollments = Array(repeating: PronunciationEnrollmentCapture(), count: 3)
     var activePronunciationMatching = true
     var trainingVariants = ["fluid boys"]
     var pronunciationEnabled = true
@@ -102,9 +119,16 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             SettingsStore.shared.customDictionaryEntries = entries
             DictionaryMatcherExperiment.sharedFeaturesEnabled = true
             DictionaryMatcherExperiment.generation = UUID()
+            VoiceTrainingAliasFilter.response = nil
             return SaveHarness()
         }
-        func waitForGate(_ gate: Gate) async { while !(await gate.entered) { await Task.yield() } }
+        func waitForGate(_ gate: Gate) async throws {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while !(await gate.entered) {
+                check(ContinuousClock.now < deadline, "Save did not reach its expected persistence boundary within 3 seconds")
+                try await Task.sleep(for: .milliseconds(1))
+            }
+        }
         // Production save and merge retain existing profile UUID and save new entries under the written UUID.
         for existing in [true, false] {
             let original = existing ? baseline() : []
@@ -125,7 +149,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             let gate = Gate()
             await PronunciationDictionaryStore.shared.configure(gate: gate)
             let save = Task { await view.addTrainedReplacement() }
-            await waitForGate(gate)
+            try await waitForGate(gate)
             var latest = original
             switch mutation {
             case 0: latest.append(Entry(triggers: ["new"], replacement: "New"))
@@ -154,7 +178,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             let lateGate = Gate()
             await PronunciationDictionaryStore.shared.configure(gate: nil, lateGate: lateGate)
             let save = Task { await view.addTrainedReplacement() }
-            await waitForGate(lateGate)
+            try await waitForGate(lateGate)
             let latest = [original[1]]
             SettingsStore.shared.customDictionaryEntries = latest
             await lateGate.release(); await save.value
@@ -168,7 +192,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             let gate = Gate()
             await PronunciationDictionaryStore.shared.configure(gate: gate, failure: true)
             let save = Task { await view.addTrainedReplacement() }
-            await waitForGate(gate)
+            try await waitForGate(gate)
             let newSaveID = UUID()
             view.trainingSaveID = newSaveID
             view.trainingStatusMessage = "new save"
@@ -199,10 +223,105 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(await PronunciationDictionaryStore.shared.writes.isEmpty, "Text-only training must not write profiles")
             passes += 1
         }
-        print("PASS \(passes) dictionary save scenarios using the production save method and merge code")
+        // Three spelling examples may save even when voice enrollment is incomplete.
+        // The actual readiness calculation must keep zero, one and two voice examples
+        // out of profile persistence, even with pronunciation learning enabled.
+        for count in 0..<3 {
+            let original = baseline()
+            let view = reset(original)
+            view.trainingPronunciationEnrollments = Array(repeating: PronunciationEnrollmentCapture(), count: count)
+            await PronunciationDictionaryStore.shared.configure(gate: nil, failure: true)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(view.writes == 1 && view.wizardStep == .saved, "Incomplete voice enrollment must not block spelling-only save")
+            check(calls == 0 && profiles.isEmpty, "Incomplete voice examples must never enter profile persistence")
+            check(SettingsStore.shared.customDictionaryEntries.first?.id == original.first?.id, "Spelling fallback retains the existing entry identity")
+            check(SettingsStore.shared.customDictionaryEntries.last == original.last, "Spelling fallback preserves unrelated rules")
+            check(!view.trainingHasError && !view.isTrainingProcessing && view.trainingSaveID == nil, "Spelling fallback finishes cleanly")
+            passes += 1
+        }
+        // Filtering cannot create a text rule when no safe aliases and no ready voice exist.
+        for available in [true, false] {
+            let original = baseline()
+            let view = reset(original)
+            view.trainingPronunciationEnrollments = []
+            VoiceTrainingAliasFilter.response = .init(accepted: [], lookupAvailable: available)
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            check(view.writes == 0 && calls == 0, "Rejected aliases must not write text rules or profiles")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Rejected aliases preserve the dictionary")
+            check(view.trainingHasError && view.wizardStep == .recording, "Rejected or unavailable aliases leave a visible retry")
+            check(view.trainingStatusMessage.contains(available ? "everyday words" : "Couldn't check"), "Alias failure explains its actual cause")
+            check(!view.trainingVariants.isEmpty && !view.isTrainingProcessing && view.trainingSaveID == nil, "Alias failure retains recordings and releases busy state")
+            passes += 1
+        }
+        // Insufficient spellings use the production save gate, even with enough voice examples.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            view.trainingSampleCount = 2
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            check(calls == 0 && view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Incomplete spellings must not save")
+            check(!view.isTrainingProcessing && view.trainingSaveID == nil && view.wizardStep == .recording, "Rejected save must not advance the wizard or leave it busy")
+            passes += 1
+        }
+        // A new feature generation while the store is suspended rejects old enrollment.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            let gate = Gate()
+            await PronunciationDictionaryStore.shared.configure(gate: gate)
+            let save = Task { await view.addTrainedReplacement() }
+            try await waitForGate(gate)
+            DictionaryMatcherExperiment.generation = UUID()
+            await gate.release(); await save.value
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(profiles.isEmpty && view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Stale pronunciation generation must not persist")
+            check(view.trainingHasError && !view.trainingPronunciationEnrollments.isEmpty, "Generation refusal is retryable and retains captured examples")
+            check(!view.isTrainingProcessing && view.trainingSaveID == nil, "Generation refusal must release busy state")
+            passes += 1
+        }
+        // A completion from an older save must not clear or advance a newer save.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            let lateGate = Gate()
+            await PronunciationDictionaryStore.shared.configure(gate: nil, lateGate: lateGate)
+            let save = Task { await view.addTrainedReplacement() }
+            try await waitForGate(lateGate)
+            let newerID = UUID()
+            view.trainingSaveID = newerID
+            view.trainingStatusMessage = "New save is running"
+            await lateGate.release(); await save.value
+            check(view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Stale success must not publish text rules")
+            check(view.trainingSaveID == newerID && view.isTrainingProcessing, "Stale success must not release the newer save")
+            check(view.trainingStatusMessage == "New save is running" && view.wizardStep == .recording && !view.trainingHasError, "Stale success must preserve newer UI state")
+            passes += 1
+        }
+        // Cancellation after profile completion suppresses dictionary publication and wizard success.
+        // This deliberately does not claim cancellation rolls back an already completed profile write.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            let lateGate = Gate()
+            await PronunciationDictionaryStore.shared.configure(gate: nil, lateGate: lateGate)
+            let save = Task { await view.addTrainedReplacement() }
+            try await waitForGate(lateGate)
+            save.cancel()
+            await lateGate.release(); await save.value
+            check(view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Cancelled save must not publish dictionary changes")
+            check(!view.isTrainingProcessing && view.trainingSaveID == nil && view.wizardStep == .recording && !view.trainingHasError, "Cancelled completion must leave no success, error or busy state")
+            check(!view.trainingPronunciationEnrollments.isEmpty, "Cancelled save retains captures for retry")
+            passes += 1
+        }
+        print("PASS \(passes) dictionary save scenarios using the production save method, readiness and merge code")
     }
 }
-'''.replace('ENTRY', entry).replace('MERGE', merge).replace('METHOD', method)
+'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('CAN_SAVE', can_save).replace('METHOD', method)
 swift = swift.replace('check(await PronunciationDictionaryStore.shared.writes.isEmpty,', 'let textOnlyWrites = await PronunciationDictionaryStore.shared.writes\n            check(textOnlyWrites.isEmpty,')
 isolation_swift = r'''
 import Foundation
@@ -229,12 +348,12 @@ actor SnapshotReader {
 with tempfile.TemporaryDirectory(prefix="fluidvoice-dictionary-regression-") as directory:
     root = Path(directory)
     (root / 'dictionary-proof.swift').write_text(swift)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof')], check=True)
-    subprocess.run([str(root/'dictionary-proof')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof')], check=True, timeout=60)
+    subprocess.run([str(root/'dictionary-proof')], check=True, timeout=60)
     (root / 'dictionary-isolation.swift').write_text(isolation_swift)
     subprocess.run([
         'xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6',
         '-default-isolation', 'MainActor', '-strict-concurrency=complete', '-warnings-as-errors',
         str(root/'dictionary-isolation.swift'), '-o', str(root/'dictionary-isolation'),
-    ], check=True)
-    subprocess.run([str(root/'dictionary-isolation')], check=True)
+    ], check=True, timeout=60)
+    subprocess.run([str(root/'dictionary-isolation')], check=True, timeout=60)

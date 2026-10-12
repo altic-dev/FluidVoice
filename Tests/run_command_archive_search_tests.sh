@@ -41,6 +41,7 @@ filter_source = service[filter_start:filter_end]
 (output / "AppSearchSnapshot.swift").write_text(
     prefix
     + "    private func schedule() {}\n"
+    + "    func refresh() { self.schedule() }\n"
     + "    func publishForTests(_ groups: [AppSearchGroup]) { self.groups = groups }\n"
     + filter_source
     + "}\n"
@@ -49,7 +50,7 @@ filter_source = service[filter_start:filter_end]
 store_path = Path("Sources/Fluid/Persistence/ChatHistoryStore.swift")
 store = store_path.read_text()
 unique_position(store, "final class ChatHistoryStore: ObservableObject", store_path)
-unique_position(store, "private let defaults = UserDefaults.standard", store_path)
+unique_position(store, "init(defaults: UserDefaults = .standard)", store_path)
 if "Foundation.UserDefaults" in store:
     raise SystemExit("Archive search test isolation failed: store bypasses the in-memory UserDefaults double")
 (output / "ChatHistoryStore.swift").write_text(
@@ -63,6 +64,7 @@ PY
 xcrun swiftc -parse-as-library \
     "$task_test_dir/AppSearchSnapshot.swift" \
     "$task_test_dir/ChatHistoryStore.swift" \
+    Sources/Fluid/Persistence/PersistedHistory.swift \
     Sources/Fluid/Persistence/Search/SearchIndexRecord.swift \
     Tests/CommandArchiveSearchTests.swift \
     -o "$task_test_dir/archive-search-tests"

@@ -23,7 +23,26 @@ struct AppSearchResultsView: View {
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                if self.service.groups.isEmpty {
+                if self.service.isSearching {
+                    Text("Searching…")
+                        .font(self.theme.typography.sidebarItem)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, self.theme.metrics.spacing.md)
+                } else if let error = self.service.searchError {
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                        Text(error)
+                            .font(self.theme.typography.sidebarItem)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Retry") { self.service.retry() }
+                            .buttonStyle(.plain)
+                            .font(self.theme.typography.sidebarItem)
+                            .foregroundStyle(self.theme.palette.accent)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, self.theme.metrics.spacing.md)
+                } else if self.service.groups.isEmpty {
                     Text("No results")
                         .font(self.theme.typography.sidebarItem)
                         .foregroundStyle(.secondary)

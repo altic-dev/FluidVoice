@@ -45,6 +45,7 @@ struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendabl
 enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
     case inconsistentEnrollment
     case staleEvidence
+    case outdatedModelRevision
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +53,8 @@ enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
             "The dictionary entry changed before audio learning finished."
         case .inconsistentEnrollment:
             "Pronunciation samples must use the same model and embedding size."
+        case .outdatedModelRevision:
+            "These pronunciation recordings use an older voice model. Retrain this word by voice. Your custom words and text corrections remain saved."
         }
     }
 }

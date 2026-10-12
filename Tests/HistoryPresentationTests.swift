@@ -15,6 +15,15 @@ enum PrivateAIModelRegistry {
 @main
 struct HistoryPresentationTests {
     static func main() async throws {
+        let pinID = UUID()
+        let otherID = UUID()
+        let pinRequest = HistoryPinRevealRequest(entryID: pinID)
+        precondition(pinRequest.target(selectedID: pinID, visibleIDs: [otherID, pinID]) == pinID)
+        precondition(pinRequest.target(selectedID: otherID, visibleIDs: [pinID, otherID]) == nil, "Pin must not navigate to an unrelated selection")
+        precondition(pinRequest.target(selectedID: pinID, visibleIDs: [otherID]) == nil, "Unpinned, filtered, or deleted rows must not be revealed")
+        precondition(pinRequest.target(selectedID: nil, visibleIDs: [pinID]) == nil)
+        precondition(pinRequest != HistoryPinRevealRequest(entryID: pinID), "Rapid toggles need distinct requests to cancel stale scroll work")
+        print("PASS: selected pin reveal, unrelated/hidden/deleted/nil non-effects and rapid request identity")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -59,6 +68,35 @@ struct HistoryPresentationTests {
             aiTokensPerSecond: 746,
             audio: audio
         )
+        precondition(HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "An empty Starred or text-filter result must still reveal an existing external selection")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: [enhanced]
+        ), "Already visible selections must preserve active filters")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: enhanced.id, selectedID: nil, allEntries: [enhanced], visibleEntries: []
+        ), "An empty selection must preserve filters")
+        let missingID = UUID()
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: missingID, selectedID: missingID, allEntries: [enhanced], visibleEntries: []
+        ), "Missing or deleted selections must preserve filters")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: nil, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "Local deletion fallback, unstar and restore selection must not clear Starred without a search request")
+        precondition(!HistorySelectionRevealPolicy.needsFilterReset(
+            requestedID: missingID, selectedID: enhanced.id, allEntries: [enhanced], visibleEntries: []
+        ), "An older search request cannot override a newer local selection")
+        let viewSource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
+        let parent = viewSource.components(separatedBy: "private var entryListView:").first ?? ""
+        precondition(parent.contains(".onChange(of: self.historyStore.searchSelectionRequest)"), "External selection must be observed outside the conditionally absent list")
+        precondition(!parent.contains(".onChange(of: self.historyStore.selectedEntryID)"), "Local selection must not become an external reveal event")
+        precondition(parent.contains("self.revealExternalSelection()"), "Parent must use the tested policy")
+        precondition(parent.contains("self.audioAvailabilityRevision = UUID()\n            self.revealExternalSelection()"), "Initial appearance must reveal the already-selected row")
+        precondition(!parent.contains("filteredEntries.map(\\.id), initial: true"), "Initial filter fallback must not erase an external selection before appearance")
+        let contentSource = try String(contentsOfFile: "Sources/Fluid/ContentView.swift", encoding: .utf8)
+        precondition(contentSource.contains("TranscriptionHistoryStore.shared.selectEntryFromSearch(id: id)"), "Sidebar navigation must produce the explicit request before opening History")
+        print("PASS: hidden/empty external reveal, visible/nil/deleted/local/stale non-effects and explicit parent/appearance wiring")
         let before = enhanced
         precondition(enhanced.clipboardText == "final words")
         precondition(enhanced == before, "Reading copy text must not mutate an entry")

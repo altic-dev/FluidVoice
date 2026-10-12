@@ -1858,10 +1858,15 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
 
     private static func log(_ message: String, level: LifecycleLogLevel) {
         let uptime = ProcessInfo.processInfo.systemUptime
-        let line = "[\(level.rawValue)] [DirectCoreAudioLifecycle] " +
-            "t=\(String(format: "%.6f", uptime)) \(message)"
-        FileLogger.shared.append(line: line)
-        print(line)
+        let message = "t=\(String(format: "%.6f", uptime)) \(message)"
+        switch level {
+        case .debug:
+            DebugLogger.shared.debug(message, source: "DirectCoreAudioLifecycle")
+        case .info:
+            DebugLogger.shared.info(message, source: "DirectCoreAudioLifecycle")
+        case .warning:
+            DebugLogger.shared.warning(message, source: "DirectCoreAudioLifecycle")
+        }
     }
 
     private static func elapsedMilliseconds(since startedAt: TimeInterval) -> Int {

@@ -16,6 +16,11 @@ final class UserDefaults {
     }
 }
 
+final class DebugLogger {
+    static let shared = DebugLogger()
+    func info(_: String, source _: String) {}
+}
+
 struct TerminalService {}
 
 @MainActor final class NotchOverlayManager {
