@@ -544,11 +544,14 @@ final class TranscriptionHistoryStore: ObservableObject {
         guard currentBytes > budgetBytes else { return 0 }
 
         var updatedEntries = self.entries
-        let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
-        let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
-        if orphanedAudio.fileCount > 0 {
-            currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
-            DebugLogger.shared.info("Pruned orphaned dictation audio (\(orphanedAudio.fileCount) files)", source: "TranscriptionHistoryStore")
+        // Unimported legacy history can reference audio these entries do not, so skip the orphan sweep.
+        if !self.writer.hasUnimportedLegacyHistory {
+            let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
+            let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
+            if orphanedAudio.fileCount > 0 {
+                currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
+                DebugLogger.shared.info("Pruned orphaned dictation audio (\(orphanedAudio.fileCount) files)", source: "TranscriptionHistoryStore")
+            }
         }
         guard currentBytes > budgetBytes else { return 0 }
 
