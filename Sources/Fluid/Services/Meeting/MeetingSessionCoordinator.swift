@@ -648,11 +648,11 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func retryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    func retryProcessing(sessionID: MeetingSessionID, languageCode: String? = nil) async throws -> MeetingSession {
         guard self.retryTask == nil else { throw MeetingCoordinatorError.activityInProgress }
         let task = Task { @MainActor [weak self] () throws -> MeetingSession in
             guard let self else { throw MeetingCoordinatorError.noActiveMeeting }
-            return try await self.performRetryProcessing(sessionID: sessionID)
+            return try await self.performRetryProcessing(sessionID: sessionID, languageCode: languageCode)
         }
         self.retryTask = task
         do {
@@ -665,7 +665,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private func performRetryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    private func performRetryProcessing(sessionID: MeetingSessionID, languageCode: String?) async throws -> MeetingSession {
         await self.ensureRestored()
         guard self.stopTask == nil,
               self.interruptionTask == nil,
@@ -681,7 +681,15 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let session = self.activeSession, session.hasRetryableAudio else {
                 throw MeetingCoordinatorError.noRecoverableAudio
             }
-            return try await self.beginProcessingRetry(session)
+            let retainedLanguage = session.languageCode
+            let hadVisibleTranscript = session.state == .completed && !session.transcriptSegments.isEmpty
+            let prepared = try self.sessionPreparedForRetranscription(session, languageCode: languageCode)
+            self.activeSession = prepared
+            return try await self.beginProcessingRetry(
+                prepared,
+                retainedLanguage: retainedLanguage,
+                hadVisibleTranscript: hadVisibleTranscript
+            )
         }
 
         if let offer = self.activeSession {
@@ -725,12 +733,75 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
 
-        self.activeSession = session
-        self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
-        return try await self.beginProcessingRetry(session)
+        let retainedLanguage = session.languageCode
+        let hadVisibleTranscript = session.state == .completed && !session.transcriptSegments.isEmpty
+        let prepared = try self.sessionPreparedForRetranscription(session, languageCode: languageCode)
+        self.activeSession = prepared
+        self.trackHealth = Dictionary(uniqueKeysWithValues: prepared.audioTracks.map { ($0.kind, $0.health) })
+        return try await self.beginProcessingRetry(
+            prepared,
+            retainedLanguage: retainedLanguage,
+            hadVisibleTranscript: hadVisibleTranscript
+        )
     }
 
-    private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
+    /// A nil language keeps the session's current language. A new code must be one final meeting
+    /// transcription can actually run, and it is stored before processing so a failed attempt still
+    /// remembers what the user asked for.
+    private func sessionPreparedForRetranscription(
+        _ session: MeetingSession,
+        languageCode: String?
+    ) throws -> MeetingSession {
+        guard let languageCode else { return session }
+        guard let code = MeetingRetranscriptionLanguage.canonicalCode(languageCode) else {
+            throw MeetingCoordinatorError.unsupportedRetranscriptionLanguage
+        }
+        guard code != session.languageCode else { return session }
+        var updated = session
+        updated.languageCode = code
+        updated.updatedAt = Date()
+        return updated
+    }
+
+    /// Puts back the transcript that was already stored. A failed language change must not leave
+    /// that transcript labeled with the language that did not finish, or hide it behind the failure screen.
+    private func restoreStoredTranscript(_ session: inout MeetingSession, from inputSession: MeetingSession) {
+        session.speakers = inputSession.speakers
+        session.transcriptSegments = inputSession.transcriptSegments
+        session.postProcessing = inputSession.postProcessing
+        session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
+        session.resultSidecarReference = inputSession.resultSidecarReference
+        session.transcriptIsComplete = inputSession.transcriptIsComplete
+        session.transcriptTimeDomain = inputSession.transcriptTimeDomain
+    }
+
+    /// Puts the pre-retry language back. Legacy meetings may have no attempt language at all, so the
+    /// session language from before this run is the one that still labels the stored transcript.
+    private func restoreRetainedLanguage(_ session: inout MeetingSession, retainedLanguage: String) {
+        guard retainedLanguage != session.languageCode else { return }
+        session.languageCode = retainedLanguage
+    }
+
+    private func publishRetryOutcome(_ session: MeetingSession, failure: MeetingSessionFailure?) {
+        self.operationGeneration = nil
+        if session.state == .completed {
+            self.activeSession = nil
+            self.latestCompletedSession = session
+            self.state = .completed(session.id)
+        } else if session.state == .interrupted {
+            self.activeSession = session
+            self.state = .interrupted(session.id)
+        } else if let failure {
+            self.activeSession = session
+            self.state = .failed(session.id, failure)
+        }
+    }
+
+    private func beginProcessingRetry(
+        _ inputSession: MeetingSession,
+        retainedLanguage: String,
+        hadVisibleTranscript: Bool
+    ) async throws -> MeetingSession {
         var session = inputSession
         if self.activityLease == nil {
             self.activityLease = try await self.audioArbiter.acquireMeetingCapture()
@@ -744,14 +815,23 @@ final class MeetingSessionCoordinator: ObservableObject {
         for index in session.processingAttempts.indices where session.processingAttempts[index].completedAt == nil {
             session.processingAttempts[index].completedAt = closedAt
         }
-        session.processingAttempts.append(Self.pendingProcessingAttempt())
+        // Record the language on the new attempt before the first save. A language change
+        // otherwise leaves only the previous attempt's language, and persistence rejects the session.
+        var attempt = Self.pendingProcessingAttempt()
+        attempt.languageCode = session.languageCode
+        session.processingAttempts.append(attempt)
         session.updatedAt = Date()
         self.activeSession = session
         try? await self.store.save(session)
         // Processing regenerates the transcript; only clear the undo stack once retry actually
         // proceeds so a lease/save failure above leaves the prior correction undoable.
         self.correctionUndoStacks[session.id] = nil
-        return try await self.process(session, generation: generation)
+        return try await self.process(
+            session,
+            generation: generation,
+            retainedLanguage: retainedLanguage,
+            hadVisibleTranscript: hadVisibleTranscript
+        )
     }
 
     func deleteSession(id: MeetingSessionID) async throws {
@@ -1546,14 +1626,24 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         try? await self.store.save(session)
-        let processed = try await self.process(session, generation: generation)
+        let processed = try await self.process(
+            session,
+            generation: generation,
+            retainedLanguage: session.languageCode,
+            hadVisibleTranscript: false
+        )
         #if DEBUG
         diagnosticsStopSucceeded = true
         #endif
         return processed
     }
 
-    private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
+    private func process(
+        _ inputSession: MeetingSession,
+        generation: UUID,
+        retainedLanguage: String,
+        hadVisibleTranscript: Bool
+    ) async throws -> MeetingSession {
         let diagnosticStarted = ContinuousClock.now
         var diagnosticStage = MeetingProcessingStage.pending
         var diagnosticOutcome = "failed"
@@ -1703,20 +1793,17 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw error
             }
             if error is CancellationError {
-                session.speakers = inputSession.speakers
-                session.transcriptSegments = inputSession.transcriptSegments
-                session.postProcessing = inputSession.postProcessing
-                session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
-                session.resultSidecarReference = inputSession.resultSidecarReference
-                session.transcriptIsComplete = inputSession.transcriptIsComplete
-                session.transcriptTimeDomain = inputSession.transcriptTimeDomain
-                session.state = .interrupted
+                self.restoreStoredTranscript(&session, from: inputSession)
+                if retainedLanguage != session.languageCode, let lastIndex = session.processingAttempts.indices.last {
+                    session.processingAttempts[lastIndex].errorCode = "cancelled"
+                    session.processingAttempts[lastIndex].completedAt = Date()
+                }
+                self.restoreRetainedLanguage(&session, retainedLanguage: retainedLanguage)
+                session.state = hadVisibleTranscript ? .completed : .interrupted
                 session.updatedAt = Date()
                 await self.flushQueuedPersistence()
                 try? await self.store.save(session)
-                self.activeSession = session
-                self.state = .interrupted(session.id)
-                self.operationGeneration = nil
+                self.publishRetryOutcome(session, failure: nil)
                 await self.releaseActivityLease()
                 throw error
             }
@@ -1725,25 +1812,18 @@ final class MeetingSessionCoordinator: ObservableObject {
             // A failed completed-session save must not durably publish a sidecar or overwrite the
             // last saved transcript under `.failed`. The verified new sidecar remains unreferenced
             // for retry/journal reconciliation.
-            session.speakers = inputSession.speakers
-            session.transcriptSegments = inputSession.transcriptSegments
-            session.postProcessing = inputSession.postProcessing
-            session.transcriptCoverageGaps = inputSession.transcriptCoverageGaps
-            session.resultSidecarReference = inputSession.resultSidecarReference
-            session.transcriptIsComplete = inputSession.transcriptIsComplete
-            session.transcriptTimeDomain = inputSession.transcriptTimeDomain
+            self.restoreStoredTranscript(&session, from: inputSession)
             if let lastIndex = session.processingAttempts.indices.last {
                 session.processingAttempts[lastIndex].errorCode = failure.code
                 session.processingAttempts[lastIndex].completedAt = Date()
             }
             session.failures.append(failure)
-            session.state = .failed
+            self.restoreRetainedLanguage(&session, retainedLanguage: retainedLanguage)
+            session.state = hadVisibleTranscript ? .completed : .failed
             session.updatedAt = Date()
             await self.flushQueuedPersistence()
             try? await self.store.save(session)
-            self.activeSession = session
-            self.state = .failed(session.id, failure)
-            self.operationGeneration = nil
+            self.publishRetryOutcome(session, failure: hadVisibleTranscript ? nil : failure)
             await self.releaseActivityLease()
             throw error
         }
@@ -2173,6 +2253,7 @@ enum MeetingCoordinatorError: LocalizedError {
     case dictationActive
     case noCorrectionToUndo
     case maintenanceInProgress
+    case unsupportedRetranscriptionLanguage
 
     var errorDescription: String? {
         switch self {
@@ -2190,6 +2271,8 @@ enum MeetingCoordinatorError: LocalizedError {
             return "There is nothing to undo."
         case .maintenanceInProgress:
             return "FluidVoice is tidying up meeting storage. Try again in a moment."
+        case .unsupportedRetranscriptionLanguage:
+            return "Choose a language the meeting transcription model supports."
         }
     }
 }

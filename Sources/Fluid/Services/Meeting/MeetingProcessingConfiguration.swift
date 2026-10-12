@@ -72,6 +72,42 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     }
 }
 
+/// Languages a finished meeting can be transcribed in again. Final meeting transcription uses the
+/// multilingual Parakeet model, so the choice is that model's language set, not the dictation model
+/// currently selected for live typing.
+enum MeetingRetranscriptionLanguage {
+    static func canonicalCode(_ raw: String) -> String? {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(code) else { return nil }
+        return code
+    }
+
+    static var choices: [VoiceEngineLanguage] {
+        VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])
+    }
+
+    static func displayName(for languageCode: String) -> String {
+        Self.choices.first { $0.id == languageCode }?.displayName ?? languageCode
+    }
+
+    /// A same-language run replaces nothing and, if it fails, hides the transcript that is already there.
+    static func canRetranscribe(selection: String, currentLanguageCode: String) -> Bool {
+        guard let code = Self.canonicalCode(selection) else { return false }
+        return code != currentLanguageCode
+    }
+
+    /// The language an empty meeting should try again. Use the latest attempt that recorded a
+    /// language, pending or failed. A later recovery attempt with no language must not hide that
+    /// request, and an older failure must not replace a newer one.
+    static func failedAttemptLanguage(for session: MeetingSession) -> String? {
+        guard session.transcriptSegments.isEmpty,
+              let language = session.processingAttempts.last(where: { $0.languageCode != nil })?.languageCode,
+              Self.canRetranscribe(selection: language, currentLanguageCode: session.languageCode)
+        else { return nil }
+        return Self.canonicalCode(language)
+    }
+}
+
 /// Inert value snapshot of live-caption ASR configuration. Live captions do no diarization.
 nonisolated struct MeetingLiveCaptionsConfiguration: Equatable, Sendable {
     static let defaultModelRepositoryID = "FluidInference/parakeet-realtime-eou-120m-coreml"
