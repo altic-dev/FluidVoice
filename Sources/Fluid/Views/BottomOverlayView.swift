@@ -113,6 +113,14 @@ final class BottomOverlayWindowController {
         Self.overlayBench("bottom_prepared")
     }
 
+    func moveBelowNotch(on screen: NSScreen?) {
+        guard let screen, let window = self.window else { return }
+        var frame = window.frame
+        frame.origin = NSPoint(x: screen.frame.midX - frame.width / 2,
+                               y: screen.frame.maxY - screen.safeAreaInsets.top - frame.height - 10)
+        window.setFrame(frame, display: true)
+    }
+
     func show(audioPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
         let startedAt = ProcessInfo.processInfo.systemUptime
         var showTrace = OverlayCloseTrace("bottom.show")
@@ -757,6 +765,10 @@ final class BottomOverlayWindowController {
 
     private static func origin(for windowSize: CGSize, on screen: NSScreen) -> NSPoint {
         let fullFrame = screen.frame
+        if MiniNotchIndicatorController.shared.isRecording {
+            return NSPoint(x: fullFrame.midX - windowSize.width / 2,
+                           y: fullFrame.maxY - screen.safeAreaInsets.top - windowSize.height - 10)
+        }
         let visibleFrame = screen.visibleFrame
         let x = fullFrame.midX - windowSize.width / 2
         let offset = SettingsStore.shared.overlayBottomOffset

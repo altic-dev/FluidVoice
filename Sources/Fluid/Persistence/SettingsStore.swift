@@ -2530,6 +2530,48 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var voiceAnimation: OverlayVisualStyle {
+        get {
+            guard let raw = self.defaults.string(forKey: Keys.voiceAnimation),
+                  let style = OverlayVisualStyle(rawValue: raw) else {
+                return .fallback
+            }
+            return style
+        }
+        set {
+            self.objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.voiceAnimation)
+        }
+    }
+
+    var miniNotchIndicatorEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.miniNotchIndicatorEnabled) }
+        set {
+            self.objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.miniNotchIndicatorEnabled)
+            MiniNotchIndicatorController.shared.refreshVisibility()
+            NotificationCenter.default.post(name: .init("MiniNotchIndicatorChanged"), object: nil)
+        }
+    }
+
+    var miniNotchHideWhenIdle: Bool {
+        get { self.defaults.bool(forKey: Keys.miniNotchHideWhenIdle) }
+        set {
+            self.objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.miniNotchHideWhenIdle)
+            MiniNotchIndicatorController.shared.refreshVisibility()
+            NotificationCenter.default.post(name: .init("MiniNotchIndicatorChanged"), object: nil)
+        }
+    }
+
+    var miniNotchFullView: Bool {
+        get { self.defaults.bool(forKey: Keys.miniNotchFullView) }
+        set {
+            self.objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.miniNotchFullView)
+        }
+    }
+
     private static func normalizedTranscriptionPreviewCharLimit(_ value: Int) -> Int {
         let range = Self.transcriptionPreviewCharLimitRange
         let clamped = max(range.lowerBound, min(range.upperBound, value))
@@ -3673,6 +3715,10 @@ final class SettingsStore: ObservableObject {
             overlayTint: self.overlayTint,
             overlayHighlight: self.overlayHighlight,
             overlayClosingAnimationEnabled: self.overlayClosingAnimationEnabled,
+            voiceAnimation: self.voiceAnimation,
+            miniNotchIndicatorEnabled: self.miniNotchIndicatorEnabled,
+            miniNotchHideWhenIdle: self.miniNotchHideWhenIdle,
+            miniNotchFullView: self.miniNotchFullView,
             meetingOverlayPreference: self.meetingOverlayPreference,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
@@ -3867,6 +3913,10 @@ final class SettingsStore: ObservableObject {
         if let enabled = payload.overlayClosingAnimationEnabled {
             self.overlayClosingAnimationEnabled = enabled
         }
+        if let style = payload.voiceAnimation { self.voiceAnimation = style }
+        if let enabled = payload.miniNotchIndicatorEnabled { self.miniNotchIndicatorEnabled = enabled }
+        if let hidden = payload.miniNotchHideWhenIdle { self.miniNotchHideWhenIdle = hidden }
+        if let fullView = payload.miniNotchFullView { self.miniNotchFullView = fullView }
         if let meetingOverlayPreference = payload.meetingOverlayPreference {
             self.meetingOverlayPreference = meetingOverlayPreference
         }
@@ -5990,6 +6040,10 @@ private extension SettingsStore {
         static let overlaySize = "OverlaySize"
         static let overlayMaterial = "OverlayMaterial"
         static let overlayGlassOpacity = "OverlayGlassOpacity"
+        static let voiceAnimation = "VoiceAnimation"
+        static let miniNotchIndicatorEnabled = "MiniNotchIndicatorEnabled"
+        static let miniNotchHideWhenIdle = "MiniNotchHideWhenIdle"
+        static let miniNotchFullView = "MiniNotchFullView"
         static let meetingOverlayPreference = "MeetingOverlayPreference"
         static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
 

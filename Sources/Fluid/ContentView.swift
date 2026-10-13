@@ -757,6 +757,7 @@ struct ContentView: View {
         self.configureNotchCallbacks()
         self.startAccessibilityPolling()
         self.initializeHotkeyManagerIfNeeded()
+        MiniNotchIndicatorController.shared.refreshVisibility()
 
         Task {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -835,6 +836,14 @@ struct ContentView: View {
         NotchOverlayManager.shared.onClearChat = { [weak commandModeService] in
             guard NotchOverlayManager.shared.allowsCommandNotchActions else { return }
             commandModeService?.deleteCurrentChat()
+        }
+
+        NotchContentState.shared.onOpenOverlayPreferencesRequested = {
+            self.openSettings(.overlay)
+        }
+
+        NotchContentState.shared.onMiniDictationStartRequested = {
+            _ = self.startRecording()
         }
     }
 

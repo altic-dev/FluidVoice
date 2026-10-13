@@ -1338,6 +1338,76 @@ struct SettingsView: View {
 
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
+                                    Text("Voice Animation")
+                                        .font(self.theme.typography.bodyStrong)
+                                        .foregroundStyle(self.settingsTitleText)
+                                    Text("How the overlay reacts to your voice")
+                                        .font(self.theme.typography.bodySmall)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                }
+
+                                Spacer()
+
+                                FluidDropdownPicker(
+                                    "Voice animation",
+                                    selectedTitle: self.settings.voiceAnimation.displayName,
+                                    selection: self.$settings.voiceAnimation
+                                ) {
+                                    ForEach(OverlayVisualStyle.allCases) { style in
+                                        Text(style.displayName).tag(style)
+                                    }
+                                }
+                                .fluidDropdownStyle()
+                                .frame(width: 170, alignment: .trailing)
+                            }
+
+                            Divider().padding(.vertical, 4)
+
+                            self.optionToggleRow(
+                                title: "Mini Indicator Under Notch",
+                                description: "Stay compact. Expand to your normal overlay size.",
+                                isOn: self.$settings.miniNotchIndicatorEnabled
+                            )
+
+                            if self.settings.miniNotchIndicatorEnabled {
+                                self.optionToggleRow(
+                                    title: "Hide When Idle",
+                                    description: "Show only when you start recording with your shortcut.",
+                                    isOn: self.$settings.miniNotchHideWhenIdle
+                                )
+
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Recording View")
+                                            .font(self.theme.typography.bodyStrong)
+                                            .foregroundStyle(self.settingsTitleText)
+                                        Text("Full view uses your normal overlay size")
+                                            .font(self.theme.typography.bodySmall)
+                                            .foregroundStyle(self.settingsSecondaryText)
+                                    }
+
+                                    Spacer()
+
+                                    FluidDropdownPicker(
+                                        "Recording view",
+                                        selectedTitle: self.settings.miniNotchFullView ? "Full view" : "Mini indicator",
+                                        selection: self.$settings.miniNotchFullView
+                                    ) {
+                                        Text("Mini indicator").tag(false)
+                                        Text("Full view").tag(true)
+                                    }
+                                    .fluidDropdownStyle()
+                                    .frame(width: 170, alignment: .trailing)
+                                }
+
+                                MiniNotchIndicatorPreview()
+                                    .padding(.top, 4)
+                            }
+
+                            Divider().padding(.vertical, 4)
+
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text("Meeting Overlay")
                                         .font(self.theme.typography.bodyStrong)
                                         .foregroundStyle(self.settingsTitleText)

@@ -285,6 +285,8 @@ class NotchContentState: ObservableObject {
     /// Called when the user requests undoing AI processing for the latest entry.
     var onUndoLastAIRequested: (() -> Void)?
     /// Called when the user requests opening Preferences.
+    var onOpenOverlayPreferencesRequested: (() -> Void)?
+    var onMiniDictationStartRequested: (() -> Void)?
     var onOpenPreferencesRequested: (() -> Void)?
     /// Called when the user requests cancelling the current recording or overlay session.
     var onCancelRequested: (() -> Void)?
@@ -1171,6 +1173,7 @@ struct NotchWaveformView: View {
     let audioPublisher: AnyPublisher<CGFloat, Never>
     let color: Color
 
+    @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var data: AudioVisualizationData
     @ObservedObject private var contentState = NotchContentState.shared
     @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 5)
@@ -1201,7 +1204,23 @@ struct NotchWaveformView: View {
         _data = StateObject(wrappedValue: AudioVisualizationData(audioLevelPublisher: audioPublisher))
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if self.settings.voiceAnimation == .wave {
+            self.originalWaveform
+        } else {
+            GeometryReader { geometry in
+                VoiceAnimationView(
+                    style: self.settings.voiceAnimation,
+                    level: self.data.audioLevel,
+                    isProcessing: self.contentState.isProcessing,
+                    isActive: true,
+                    size: geometry.size
+                )
+            }
+        }
+    }
+
+    private var originalWaveform: some View {
         ZStack {
             self.barsView(using: { index in
                 self.displayHeight(for: index)
@@ -1920,6 +1939,7 @@ struct CompactNotchWaveformView: View {
     let color: Color
     var barCount: Int = 8
 
+    @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var data: AudioVisualizationData
     @ObservedObject private var contentState = NotchContentState.shared
     @State private var barHeights: [CGFloat] = Array(
@@ -1941,25 +1961,39 @@ struct CompactNotchWaveformView: View {
         _data = StateObject(wrappedValue: AudioVisualizationData(audioLevelPublisher: audioPublisher))
     }
 
-    var body: some View {
-        ZStack {
-            if self.contentState.isDictationMuted {
-                DictationMutedIndicator(compact: true)
-            } else {
-                self.barsView(using: { index in
-                    self.displayHeight(for: index)
-                })
-                .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
+    @ViewBuilder var body: some View {
+        if self.contentState.isDictationMuted {
+            DictationMutedIndicator(compact: true)
+        } else if self.settings.voiceAnimation == .wave {
+            self.originalWaveform
+        } else {
+            GeometryReader { geometry in
+                VoiceAnimationView(
+                    style: self.settings.voiceAnimation,
+                    level: self.data.audioLevel,
+                    isProcessing: self.contentState.isProcessing,
+                    isActive: true,
+                    size: geometry.size
+                )
+            }
+        }
+    }
 
-                if self.contentState.isProcessing {
-                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
-                        .mask {
-                            self.barsView(using: { index in
-                                self.displayHeight(for: index)
-                            })
-                        }
-                        .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
-                }
+    private var originalWaveform: some View {
+        ZStack {
+            self.barsView(using: { index in
+                self.displayHeight(for: index)
+            })
+            .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
+
+            if self.contentState.isProcessing {
+                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    .mask {
+                        self.barsView(using: { index in
+                            self.displayHeight(for: index)
+                        })
+                    }
+                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
             }
         }
         .onChange(of: self.data.audioLevel) { _, level in

@@ -184,6 +184,27 @@ final class NotchOverlayManager {
         ActiveAppMonitor.shared.startMonitoring()
         let targetScreen = OverlayScreenResolver.screenForCurrentPointer()
 
+        if SettingsStore.shared.miniNotchIndicatorEnabled, mode != .command {
+            self.currentMode = self.normalizedOverlayMode(mode)
+            NotchContentState.shared.mode = self.currentMode
+            NotchContentState.shared.setProcessing(false)
+            MiniNotchIndicatorController.shared.expand = { [weak self] in
+                guard let self, let publisher = self.lastAudioPublisher else { return }
+                let content = NotchContentState.shared
+                let transcript = content.transcriptionText
+                let processing = content.isProcessing
+                let spokenSend = content.spokenSendIndicatorState
+                self.showBottomOverlay(audioLevelPublisher: publisher, mode: self.currentMode)
+                content.updateTranscription(transcript)
+                content.setProcessing(processing)
+                content.setSpokenSendIndicatorState(spokenSend)
+                BottomOverlayWindowController.shared.moveBelowNotch(on: targetScreen)
+            }
+            MiniNotchIndicatorController.shared.start(audioLevelPublisher, screen: targetScreen)
+            if SettingsStore.shared.miniNotchFullView { MiniNotchIndicatorController.shared.expandOverlay() }
+            return
+        }
+
         // Route to bottom overlay if user preference is set
         if SettingsStore.shared.overlayPosition == .bottom {
             Self.overlayBench("show_internal_route target=bottom")
@@ -310,6 +331,7 @@ final class NotchOverlayManager {
     }
 
     func hide() {
+        MiniNotchIndicatorController.shared.finish()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return
@@ -338,6 +360,7 @@ final class NotchOverlayManager {
     /// Removes a successfully completed recording overlay synchronously so it
     /// cannot outlive the text insertion that follows.
     func hideImmediately() {
+        MiniNotchIndicatorController.shared.finish()
         var trace = OverlayCloseTrace("manager.hide")
         defer { trace.finish() }
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -388,6 +411,7 @@ final class NotchOverlayManager {
     /// Reports whether the active overlay finished hiding or a newer
     /// presentation superseded this request.
     func hideAndWait() async -> RecordingOverlayHideOutcome {
+        MiniNotchIndicatorController.shared.finish()
         guard SettingsStore.shared.overlayClosingAnimationEnabled else {
             self.hideImmediately()
             return .hidden
@@ -537,6 +561,10 @@ final class NotchOverlayManager {
     }
 
     func setProcessing(_ processing: Bool) {
+        if MiniNotchIndicatorController.shared.isRecording, !self.isBottomOverlayVisible {
+            NotchContentState.shared.setProcessing(processing)
+            return
+        }
         Self.overlayBench("set_processing processing=\(processing) state=\(self.state) bottomVisible=\(self.isBottomOverlayVisible) commandExpanded=\(self.isCommandOutputExpanded)")
         NotchContentState.shared.setProcessing(processing)
 

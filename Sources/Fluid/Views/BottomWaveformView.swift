@@ -7,6 +7,8 @@ struct BottomWaveformView: View {
     let layout: BottomOverlayView.LayoutConstants
     let visibleBarCount: Int?
 
+    var visualizerWidth: CGFloat? = nil
+    @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var contentState = NotchContentState.shared
     @ObservedObject private var audioLevel = OverlayAudioLevelState.shared
     private var isWaitingForMicrophone: Bool {
@@ -69,27 +71,38 @@ struct BottomWaveformView: View {
         self.contentState.isBottomOverlayReleaseTransitioning || self.contentState.isBottomOverlayDismissing
     }
 
-    var body: some View {
-        ZStack {
-            if self.contentState.isDictationMuted {
-                DictationMutedIndicator(compact: self.layout.waveformWidth < 80)
-            } else {
-                self.barsView
-                    .foregroundStyle(self.barFillColor)
+    @ViewBuilder var body: some View {
+        if self.contentState.isDictationMuted {
+            DictationMutedIndicator(compact: self.layout.waveformWidth < 80)
+        } else if self.settings.voiceAnimation == .wave {
+            self.originalWaveform
+        } else {
+            VoiceAnimationView(
+                style: self.settings.voiceAnimation,
+                level: self.audioLevel.level,
+                isProcessing: self.contentState.isProcessing,
+                isActive: self.contentState.isBottomOverlayPresented && !self.isReleaseAnimationActive,
+                size: CGSize(width: self.visualizerWidth ?? self.layout.waveformWidth, height: self.layout.waveformHeight)
+            )
+        }
+    }
 
-                if self.isProcessingVisualActive {
-                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
-                        .mask {
-                            self.barsView
-                        }
-                        .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
-                }
+    private var originalWaveform: some View {
+        ZStack {
+            self.barsView
+                .foregroundStyle(self.barFillColor)
+
+            if self.isProcessingVisualActive {
+                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    .mask {
+                        self.barsView
+                    }
+                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
             }
         }
-        .opacity(self.isWaitingForMicrophone && !self.contentState.isDictationMuted ? 0.45 : 1)
+        .opacity(self.isWaitingForMicrophone ? 0.45 : 1)
         .animation(.easeOut(duration: 0.22), value: self.isWaitingForMicrophone)
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-            // Update threshold when user changes sensitivity setting
             let newThreshold = CGFloat(SettingsStore.shared.visualizerNoiseThreshold)
             if newThreshold != self.noiseThreshold {
                 self.noiseThreshold = newThreshold
