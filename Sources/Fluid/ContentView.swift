@@ -2815,8 +2815,13 @@ struct ContentView: View {
             let fluidIntelligenceLatencyMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - fluidIntelligenceStartedAt) * 1000).rounded()
             )
+            let cleanedText = DictationPromptRequest.cleanedText(
+                response: response.outputText,
+                instructions: "",
+                transcript: inputText
+            )
             return AITextProcessingResult(
-                text: response.outputText,
+                text: cleanedText,
                 tokensPerSecond: tokensPerSecond,
                 fluidIntelligenceLatencyMilliseconds: fluidIntelligenceLatencyMilliseconds
             )
