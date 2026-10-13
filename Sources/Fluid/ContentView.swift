@@ -2397,6 +2397,7 @@ struct ContentView: View {
             preferredTargetPID: targetPID,
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
+            capturedTarget: stopSnapshot?.target,
             postInsertionKey: self.settings.spokenSendKey,
             requiredFocusTarget: stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
@@ -3457,6 +3458,7 @@ struct ContentView: View {
                     preferredTargetPID: typingTarget.pid,
                     textReadyAt: finalTextReadyAt,
                     toggleStopRequestedAt: toggleStopRequestedAt,
+                    capturedTarget: stopSnapshot?.target,
                     tracksDictionaryCorrections: true,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
                     isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }

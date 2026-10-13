@@ -5,6 +5,42 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testChangedDestinationWhileQueuedDoesNotPostPaste() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await sut.deliver("first", preserveTranscriptOnClipboard: false)
+        var targetMatches = true
+        var queued = false
+        let delivery = Task { @MainActor in
+            queued = true
+            return await sut.deliver("preserved transcript", preserveTranscriptOnClipboard: true, validateTarget: { targetMatches ? nil : .noEditableTarget })
+        }
+        await self.waitUntil { queued }
+        targetMatches = false
+        sut.runPendingSettlementForTesting()
+        let result = await delivery.value
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget), "Destination drift is a recoverable delivery failure")
+        XCTAssertEqual(poster.postCount, 1, "Only the first delivery may post paste")
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1, "The refused delivery must not write temporary clipboard text")
+        XCTAssertEqual(pasteboard.text, "preserved transcript", "The requested transcript backup survives refusal")
+    }
+
+    func testChangedDestinationBeforeCommandRestoresClipboardWithoutPosting() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        var validations = 0
+        let result = await sut.deliver("dictation", preserveTranscriptOnClipboard: false, validateTarget: {
+            validations += 1
+            return validations == 1 ? nil : .noEditableTarget
+        })
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget), "Recheck immediately before dispatch must refuse a changed destination")
+        XCTAssertEqual(poster.postCount, 0, "Unsafe paste command must not be posted")
+        XCTAssertEqual(pasteboard.text, "before", "Original clipboard must be restored after refusal")
+        XCTAssertEqual(pasteboard.restoreCount, 1)
+    }
+
     func testCancelledFocusPreparationDoesNotCopyBackup() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()

@@ -645,6 +645,7 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
+        validateTarget: @MainActor () -> TextDeliveryFailure? = { nil },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
@@ -658,6 +659,13 @@ final class PasteDeliveryCoordinator {
         }
 
         guard isOutputValid() else { return .cancelled }
+        if let failure = validateTarget() {
+            if preserveTranscriptOnClipboard {
+                self.writeBackup(text)
+            }
+            self.log("delivery_failed reason=\(failure.rawValue) at=slot_acquired")
+            return .recoverableFailure(failure)
+        }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
         let generation = self.generation
@@ -689,6 +697,11 @@ final class PasteDeliveryCoordinator {
         guard isOutputValid() else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
+        }
+        if let failure = validateTarget() {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
+            self.log("delivery_failed reason=\(failure.rawValue) at=before_command")
+            return .recoverableFailure(failure)
         }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime
