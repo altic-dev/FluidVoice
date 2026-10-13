@@ -3,7 +3,7 @@ import Foundation
 
 /// Decides, before pasting, whether the focused UI element can take text.
 /// A button fallback requires a matching captured destination; unknown roles retain the chosen mode.
-enum DeliveryTargetAssessment: Equatable {
+nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
     struct Target {
         let pid: pid_t
         let bundleIdentifier: String?
@@ -35,18 +35,19 @@ enum DeliveryTargetAssessment: Equatable {
     func deliveryDecision(capturedTarget: Target?, focusedTarget: Target?, frontmostPID: pid_t?, ownPID: pid_t) -> DeliveryDecision {
         guard let focusedTarget, focusedTarget.hasFocusedElement,
               focusedTarget.pid > 0, focusedTarget.pid != ownPID,
-              frontmostPID == focusedTarget.pid,
+              let frontmostPID, frontmostPID > 0, frontmostPID != ownPID,
               focusedTarget.bundleIdentifier != "com.FluidApp.app",
               focusedTarget.bundleIdentifier != "com.FluidApp.app.debug",
               !focusedTarget.isSecureTextField
         else { return .refuse }
         if let capturedTarget {
             guard capturedTarget.pid == focusedTarget.pid,
-                  let bundleIdentifier = capturedTarget.bundleIdentifier, !bundleIdentifier.isEmpty,
-                  bundleIdentifier == focusedTarget.bundleIdentifier,
+                  capturedTarget.bundleIdentifier == focusedTarget.bundleIdentifier,
                   !capturedTarget.isSecureTextField
             else { return .refuse }
         }
+        // Captured AX focus can belong to a non-activating launcher while another app stays frontmost.
+        guard frontmostPID == focusedTarget.pid || capturedTarget?.hasFocusedElement == true else { return .refuse }
         switch self {
         case .editable:
             return .insert
@@ -54,7 +55,11 @@ enum DeliveryTargetAssessment: Equatable {
             return .refuse
         case .notEditable(role: "AXButton"):
             // Web-view composers can report a button even while their editor has the caret.
-            return capturedTarget?.hasFocusedElement == true ? .reliablePasteFallback : .refuse
+            guard capturedTarget?.hasFocusedElement == true,
+                  let bundleIdentifier = capturedTarget?.bundleIdentifier, !bundleIdentifier.isEmpty,
+                  frontmostPID == focusedTarget.pid
+            else { return .refuse }
+            return .reliablePasteFallback
         case .unknown:
             return capturedTarget?.hasFocusedElement == true ? .insert : .refuse
         case .notEditable:
@@ -102,8 +107,7 @@ enum DeliveryTargetAssessment: Equatable {
         "AXTextField", "AXTextArea", "AXComboBox",
     ]
 
-    struct FocusObservation {
-        let element: AXUIElement
+    struct FocusObservation: Sendable {
         let pid: pid_t
         let assessment: DeliveryTargetAssessment
     }
@@ -124,7 +128,7 @@ enum DeliveryTargetAssessment: Equatable {
         let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
-        return FocusObservation(element: element, pid: pid, assessment: self.assess(element))
+        return FocusObservation(pid: pid, assessment: self.assess(element))
     }
 
     nonisolated static func isSecureTextField(_ element: AXUIElement) -> Bool {
@@ -176,5 +180,29 @@ enum DeliveryTargetAssessment: Equatable {
         }
         guard self.nonEditableRoles.contains(role) else { return .unknown(reason: "role_\(role)") }
         return .notEditable(role: role)
+    }
+}
+
+/// Keeps remote AX reads on the insertion queue and lifecycle decisions on the main actor.
+enum DirectInsertionExecutor {
+    @MainActor
+    static func run(
+        on queue: DispatchQueue,
+        readFocus: @escaping @Sendable () -> DeliveryTargetAssessment.FocusObservation?,
+        canStart: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
+        canContinue: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
+        insert: @escaping @Sendable (@Sendable () -> Bool) -> Bool
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let initialFocus = readFocus()
+                let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { canStart(initialFocus) } }
+                guard valid else { continuation.resume(returning: false); return }
+                continuation.resume(returning: insert {
+                    let focus = readFocus()
+                    return DispatchQueue.main.sync { MainActor.assumeIsolated { canContinue(focus) } }
+                })
+            }
+        }
     }
 }

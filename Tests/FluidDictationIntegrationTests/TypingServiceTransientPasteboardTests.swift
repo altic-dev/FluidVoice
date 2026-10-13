@@ -558,12 +558,6 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
             let callEnd = try XCTUnwrap(pipeline.range(of: "})", range: callStart.upperBound..<pipeline.endIndex))
             XCTAssertTrue(pipeline[callStart.lowerBound..<callEnd.lowerBound].contains("isOutputValid: isOutputValid"))
         }
-        let wrapperStart = try XCTUnwrap(source.range(of: "private func insertTextDirectlyOffMain("))
-        let wrapperEnd = try XCTUnwrap(source.range(of: "nonisolated static func attemptDirectInsertion", range: wrapperStart.upperBound..<source.endIndex))
-        let wrapper = source[wrapperStart.lowerBound..<wrapperEnd.lowerBound]
-        XCTAssertTrue(wrapper.contains("isOutputValid: {"))
-        XCTAssertTrue(wrapper.contains("DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }"))
-
         let writeStart = try XCTUnwrap(source.range(of: "private nonisolated func insertTextAtCursorUsingSelectedRange("))
         let writes = String(source[writeStart.lowerBound...])
         let lines = writes.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }

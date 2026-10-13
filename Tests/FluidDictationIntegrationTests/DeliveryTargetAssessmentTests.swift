@@ -78,6 +78,29 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
         }
     }
 
+    func testOrdinaryDeliverySupportsUnbundledAppsAndNonActivatingLaunchers() {
+        for bundle in [nil, "test.launcher"] as [String?] {
+            let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: bundle, hasFocusedElement: true)
+            for frontmostPID: pid_t in [100, 200] {
+                for assessment: DeliveryTargetAssessment in [.editable(role: "AXTextField"), .unknown(reason: "role_AXWindow")] {
+                    XCTAssertEqual(assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: frontmostPID, ownPID: 999), .insert)
+                }
+                let button = DeliveryTargetAssessment.notEditable(role: "AXButton")
+                XCTAssertEqual(button.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: frontmostPID, ownPID: 999), bundle != nil && frontmostPID == 100 ? .reliablePasteFallback : .refuse)
+            }
+            let editable = DeliveryTargetAssessment.editable(role: "AXTextField")
+            XCTAssertEqual(editable.deliveryDecision(capturedTarget: nil, focusedTarget: target, frontmostPID: 200, ownPID: 999), .refuse, "Launcher exception requires captured AX focus")
+            let withoutElement = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: bundle, hasFocusedElement: false)
+            XCTAssertEqual(editable.deliveryDecision(capturedTarget: withoutElement, focusedTarget: target, frontmostPID: 200, ownPID: 999), .refuse)
+            XCTAssertEqual(editable.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 999, ownPID: 999), .refuse)
+        }
+        let bundled = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        let unbundled = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: nil, hasFocusedElement: true)
+        let editable = DeliveryTargetAssessment.editable(role: "AXTextField")
+        XCTAssertEqual(editable.deliveryDecision(capturedTarget: bundled, focusedTarget: unbundled, frontmostPID: 100, ownPID: 999), .refuse)
+        XCTAssertEqual(editable.deliveryDecision(capturedTarget: unbundled, focusedTarget: bundled, frontmostPID: 100, ownPID: 999), .refuse)
+    }
+
     func testDirectDeliveryPreservesModeAndDoesNotReplayRoleChanges() {
         let external = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
         let unknownDecision = DeliveryTargetAssessment.classify(role: "AXWebArea", valueSettable: false)
@@ -108,7 +131,7 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
             (.editable(role: "AXTextField"), other, 200),
             (.editable(role: "AXTextField"), own, 999),
             (.editable(role: "AXTextField"), changedBundle, 100),
-            (.editable(role: "AXTextField"), external, 200),
+            (.editable(role: "AXTextField"), external, 999),
         ]
         for (assessment, focused, frontmostPID) in unsafeFocus {
             let decision = assessment.deliveryDecision(capturedTarget: external, focusedTarget: focused, frontmostPID: frontmostPID, ownPID: 999)
@@ -130,6 +153,102 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
             XCTAssertEqual(result.chunks, 0, role)
             XCTAssertFalse(result.pastes, role)
         }
+    }
+
+    func testSlowFocusReadDoesNotBlockMainActorAndRechecksCancellation() async {
+        let releaseRead = DispatchSemaphore(value: 0)
+        var isValid = true
+        var heartbeatRan = false
+        var insertionStarted = false
+        let observation = DeliveryTargetAssessment.FocusObservation(pid: 100, assessment: .editable(role: "AXTextField"))
+        let sut = await DirectInsertionExecutor.run(
+            on: DispatchQueue(label: "test.fluid.slow-focus"),
+            readFocus: {
+                XCTAssertFalse(Thread.isMainThread, "Remote AX reads must stay off the main thread")
+                DispatchQueue.main.async {
+                    heartbeatRan = true
+                    isValid = false
+                    releaseRead.signal()
+                }
+                XCTAssertEqual(releaseRead.wait(timeout: .now() + 1), .success, "Main actor must remain responsive during the read")
+                return observation
+            },
+            canStart: { _ in
+                XCTAssertTrue(Thread.isMainThread, "Lifecycle checks remain on the main actor")
+                insertionStarted = isValid
+                return isValid
+            },
+            canContinue: { _ in isValid },
+            insert: { _ in XCTFail("Cancelled delivery must not insert"); return false }
+        )
+        XCTAssertFalse(sut)
+        XCTAssertTrue(heartbeatRan)
+        XCTAssertFalse(insertionStarted, "Cancellation during the read must prevent insertion")
+    }
+
+    func testWorkerRefreshesFocusBetweenChunksAndLatchesRefusal() async {
+        let assessments: [DeliveryTargetAssessment] = [
+            .editable(role: "AXTextField"), .editable(role: "AXTextField"),
+            .secure(role: "AXSecureTextField"), .editable(role: "AXTextField"),
+        ]
+        var reads = 0
+        var state = DeliveryTargetAssessment.DirectInsertionState()
+        let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        let decision: @MainActor (DeliveryTargetAssessment.FocusObservation?) -> DeliveryTargetAssessment.DeliveryDecision = {
+            $0?.assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 100, ownPID: 999) ?? .refuse
+        }
+        let sut = await DirectInsertionExecutor.run(
+            on: DispatchQueue(label: "test.fluid.fresh-focus"),
+            readFocus: {
+                XCTAssertFalse(Thread.isMainThread)
+                return DispatchQueue.main.sync {
+                    MainActor.assumeIsolated {
+                        let assessment = assessments[reads]
+                        reads += 1
+                        return DeliveryTargetAssessment.FocusObservation(pid: 100, assessment: assessment)
+                    }
+                }
+            },
+            canStart: { state.canStart(decision($0)) },
+            canContinue: { state.canContinue(decision($0)) },
+            insert: { valid in
+                XCTAssertTrue(valid(), "First chunk remains safe")
+                XCTAssertFalse(valid(), "Secure focus stops the next chunk")
+                XCTAssertFalse(valid(), "A later fallback cannot resume after focus recovers")
+                return false
+            }
+        )
+        XCTAssertFalse(sut)
+        XCTAssertEqual(reads, 4, "Admission and every chunk or fallback need fresh focus")
+        XCTAssertTrue(state.wasRefused, "Partial delivery must suppress clipboard replay")
+    }
+
+    func testCancellationDuringChunkFocusReadStopsFurtherInsertion() async {
+        let releaseRead = DispatchSemaphore(value: 0)
+        var reads = 0
+        var isValid = true
+        let observation = DeliveryTargetAssessment.FocusObservation(pid: 100, assessment: .editable(role: "AXTextField"))
+        let sut = await DirectInsertionExecutor.run(
+            on: DispatchQueue(label: "test.fluid.chunk-cancellation"),
+            readFocus: {
+                XCTAssertFalse(Thread.isMainThread)
+                let read = DispatchQueue.main.sync { MainActor.assumeIsolated { reads += 1; return reads } }
+                if read == 2 {
+                    DispatchQueue.main.async { isValid = false; releaseRead.signal() }
+                    XCTAssertEqual(releaseRead.wait(timeout: .now() + 1), .success)
+                }
+                return observation
+            },
+            canStart: { _ in isValid },
+            canContinue: { _ in isValid },
+            insert: { valid in
+                XCTAssertFalse(valid(), "Cancellation during a remote read must prevent the next chunk")
+                return false
+            }
+        )
+        XCTAssertFalse(sut)
+        XCTAssertEqual(reads, 2)
+        XCTAssertFalse(isValid)
     }
 
     private func simulateDirectDelivery(

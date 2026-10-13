@@ -520,7 +520,7 @@ final class TypingService {
 
         // Paste Last and rewrite actions have no stop snapshot; retain their requested cursor.
         let deliveryTarget = capturedTarget ?? Self.captureRecordingTargetContext()
-        let focus = Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID)
+        let focus = Self.assessDeliveryFocus(observation: DeliveryTargetAssessment.observeFocusedElement(), capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID)
         DebugLogger.shared.info("FOCUS_ASSESS \(focus.assessment.logDescription) decision=\(focus.decision)", source: "TypingService")
         if focus.decision == .refuse {
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
@@ -544,7 +544,7 @@ final class TypingService {
             )
         }
         let validateTarget: @MainActor () -> TextDeliveryFailure? = {
-            Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .refuse ? .noEditableTarget : nil
+            Self.assessDeliveryFocus(observation: DeliveryTargetAssessment.observeFocusedElement(), capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .refuse ? .noEditableTarget : nil
         }
         let usesClipboard = focus.decision == .reliablePasteFallback || mode == .reliablePaste ||
             self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID) != nil
@@ -567,16 +567,16 @@ final class TypingService {
         } else if await self.insertTextDirectlyOffMain(
             text,
             preferredTargetPID: preferredTargetPID,
-            canStartInsertion: {
+            canStartInsertion: { observation in
                 isOutputValid() && directState.canStart(
-                    Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
                 )
             },
-            isOutputValid: {
+            isOutputValid: { observation in
                 // Once direct typing starts, a role change alone must not replay a partly typed transcript.
                 guard isOutputValid() else { return false }
                 return directState.canContinue(
-                    Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
                 )
             }
         ) {
@@ -721,10 +721,10 @@ final class TypingService {
 
     @MainActor
     private static func assessDeliveryFocus(
+        observation: DeliveryTargetAssessment.FocusObservation?,
         capturedTarget: RecordingTargetContext?,
         preferredTargetPID: pid_t?
     ) -> (assessment: DeliveryTargetAssessment, decision: DeliveryTargetAssessment.DeliveryDecision) {
-        let observation = DeliveryTargetAssessment.observeFocusedElement()
         let assessment = observation?.assessment ?? .unavailable(reason: "no_focused_element")
         let focused = observation.map {
             DeliveryTargetAssessment.Target(
@@ -742,11 +742,17 @@ final class TypingService {
                 isSecureTextField: $0.isSecureTextField
             )
         }
-        if let preferredTargetPID, preferredTargetPID != focused?.pid { return (assessment, .refuse) }
+        if let preferredTargetPID, preferredTargetPID != focused?.pid {
+            return (assessment, .refuse)
+        }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        if frontmost?.bundleIdentifier == "com.FluidApp.app" || frontmost?.bundleIdentifier == "com.FluidApp.app.debug" {
+            return (assessment, .refuse)
+        }
         return (assessment, assessment.deliveryDecision(
             capturedTarget: captured,
             focusedTarget: focused,
-            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            frontmostPID: frontmost?.processIdentifier,
             ownPID: ProcessInfo.processInfo.processIdentifier
         ))
     }
@@ -835,18 +841,19 @@ final class TypingService {
 
     // MARK: - Internal insertion pipeline
 
-    private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, canStartInsertion: @escaping @MainActor () -> Bool, isOutputValid: @escaping @MainActor () -> Bool) async -> Bool {
-        await withCheckedContinuation { continuation in
-            Self.directInsertionQueue.async {
-                let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { canStartInsertion() } }
-                guard valid else { continuation.resume(returning: false); return }
-                continuation.resume(
-                    returning: self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: {
-                        DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }
-                    })
-                )
-            }
-        }
+    private func insertTextDirectlyOffMain(
+        _ text: String,
+        preferredTargetPID: pid_t?,
+        canStartInsertion: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
+        isOutputValid: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool
+    ) async -> Bool {
+        await DirectInsertionExecutor.run(
+            on: Self.directInsertionQueue,
+            readFocus: { DeliveryTargetAssessment.observeFocusedElement() },
+            canStart: canStartInsertion,
+            canContinue: isOutputValid,
+            insert: { valid in self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: valid) }
+        )
     }
 
     nonisolated static func attemptDirectInsertion(isOutputValid: () -> Bool, insert: () -> Bool) -> Bool {
