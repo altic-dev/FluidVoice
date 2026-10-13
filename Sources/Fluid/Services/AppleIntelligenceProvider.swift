@@ -36,9 +36,16 @@ nonisolated enum AppleIntelligenceProvider {
     }
 
     /// The system model sometimes mimics the legacy `{"transcript": ...}` envelope
-    /// even when given plain text. Only that exact single-key shape is unwrapped.
-    static func unwrappedDictationText(_ response: String) -> String {
+    /// even when given plain text. Only that exact single-key shape is unwrapped,
+    /// unless the original transcript itself was already formatted in this shape.
+    static func unwrappedDictationText(_ response: String, originalTranscript: String? = nil) -> String {
         let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let original = originalTranscript?.trimmingCharacters(in: .whitespacesAndNewlines),
+           original.hasPrefix("{"), original.hasSuffix("}"),
+           let origObj = try? JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any],
+           origObj.count == 1, origObj["transcript"] != nil {
+            return response
+        }
         guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
               let object = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8)) as? [String: Any],
               object.count == 1,

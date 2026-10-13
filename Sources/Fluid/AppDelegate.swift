@@ -49,6 +49,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DictationPromptRequest.logger = { DebugLogger.shared.log($0) }
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
         self.updateUISimulationObserver = UpdatePromptSimulation.register(self)

@@ -312,11 +312,11 @@ final class DictationPostProcessingService {
             throw AIProcessingError.emptyResponse
         }
         let content = resolved.providerID == AppleIntelligenceProvider.providerID
-            ? AppleIntelligenceProvider.unwrappedDictationText(response.content)
+            ? AppleIntelligenceProvider.unwrappedDictationText(response.content, originalTranscript: trimmed)
             : response.content
         return Result(
             text: ASRService.applyGAAVFormatting(DictationPromptRequest.cleanedText(
-                response: content, instructions: promptText, transcript: trimmed
+                response: content, instructions: request.systemPrompt, transcript: trimmed
             )),
             providerID: resolved.providerID,
             model: resolved.model

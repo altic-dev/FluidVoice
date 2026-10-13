@@ -46,6 +46,22 @@ final class AppleIntelligenceProviderTests: XCTestCase {
             DictationPromptRequest.cleanedText(response: envelope, instructions: "Fix grammar.", transcript: "Meaning what?"),
             envelope
         )
+        // If the user deliberately dictated a {"transcript": "hello"} JSON envelope, preserve it:
+        let intentionalJSON = "{\"transcript\": \"hello\"}"
+        XCTAssertEqual(
+            AppleIntelligenceProvider.unwrappedDictationText(intentionalJSON, originalTranscript: intentionalJSON),
+            intentionalJSON
+        )
+    }
+
+    func testCustomClosingPhrasePreservedInsteadOfFlaggedAsEcho() {
+        let instructions = "Fix transcription typos.\nSign off with:\nThank you for your time."
+        let transcript = "thanks for your time"
+        let response = "Thank you for your time."
+        XCTAssertEqual(
+            DictationPromptRequest.cleanedText(response: response, instructions: instructions, transcript: transcript),
+            response
+        )
     }
 
     func testCleanupInstructionEchoPreservesSpeech() {
@@ -57,6 +73,7 @@ final class AppleIntelligenceProviderTests: XCTestCase {
             ("Please send the report tomorrow.", transcript, transcript),
             (instruction, instruction, instruction),
             ("Send the report tomorrow!", transcript, "Send the report tomorrow!"),
+            ("Read only the transcription in the user message", transcript, transcript),
         ]
         for (response, spokenText, expected) in scenarios {
             XCTAssertEqual(DictationPromptRequest.cleanedText(

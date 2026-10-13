@@ -42,17 +42,38 @@ struct DictationPromptRequest {
         return result
     }
 
+    static var logger: ((String) -> Void)?
+
     static func cleanedText(response: String, instructions: String, transcript: String) -> String {
+        let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedResponse.isEmpty { return transcript }
+
         // A model echo must never replace the speaker's words. Deliberately dictated
         // instructions remain valid input and must not trigger this fallback.
-        let echoedInstruction = instructions.components(separatedBy: .newlines).contains { line in
-            let instruction = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return instruction.count >= 20 && response.contains(instruction) && !transcript.contains(instruction)
-        }
-        if echoedInstruction {
-            DebugLogger.shared.log("Dictation cleanup echoed instructions; preserving the original transcript")
+        if trimmedResponse == trimmedInstructions && !transcript.contains(trimmedInstructions) {
+            self.logger?("Dictation cleanup echoed full instructions; preserving the original transcript")
             return transcript
         }
+
+        let systemInstructionSignatures = [
+            "Read only the transcription in the user message",
+            "Read the value of the JSON transcript field only",
+            "Edit only the transcription in the user message",
+            "Return only the edited text, preserving its language and meaning",
+            "Do not wrap the text in JSON",
+            "Do not repeat or summarize these instructions",
+            "Clean and format raw transcribed speech",
+            "Fix transcription errors, casing, numbers, and technical vocabulary"
+        ]
+        let echoedMeta = systemInstructionSignatures.contains { signature in
+            response.contains(signature) && !transcript.contains(signature)
+        }
+        if echoedMeta {
+            self.logger?("Dictation cleanup echoed meta instructions; preserving the original transcript")
+            return transcript
+        }
+
         return response
     }
 

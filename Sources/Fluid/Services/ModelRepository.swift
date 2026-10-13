@@ -17,7 +17,6 @@ final class ModelRepository {
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
-            AppleIntelligenceProvider.providerID,
             "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
         ]
         if PrivateFeatures.privateAIProvider {
@@ -173,7 +172,6 @@ final class ModelRepository {
     /// Returns the list of built-in providers for UI pickers
     func builtInProvidersList() -> [(id: String, name: String)] {
         var list: [(id: String, name: String)] = [
-            (AppleIntelligenceProvider.providerID, "Apple Intelligence"),
             ("openai", "OpenAI"),
             ("anthropic", "Anthropic"),
             ("xai", "xAI"),

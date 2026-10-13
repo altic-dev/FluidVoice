@@ -2823,14 +2823,22 @@ struct ContentView: View {
 
         // Keep cleanup instructions separate from transcript data. Explicit
         // ${transcript} templates retain their authored single-turn layout.
-        let request = isDictationCall
-            ? DictationPromptRequest(promptText: promptText, transcript: inputText)
-            : DictationPromptRequest(systemPrompt: promptText, userContent: inputText)
+        let isAppleIntelligence = currentSelectedProviderID == AppleIntelligenceProvider.providerID
+        let request: DictationPromptRequest = {
+            if isDictationCall {
+                if isAppleIntelligence {
+                    let prompt = AppleIntelligenceProvider.dictationPrompt(instructions: promptText, transcript: inputText)
+                    return DictationPromptRequest(systemPrompt: prompt.instructions, userContent: prompt.text)
+                }
+                return DictationPromptRequest(promptText: promptText, transcript: inputText)
+            }
+            return DictationPromptRequest(systemPrompt: promptText, userContent: inputText)
+        }()
         let systemPrompt = request.systemPrompt
         let userMessageContent = request.userContent
 
-        // Skip API key validation for local endpoints
-        let isLocal = self.isLocalEndpoint(derivedBaseURL)
+        // Skip API key validation for local endpoints and on-device Apple Intelligence
+        let isLocal = isAppleIntelligence || self.isLocalEndpoint(derivedBaseURL)
         let apiKey = route.apiKey
 
         if !isLocal {
@@ -2903,6 +2911,7 @@ struct ContentView: View {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: currentSelectedProviderID,
             messages: messages,
             model: derivedSelectedModel,
             baseURL: derivedBaseURL,
@@ -2936,6 +2945,7 @@ struct ContentView: View {
                     source: "ContentView"
                 )
                 let fallbackConfig = LLMClient.Config(
+                    providerID: currentSelectedProviderID,
                     messages: messages,
                     model: derivedSelectedModel,
                     baseURL: derivedBaseURL,
@@ -2967,8 +2977,16 @@ struct ContentView: View {
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }
+        let rawContent = isAppleIntelligence
+            ? AppleIntelligenceProvider.unwrappedDictationText(response.content, originalTranscript: inputText)
+            : response.content
+        let processedText = DictationPromptRequest.cleanedText(
+            response: rawContent,
+            instructions: request.systemPrompt,
+            transcript: inputText
+        )
         return AITextProcessingResult(
-            text: response.content,
+            text: processedText,
             tokensPerSecond: nil,
             fluidIntelligenceLatencyMilliseconds: nil
         )
