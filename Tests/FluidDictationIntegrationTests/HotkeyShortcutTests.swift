@@ -1585,6 +1585,37 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelledTerminationRejectsOlderTapRetry() async throws {
+        try XCTSkipIf(AXIsProcessTrusted(), "This test needs tap setup to fail without installing a live input tap")
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        var starts = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
+
+        GlobalHotkeyManager.suspendForTermination()
+        GlobalHotkeyManager.resumeAfterCancelledTermination()
+        await Task.yield()
+        let firstResume = ProcessInfo.processInfo.systemUptime
+        // Failed setup schedules a retry at 0.5 seconds; cancel it before it wakes.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try XCTSkipIf(ProcessInfo.processInfo.systemUptime - firstResume >= 0.45, "Runner missed the window before the old retry")
+        GlobalHotkeyManager.suspendForTermination()
+        GlobalHotkeyManager.resumeAfterCancelledTermination()
+        let secondResume = ProcessInfo.processInfo.systemUptime
+        let down = try self.primaryReleaseTestEvent(type: .keyDown)
+        let up = try self.primaryReleaseTestEvent(type: .keyUp)
+        XCTAssertNil(manager.handleKeyEvent(type: .keyDown, event: down))
+
+        // Cross the old retry deadline, but stay before the new retry at 0.8 seconds.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try XCTSkipIf(ProcessInfo.processInfo.systemUptime - secondResume >= 0.45, "Runner reached the new retry deadline")
+        XCTAssertNil(manager.handleKeyEvent(type: .keyUp, event: up))
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(starts, 1, "An older retry must not reset the fresh shortcut after cancelling quit")
+    }
+
+    @MainActor
     func testCancelledTerminationCannotReviveQueuedPaste() async {
         var pastes = 0
         let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: {})
