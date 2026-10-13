@@ -1012,9 +1012,20 @@ final nonisolated class LLMClient: @unchecked Sendable {
             parsed = try self.parseAnthropicResponse(json)
         } else if wireProtocol == .geminiCodeAssist {
             parsed = try self.parseGeminiResponse(json)
-        } else if wireProtocol == .responses || self.isResponsesRequest(request) {
+        } else if wireProtocol == .responses {
             if let terminalError = Self.responsesNonStreamingTerminalError(from: json) {
                 throw terminalError
+            }
+            parsed = try self.parseResponsesResponse(json)
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            parsed.isIncomplete = (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
+        } else if self.isResponsesRequest(request) {
+            if let providerError = json["error"] as? [String: Any],
+               let message = providerError["message"] as? String {
+                throw LLMError.invalidRequest("Responses API request failed: \(message)")
             }
             parsed = try self.parseResponsesResponse(json)
             let status = json["status"] as? String
