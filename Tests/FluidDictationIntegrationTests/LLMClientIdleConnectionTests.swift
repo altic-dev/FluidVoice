@@ -68,12 +68,12 @@ private final class KeepAliveServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "LLMClientIdleConnectionTests.server")
     private let lock = NSLock()
-    private var connections = 0
+    private var accepted: [NWConnection] = []
     private var requests = 0
     private(set) var port: UInt16 = 0
 
     var connectionCount: Int {
-        self.lock.withLock { self.connections }
+        self.lock.withLock { self.accepted.count }
     }
 
     var requestCount: Int {
@@ -86,7 +86,7 @@ private final class KeepAliveServer: @unchecked Sendable {
         self.listener = try NWListener(using: parameters)
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
-            self.lock.withLock { self.connections += 1 }
+            self.lock.withLock { self.accepted.append(connection) }
             connection.start(queue: self.queue)
             self.receive(on: connection, buffer: Data())
         }
@@ -106,6 +106,7 @@ private final class KeepAliveServer: @unchecked Sendable {
 
     func stop() {
         self.listener.cancel()
+        self.lock.withLock { self.accepted }.forEach { $0.cancel() }
     }
 
     private func receive(on connection: NWConnection, buffer: Data) {
