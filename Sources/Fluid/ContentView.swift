@@ -524,6 +524,11 @@ struct ContentView: View {
             .onReceive(self.asr.$partialTranscription) { text in
                 self.handleSpokenSendPartialTranscription(text)
             }
+            .onChange(of: self.settings.textInsertionMode) { _, mode in
+                if mode == .clipboardOnly {
+                    self.cancelSpokenSendCountdownForCopyOnly()
+                }
+            }
             .overlay(alignment: .center) {}
             .modifier(ReleaseHighlightsPresenter(
                 requested: self.$showsReleaseHighlights,
@@ -2971,8 +2976,15 @@ struct ContentView: View {
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }
+        let cleanedContent = isDictationCall
+            ? DictationPromptRequest.cleanedText(
+                response: response.content,
+                instructions: promptText,
+                transcript: inputText
+            )
+            : response.content
         return AITextProcessingResult(
-            text: response.content,
+            text: cleanedContent,
             tokensPerSecond: nil,
             fluidIntelligenceLatencyMilliseconds: nil
         )
@@ -3863,12 +3875,30 @@ struct ContentView: View {
         NotchContentState.shared.clearTextDeliveryFailure()
     }
 
+    private func cancelSpokenSendCountdownForCopyOnly() {
+        self.spokenSendAutoStopTask?.cancel()
+        self.spokenSendAutoStopTask = nil
+        self.stopSpokenSendVoiceActivityMonitoring()
+        self.spokenSendCountdownStartedAt = nil
+        self.spokenSendArming.reset()
+        if !self.spokenSendAutoStopTriggered,
+           NotchContentState.shared.spokenSendIndicatorState == .countingDown || NotchContentState.shared.spokenSendIndicatorState == .detected
+        {
+            NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+        }
+    }
+
     private func handleSpokenSendPartialTranscription(_ text: String) {
         guard self.settings.spokenSendEnabled else { return }
+        guard self.settings.textInsertionMode != .clipboardOnly else {
+            self.cancelSpokenSendCountdownForCopyOnly()
+            return
+        }
         let isDictationMode = self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode
         let isEligible = isDictationMode &&
             self.cancelledOutputLifecycleID != self.overlayLifecycleID &&
             self.currentDictationOutputRouteForHotkeyStop() == .normal &&
+            self.settings.textInsertionMode != .clipboardOnly &&
             self.asr.isRunning &&
             !self.spokenSendAutoStopTriggered
         let isArmed = self.spokenSendArming.update(
@@ -3917,6 +3947,7 @@ struct ContentView: View {
                   self.asr.isRunning,
                   self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode,
                   self.currentDictationOutputRouteForHotkeyStop() == .normal,
+                  self.settings.textInsertionMode != .clipboardOnly,
                   !self.spokenSendAutoStopTriggered,
                   SpokenSendParser.canCompleteImmediateStop(
                       self.asr.partialTranscription,
