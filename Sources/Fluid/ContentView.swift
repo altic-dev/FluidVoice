@@ -248,6 +248,10 @@ struct ContentView: View {
 
         var savesHistory: Bool { self != .onboardingSandbox }
         var deliversText: Bool { self == .normal }
+
+        func supportsSpokenSend(in insertionMode: SettingsStore.TextInsertionMode) -> Bool {
+            self.deliversText && insertionMode != .clipboardOnly
+        }
         var publishesEditorResult: Bool { self != .historyOnly }
     }
 
@@ -3035,7 +3039,7 @@ struct ContentView: View {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
         let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+            && !promptTest.isActive && !shouldUseAIOnStop && !(self.settings.spokenSendEnabled && self.settings.textInsertionMode != .clipboardOnly))
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3153,7 +3157,7 @@ struct ContentView: View {
         let spokenSendParse = SpokenSendParser.parseArmed(
             punctuationFormattedText,
             phrase: self.settings.spokenSendPhrase,
-            enabled: !cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled,
+            enabled: !cancelledAtASRStop && self.settings.spokenSendEnabled && route.supportsSpokenSend(in: self.settings.textInsertionMode),
             wasArmed: self.spokenSendArming.wasArmed
         )
         self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)

@@ -42,6 +42,20 @@ struct DictationPromptRequest {
         return result
     }
 
+    static func cleanedText(response: String, instructions: String, transcript: String) -> String {
+        // A model echo must never replace the speaker's words. Deliberately dictated
+        // instructions remain valid input and must not trigger this fallback.
+        let echoedInstruction = instructions.components(separatedBy: .newlines).contains { line in
+            let instruction = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return instruction.count >= 20 && response.contains(instruction) && !transcript.contains(instruction)
+        }
+        if echoedInstruction {
+            DebugLogger.shared.log("Dictation cleanup echoed instructions; preserving the original transcript")
+            return transcript
+        }
+        return response
+    }
+
     static func renderTemplate(promptText: String, transcript: String) -> String {
         if promptText.contains("${transcript}") {
             return promptText.replacingOccurrences(of: "${transcript}", with: transcript)
