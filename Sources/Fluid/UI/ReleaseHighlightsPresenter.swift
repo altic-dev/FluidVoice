@@ -7,8 +7,8 @@ private final class ReleaseHighlightsCoordinator {
     static let shared = ReleaseHighlightsCoordinator()
     private var policy = ReleaseHighlightsPolicy(seenVersions: UserDefaults.standard.stringArray(forKey: ReleaseHighlightsPolicy.seenKey) ?? [])
 
-    func request(owner: UUID, version: String, release: String, eligible: Bool, manual: Bool) -> ReleaseHighlightsPolicy.Session? {
-        self.policy.request(owner: owner, version: version, release: release, eligible: eligible, manual: manual)
+    func request(owner: UUID, version: String, build: String, eligible: Bool, manual: Bool) -> ReleaseHighlightsPolicy.Session? {
+        self.policy.request(owner: owner, version: version, build: build, eligible: eligible, manual: manual)
     }
 
     func requestManual(owner: UUID) { self.policy.requestManual(owner: owner) }
@@ -40,6 +40,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
     @State private var session: ReleaseHighlightsPolicy.Session?
     @State private var pendingDestination: ReleaseHighlightsContent.Destination?
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    private let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
     private let highlights = ReleaseHighlightsContent.current(hasPrivateAI: PrivateAIProviderFeature.shared.isAvailable)
     private let coordinator = ReleaseHighlightsCoordinator.shared
 
@@ -54,7 +55,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
                 self.presentIfNeeded()
             })
             .sheet(isPresented: self.$isPresented, onDismiss: self.didDismiss) {
-                ReleaseHighlightsView(canExplore: self.canExplore, content: self.highlights, onClose: self.close)
+                ReleaseHighlightsView(canExplore: self.canExplore, version: self.version, content: self.highlights, onClose: self.close)
             }
             .onAppear { self.visible = true; self.presentIfNeeded() }
             .onDisappear {
@@ -92,7 +93,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
         guard let session = self.coordinator.request(
             owner: self.owner,
             version: self.version,
-            release: self.highlights.release,
+            build: self.build,
             eligible: self.canExplore,
             manual: manual
         ) else { return }

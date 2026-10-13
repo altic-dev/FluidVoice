@@ -1973,6 +1973,27 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Lets the bundled `fv-serve` command read saved meetings. Off until the user turns it on;
+    /// the command reads this same key from the app's preferences.
+    var fluidServeMeetingAccessEnabled: Bool {
+        get { self.defaults.bool(forKey: FluidServeMeetings.accessDefaultsKey) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: FluidServeMeetings.accessDefaultsKey)
+        }
+    }
+
+    /// Set when the user copied the skill instructions for an agent FluidVoice cannot see (Cursor,
+    /// Gemini and others). It keeps meetings shared after the Claude Code and Codex skills are removed,
+    /// until the user stops it.
+    var fluidServeOtherAgentsShared: Bool {
+        get { self.defaults.bool(forKey: "FluidServeOtherAgentsShared") }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: "FluidServeOtherAgentsShared")
+        }
+    }
+
     /// Skips clearly silent recordings up to four seconds before invoking ASR.
     /// Opt-in so quiet speech keeps the existing transcription behavior by default.
     var skipSilentRecordingsEnabled: Bool {
@@ -2105,9 +2126,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    /// Tier 2 browser-tab meeting auto-detection. On unless the user turned it off: Google Meet
+    /// only exists in a browser. It reads the frontmost tab's URL, which is never stored or sent.
     var meetingAutoDetectBrowserEnabled: Bool {
-        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingAutoDetectBrowserEnabled)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled)
+        }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
@@ -3391,10 +3417,13 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether the model rejects the `temperature` parameter.
-    /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
-    func isTemperatureUnsupported(_ model: String) -> Bool {
+    /// Order: reasoning models, then support learned from `/models` metadata or a past
+    /// HTTP 400 (`ModelTemperatureSupport`), then a version check for Anthropic models that
+    /// have deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6
+    /// and older still accept it).
+    func isTemperatureUnsupported(_ model: String, baseURL: String, support: ModelTemperatureSupport = .shared) -> Bool {
         if self.isReasoningModel(model) { return true }
+        if let supported = support.isSupported(model, baseURL: baseURL) { return !supported }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")

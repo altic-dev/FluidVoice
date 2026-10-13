@@ -356,8 +356,8 @@ struct MeetingResultCanvas: View {
     let onRenameSession: (String) -> Void
     let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
     let onClose: (() -> Void)?
-
-    var summaryASRService: ASRService? = nil
+    /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
+    var onOpenIntegrations: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
@@ -438,7 +438,7 @@ struct MeetingResultCanvas: View {
                 }
 
                 if self.documentSection == .summary {
-                    MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
+                    MeetingSummaryView(session: self.session, isQuiescent: self.isQuiescent)
                         .id("\(self.session.id)-\(self.session.updatedAt)")
                 } else {
                     if !activeSpeakers.isEmpty {
@@ -701,6 +701,10 @@ struct MeetingResultCanvas: View {
             if self.hasEchoSegments {
                 Divider()
                 Toggle("Show probable echo", isOn: self.$showsProbableEchoes)
+            }
+            if let onOpenIntegrations {
+                Divider()
+                Button("Integrations…", systemImage: "link", action: onOpenIntegrations)
             }
             if let onClose {
                 Divider()
