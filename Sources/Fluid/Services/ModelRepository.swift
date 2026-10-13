@@ -17,6 +17,7 @@ final class ModelRepository {
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
+            AppleIntelligenceProvider.providerID,
             "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
         ]
         if PrivateFeatures.privateAIProvider {
@@ -33,6 +34,8 @@ final class ModelRepository {
         }
 
         switch providerID {
+        case AppleIntelligenceProvider.providerID:
+            return [AppleIntelligenceProvider.modelID]
         case "openai":
             return ["gpt-4.1"]
         case "anthropic":
@@ -59,6 +62,7 @@ final class ModelRepository {
     /// Returns models eligible for one app mode. Remote providers keep their
     /// normal model list; Fluid Intelligence supplies task-scoped local models.
     func defaultModels(for providerID: String, task: PrivateAIModelTask) -> [String] {
+        if providerID == AppleIntelligenceProvider.providerID, task == .command { return [] }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs(for: task)
         }
@@ -100,6 +104,7 @@ final class ModelRepository {
 
     /// Returns the display name for a provider ID
     func displayName(for providerID: String) -> String {
+        if providerID == AppleIntelligenceProvider.providerID { return "Apple Intelligence" }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.providerName
         }
@@ -168,6 +173,7 @@ final class ModelRepository {
     /// Returns the list of built-in providers for UI pickers
     func builtInProvidersList() -> [(id: String, name: String)] {
         var list: [(id: String, name: String)] = [
+            (AppleIntelligenceProvider.providerID, "Apple Intelligence"),
             ("openai", "OpenAI"),
             ("anthropic", "Anthropic"),
             ("xai", "xAI"),
@@ -239,6 +245,9 @@ final class ModelRepository {
     ///   - apiKey: Optional API key for authentication
     /// - Returns: Array of model IDs sorted alphabetically
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+        if providerID == AppleIntelligenceProvider.providerID {
+            return [AppleIntelligenceProvider.modelID]
+        }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }
