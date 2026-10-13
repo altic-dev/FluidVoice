@@ -1573,6 +1573,7 @@ final class HotkeyShortcutTests: XCTestCase {
         }
         for type in [CGEventType.otherMouseDown, .otherMouseUp] {
             let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: .zero, mouseButton: .center))
+            event.flags = []
             XCTAssertTrue(manager.handleMouseShortcutEvent(type: type, event: event)?.takeUnretainedValue() === event)
         }
         for _ in 0..<20 {
@@ -1614,7 +1615,9 @@ final class HotkeyShortcutTests: XCTestCase {
             if mouse {
                 manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
                 down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                down.flags = []
                 up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                up.flags = []
             } else {
                 down = try self.primaryReleaseTestEvent(type: .keyDown)
                 up = try self.primaryReleaseTestEvent(type: .keyUp)
@@ -1661,7 +1664,9 @@ final class HotkeyShortcutTests: XCTestCase {
                     if mouse {
                         manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
                         down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                        down.flags = []
                         up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                        up.flags = []
                     } else {
                         down = try self.primaryReleaseTestEvent(type: .keyDown)
                         up = try self.primaryReleaseTestEvent(type: .keyUp)
@@ -1740,6 +1745,7 @@ final class HotkeyShortcutTests: XCTestCase {
                 manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
                 for type in [CGEventType.otherMouseDown, .otherMouseUp] {
                     let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: .zero, mouseButton: .center))
+                    event.flags = []
                     XCTAssertNil(manager.handleMouseShortcutEvent(type: type, event: event))
                 }
             } else {
