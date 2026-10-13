@@ -13,6 +13,7 @@ xcrun swiftc -parse-as-library \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \
+    Sources/Fluid/Persistence/ResponsesContinuationItem.swift \
     Tests/HistoryDecodeRecoveryTests.swift \
     -o "$task_test_dir/tests"
 "$task_test_dir/tests"

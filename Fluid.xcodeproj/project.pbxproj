@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00000000000000000042 /* ProviderNonStreamingCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000041 /* ProviderNonStreamingCompletionTests.swift */; };
+		C0DE00000000000000000022 /* ProviderStreamCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000021 /* ProviderStreamCompletionTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
 		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
@@ -199,6 +201,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C0DE00000000000000000041 /* ProviderNonStreamingCompletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderNonStreamingCompletionTests.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000021 /* ProviderStreamCompletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStreamCompletionTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
@@ -472,6 +476,8 @@
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
 				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
 				AD1030000000000000000001 /* HoldToMuteTests.swift */,
+				C0DE00000000000000000041 /* ProviderNonStreamingCompletionTests.swift */,
+				C0DE00000000000000000021 /* ProviderStreamCompletionTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
 				FEB700000000000000000002 /* FeedbackClientTests.swift */,
 				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
@@ -875,6 +881,8 @@
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
 				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
 				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
+				C0DE00000000000000000042 /* ProviderNonStreamingCompletionTests.swift in Sources */,
+				C0DE00000000000000000022 /* ProviderStreamCompletionTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
 				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
 				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
@@ -1128,6 +1136,7 @@
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				COMPILER_INDEX_STORE_ENABLE = NO;
 			};
 			name = Release;
 		};
@@ -1238,6 +1247,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
+				COMPILER_INDEX_STORE_ENABLE = NO;
 			};
 			name = Release;
 		};
