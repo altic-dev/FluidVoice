@@ -2,15 +2,15 @@ import CryptoKit
 import Foundation
 import Security
 
-final nonisolated class CredentialScopedStringCache: @unchecked Sendable {
+final nonisolated class CredentialScopedValueCache<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var values: [String: String] = [:]
+    private var values: [String: Value] = [:]
 
     @_optimize(none)
     func value(
         for credentialKey: String,
-        load: () async throws -> String
-    ) async throws -> String {
+        load: () async throws -> Value
+    ) async throws -> Value {
         self.lock.lock()
         if let cached = self.values[credentialKey] {
             self.lock.unlock()
@@ -92,7 +92,7 @@ enum OfficialProviderAuth {
 
     private static let expirySafetyWindow: TimeInterval = 60
     private static let maximumCredentialFileSize = 1_048_576
-    private static let geminiProjectCache = CredentialScopedStringCache()
+    private static let geminiProjectCache = CredentialScopedValueCache<String>()
     struct CodexCredential: Equatable {
         let accessToken: String
         let accountID: String?
