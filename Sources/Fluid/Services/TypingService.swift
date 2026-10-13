@@ -466,6 +466,7 @@ final class TypingService {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
+        allowsCopyOnly: Bool = false,
         verifiesLanding: Bool = true,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
@@ -497,7 +498,7 @@ final class TypingService {
             return result
         }
 
-        if mode == .clipboardOnly {
+        if allowsCopyOnly && mode == .clipboardOnly {
             return await PasteDeliveryCoordinator.shared.deliverCopyOnly(text, isOutputValid: isOutputValid)
         }
 
@@ -600,6 +601,7 @@ final class TypingService {
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        allowsCopyOnly: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
         completion: (@MainActor (DeliveryOutcome) -> Void)? = nil
     ) {
@@ -635,6 +637,7 @@ final class TypingService {
                     toggleStopRequestedAt: toggleStopRequestedAt,
                     tracksDictionaryCorrections: tracksDictionaryCorrections,
                     preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+                    allowsCopyOnly: allowsCopyOnly,
                     // A send key empties the field right after the paste, so the read-back would report a false miss.
                     verifiesLanding: postInsertionKey == nil,
                     isOutputValid: isOutputValid

@@ -27,6 +27,24 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(poster.postCount, 0)
     }
 
+    func testExplicitPasteDoesNotRouteToCopyOnlyEvenWhenModeIsClipboardOnly() async {
+        let previousMode = SettingsStore.shared.textInsertionMode
+        defer { SettingsStore.shared.textInsertionMode = previousMode }
+        SettingsStore.shared.textInsertionMode = .clipboardOnly
+
+        let typingService = TypingService()
+        let plan = ASRService.makeDictationLiteralOutputPlan(for: "inserted text")
+        let result = await typingService.typeOutputPlanInstantly(
+            plan,
+            preferredTargetPID: nil,
+            textReadyAt: nil,
+            allowsCopyOnly: false
+        )
+        // With allowsCopyOnly = false, it does NOT deliver copy-only (which returns .commandPosted),
+        // but instead proceeds to normal insertion checks.
+        XCTAssertNotEqual(result, .commandPosted)
+    }
+
     func testCancelledFocusPreparationDoesNotCopyBackup() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()
