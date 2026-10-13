@@ -78,6 +78,24 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
         }
     }
 
+    func testButtonFallbackAppliesAcrossExternalAppsWithoutAnAllowlist() {
+        let assessment = DeliveryTargetAssessment.classify(role: "AXButton", valueSettable: false)
+        for bundleIdentifier in ["test.web-editor", "test.native-editor", "test.future-app"] {
+            let captured = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: bundleIdentifier, hasFocusedElement: true)
+            XCTAssertEqual(
+                assessment.deliveryDecision(capturedTarget: captured, focusedTarget: captured, frontmostPID: 100, ownPID: 999),
+                .reliablePasteFallback,
+                "A matching captured target receives the same fallback regardless of app identity"
+            )
+            let changed = DeliveryTargetAssessment.Target(pid: 200, bundleIdentifier: bundleIdentifier, hasFocusedElement: true)
+            XCTAssertEqual(
+                assessment.deliveryDecision(capturedTarget: captured, focusedTarget: changed, frontmostPID: 200, ownPID: 999),
+                .refuse,
+                "Cross-app fallback still rejects a changed destination"
+            )
+        }
+    }
+
     func testOrdinaryDeliverySupportsUnbundledAppsAndNonActivatingLaunchers() {
         for bundle in [nil, "test.launcher"] as [String?] {
             let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: bundle, hasFocusedElement: true)

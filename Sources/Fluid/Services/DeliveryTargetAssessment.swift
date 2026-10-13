@@ -126,17 +126,30 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
     }
 
     nonisolated static func observeFocusedElement() -> FocusObservation? {
-        guard AXIsProcessTrusted() else { return nil }
+        guard AXIsProcessTrusted() else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=permission", source: "TypingService")
+            return nil
+        }
         var focusedRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
             AXUIElementCreateSystemWide(),
             kAXFocusedUIElementAttribute as CFString,
             &focusedRef
         )
-        guard result == .success, let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+        guard result == .success, let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
+            DebugLogger.shared.info(
+                "FOCUS_READ unavailable stage=focused_element axError=\(result.rawValue)",
+                source: "TypingService"
+            )
+            return nil
+        }
         let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
         var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
+        let pidResult = AXUIElementGetPid(element, &pid)
+        guard pidResult == .success, pid > 0 else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=pid axError=\(pidResult.rawValue)", source: "TypingService")
+            return nil
+        }
         return FocusObservation(pid: pid, assessment: self.assess(element))
     }
 
