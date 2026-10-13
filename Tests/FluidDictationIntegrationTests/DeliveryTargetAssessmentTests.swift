@@ -1,6 +1,7 @@
 @testable import FluidVoice_Debug
 import XCTest
 
+@MainActor
 final class DeliveryTargetAssessmentTests: XCTestCase {
     func testTextRolesAreEditable() {
         for role in ["AXTextField", "AXTextArea", "AXComboBox"] {
@@ -53,8 +54,8 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
             .init(expectation: "editable inserts", assessment: .editable(role: "AXTextArea"), captured: external, focused: external, frontmostPID: 100, decision: .insert),
             .init(expectation: "editable without capture inserts", assessment: .editable(role: "AXTextField"), captured: nil, focused: external, frontmostPID: 100, decision: .insert),
             .init(expectation: "button with capture pastes", assessment: .notEditable(role: "AXButton"), captured: external, focused: external, frontmostPID: 100, decision: .reliablePasteFallback),
-            .init(expectation: "unknown role with capture pastes", assessment: .unknown(reason: "role_AXWebArea"), captured: external, focused: external, frontmostPID: 100, decision: .reliablePasteFallback),
-            .init(expectation: "unreadable role with capture pastes", assessment: .unknown(reason: "role_unreadable"), captured: external, focused: external, frontmostPID: 100, decision: .reliablePasteFallback),
+            .init(expectation: "unknown role preserves selected mode", assessment: .unknown(reason: "role_AXWebArea"), captured: external, focused: external, frontmostPID: 100, decision: .insert),
+            .init(expectation: "unreadable role preserves selected mode", assessment: .unknown(reason: "role_unreadable"), captured: external, focused: external, frontmostPID: 100, decision: .insert),
             .init(expectation: "button without capture refuses", assessment: .notEditable(role: "AXButton"), captured: nil, focused: external, frontmostPID: 100, decision: .refuse),
             .init(expectation: "unknown without capture refuses", assessment: .unknown(reason: "role_AXWindow"), captured: nil, focused: external, frontmostPID: 100, decision: .refuse),
             .init(expectation: "missing live focus refuses", assessment: .editable(role: "AXTextArea"), captured: external, focused: nil, frontmostPID: 100, decision: .refuse),
@@ -75,5 +76,79 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
             let sut = test.assessment.deliveryDecision(capturedTarget: test.captured, focusedTarget: test.focused, frontmostPID: test.frontmostPID, ownPID: 999)
             XCTAssertEqual(sut, test.decision, test.expectation)
         }
+    }
+
+    func testDirectDeliveryPreservesModeAndDoesNotReplayRoleChanges() {
+        let external = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        let unknownDecision = DeliveryTargetAssessment.classify(role: "AXWebArea", valueSettable: false)
+            .deliveryDecision(capturedTarget: external, focusedTarget: external, frontmostPID: 100, ownPID: 999)
+        let buttonDecision = DeliveryTargetAssessment.classify(role: "AXButton", valueSettable: false)
+            .deliveryDecision(capturedTarget: external, focusedTarget: external, frontmostPID: 100, ownPID: 999)
+        let unknown = self.simulateDirectDelivery([unknownDecision, unknownDecision, unknownDecision])
+        XCTAssertEqual(unknown.chunks, 2)
+        XCTAssertFalse(unknown.pastes)
+        let buttonBeforeStart = self.simulateDirectDelivery([buttonDecision])
+        XCTAssertEqual(buttonBeforeStart.chunks, 0)
+        XCTAssertTrue(buttonBeforeStart.pastes)
+        let roleChangedDuringTyping = self.simulateDirectDelivery([.insert, .insert, buttonDecision])
+        XCTAssertEqual(roleChangedDuringTyping.chunks, 2)
+        XCTAssertFalse(roleChangedDuringTyping.pastes)
+    }
+
+    func testUnsafePartialDeliveryNeverReplaysEvenAfterFocusRecovers() {
+        let external = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        let other = DeliveryTargetAssessment.Target(pid: 200, bundleIdentifier: "test.other", hasFocusedElement: true)
+        let own = DeliveryTargetAssessment.Target(pid: 999, bundleIdentifier: "com.FluidApp.app", hasFocusedElement: true)
+        let changedBundle = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.changed", hasFocusedElement: true)
+        let unsafeFocus: [(DeliveryTargetAssessment, DeliveryTargetAssessment.Target?, pid_t?)] = [
+            (.secure(role: "AXTextField"), external, 100),
+            (.unavailable(reason: "no_focused_element"), nil, 100),
+            (.notEditable(role: "AXSlider"), external, 100),
+            (.notEditable(role: "AXStaticText"), external, 100),
+            (.editable(role: "AXTextField"), other, 200),
+            (.editable(role: "AXTextField"), own, 999),
+            (.editable(role: "AXTextField"), changedBundle, 100),
+            (.editable(role: "AXTextField"), external, 200),
+        ]
+        for (assessment, focused, frontmostPID) in unsafeFocus {
+            let decision = assessment.deliveryDecision(capturedTarget: external, focusedTarget: focused, frontmostPID: frontmostPID, ownPID: 999)
+            let result = self.simulateDirectDelivery([.insert, .insert, decision, .insert])
+            XCTAssertEqual(result.chunks, 1, assessment.logDescription)
+            XCTAssertFalse(result.pastes, assessment.logDescription)
+            XCTAssertFalse(result.canResume, assessment.logDescription)
+        }
+    }
+
+    func testDirectStartRefusesUnsafeControlAndSecureRoles() {
+        let external = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        for role in ["AXSlider", "AXStaticText", "AXSecureTextField"] {
+            let decision = DeliveryTargetAssessment.classify(role: role, valueSettable: false)
+                .deliveryDecision(capturedTarget: external, focusedTarget: external, frontmostPID: 100, ownPID: 999)
+            let state = DeliveryTargetAssessment.DirectInsertionState()
+            XCTAssertFalse(state.canStart(decision), role)
+            let result = self.simulateDirectDelivery([decision])
+            XCTAssertEqual(result.chunks, 0, role)
+            XCTAssertFalse(result.pastes, role)
+        }
+    }
+
+    private func simulateDirectDelivery(
+        _ decisions: [DeliveryTargetAssessment.DeliveryDecision]
+    ) -> (chunks: Int, pastes: Bool, canResume: Bool) {
+        var state = DeliveryTargetAssessment.DirectInsertionState()
+        var chunks = 0
+        var completed = false
+        if state.canStart(decisions[0]) {
+            completed = true
+            for decision in decisions.dropFirst() {
+                guard state.canContinue(decision) else {
+                    completed = false
+                    break
+                }
+                chunks += 1
+            }
+        }
+        let pastes = !completed && !state.wasRefused && decisions.last != .refuse
+        return (chunks, pastes, state.canContinue(.insert))
     }
 }

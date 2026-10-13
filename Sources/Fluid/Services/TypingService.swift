@@ -213,7 +213,7 @@ final class TypingService {
             bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
             window: window,
             element: element,
-            isSecureTextField: DeliveryTargetAssessment.assess(element).isSecureTextField
+            isSecureTextField: DeliveryTargetAssessment.isSecureTextField(element)
         )
     }
 
@@ -554,7 +554,7 @@ final class TypingService {
         let result: TextDeliveryResult
         let deliveryPath: AnalyticsInsertionPath
         var dispatchedAt: TimeInterval?
-        var directTargetRefused = false
+        var directState = DeliveryTargetAssessment.DirectInsertionState()
         if usesClipboard {
             deliveryPath = .clipboard
             result = await PasteDeliveryCoordinator.shared.deliver(
@@ -568,20 +568,22 @@ final class TypingService {
             text,
             preferredTargetPID: preferredTargetPID,
             canStartInsertion: {
-                Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .insert
+                isOutputValid() && directState.canStart(
+                    Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                )
             },
             isOutputValid: {
                 // Once direct typing starts, a role change alone must not replay a partly typed transcript.
-                if validateTarget() != nil {
-                    directTargetRefused = true
-                }
-                return isOutputValid() && !directTargetRefused
+                guard isOutputValid() else { return false }
+                return directState.canContinue(
+                    Self.assessDeliveryFocus(capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                )
             }
         ) {
             deliveryPath = .direct
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
             result = .commandPosted
-        } else if directTargetRefused {
+        } else if directState.wasRefused {
             deliveryPath = .direct
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
             result = .recoverableFailure(.noEditableTarget)
@@ -836,7 +838,7 @@ final class TypingService {
     private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, canStartInsertion: @escaping @MainActor () -> Bool, isOutputValid: @escaping @MainActor () -> Bool) async -> Bool {
         await withCheckedContinuation { continuation in
             Self.directInsertionQueue.async {
-                let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() && canStartInsertion() } }
+                let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { canStartInsertion() } }
                 guard valid else { continuation.resume(returning: false); return }
                 continuation.resume(
                     returning: self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: {

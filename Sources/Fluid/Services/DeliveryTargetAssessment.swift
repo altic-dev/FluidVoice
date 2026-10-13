@@ -2,7 +2,7 @@ import ApplicationServices
 import Foundation
 
 /// Decides, before pasting, whether the focused UI element can take text.
-/// Ambiguous roles can use Reliable Paste only with a matching captured destination.
+/// A button fallback requires a matching captured destination; unknown roles retain the chosen mode.
 enum DeliveryTargetAssessment: Equatable {
     struct Target {
         let pid: pid_t
@@ -15,6 +15,21 @@ enum DeliveryTargetAssessment: Equatable {
         case insert
         case reliablePasteFallback
         case refuse
+    }
+
+    struct DirectInsertionState {
+        private(set) var wasRefused = false
+
+        func canStart(_ decision: DeliveryDecision) -> Bool {
+            !self.wasRefused && decision == .insert
+        }
+
+        mutating func canContinue(_ decision: DeliveryDecision) -> Bool {
+            if decision == .refuse {
+                self.wasRefused = true
+            }
+            return !self.wasRefused
+        }
     }
 
     func deliveryDecision(capturedTarget: Target?, focusedTarget: Target?, frontmostPID: pid_t?, ownPID: pid_t) -> DeliveryDecision {
@@ -37,9 +52,11 @@ enum DeliveryTargetAssessment: Equatable {
             return .insert
         case .secure, .unavailable:
             return .refuse
-        case .notEditable(role: "AXButton"), .unknown:
+        case .notEditable(role: "AXButton"):
             // Web-view composers can report a button even while their editor has the caret.
             return capturedTarget?.hasFocusedElement == true ? .reliablePasteFallback : .refuse
+        case .unknown:
+            return capturedTarget?.hasFocusedElement == true ? .insert : .refuse
         case .notEditable:
             return .refuse
         }
@@ -110,19 +127,36 @@ enum DeliveryTargetAssessment: Equatable {
         return FocusObservation(element: element, pid: pid, assessment: self.assess(element))
     }
 
-    nonisolated static func assess(_ element: AXUIElement) -> DeliveryTargetAssessment {
+    nonisolated static func isSecureTextField(_ element: AXUIElement) -> Bool {
+        let attributes = self.roleAttributes(of: element)
+        return self.isSecureRole(attributes.role, subrole: attributes.subrole)
+    }
+
+    private nonisolated static func roleAttributes(of element: AXUIElement) -> (role: String?, subrole: String?) {
         var roleRef: CFTypeRef?
         let roleResult = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
         var subroleRef: CFTypeRef?
         _ = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef)
-        let subrole = subroleRef as? String
-        if subrole?.localizedCaseInsensitiveContains("secure") == true {
-            return .secure(role: roleRef as? String ?? "unknown")
+        return (roleResult == .success ? roleRef as? String : nil, subroleRef as? String)
+    }
+
+    private nonisolated static func isSecureRole(_ role: String?, subrole: String?) -> Bool {
+        role == "AXSecureTextField" || subrole?.localizedCaseInsensitiveContains("secure") == true
+    }
+
+    nonisolated static func assess(_ element: AXUIElement) -> DeliveryTargetAssessment {
+        let attributes = self.roleAttributes(of: element)
+        if self.isSecureRole(attributes.role, subrole: attributes.subrole) {
+            return .secure(role: attributes.role ?? "unknown")
         }
-        guard roleResult == .success, let role = roleRef as? String else { return .unknown(reason: "role_unreadable") }
+        guard let role = attributes.role else { return .unknown(reason: "role_unreadable") }
+        let assessment = self.classify(role: role, valueSettable: false, subrole: attributes.subrole)
+        if case .editable = assessment {
+            return assessment
+        }
         var valueSettable = DarwinBoolean(false)
         let settableResult = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
-        return self.classify(role: role, valueSettable: settableResult == .success && valueSettable.boolValue, subrole: subrole)
+        return settableResult == .success && valueSettable.boolValue ? .editable(role: role) : assessment
     }
 
     var isSecureTextField: Bool {
@@ -134,7 +168,7 @@ enum DeliveryTargetAssessment: Equatable {
 
     /// Pure role decision, kept separate from the AX queries so it can be tested.
     nonisolated static func classify(role: String, valueSettable: Bool, subrole: String? = nil) -> DeliveryTargetAssessment {
-        if role == "AXSecureTextField" || subrole?.localizedCaseInsensitiveContains("secure") == true {
+        if self.isSecureRole(role, subrole: subrole) {
             return .secure(role: role)
         }
         if self.editableRoles.contains(role) || valueSettable {
