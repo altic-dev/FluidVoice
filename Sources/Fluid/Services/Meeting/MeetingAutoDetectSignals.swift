@@ -82,20 +82,25 @@ nonisolated struct AudioProcessActivitySnapshot: Sendable, Equatable {
     var queryState: QueryState
 }
 
-/// Maps HAL process objects to the registered native application that owns them. Bundle IDs from
+/// Maps HAL process objects to the registered application that owns them. Native meeting apps by
+/// default; browsers only when asked, to read whether a browser still holds the microphone. Bundle IDs from
 /// HAL are advisory: helpers frequently report their own (or stale) IDs. Ownership is accepted
 /// only when the live executable is contained in the owning app bundle after symlink resolution.
 /// Ambiguous, missing, or malformed data is deliberately rejected.
 nonisolated enum MeetingAudioProcessResolver {
     // nil means unavailable; an empty result means available with no values.
-    // swiftlint:disable:next discouraged_optional_collection
-    static func activeOwnerInputByPID(snapshot: AudioProcessActivitySnapshot) -> [Int32: Bool]? {
+    // swiftlint:disable discouraged_optional_collection
+    static func activeOwnerInputByPID(
+        snapshot: AudioProcessActivitySnapshot,
+        owning isOwner: (String) -> Bool = MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier:)
+    ) -> [Int32: Bool]? {
+        // swiftlint:enable discouraged_optional_collection
         guard snapshot.queryState == .valid else { return nil }
         var matches: [Int32: Bool] = [:]
         for process in snapshot.processes where process.isInputRunning || process.isOutputRunning {
             guard let path = canonicalPath(process.executablePath), process.processID > 0 else { return nil }
             let candidates = snapshot.owners.filter { owner in
-                guard MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: owner.bundleIdentifier),
+                guard isOwner(owner.bundleIdentifier),
                       let ownerPath = canonicalPath(owner.bundlePath), ownerPath.hasSuffix(".app")
                 else { return false }
                 guard path.hasPrefix(ownerPath + "/Contents/") else { return false }
@@ -647,8 +652,9 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
 final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
     func snapshot() async -> AudioProcessActivitySnapshot {
         let owners = NSWorkspace.shared.runningApplications.compactMap { app -> MeetingProcessOwner? in
+            // Browsers are listed too: their microphone tells when a web meeting is over.
             guard let bundle = app.bundleIdentifier,
-                  MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: bundle),
+                  MeetingAppRegistry.tier(forBundleIdentifier: bundle) != nil,
                   !app.isTerminated, app.processIdentifier > 0,
                   let path = app.bundleURL?.path else { return nil }
             return MeetingProcessOwner(processID: app.processIdentifier, bundleIdentifier: bundle, bundlePath: path)

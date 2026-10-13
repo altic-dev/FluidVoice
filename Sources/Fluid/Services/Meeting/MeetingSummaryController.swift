@@ -3,8 +3,11 @@ import CryptoKit
 import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
-    case executive, detailed, actions, decisions, participants, topics
-    var id: String { self.rawValue }
+    case executive, detailed, actions, decisions, participants, topics, custom
+    var id: String {
+        self.rawValue
+    }
+
     var title: String {
         switch self {
         case .executive: "Executive summary"
@@ -13,6 +16,7 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .decisions: "Key decisions"
         case .participants: "Participants"
         case .topics: "Topics discussed"
+        case .custom: "Custom prompt"
         }
     }
 }
@@ -28,7 +32,11 @@ nonisolated enum MeetingSummaryInput {
         formatter.dateStyle = .none
         formatter.timeStyle = .short
         let time = formatter.string(from: session.startedAt)
-        let duration = max(0, (session.endedAt ?? session.startedAt).timeIntervalSince(session.startedAt) / 60)
+        // A saved meeting keeps whole seconds. Count the same way here, so the text (and the fingerprint
+        // that decides whether a saved summary is still shown) is the same before and after a restart.
+        let startSeconds = session.startedAt.timeIntervalSinceReferenceDate.rounded(.down)
+        let endSeconds = (session.endedAt ?? session.startedAt).timeIntervalSinceReferenceDate.rounded(.down)
+        let duration = max(0, (endSeconds - startSeconds) / 60)
         let turns = session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start.seconds < $1.start.seconds }
         return """
         Title: \(session.title)
@@ -55,6 +63,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     private var processing: Set<UUID> = []
     @Published private(set) var isProcessing = false
     private var summary: UUID?
+    private var remoteSummary: UUID?
     @Published private(set) var selectionLock: UUID?
 
     /// Acquired synchronously by the button action, before generation's task starts.
@@ -90,9 +99,24 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         asr.showError = true
     }
 
+    /// Cloud summaries hold neither the audio lease nor the processing gate that on-device
+    /// summaries need, so dictation, Command Mode, and Rewrite keep working while a provider responds.
+    func withRemoteSummary<T>(work: () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        guard self.remoteSummary == nil, self.summary == nil else { throw MeetingModelResidencyError.busy }
+        let token = UUID()
+        self.remoteSummary = token
+        defer {
+            if self.remoteSummary == token {
+                self.remoteSummary = nil
+            }
+        }
+        return try await work()
+    }
+
     func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        guard self.summary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
+        guard self.summary == nil, self.remoteSummary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
         let token = UUID()
         self.summary = token
         defer { if self.summary == token { self.summary = nil } }
@@ -119,43 +143,70 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var deleting = false
     @Published private(set) var progress: PrivateAIModelDownloadProgress?
     @Published private(set) var output = ""
+    @Published private(set) var outputProvenance = ""
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
-    var busy: Bool { self.downloading || self.generating || self.deleting }
+    var busy: Bool {
+        self.downloading || self.generating || self.deleting
+    }
+
     var model: PrivateAIRegisteredModel? {
         PrivateAIModelRegistry.modelIDs(for: .meetingSummary).first.flatMap { PrivateAIModelRegistry.model(id: $0) }
     }
 
-    private nonisolated struct SavedSummary: Codable, Sendable {
+    nonisolated struct SavedSummary: Codable {
         let transcriptHash: String
         let modelID: String
         let text: String
+        var providerID: String?
+        var providerName: String?
+        var configurationHash: String?
+        var promptVersion: Int?
+        var generatedAt: Date?
+        /// Set for custom-prompt summaries, so an edited prompt does not show an older result.
+        var promptHash: String?
+        /// Display name of an on-device model, whose ID is not meant to be read.
+        var modelName: String?
+
+        var provenance: String {
+            "\(self.providerName ?? "Fluid Intelligence") · \(self.modelName ?? self.modelID)"
+        }
+
+        /// Summaries saved before providers were recorded came from the earlier on-device
+        /// model, which was withdrawn for accuracy; they stay hidden.
+        func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
+            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+        }
     }
 
-    func refresh(session: MeetingSession?, kind: MeetingSummaryKind) async {
+    func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
         self.output = ""
+        self.outputProvenance = ""
         self.error = nil
         self.checking = true
         let model = self.model
-        let modelID = model?.id
-        let snapshot = await Task.detached(priority: .utility) { () -> (Bool, String) in
+        let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
+        let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
-            guard let session, let modelID,
+            guard let session,
                   let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
-                  saved.modelID == modelID,
-                  saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
-            else { return (installed, "") }
-            return (installed, saved.text)
+                  saved.isCurrent(
+                      transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+                      promptHash: promptHash
+                  )
+            else { return (installed, nil) }
+            return (installed, saved)
         }.value
         guard self.generation == generation, !Task.isCancelled else { return }
         self.installed = snapshot.0
-        self.output = snapshot.1
+        self.output = snapshot.1?.text ?? ""
+        self.outputProvenance = snapshot.1?.provenance ?? ""
         self.checking = false
     }
 
@@ -208,8 +259,70 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService) {
-        guard !self.busy, self.installed, let model,
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
+        guard !self.busy, !self.checking,
+              let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
+        self.generating = true
+        self.error = nil
+        self.operation = Task {
+            defer {
+                self.generating = false
+                self.operation = nil
+                MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
+            }
+            do {
+                try await MeetingSummaryActivityCoordinator.shared.withRemoteSummary {
+                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                        throw MeetingPostProcessingError.invalidOutput
+                    }
+                    try Task.checkCancellation()
+                    let instructions = kind == .custom ? customPrompt.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    let text = try await MeetingSummaryRemoteService.shared.generate(
+                        transcript: transcript,
+                        kind: kind,
+                        route: route,
+                        customInstructions: instructions
+                    )
+                    try Task.checkCancellation()
+                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                        throw MeetingPostProcessingError.checkpointFailed
+                    }
+                    let saved = SavedSummary(
+                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        modelID: route.modelID,
+                        text: text,
+                        providerID: route.providerID,
+                        providerName: route.providerName,
+                        configurationHash: route.configurationHash,
+                        promptVersion: 1,
+                        generatedAt: Date(),
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
+                    )
+                    try await Task.detached(priority: .utility) {
+                        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                    }.value
+                    self.output = text
+                    self.outputProvenance = saved.provenance
+                }
+            } catch is CancellationError {
+                self.error = nil
+            } catch {
+                self.error = Task.isCancelled ? nil : error.localizedDescription
+            }
+        }
+    }
+
+    /// Summarizes with the on-device model. Unlike a cloud summary it takes the meeting model
+    /// residency, so dictation and other local models make room while it runs.
+    func summarizeOnDevice(
+        session: MeetingSession,
+        kind: MeetingSummaryKind,
+        customPrompt: String = "",
+        thinking: Bool,
+        asr: ASRService
+    ) {
+        guard !self.busy, !self.checking, self.installed, let model,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
@@ -222,23 +335,48 @@ final class MeetingSummaryController: ObservableObject {
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
                     let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
-                    guard transcript.utf8.count <= 96_000 else { throw MeetingPostProcessingError.inputTooLarge }
+                    guard transcript.utf8.count <= MeetingSummaryOnDevice.maximumTranscriptBytes else {
+                        throw MeetingPostProcessingError.inputTooLarge
+                    }
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
+                    }
+                    let instructions = kind == .custom ? customPrompt.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    guard kind != .custom || !instructions.isEmpty else {
+                        throw LLMError.invalidRequest("Write a custom prompt before generating.")
                     }
                     try Task.checkCancellation()
                     let text = try await asr.withMeetingModelResidency(attemptID: UUID()) {
                         try MeetingModelResidencyCoordinator.shared.markSummary()
-                        return try await PrivateAIIntegrationService.summarizeMeeting(transcript, style: kind.rawValue)
+                        return try await PrivateAIIntegrationService.summarizeMeeting(
+                            transcript,
+                            style: kind.rawValue,
+                            instructions: instructions,
+                            thinking: thinking
+                        )
                     }
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    self.output = text
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
-                    let saved = SavedSummary(transcriptHash: MeetingSummaryInput.fingerprint(transcript), modelID: model.id, text: text)
+                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                        throw MeetingPostProcessingError.checkpointFailed
+                    }
+                    let saved = SavedSummary(
+                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        modelID: model.id,
+                        text: text,
+                        providerID: MeetingSummaryOnDevice.providerID,
+                        providerName: MeetingSummaryOnDevice.providerName,
+                        configurationHash: MeetingSummaryInput.fingerprint("\(MeetingSummaryOnDevice.providerID)|\(model.id)|\(thinking)"),
+                        promptVersion: 1,
+                        generatedAt: Date(),
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
+                        modelName: model.displayName
+                    )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                     }.value
+                    self.output = text
+                    self.outputProvenance = saved.provenance
                 }
             } catch is CancellationError {
                 self.error = nil
@@ -248,7 +386,11 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    private func receiveProgress(_ progress: PrivateAIModelDownloadProgress) { self.progress = progress }
+    private func receiveProgress(_ progress: PrivateAIModelDownloadProgress) {
+        self.progress = progress
+    }
 
-    func cancel() { self.operation?.cancel() }
+    func cancel() {
+        self.operation?.cancel()
+    }
 }

@@ -15,6 +15,78 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(SettingsBackupPayload.self, from: legacyData).showUpdatePopups)
     }
 
+    func testOnlyLaunchesRightAfterLoginCountAsSessionRestore() {
+        let login = Date(timeIntervalSinceReferenceDate: 1000)
+        func restored(_ offset: TimeInterval?) -> Bool {
+            LoginSessionLaunch.startedWithLoginSession(
+                processStart: offset.map(login.addingTimeInterval),
+                consoleLogin: login
+            )
+        }
+        XCTAssertTrue(restored(0))
+        XCTAssertTrue(restored(4), "macOS reopens apps seconds after login")
+        XCTAssertTrue(restored(LoginSessionLaunch.restoreWindow))
+        XCTAssertFalse(restored(LoginSessionLaunch.restoreWindow + 1), "opening the app later is a manual launch")
+        XCTAssertFalse(restored(3600))
+        XCTAssertFalse(restored(-1), "a start before the login record is not trusted")
+        XCTAssertFalse(restored(nil), "an unknown start time shows the window")
+        XCTAssertFalse(
+            LoginSessionLaunch.startedWithLoginSession(processStart: login, consoleLogin: nil),
+            "an unknown login time shows the window"
+        )
+    }
+
+    func testMainWindowIsRecognizedWhateverPageTitleItShows() {
+        func window(title: String, identifier: String?, style: NSWindow.StyleMask = [.titled]) -> NSWindow {
+            let window = NSWindow(contentRect: .zero, styleMask: style, backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            window.title = title
+            window.identifier = identifier.map { NSUserInterfaceItemIdentifier($0) }
+            return window
+        }
+        let delegate = AppDelegate()
+        XCTAssertTrue(delegate.isMainWindow(window(title: "Stats", identifier: "main-AppWindow-1")))
+        XCTAssertTrue(delegate.isMainWindow(window(title: "FluidVoice", identifier: nil)))
+        XCTAssertFalse(delegate.isMainWindow(window(title: "Stats", identifier: nil)), "another titled window is not the main window")
+        XCTAssertFalse(delegate.isMainWindow(window(title: "Stats", identifier: "main-AppWindow-1", style: [.borderless])))
+        let floating = window(title: "Stats", identifier: "main-AppWindow-1")
+        floating.level = .floating
+        XCTAssertFalse(delegate.isMainWindow(floating))
+    }
+
+    func testMenuBarReusesHiddenMainWindowAndExcludesOtherWindows() {
+        final class CandidateWindow: NSWindow {
+            var minimized = false
+            var keyEligible = true
+            override var isMiniaturized: Bool { self.minimized }
+            override var canBecomeKey: Bool { self.keyEligible }
+        }
+        let window = CandidateWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.identifier = NSUserInterfaceItemIdentifier("main-AppWindow-1")
+        window.title = "Stats"
+        window.alphaValue = 0
+        let manager = MenuBarManager()
+        XCTAssertTrue(manager.isFluidMainWindow(window), "a concealed page-titled window must be reused")
+        XCTAssertEqual(window.alphaValue, 0, "recognition must not reveal the window")
+        XCTAssertFalse(window.isVisible, "recognition must not order the window front")
+        window.title = "General"
+        XCTAssertTrue(manager.isFluidMainWindow(window))
+        window.identifier = nil
+        XCTAssertFalse(manager.isFluidMainWindow(window), "unrelated page-titled windows stay excluded")
+        window.title = "FluidVoice"
+        XCTAssertTrue(manager.isFluidMainWindow(window), "legacy hosted windows remain supported")
+        window.level = .floating
+        XCTAssertFalse(manager.isFluidMainWindow(window), "floating captions must stay excluded")
+        window.level = .normal
+        window.minimized = true
+        XCTAssertFalse(manager.isFluidMainWindow(window), "minimized windows keep the existing menu policy")
+        window.minimized = false
+        window.keyEligible = false
+        XCTAssertFalse(manager.isFluidMainWindow(window), "non-key windows stay excluded")
+        window.close()
+    }
+
     func testOnlyOlderCopiesAtTheSameLocationAreSuperseded() {
         typealias Instance = SupersededInstanceRetirement.Instance
         let launch = Date(timeIntervalSinceReferenceDate: 1000)

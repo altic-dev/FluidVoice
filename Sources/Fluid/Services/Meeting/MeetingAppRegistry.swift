@@ -39,6 +39,13 @@ nonisolated enum MeetingAppRegistry {
         "com.microsoft.edgemac.app.",
     ]
 
+    /// A browser web app such as Google Meet's runs inside its browser, which is the process that
+    /// actually holds the microphone. Nil for anything that is not such a web app.
+    static func parentBrowser(ofWebApp bundleIdentifier: String) -> String? {
+        guard let prefix = self.pwaBundlePrefixes.first(where: { bundleIdentifier.hasPrefix($0) }) else { return nil }
+        return String(prefix.dropLast(".app.".count))
+    }
+
     static func tier(forBundleIdentifier bundleIdentifier: String) -> MeetingDetectionTier? {
         if self.nativeBundleIdentifiers.contains(bundleIdentifier) {
             return .nativeTier1
@@ -58,6 +65,63 @@ nonisolated enum MeetingAppRegistry {
 
     static func isBrowserApp(bundleIdentifier: String) -> Bool {
         self.tier(forBundleIdentifier: bundleIdentifier) == .browserTier2
+    }
+
+    // MARK: - Source picker order
+
+    /// Call apps people record by hand that detection does not cover. They only shape the order
+    /// of the source pickers; nothing here is detected or prompted for.
+    static let otherCallAppBundleIdentifiers: [String] = [
+        "com.apple.FaceTime",
+        "com.tinyspeck.slackmacgap",
+        "com.hnc.Discord",
+        "net.whatsapp.WhatsApp",
+        "ru.keepcoder.Telegram",
+        "org.whispersystems.signal-desktop",
+        "com.skype.skype",
+    ]
+
+    private static let pickerCallAppOrder: [String] = [
+        "us.zoom.xos",
+        "com.microsoft.teams2",
+        "com.microsoft.teams",
+        "com.cisco.webexmeetingsapp",
+        "Cisco-Systems.Spark",
+    ] + otherCallAppBundleIdentifiers
+
+    private static let pickerBrowserOrder: [String] = [
+        "com.google.Chrome",
+        "com.apple.Safari",
+        "company.thebrowser.Browser",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+    ]
+
+    /// Where an app belongs among the usual meeting sources, lower first: call apps, then browser
+    /// web apps such as Google Meet's, then browsers. Nil for anything that is not a usual source.
+    static func pickerRank(forBundleIdentifier bundleIdentifier: String) -> Int? {
+        if let index = self.pickerCallAppOrder.firstIndex(of: bundleIdentifier) { return index }
+        if self.pwaBundlePrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) { return self.pickerCallAppOrder.count }
+        if let index = self.pickerBrowserOrder.firstIndex(of: bundleIdentifier) { return self.pickerCallAppOrder.count + 1 + index }
+        return nil
+    }
+
+    /// Splits a source list for a picker: the usual meeting sources first in a fixed order, then
+    /// everything else by name with background items (menu bar helpers, agents) at the very end.
+    static func pickerSections<Item>(
+        _ items: [Item],
+        bundleIdentifier: (Item) -> String,
+        name: (Item) -> String,
+        isBackgroundItem: (Item) -> Bool
+    ) -> (usual: [Item], others: [Item]) {
+        func byName(_ lhs: Item, _ rhs: Item) -> Bool {
+            name(lhs).localizedCaseInsensitiveCompare(name(rhs)) == .orderedAscending
+        }
+        let ranked = items.compactMap { item in self.pickerRank(forBundleIdentifier: bundleIdentifier(item)).map { (item, $0) } }
+        let usual = ranked.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : byName($0.0, $1.0) }.map(\.0)
+        let rest = items.filter { self.pickerRank(forBundleIdentifier: bundleIdentifier($0)) == nil }
+        let others = rest.filter { !isBackgroundItem($0) }.sorted(by: byName) + rest.filter(isBackgroundItem).sorted(by: byName)
+        return (usual, others)
     }
 
     private static let zoomMeetingTitles: Set<String> = [
