@@ -3380,6 +3380,40 @@ struct ContentView: View {
 
         self.appBench("typing_decision snapshotTarget=\(stopSnapshot != nil) external=\(shouldTypeExternally)")
 
+        if shouldDeliverOutputs, self.settings.textInsertionMode == .clipboardOnly {
+            let deliveryResult = await PasteDeliveryCoordinator.shared.deliverCopyOnly(
+                finalText,
+                isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
+            )
+            guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
+                saveCancelledSendOnlyHistory()
+                return
+            }
+            let didCopy = deliveryResult.wasDispatched
+            self.handleTypingDelivery(
+                didCopy ? .inserted : .insertionFailed,
+                pipelineID: pipelineID,
+                pipelineStartedAt: pipelineStartedAt,
+                textReadyAt: finalTextReadyAt,
+                shouldHideOverlay: didCopy && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide,
+                expectedOverlayLifecycleID: expectedOverlayLifecycleID
+            )
+            if case let .recoverableFailure(failure) = deliveryResult {
+                self.showStoppedDictationDeliveryFailure(failure, transcript: finalText, snapshot: stopSnapshot)
+            } else if !shouldShowAIProcessingFailure, !stopOverlay.didRequestHide {
+                self.hideOverlayAfterOutput()
+            }
+            if shouldShowAIProcessingFailure {
+                self.pendingAIReprocessText = spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText
+                NotchContentState.shared.showAIProcessingFailure()
+                self.menuBarManager.finishProcessingKeepingOverlayVisible()
+                if let aiFallbackNotificationError {
+                    NotificationService.showAIProcessingFallback(error: aiFallbackNotificationError)
+                }
+            }
+            return
+        }
+
         // A sidebar search field that was already focused when recording began gets
         // the text through its field editor, which also fires change notifications.
         // So does an in-app editor that opted in with `DictationTextTarget`.

@@ -42,15 +42,22 @@ final class RecordingVolumeDucking {
 
     func restore() {
         guard let ownership = self.ownership else { return }
-        self.ownership = nil
+        var remainingChannels: [Channel] = []
         // Restore only the captured device and preserve any manual volume change.
         for channel in ownership.channels {
-            guard let current = Self.volume(device: ownership.device, element: channel.element),
-                  abs(current - channel.ducked) < 0.005 else { continue }
+            guard let current = Self.volume(device: ownership.device, element: channel.element) else {
+                remainingChannels.append(channel)
+                continue
+            }
+            guard abs(current - channel.ducked) < 0.005 else { continue }
             if !Self.setVolume(channel.original, device: ownership.device, element: channel.element) {
                 DebugLogger.shared.error("Unable to restore recording output volume", source: "RecordingVolumeDucking")
+                remainingChannels.append(channel)
             }
         }
+        self.ownership = remainingChannels.isEmpty
+            ? nil
+            : Ownership(sessionID: ownership.sessionID, device: ownership.device, channels: remainingChannels)
     }
 
     private static func channels(device: AudioObjectID, target: Float) -> [Channel] {

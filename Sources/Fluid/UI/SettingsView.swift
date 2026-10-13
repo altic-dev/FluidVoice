@@ -1298,6 +1298,7 @@ struct SettingsView: View {
                                     }
                                 }
                             }
+                            .settingsSearchTarget(.duckAudioDuringRecording)
                             .disabled(mediaPauseOverridesDucking)
 
                             self.microphoneQualityGuidance
