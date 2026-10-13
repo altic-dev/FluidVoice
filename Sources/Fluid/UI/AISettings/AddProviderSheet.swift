@@ -62,7 +62,12 @@ struct AddProviderSheet<Logo: View>: View {
                                             self.logo(provider.id, provider.name).accessibilityHidden(true)
                                             VStack(alignment: .leading, spacing: 5) {
                                                 Text(provider.name).font(self.theme.typography.bodyStrong)
-                                                Text(["ollama", "lmstudio"].contains(provider.id) ? "Local connection" : "Connect with an API key")
+                                                Text(
+                                                    OfficialProviderAuth.isOfficialProvider(provider.id)
+                                                        ? "Connect with a provider login"
+                                                        : ["ollama", "lmstudio"].contains(provider.id)
+                                                        ? "Local connection" : "Connect with an API key"
+                                                )
                                                     .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                             }
                                             Spacer()
@@ -117,8 +122,13 @@ struct AddProviderSheet<Logo: View>: View {
                             self.field("Name") { TextField("Custom Provider", text: self.$draft.name) }
                             self.field("Server URL") { TextField("https://your-server.com/v1", text: self.$draft.baseURL) }
                         }
-                        self.field(self.draft.requiresAPIKey ? "API key" : "API key · Optional") {
-                            SecureField("Enter API key", text: self.$draft.apiKey)
+                        if OfficialProviderAuth.isOfficialProvider(self.draft.providerID) {
+                            Text("Add this provider, then use Manage to sign in.")
+                                .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
+                        } else {
+                            self.field(self.draft.requiresAPIKey ? "API key" : "API key · Optional") {
+                                SecureField("Enter API key", text: self.$draft.apiKey)
+                            }
                         }
                         if let website = ModelRepository.shared.providerWebsiteURL(for: self.draft.providerID), let url = URL(string: website.url) {
                             Link(destination: url) { Label(website.label, systemImage: "arrow.up.right").font(self.theme.typography.caption) }

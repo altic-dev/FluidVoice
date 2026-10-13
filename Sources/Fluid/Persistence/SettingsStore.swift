@@ -4380,9 +4380,12 @@ final class SettingsStore: ObservableObject {
 
         let baseURL = self.providerBaseURLForVerification(for: trimmed)
         let apiKey = (self.getAPIKey(for: trimmed) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard ModelRepository.shared.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
+        guard ModelRepository.shared.isLocalEndpoint(baseURL) ||
+            OfficialProviderAuth.isOfficialProvider(trimmed) ||
+            !apiKey.isEmpty
+        else { return false }
 
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == stored
+        return self.providerFingerprint(providerID: trimmed, baseURL: baseURL, apiKey: apiKey) == stored
     }
 
     private func providerBaseURLForVerification(for providerID: String) -> String {
@@ -4397,14 +4400,12 @@ final class SettingsStore: ObservableObject {
         return ""
     }
 
-    private func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBaseURL.isEmpty else { return nil }
-
-        let input = "\(trimmedBaseURL)|\(trimmedAPIKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func providerFingerprint(providerID: String, baseURL: String, apiKey: String) -> String? {
+        OfficialProviderAuth.configurationFingerprint(
+            providerID: providerID,
+            baseURL: baseURL,
+            apiKey: apiKey
+        )
     }
 
     private func syncLinkedProviderSelections(to providerID: String) {
