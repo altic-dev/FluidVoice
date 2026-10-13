@@ -27,6 +27,7 @@
 		BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */; };
 		F5E000000000000000000021 /* FluidServeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000020 /* FluidServeTests.swift */; };
 		BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */; };
+		B1016A0000000000000000A2 /* LLMClientIdleConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */; };
 		AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */; };
@@ -219,6 +220,7 @@
 		BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryProviderTests.swift; sourceTree = "<group>"; };
 		F5E000000000000000000020 /* FluidServeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidServeTests.swift; sourceTree = "<group>"; };
 		BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTemperatureSupportTests.swift; sourceTree = "<group>"; };
+		B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientIdleConnectionTests.swift; sourceTree = "<group>"; };
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
@@ -500,6 +502,7 @@
 				BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */,
 				F5E000000000000000000020 /* FluidServeTests.swift */,
 				BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */,
+				B1016A0000000000000000A1 /* LLMClientIdleConnectionTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
@@ -903,6 +906,7 @@
 				BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */,
 				F5E000000000000000000021 /* FluidServeTests.swift in Sources */,
 				BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */,
+				B1016A0000000000000000A2 /* LLMClientIdleConnectionTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
