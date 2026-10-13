@@ -1135,7 +1135,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = macosx;
-				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_COMPILATION_MODE = singlefile;
 				COMPILER_INDEX_STORE_ENABLE = NO;
 			};
 			name = Release;
@@ -1248,6 +1248,7 @@
 				SWIFT_VERSION = 5.0;
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
 				COMPILER_INDEX_STORE_ENABLE = NO;
+				SWIFT_COMPILATION_MODE = singlefile;
 			};
 			name = Release;
 		};
