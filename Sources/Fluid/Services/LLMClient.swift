@@ -90,12 +90,49 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Opaque reasoning state required to continue stateless Responses API tool loops.
+        let responsesContinuationItems: [ResponsesContinuationItem]
+        /// Credential scope that produced opaque continuation state.
+        let responsesContinuationScope: String?
+
+        init(
+            thinking: String?,
+            content: String,
+            toolCalls: [ToolCall],
+            responsesContinuationItems: [ResponsesContinuationItem] = [],
+            responsesContinuationScope: String? = nil
+        ) {
+            self.thinking = thinking
+            self.content = content
+            self.toolCalls = toolCalls
+            self.responsesContinuationItems = responsesContinuationItems
+            self.responsesContinuationScope = responsesContinuationScope
+        }
+
+        var hasUsableVerificationOutput: Bool {
+            !self.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !self.toolCalls.isEmpty
+        }
     }
+
+    typealias ResponsesContinuationItem = LLMResponsesContinuationItem
 
     struct ToolCall: @unchecked Sendable {
         let id: String
         let name: String
         let arguments: [String: Any]
+        let thoughtSignature: String?
+
+        init(
+            id: String,
+            name: String,
+            arguments: [String: Any],
+            thoughtSignature: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+            self.thoughtSignature = thoughtSignature
+        }
 
         /// Get a string argument by key
         func getString(_ key: String) -> String? {
@@ -116,14 +153,23 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var arguments: String = ""
     }
 
+    private struct AnthropicToolCallAccumulator {
+        var id: String?
+        var name: String?
+        var arguments: String = ""
+    }
+
     // MARK: - Configuration
 
     struct Config: @unchecked Sendable {
+        /// Provider identity is required for non-OpenAI wire protocols and
+        /// first-party subscription logins. Empty preserves legacy behavior.
+        let providerID: String
         let messages: [[String: Any]]
         let model: String
         let baseURL: String
         let apiKey: String
-        let streaming: Bool
+        var streaming: Bool
         let tools: [[String: Any]]
         let temperature: Double?
 
@@ -136,6 +182,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         /// Optional dictation pipeline correlation for bounded latency diagnostics.
         let benchmarkID: String?
+
+        /// Only continuation items from this credential scope may be replayed.
+        var responsesContinuationScope: String?
 
         // Retry configuration
         var maxRetries: Int = 3
@@ -152,6 +201,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var onToolCallStart: (@Sendable (String) -> Void)?
 
         init(
+            providerID: String = "",
             messages: [[String: Any]],
             model: String,
             baseURL: String,
@@ -161,8 +211,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
             temperature: Double? = nil,
             maxTokens: Int? = nil,
             extraParameters: [String: Any] = [:],
-            benchmarkID: String? = nil
+            benchmarkID: String? = nil,
+            responsesContinuationScope: String? = nil
         ) {
+            self.providerID = providerID
             self.messages = messages
             self.model = model
             self.baseURL = baseURL
@@ -173,6 +225,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             self.maxTokens = maxTokens
             self.extraParameters = extraParameters
             self.benchmarkID = benchmarkID
+            self.responsesContinuationScope = responsesContinuationScope
         }
     }
 
@@ -183,7 +236,29 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Handles thinking token extraction, tool call parsing, and retries.
     @concurrent func call(_ config: Config) async throws -> Response {
         self.benchmark(config, "call_enter")
-        var request = try buildRequest(config)
+        let officialSession: OfficialProviderAuth.Session?
+        if OfficialProviderAuth.isOfficialProvider(config.providerID) {
+            officialSession = try await OfficialProviderAuth.resolve(
+                providerID: config.providerID,
+                session: self.session
+            )
+        } else {
+            officialSession = nil
+        }
+        var effectiveConfig = config
+        effectiveConfig.streaming = Self.effectiveStreaming(
+            providerID: config.providerID,
+            requested: config.streaming
+        )
+        let continuationScope = OfficialProviderAuth.responsesContinuationScope(
+            providerID: config.providerID,
+            baseURL: config.baseURL,
+            apiKey: config.apiKey,
+            session: officialSession
+        )
+        effectiveConfig.responsesContinuationScope = continuationScope
+        var request = try self.buildRequest(effectiveConfig, officialSession: officialSession)
+        let wireProtocol = officialSession?.wireProtocol
         self.benchmark(config, "request_built bodyBytes=\(request.httpBody?.count ?? 0)")
 
         // Apply timeout to the request itself
@@ -195,28 +270,132 @@ final nonisolated class LLMClient: @unchecked Sendable {
         // keep the caller suspended until the full timeout elapses, which is the exact stall
         // we want to eliminate for overlay responsiveness.
         do {
-            let response = try await self.executeWithRetry(request: request, config: config)
+            let response = try await self.executeWithRetry(
+                request: request,
+                config: effectiveConfig,
+                wireProtocol: wireProtocol
+            )
             self.benchmark(config, "call_return")
-            return response
+            guard !response.responsesContinuationItems.isEmpty || !response.toolCalls.isEmpty else { return response }
+            return Response(
+                thinking: response.thinking,
+                content: response.content,
+                toolCalls: response.toolCalls,
+                responsesContinuationItems: response.responsesContinuationItems,
+                responsesContinuationScope: continuationScope
+            )
         } catch {
             self.benchmark(config, "call_fail")
             throw error
         }
     }
 
+    static func effectiveStreaming(providerID: String, requested: Bool) -> Bool {
+        requested || OfficialProviderAuth.requiresStreamingRequests(providerID)
+    }
+
+    static func responsesStreamingTerminalError(from event: [String: Any]) -> LLMError? {
+        guard let type = event["type"] as? String,
+              ["error", "response.failed", "response.incomplete"].contains(type)
+        else { return nil }
+
+        let response = event["response"] as? [String: Any]
+        let responseError = response?["error"] as? [String: Any]
+        let incompleteDetails = response?["incomplete_details"] as? [String: Any]
+        let detail = [
+            event["message"] as? String,
+            responseError?["message"] as? String,
+            incompleteDetails?["reason"] as? String,
+            response?["status"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? type
+        return .invalidRequest("Responses API stream failed: \(detail)")
+    }
+
+    static func responsesNonStreamingTerminalError(from response: [String: Any]) -> LLMError? {
+        let status = response["status"] as? String
+        let providerError = response["error"] as? [String: Any]
+        guard providerError != nil || (status != nil && status != "completed") else { return nil }
+
+        let incompleteDetails = response["incomplete_details"] as? [String: Any]
+        let detail = [
+            providerError?["message"] as? String,
+            incompleteDetails?["reason"] as? String,
+            status,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Responses API error"
+        return .invalidRequest("Responses API request failed: \(detail)")
+    }
+
+    static func anthropicStreamingError(from event: [String: Any]) -> LLMError? {
+        guard event["type"] as? String == "error" else { return nil }
+        let providerError = event["error"] as? [String: Any]
+        let detail = [
+            providerError?["message"] as? String,
+            event["message"] as? String,
+            providerError?["type"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Anthropic streaming error"
+        return .invalidRequest("Anthropic stream failed: \(detail)")
+    }
+
+    private static func geminiCandidateCompletion(_ root: [String: Any]) throws -> [Int: Bool] {
+        let payload = root["response"] as? [String: Any] ?? root
+        let candidates = payload["candidates"] as? [[String: Any]] ?? []
+        var states: [Int: Bool] = [:]
+        for (offset, candidate) in candidates.enumerated() {
+            let index = candidate["index"] as? Int ?? offset
+            guard let reason = candidate["finishReason"] as? String else {
+                states[index] = false
+                continue
+            }
+            guard reason == "STOP" else { throw LLMError.invalidResponse }
+            states[index] = true
+        }
+        return states
+    }
+
+    static func geminiStreamingError(from root: [String: Any]) -> LLMError? {
+        guard let providerError = root["error"] as? [String: Any] else { return nil }
+        let detail = [
+            providerError["message"] as? String,
+            providerError["status"] as? String,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? "unknown Gemini streaming error"
+        return .invalidRequest("Gemini stream failed: \(detail)")
+    }
+
     /// Execute request with retry logic (extracted for timeout wrapper)
-    private func executeWithRetry(request: URLRequest, config: Config) async throws -> Response {
+    private func executeWithRetry(
+        request: URLRequest,
+        config: Config,
+        wireProtocol: OfficialProviderAuth.WireProtocol?
+    ) async throws -> Response {
         var lastError: Error?
         for attempt in 1...config.maxRetries {
             do {
                 self.benchmark(config, "attempt_start attempt=\(attempt)")
                 if config.streaming {
-                    if self.isResponsesRequest(request) {
+                    if wireProtocol == .anthropicMessages {
+                        return try await self.processAnthropicStreaming(request: request, config: config)
+                    }
+                    if wireProtocol == .geminiCodeAssist {
+                        return try await self.processGeminiStreaming(request: request, config: config)
+                    }
+                    if wireProtocol == .responses || self.isResponsesRequest(request) {
                         return try await self.processResponsesStreaming(request: request, config: config)
                     }
                     return try await self.processStreaming(request: request, config: config)
                 } else {
-                    return try await self.processNonStreaming(request: request, config: config)
+                    return try await self.processNonStreaming(
+                        request: request,
+                        config: config,
+                        wireProtocol: wireProtocol
+                    )
                 }
             } catch let error as URLError where self.isRetryableError(error) {
                 lastError = LLMError.networkError(error)
@@ -241,22 +420,46 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Request Building
 
-    func buildRequest(_ config: Config) throws -> URLRequest {
+    func buildRequest(
+        _ config: Config,
+        officialSession: OfficialProviderAuth.Session? = nil
+    ) throws -> URLRequest {
         // Build endpoint URL
-        let baseURL = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = (officialSession?.baseURL ?? config.baseURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !baseURL.isEmpty else {
             DebugLogger.shared.error("LLMClient: Missing base URL; refusing to fall back to OpenAI", source: "LLMClient")
             throw LLMError.invalidURL
         }
 
-        let useResponsesAPI = Self.shouldUseResponsesAPI(baseURL: baseURL, model: config.model)
-        let endpoint = Self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
+        let wireProtocol = officialSession?.wireProtocol
+        let useResponsesAPI = wireProtocol == .responses || Self.shouldUseResponsesAPI(baseURL: baseURL, model: config.model)
+        let endpoint: String
+        switch wireProtocol {
+        case .anthropicMessages:
+            endpoint = baseURL.contains("/messages") ? baseURL : Self.appendingPath("messages", to: baseURL)
+        case .geminiCodeAssist:
+            let operation = config.streaming ? ":streamGenerateContent?alt=sse" : ":generateContent"
+            endpoint = baseURL.contains(":generateContent") || baseURL.contains(":streamGenerateContent")
+                ? baseURL
+                : "\(baseURL)\(operation)"
+        case .responses, .none:
+            endpoint = Self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
+        }
 
         guard let url = URL(string: endpoint) else {
             throw LLMError.invalidURL
         }
 
-        let body = useResponsesAPI ? self.buildResponsesBody(config) : self.buildChatCompletionsBody(config)
+        let body: [String: Any]
+        switch wireProtocol {
+        case .anthropicMessages:
+            body = self.buildAnthropicMessagesBody(config)
+        case .geminiCodeAssist:
+            body = self.buildGeminiCodeAssistBody(config, project: officialSession?.project ?? "")
+        case .responses, .none:
+            body = useResponsesAPI ? self.buildResponsesBody(config) : self.buildChatCompletionsBody(config)
+        }
 
         // Serialize to JSON
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body, options: []) else {
@@ -269,8 +472,12 @@ final nonisolated class LLMClient: @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Send Authorization whenever a key exists; some localhost endpoints still require auth.
-        if !config.apiKey.isEmpty {
-            request.addValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        let accessToken = officialSession?.accessToken ?? config.apiKey
+        if !accessToken.isEmpty {
+            request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in officialSession?.headers ?? [:] {
+            request.setValue(value, forHTTPHeaderField: name)
         }
 
         request.httpBody = jsonData
@@ -388,11 +595,32 @@ final nonisolated class LLMClient: @unchecked Sendable {
     }
 
     func buildResponsesBody(_ config: Config) -> [String: Any] {
+        let usesCodexSubscription = config.providerID == OfficialProviderAuth.codexProviderID
+        let systemInstructions = config.messages.compactMap { message -> String? in
+            guard message["role"] as? String == "system",
+                  let content = message["content"] as? String,
+                  !content.isEmpty
+            else { return nil }
+            return content
+        }.joined(separator: "\n\n")
         var body: [String: Any] = [
             "model": config.model,
-            "input": self.responsesInput(from: config.messages),
+            "input": self.responsesInput(
+                from: config.messages,
+                excludingSystemMessages: usesCodexSubscription,
+                expectedContinuationScope: config.responsesContinuationScope
+            ),
             "store": false,
         ]
+
+        if usesCodexSubscription {
+            if !systemInstructions.isEmpty {
+                body["instructions"] = systemInstructions
+            }
+            body["tool_choice"] = "auto"
+            body["parallel_tool_calls"] = false
+            body["include"] = ["reasoning.encrypted_content"]
+        }
 
         // Always send stream explicitly — providers like Ollama treat an absent key as true
         body["stream"] = config.streaming
@@ -400,9 +628,13 @@ final nonisolated class LLMClient: @unchecked Sendable {
         if !config.tools.isEmpty {
             body["tools"] = self.responsesTools(from: config.tools)
             body["tool_choice"] = "auto"
+            body["parallel_tool_calls"] = false
         }
 
-        if let tokens = config.maxTokens {
+        // The ChatGPT Codex subscription backend follows the official Codex
+        // request contract, which does not accept `max_output_tokens`.
+        // Keep the standard Responses API behavior for API-key providers.
+        if let tokens = config.maxTokens, !usesCodexSubscription {
             body["max_output_tokens"] = tokens
         }
 
@@ -419,6 +651,228 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         return body
+    }
+
+    func buildAnthropicMessagesBody(_ config: Config) -> [String: Any] {
+        var systemParts: [String] = []
+        var messages: [[String: Any]] = []
+
+        func appendMessage(role: String, blocks: [[String: Any]]) {
+            guard !blocks.isEmpty else { return }
+            if let lastIndex = messages.indices.last,
+               messages[lastIndex]["role"] as? String == role,
+               var existing = messages[lastIndex]["content"] as? [[String: Any]]
+            {
+                existing.append(contentsOf: blocks)
+                messages[lastIndex]["content"] = existing
+            } else {
+                messages.append(["role": role, "content": blocks])
+            }
+        }
+
+        for message in config.messages {
+            let role = message["role"] as? String ?? "user"
+            let content = message["content"] as? String ?? ""
+            if role == "system" {
+                if !content.isEmpty {
+                    systemParts.append(content)
+                }
+                continue
+            }
+            if role == "tool" {
+                appendMessage(role: "user", blocks: [[
+                    "type": "tool_result",
+                    "tool_use_id": message["tool_call_id"] as? String ?? "call_unknown",
+                    "content": content,
+                ]])
+                continue
+            }
+
+            var blocks: [[String: Any]] = []
+            if !content.isEmpty {
+                blocks.append(["type": "text", "text": content])
+            }
+            if let toolCalls = message["tool_calls"] as? [[String: Any]] {
+                for toolCall in toolCalls {
+                    guard let function = toolCall["function"] as? [String: Any],
+                          let name = function["name"] as? String
+                    else { continue }
+                    let argumentsString = function["arguments"] as? String ?? "{}"
+                    let input = argumentsString.data(using: .utf8)
+                        .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+                    blocks.append([
+                        "type": "tool_use",
+                        "id": toolCall["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
+                        "name": name,
+                        "input": input,
+                    ])
+                }
+            }
+            appendMessage(role: role == "assistant" ? "assistant" : "user", blocks: blocks)
+        }
+
+        var body: [String: Any] = [
+            "model": config.model,
+            "messages": messages,
+            "max_tokens": config.maxTokens ?? 4096,
+            "stream": config.streaming,
+        ]
+        if !systemParts.isEmpty {
+            body["system"] = systemParts.joined(separator: "\n\n")
+        }
+        if let temperature = config.temperature {
+            body["temperature"] = temperature
+        }
+        if !config.tools.isEmpty {
+            var convertedTools: [[String: Any]] = []
+            for tool in config.tools {
+                guard tool["type"] as? String == "function",
+                      let function = tool["function"] as? [String: Any],
+                      let name = function["name"] as? String,
+                      let parameters = function["parameters"] as? [String: Any]
+                else { continue }
+                var converted: [String: Any] = ["name": name, "input_schema": parameters]
+                if let description = function["description"] as? String {
+                    converted["description"] = description
+                }
+                convertedTools.append(converted)
+            }
+            body["tools"] = convertedTools
+        }
+        for (name, value) in config.extraParameters where name != "reasoning_effort" {
+            body[name] = value
+        }
+        // Command Mode consumes one tool result per turn.
+        if let tools = body["tools"] as? [[String: Any]], !tools.isEmpty {
+            body["tool_choice"] = ["type": "auto", "disable_parallel_tool_use": true]
+        }
+        return body
+    }
+
+    func buildGeminiCodeAssistBody(_ config: Config, project: String) -> [String: Any] {
+        let toolNames = self.geminiScopedToolNames(config)
+        let conversation = self.geminiConversation(config.messages, toolNamesByCallID: toolNames)
+        var request: [String: Any] = ["contents": conversation.contents, "session_id": UUID().uuidString.lowercased()]
+        if !conversation.instructions.isEmpty {
+            request["systemInstruction"] = ["parts": [["text": conversation.instructions.joined(separator: "\n\n")]]]
+        }
+        let generation = self.geminiGenerationConfiguration(config)
+        if !generation.isEmpty { request["generationConfig"] = generation }
+        let declarations = self.geminiToolDeclarations(config.tools)
+        if !declarations.isEmpty { request["tools"] = [["functionDeclarations": declarations]] }
+        return ["model": config.model, "project": project,
+                "user_prompt_id": UUID().uuidString.lowercased(), "request": request]
+    }
+
+    private func geminiScopedToolNames(_ config: Config) -> [String: String] {
+        var toolNamesByCallID: [String: String] = [:]
+        for message in config.messages {
+            guard let expectedScope = config.responsesContinuationScope,
+                  message["tool_continuation_scope"] as? String == expectedScope
+            else { continue }
+            guard let toolCalls = message["tool_calls"] as? [[String: Any]] else { continue }
+            for toolCall in toolCalls {
+                guard let callID = toolCall["id"] as? String,
+                      let function = toolCall["function"] as? [String: Any],
+                      let name = function["name"] as? String
+                else { continue }
+                toolNamesByCallID[callID] = name
+            }
+        }
+
+        return toolNamesByCallID
+    }
+
+    private func geminiConversation(_ messages: [[String: Any]], toolNamesByCallID: [String: String])
+        -> (instructions: [String], contents: [[String: Any]]) {
+        var instructions: [String] = []
+        var contents: [[String: Any]] = []
+        for message in messages {
+            if message["role"] as? String == "system" {
+                if let text = message["content"] as? String, !text.isEmpty { instructions.append(text) }
+            } else {
+                let content = self.geminiContent(message, toolNamesByCallID: toolNamesByCallID)
+                self.appendGeminiContent(role: content.role, parts: content.parts, to: &contents)
+            }
+        }
+        return (instructions, contents)
+    }
+
+    private func appendGeminiContent(role: String, parts: [[String: Any]], to contents: inout [[String: Any]]) {
+        guard !parts.isEmpty else { return }
+        if let index = contents.indices.last, contents[index]["role"] as? String == role,
+           var existing = contents[index]["parts"] as? [[String: Any]] {
+            existing.append(contentsOf: parts)
+            contents[index]["parts"] = existing
+        } else {
+            contents.append(["role": role, "parts": parts])
+        }
+    }
+
+    private func geminiContent(_ message: [String: Any], toolNamesByCallID: [String: String])
+        -> (role: String, parts: [[String: Any]]) {
+        let role = message["role"] as? String ?? "user"
+        if role == "tool" {
+            let callID = message["tool_call_id"] as? String ?? "call_unknown"
+            guard let name = toolNamesByCallID[callID] else { return ("user", []) }
+            return ("user", [["functionResponse": [
+                "name": name, "response": ["result": message["content"] as? String ?? ""],
+            ]]])
+        }
+        return (role == "assistant" ? "model" : "user",
+                self.geminiMessageParts(message, toolNamesByCallID: toolNamesByCallID))
+    }
+
+    private func geminiMessageParts(_ message: [String: Any], toolNamesByCallID: [String: String]) -> [[String: Any]] {
+        var parts: [[String: Any]] = []
+        if let content = message["content"] as? String, !content.isEmpty { parts.append(["text": content]) }
+        for call in message["tool_calls"] as? [[String: Any]] ?? [] {
+            parts.append(contentsOf: self.geminiToolCallParts(call, toolNamesByCallID: toolNamesByCallID))
+        }
+        return parts
+    }
+
+    private func geminiToolCallParts(_ call: [String: Any], toolNamesByCallID: [String: String]) -> [[String: Any]] {
+        guard let callID = call["id"] as? String, toolNamesByCallID[callID] != nil,
+              let function = call["function"] as? [String: Any], let name = function["name"] as? String
+        else { return [] }
+        let argumentsString = function["arguments"] as? String ?? "{}"
+        let arguments = argumentsString.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        var part: [String: Any] = ["functionCall": ["name": name, "args": arguments]]
+        if let signature = call["thought_signature"] as? String { part["thoughtSignature"] = signature }
+        return [part]
+    }
+
+    private func geminiGenerationConfiguration(_ config: Config) -> [String: Any] {
+        var generationConfig: [String: Any] = [:]
+        if let temperature = config.temperature {
+            generationConfig["temperature"] = temperature
+        }
+        if let maxTokens = config.maxTokens {
+            generationConfig["maxOutputTokens"] = maxTokens
+        }
+        for (name, value) in config.extraParameters where name != "reasoning_effort" {
+            generationConfig[name] = value
+        }
+        return generationConfig
+    }
+
+    private func geminiToolDeclarations(_ tools: [[String: Any]]) -> [[String: Any]] {
+        var declarations: [[String: Any]] = []
+        for tool in tools {
+            guard tool["type"] as? String == "function",
+                  let function = tool["function"] as? [String: Any],
+                  let name = function["name"] as? String,
+                  let parameters = function["parameters"] as? [String: Any]
+            else { continue }
+            var declaration: [String: Any] = ["name": name, "parameters": parameters]
+            if let description = function["description"] as? String {
+                declaration["description"] = description
+            }
+            declarations.append(declaration)
+        }
+        return declarations
     }
 
     private func addResponsesExtraParameter(name: String, value: Any, to body: inout [String: Any]) {
@@ -454,11 +908,25 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return tools
     }
 
-    private func responsesInput(from messages: [[String: Any]]) -> [[String: Any]] {
+    private func responsesInput(
+        from messages: [[String: Any]],
+        excludingSystemMessages: Bool = false,
+        expectedContinuationScope: String? = nil
+    ) -> [[String: Any]] {
         var input: [[String: Any]] = []
 
         for message in messages {
             let role = message["role"] as? String ?? "user"
+            if excludingSystemMessages, role == "system" {
+                continue
+            }
+
+            if let expectedContinuationScope,
+               message["responses_continuation_scope"] as? String == expectedContinuationScope,
+               let continuationItems = message["responses_continuation_items"] as? [[String: Any]]
+            {
+                input.append(contentsOf: continuationItems)
+            }
 
             if role == "tool" {
                 input.append([
@@ -496,7 +964,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Non-Streaming Response
 
-    private func processNonStreaming(request: URLRequest, config: Config) async throws -> Response {
+    func processNonStreaming(
+        request: URLRequest,
+        config: Config,
+        wireProtocol: OfficialProviderAuth.WireProtocol?
+    ) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
         let (data, response) = try await self.session.data(for: request)
@@ -515,7 +987,14 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         let parsed: Response
-        if self.isResponsesRequest(request) {
+        if wireProtocol == .anthropicMessages {
+            parsed = try self.parseAnthropicResponse(json)
+        } else if wireProtocol == .geminiCodeAssist {
+            parsed = try self.parseGeminiResponse(json)
+        } else if wireProtocol == .responses || self.isResponsesRequest(request) {
+            if let terminalError = Self.responsesNonStreamingTerminalError(from: json) {
+                throw terminalError
+            }
             parsed = try self.parseResponsesResponse(json)
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
@@ -528,7 +1007,185 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return parsed
     }
 
-    private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
+    func processAnthropicStreaming(request: URLRequest, config: Config) async throws -> Response {
+        let (bytes, response) = try await self.session.bytes(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            throw LLMError.httpError(http.statusCode, String(data: errorData, encoding: .utf8) ?? "Unknown error")
+        }
+
+        var content: [String] = []
+        var thinking: [String] = []
+        var toolCalls: [Int: AnthropicToolCallAccumulator] = [:]
+        var isThinking = false
+        var didComplete = false
+
+        for try await rawLine in bytes.lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("data:") else { continue }
+            let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            guard let data = jsonString.data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = event["type"] as? String
+            else { continue }
+
+            if let streamError = Self.anthropicStreamingError(from: event) {
+                throw streamError
+            }
+
+            let index = event["index"] as? Int ?? 0
+            switch type {
+            case "message_stop":
+                didComplete = true
+            case "message_delta":
+                if let delta = event["delta"] as? [String: Any], delta["stop_reason"] as? String == "max_tokens" {
+                    throw LLMError.invalidResponse
+                }
+            case "content_block_start":
+                guard let block = event["content_block"] as? [String: Any] else { continue }
+                switch block["type"] as? String {
+                case "tool_use":
+                    var call = toolCalls[index] ?? AnthropicToolCallAccumulator()
+                    call.id = block["id"] as? String
+                    call.name = block["name"] as? String
+                    if let input = block["input"] as? [String: Any], !input.isEmpty,
+                       let inputData = try? JSONSerialization.data(withJSONObject: input),
+                       let inputString = String(data: inputData, encoding: .utf8)
+                    {
+                        call.arguments = inputString
+                    }
+                    toolCalls[index] = call
+                    if let name = call.name {
+                        config.onToolCallStart?(name)
+                    }
+                case "thinking":
+                    if !isThinking {
+                        config.onThinkingStart?()
+                    }
+                    isThinking = true
+                default:
+                    break
+                }
+            case "content_block_delta":
+                guard let delta = event["delta"] as? [String: Any] else { continue }
+                switch delta["type"] as? String {
+                case "text_delta":
+                    if isThinking {
+                        isThinking = false
+                        config.onThinkingEnd?()
+                    }
+                    if let text = delta["text"] as? String {
+                        content.append(text)
+                        config.onContentChunk?(text)
+                    }
+                case "thinking_delta":
+                    if !isThinking {
+                        config.onThinkingStart?()
+                    }
+                    isThinking = true
+                    if let text = delta["thinking"] as? String {
+                        thinking.append(text)
+                        config.onThinkingChunk?(text)
+                    }
+                case "input_json_delta":
+                    var call = toolCalls[index] ?? AnthropicToolCallAccumulator()
+                    call.arguments += delta["partial_json"] as? String ?? ""
+                    toolCalls[index] = call
+                default:
+                    break
+                }
+            default:
+                continue
+            }
+        }
+        if isThinking {
+            config.onThinkingEnd?()
+        }
+
+        guard didComplete else { throw LLMError.invalidResponse }
+        let parsedTools = try toolCalls.keys.sorted().map { index -> ToolCall in
+            guard let call = toolCalls[index], let name = call.name else { throw LLMError.invalidResponse }
+            let argumentString = call.arguments.isEmpty ? "{}" : call.arguments
+            guard let data = argumentString.data(using: .utf8),
+                  let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { throw LLMError.invalidResponse }
+            return ToolCall(
+                id: call.id ?? "call_\(UUID().uuidString.prefix(8))",
+                name: name,
+                arguments: arguments
+            )
+        }
+        let thinkingText = thinking.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return Response(
+            thinking: thinkingText.isEmpty ? nil : thinkingText,
+            content: content.joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            toolCalls: parsedTools
+        )
+    }
+
+    func processGeminiStreaming(request: URLRequest, config: Config) async throws -> Response {
+        let (bytes, response) = try await self.session.bytes(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            throw LLMError.httpError(http.statusCode, String(data: errorData, encoding: .utf8) ?? "Unknown error")
+        }
+
+        var content: [String] = []
+        var thinking: [String] = []
+        var tools: [ToolCall] = []
+        var reportedThinking = false
+        var completionByCandidate: [Int: Bool] = [:]
+
+        for try await rawLine in bytes.lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("data:") else { continue }
+            let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            guard let data = jsonString.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            if let streamError = Self.geminiStreamingError(from: root) {
+                throw streamError
+            }
+
+            completionByCandidate.merge(try Self.geminiCandidateCompletion(root)) { $0 || $1 }
+            let parsed = self.geminiParts(from: root)
+            for text in parsed.content {
+                content.append(text)
+                config.onContentChunk?(text)
+            }
+            for text in parsed.thinking {
+                if !reportedThinking {
+                    config.onThinkingStart?()
+                }
+                reportedThinking = true
+                thinking.append(text)
+                config.onThinkingChunk?(text)
+            }
+            for tool in parsed.toolCalls {
+                tools.append(tool)
+                config.onToolCallStart?(tool.name)
+            }
+        }
+        if reportedThinking {
+            config.onThinkingEnd?()
+        }
+        guard !completionByCandidate.isEmpty, completionByCandidate.values.allSatisfy({ $0 }) else { throw LLMError.invalidResponse }
+        let thinkingText = thinking.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return Response(
+            thinking: thinkingText.isEmpty ? nil : thinkingText,
+            content: content.joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            toolCalls: tools
+        )
+    }
+
+    func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
         let (bytes, response) = try await self.session.bytes(for: request)
@@ -546,6 +1203,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var contentBuffer: [String] = []
         var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
         var didLogFirstContent = false
+        var didComplete = false
+        var continuationItemsByIndex: [Int: ResponsesContinuationItem] = [:]
 
         for try await rawLine in bytes.lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -566,7 +1225,15 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 continue
             }
 
+            if let terminalError = Self.responsesStreamingTerminalError(from: event) {
+                throw terminalError
+            }
+
             switch type {
+            case "response.completed":
+                if let response = event["response"] as? [String: Any],
+                   let error = Self.responsesNonStreamingTerminalError(from: response) { throw error }
+                didComplete = true
             case "response.output_text.delta":
                 if let delta = event["delta"] as? String {
                     if !didLogFirstContent, !delta.isEmpty {
@@ -577,10 +1244,15 @@ final nonisolated class LLMClient: @unchecked Sendable {
                     config.onContentChunk?(delta)
                 }
             case "response.output_item.added", "response.output_item.done":
-                guard let item = event["item"] as? [String: Any],
-                      item["type"] as? String == "function_call"
-                else { continue }
+                guard let item = event["item"] as? [String: Any] else { continue }
                 let index = event["output_index"] as? Int ?? 0
+                if type == "response.output_item.done",
+                   let continuationItem = self.responsesContinuationItem(from: item)
+                {
+                    continuationItemsByIndex[index] = continuationItem
+                    continue
+                }
+                guard item["type"] as? String == "function_call" else { continue }
                 var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
                 call.id = item["id"] as? String ?? call.id
                 call.callID = item["call_id"] as? String ?? call.callID
@@ -616,12 +1288,13 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
         }
 
-        let toolCalls = toolCallsByIndex.keys.sorted().compactMap { index -> ToolCall? in
+        guard didComplete else { throw LLMError.invalidResponse }
+        let toolCalls = try toolCallsByIndex.keys.sorted().map { index -> ToolCall in
             guard let call = toolCallsByIndex[index],
                   let name = call.name,
                   let argsData = call.arguments.data(using: .utf8),
                   let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
-            else { return nil }
+            else { throw LLMError.invalidResponse }
 
             return ToolCall(
                 id: call.callID ?? call.id ?? "call_\(UUID().uuidString.prefix(8))",
@@ -633,7 +1306,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let parsed = Response(
             thinking: nil,
             content: contentBuffer.joined().trimmingCharacters(in: .whitespacesAndNewlines),
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            responsesContinuationItems: continuationItemsByIndex.keys.sorted().compactMap {
+                continuationItemsByIndex[$0]
+            }
         )
         self.benchmark(config, "response_decoded")
         return parsed
@@ -852,6 +1528,115 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Parse Non-Streaming Message
 
+    private func parseAnthropicResponse(_ json: [String: Any]) throws -> Response {
+        guard let stopReason = json["stop_reason"] as? String,
+              ["end_turn", "stop_sequence", "tool_use"].contains(stopReason),
+              let blocks = json["content"] as? [[String: Any]]
+        else {
+            throw LLMError.invalidResponse
+        }
+        var content: [String] = []
+        var thinking: [String] = []
+        var tools: [ToolCall] = []
+        for block in blocks {
+            switch block["type"] as? String {
+            case "text":
+                if let text = block["text"] as? String {
+                    content.append(text)
+                }
+            case "thinking":
+                if let text = block["thinking"] as? String {
+                    thinking.append(text)
+                }
+            case "tool_use":
+                guard let name = block["name"] as? String,
+                      !name.isEmpty,
+                      let input = block["input"] as? [String: Any]
+                else { throw LLMError.invalidResponse }
+                tools.append(ToolCall(
+                    id: block["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
+                    name: name,
+                    arguments: input
+                ))
+            default:
+                continue
+            }
+        }
+        let thinkingText = thinking.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return Response(
+            thinking: thinkingText.isEmpty ? nil : thinkingText,
+            content: content.joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            toolCalls: tools
+        )
+    }
+
+    private func parseGeminiResponse(_ json: [String: Any]) throws -> Response {
+        let payload = (json["response"] as? [String: Any]) ?? json
+        guard let candidates = payload["candidates"] as? [[String: Any]],
+              !candidates.isEmpty,
+              candidates.allSatisfy({ $0["finishReason"] as? String == "STOP" })
+        else { throw LLMError.invalidResponse }
+        for candidate in candidates {
+            guard let content = candidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]]
+            else { throw LLMError.invalidResponse }
+            for part in parts where part["functionCall"] != nil {
+                guard let call = part["functionCall"] as? [String: Any],
+                      let name = call["name"] as? String, !name.isEmpty,
+                      call["args"] == nil || call["args"] is [String: Any]
+                else { throw LLMError.invalidResponse }
+            }
+        }
+        let parsed = self.geminiParts(from: json)
+        guard !parsed.content.isEmpty || !parsed.thinking.isEmpty || !parsed.toolCalls.isEmpty else {
+            throw LLMError.invalidResponse
+        }
+        let thinkingText = parsed.thinking.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return Response(
+            thinking: thinkingText.isEmpty ? nil : thinkingText,
+            content: parsed.content.joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            toolCalls: parsed.toolCalls
+        )
+    }
+
+    func geminiParts(from root: [String: Any]) -> (
+        content: [String],
+        thinking: [String],
+        toolCalls: [ToolCall]
+    ) {
+        let payload = (root["response"] as? [String: Any]) ?? root
+        let candidates = payload["candidates"] as? [[String: Any]] ?? []
+        var content: [String] = []
+        var thinking: [String] = []
+        var tools: [ToolCall] = []
+
+        for candidate in candidates {
+            guard let candidateContent = candidate["content"] as? [String: Any],
+                  let parts = candidateContent["parts"] as? [[String: Any]]
+            else { continue }
+            for part in parts {
+                if let text = part["text"] as? String {
+                    if part["thought"] as? Bool == true {
+                        thinking.append(text)
+                    } else {
+                        content.append(text)
+                    }
+                }
+                if let call = part["functionCall"] as? [String: Any],
+                   let name = call["name"] as? String
+                {
+                    tools.append(ToolCall(
+                        id: call["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
+                        name: name,
+                        arguments: call["args"] as? [String: Any] ?? [:],
+                        thoughtSignature: part["thoughtSignature"] as? String
+                    ))
+                }
+            }
+        }
+        return (content, thinking, tools)
+    }
+
     private func parseResponsesResponse(_ json: [String: Any]) throws -> Response {
         guard let output = json["output"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
@@ -859,6 +1644,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         var contentParts: [String] = []
         var parsedToolCalls: [ToolCall] = []
+        var continuationItems: [ResponsesContinuationItem] = []
 
         for item in output {
             switch item["type"] as? String {
@@ -885,6 +1671,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
                         arguments: args
                     )
                 )
+            case "reasoning":
+                if let continuationItem = self.responsesContinuationItem(from: item) {
+                    continuationItems.append(continuationItem)
+                }
             default:
                 continue
             }
@@ -896,8 +1686,20 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return Response(
             thinking: thinking.isEmpty ? nil : thinking,
             content: cleanedContent.isEmpty ? rawContent.trimmingCharacters(in: .whitespacesAndNewlines) : cleanedContent,
-            toolCalls: parsedToolCalls
+            toolCalls: parsedToolCalls,
+            responsesContinuationItems: continuationItems
         )
+    }
+
+    func responsesContinuationItem(from item: [String: Any]) -> ResponsesContinuationItem? {
+        guard item["type"] as? String == "reasoning",
+              let id = item["id"] as? String,
+              !id.isEmpty,
+              let encryptedContent = item["encrypted_content"] as? String,
+              !encryptedContent.isEmpty
+        else { return nil }
+
+        return ResponsesContinuationItem(id: id, encryptedContent: encryptedContent)
     }
 
     private func parseMessageResponse(_ message: [String: Any]) -> Response {
@@ -1074,5 +1876,30 @@ final nonisolated class LLMClient: @unchecked Sendable {
             message: "id=\(id) \(message())",
             source: "LLMBenchmark"
         )
+    }
+
+    private func logRequest(_ request: URLRequest) {
+        guard let url = request.url, let method = request.httpMethod else { return }
+
+        var bodyString = ""
+        if let body = request.httpBody {
+            bodyString = String(data: body, encoding: .utf8) ?? ""
+        }
+
+        var curl = "curl -X \(method) \"\(url.absoluteString)\" \\\n"
+        for (key, value) in request.allHTTPHeaderFields ?? [:] {
+            let normalizedKey = key.lowercased()
+            let isSensitive = normalizedKey.contains("auth") ||
+                normalizedKey.contains("token") ||
+                normalizedKey.contains("api-key") ||
+                normalizedKey.contains("account-id") ||
+                normalizedKey.contains("userid") ||
+                normalizedKey.contains("user-id")
+            let maskedValue = isSensitive ? "[REDACTED]" : value
+            curl += "  -H \"\(key): \(maskedValue)\" \\\n"
+        }
+        curl += "  -d '\(bodyString)'"
+
+        DebugLogger.shared.info("LLMClient: Full Request as cURL:\n\(curl)", source: "LLMClient")
     }
 }
