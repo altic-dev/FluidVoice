@@ -1136,6 +1136,7 @@
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				COMPILER_INDEX_STORE_ENABLE = NO;
 			};
 			name = Release;
 		};
@@ -1246,6 +1247,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
+				COMPILER_INDEX_STORE_ENABLE = NO;
 			};
 			name = Release;
 		};
