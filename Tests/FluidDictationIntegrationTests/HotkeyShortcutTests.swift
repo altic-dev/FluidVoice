@@ -1549,6 +1549,276 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testTerminationCancelsQueuedStartAndPassesOriginalInput() async throws {
+        var starts = 0
+        var secondStarts = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
+        let secondManager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { secondStarts += 1 })
+        manager.updatePrimaryShortcuts([
+            HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command]),
+            HotkeyShortcut(mouseButton: 2, modifierFlags: []),
+        ])
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+        _ = try secondManager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        _ = try secondManager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+
+        GlobalHotkeyManager.suspendForTermination()
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        XCTAssertTrue(GlobalHotkeyManager.isTerminating)
+        XCTAssertFalse(manager.isEventTapEnabled())
+        for type in [CGEventType.keyDown, .keyUp, .flagsChanged] {
+            let event = try self.primaryReleaseTestEvent(type: type)
+            XCTAssertTrue(manager.handleKeyEvent(type: type, event: event)?.takeUnretainedValue() === event)
+        }
+        for type in [CGEventType.otherMouseDown, .otherMouseUp] {
+            let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: .zero, mouseButton: .center))
+            XCTAssertTrue(manager.handleMouseShortcutEvent(type: type, event: event)?.takeUnretainedValue() === event)
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(starts, 0, "Quitting must discard a recording start queued before suspension")
+        XCTAssertEqual(secondStarts, 0, "Suspension must cancel pending work in every live manager")
+        XCTAssertFalse(secondManager.isEventTapEnabled())
+    }
+
+    @MainActor
+    func testCancelledTerminationCannotReviveQueuedPaste() async {
+        var pastes = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: {})
+        manager.setPasteLastTranscriptionCallback { pastes += 1 }
+        manager.triggerPasteLastTranscription(isAutorepeat: false)
+        GlobalHotkeyManager.suspendForTermination()
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        GlobalHotkeyManager.resumeAfterCancelledTermination()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(pastes, 0, "A cancelled quit must not revive a paste queued before suspension")
+        manager.triggerPasteLastTranscription(isAutorepeat: false)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(pastes, 1, "A new paste request must work after cancelling quit")
+    }
+
+    @MainActor
+    func testCancelledTerminationDiscardsHeldPressButAllowsFreshShortcut() async throws {
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        for mouse in [false, true] {
+            var starts = 0
+            let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
+            let down: CGEvent
+            let up: CGEvent
+            if mouse {
+                manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
+                down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+            } else {
+                down = try self.primaryReleaseTestEvent(type: .keyDown)
+                up = try self.primaryReleaseTestEvent(type: .keyUp)
+            }
+            func handle(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+                mouse ? manager.handleMouseShortcutEvent(type: event.type, event: event) : manager.handleKeyEvent(type: event.type, event: event)
+            }
+            XCTAssertNil(handle(down))
+            GlobalHotkeyManager.suspendForTermination()
+            GlobalHotkeyManager.resumeAfterCancelledTermination()
+            XCTAssertFalse(GlobalHotkeyManager.isTerminating)
+            XCTAssertTrue(handle(up)?.takeUnretainedValue() === up)
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(starts, 0, "Cancelling quit must not restore ownership of a pre-quit key or mouse press")
+            XCTAssertNil(handle(down))
+            XCTAssertNil(handle(up))
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(starts, 1, "A complete new shortcut must work after cancelling quit")
+        }
+    }
+
+    @MainActor
+    func testCancelledTerminationStopsInterruptedHoldCaptureOnce() async throws {
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        for mode in [HotkeyActivationMode.hold, .automatic] {
+            for mouse in [false, true] {
+                for releaseBeforeSuspension in [false, true] {
+                    let asr = ASRService()
+                    defer { asr.isRunning = false }
+                    var starts = 0
+                    var stops = 0
+                    let manager = self.makePrimaryReleaseTestManager(
+                        asr: asr,
+                        onStart: { starts += 1; asr.isRunning = true },
+                        onStop: { stops += 1; asr.isRunning = false }
+                    )
+                    manager.setHotkeyMode(mode)
+                    let down: CGEvent
+                    let up: CGEvent
+                    if mouse {
+                        manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
+                        down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                        up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                    } else {
+                        down = try self.primaryReleaseTestEvent(type: .keyDown)
+                        up = try self.primaryReleaseTestEvent(type: .keyUp)
+                    }
+                    func handle(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+                        mouse ? manager.handleMouseShortcutEvent(type: event.type, event: event) : manager.handleKeyEvent(type: event.type, event: event)
+                    }
+                    XCTAssertNil(handle(down))
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    XCTAssertEqual(starts, 1)
+                    XCTAssertTrue(asr.isRunning)
+                    if releaseBeforeSuspension {
+                        if mode == .automatic {
+                            // Cross the automatic mode's 0.4-second hold threshold before release.
+                            try await Task.sleep(nanoseconds: 450_000_000)
+                        }
+                        XCTAssertNil(handle(up))
+                    }
+                    GlobalHotkeyManager.suspendForTermination()
+                    if !releaseBeforeSuspension {
+                        XCTAssertTrue(handle(up)?.takeUnretainedValue() === up)
+                    }
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    XCTAssertEqual(stops, 0, "Suspension leaves capture shutdown to the application")
+                    GlobalHotkeyManager.resumeAfterCancelledTermination()
+                    GlobalHotkeyManager.resumeAfterCancelledTermination()
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    XCTAssertEqual(stops, 1, "Cancelling quit must finish interrupted \(mode) capture exactly once; mouse=\(mouse)")
+                    XCTAssertFalse(asr.isRunning)
+                    XCTAssertTrue(handle(up)?.takeUnretainedValue() === up)
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    XCTAssertEqual(starts, 1, "A stale release must never start another recording")
+                    XCTAssertEqual(stops, 1)
+                    XCTAssertNil(handle(down))
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    XCTAssertEqual(starts, 2, "A fresh press must still start capture")
+                    XCTAssertNil(handle(up))
+                    for _ in 0..<20 {
+                        await Task.yield()
+                    }
+                    if mode == .hold {
+                        XCTAssertEqual(stops, 2)
+                        XCTAssertFalse(asr.isRunning)
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testCancelledTerminationPreservesQueuedAutomaticShortTapStop() async throws {
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        for mouse in [false, true] {
+            let asr = ASRService()
+            asr.isRunning = true
+            defer { asr.isRunning = false }
+            var starts = 0
+            var stops = 0
+            let manager = self.makePrimaryReleaseTestManager(
+                asr: asr,
+                onStart: { starts += 1; asr.isRunning = true },
+                onStop: { stops += 1; asr.isRunning = false }
+            )
+            manager.setHotkeyMode(.automatic)
+            if mouse {
+                manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
+                for type in [CGEventType.otherMouseDown, .otherMouseUp] {
+                    let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: .zero, mouseButton: .center))
+                    XCTAssertNil(manager.handleMouseShortcutEvent(type: type, event: event))
+                }
+            } else {
+                for type in [CGEventType.keyDown, .keyUp] {
+                    XCTAssertNil(try manager.handleKeyEvent(type: type, event: self.primaryReleaseTestEvent(type: type)))
+                }
+            }
+            // Do not yield: the short tap queued its stop but has already released ownership.
+            GlobalHotkeyManager.suspendForTermination()
+            GlobalHotkeyManager.resumeAfterCancelledTermination()
+            for _ in 0..<20 {
+                await Task.yield()
+            }
+            XCTAssertEqual(stops, 1, "Cancelling quit must retain the stop requested by the automatic tap; mouse=\(mouse)")
+            XCTAssertFalse(asr.isRunning)
+            XCTAssertEqual(starts, 0, "Recovering a queued stop must never start another recording")
+        }
+    }
+
+    @MainActor
+    func testCancelledTerminationPreservesToggleRecording() async throws {
+        let asr = ASRService()
+        defer {
+            asr.isRunning = false
+            GlobalHotkeyManager.resumeAfterCancelledTermination()
+        }
+        var starts = 0
+        var stops = 0
+        let manager = self.makePrimaryReleaseTestManager(
+            asr: asr,
+            onStart: { starts += 1; asr.isRunning = true },
+            onStop: { stops += 1; asr.isRunning = false }
+        )
+        for type in [CGEventType.keyDown, .keyUp] {
+            _ = try manager.handleKeyEvent(type: type, event: self.primaryReleaseTestEvent(type: type))
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertTrue(asr.isRunning)
+        GlobalHotkeyManager.suspendForTermination()
+        GlobalHotkeyManager.resumeAfterCancelledTermination()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(stops, 0, "A toggle recording has no held release to recover")
+        XCTAssertTrue(asr.isRunning)
+        for type in [CGEventType.keyDown, .keyUp] {
+            _ = try manager.handleKeyEvent(type: type, event: self.primaryReleaseTestEvent(type: type))
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(stops, 1, "The next toggle must still stop the preserved recording")
+        XCTAssertFalse(asr.isRunning)
+    }
+
+    @MainActor
+    func testManagerCreatedDuringTerminationCannotInitializeOrConsumeInput() async throws {
+        GlobalHotkeyManager.suspendForTermination()
+        defer { GlobalHotkeyManager.resumeAfterCancelledTermination() }
+        var starts = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
+        manager.reinitialize()
+        // Exceed the normal 1.5-second initialization delay while termination stays active.
+        try await Task.sleep(nanoseconds: 1_600_000_000)
+        XCTAssertFalse(manager.isEventTapEnabled())
+        for type in [CGEventType.keyDown, .keyUp] {
+            let event = try self.primaryReleaseTestEvent(type: type)
+            XCTAssertTrue(manager.handleKeyEvent(type: type, event: event)?.takeUnretainedValue() === event)
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(starts, 0)
+    }
+
+    @MainActor
     func testCancelAfterToggleReleaseInvalidatesQueuedStart() async throws {
         var starts = 0
         let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
