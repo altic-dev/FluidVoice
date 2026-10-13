@@ -2829,8 +2829,8 @@ struct ContentView: View {
         let systemPrompt = request.systemPrompt
         let userMessageContent = request.userContent
 
-        // Skip API key validation for local endpoints
-        let isLocal = self.isLocalEndpoint(derivedBaseURL)
+        // Skip API key validation for local endpoints and official subscriptions
+        let isLocal = self.isLocalEndpoint(derivedBaseURL) || OfficialProviderAuth.isOfficialProvider(currentSelectedProviderID)
         let apiKey = route.apiKey
 
         if !isLocal {
@@ -2903,6 +2903,7 @@ struct ContentView: View {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: currentSelectedProviderID,
             messages: messages,
             model: derivedSelectedModel,
             baseURL: derivedBaseURL,
@@ -2936,6 +2937,7 @@ struct ContentView: View {
                     source: "ContentView"
                 )
                 let fallbackConfig = LLMClient.Config(
+                    providerID: currentSelectedProviderID,
                     messages: messages,
                     model: derivedSelectedModel,
                     baseURL: derivedBaseURL,

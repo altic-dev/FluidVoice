@@ -1185,7 +1185,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             completionByCandidate.merge(try Self.geminiCandidateCompletion(root)) { $0 || $1 }
-            let parsed = self.geminiParts(from: root)
+            let parsed = try self.geminiParts(from: root)
             for text in parsed.content {
                 content.append(text)
                 config.onContentChunk?(text)
@@ -1207,6 +1207,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             config.onThinkingEnd?()
         }
         guard !completionByCandidate.isEmpty, completionByCandidate.values.allSatisfy({ $0 }) else { throw LLMError.invalidResponse }
+        guard tools.count <= 1 else { throw LLMError.invalidResponse }
         let thinkingText = thinking.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         return Response(
             thinking: thinkingText.isEmpty ? nil : thinkingText,
@@ -1617,7 +1618,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 else { throw LLMError.invalidResponse }
             }
         }
-        let parsed = self.geminiParts(from: json)
+        let parsed = try self.geminiParts(from: json)
+        guard parsed.toolCalls.count <= 1 else {
+            throw LLMError.invalidResponse
+        }
         guard !parsed.content.isEmpty || !parsed.thinking.isEmpty || !parsed.toolCalls.isEmpty else {
             throw LLMError.invalidResponse
         }
@@ -1629,7 +1633,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         )
     }
 
-    func geminiParts(from root: [String: Any]) -> (
+    func geminiParts(from root: [String: Any]) throws -> (
         content: [String],
         thinking: [String],
         toolCalls: [ToolCall]
@@ -1652,13 +1656,16 @@ final nonisolated class LLMClient: @unchecked Sendable {
                         content.append(text)
                     }
                 }
-                if let call = part["functionCall"] as? [String: Any],
-                   let name = call["name"] as? String
-                {
+                if let call = part["functionCall"] as? [String: Any] {
+                    guard let name = call["name"] as? String, !name.isEmpty,
+                          call["args"] == nil || call["args"] is [String: Any]
+                    else {
+                        throw LLMError.invalidResponse
+                    }
                     tools.append(ToolCall(
                         id: call["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
                         name: name,
-                        arguments: call["args"] as? [String: Any] ?? [:],
+                        arguments: (call["args"] as? [String: Any]) ?? [:],
                         thoughtSignature: part["thoughtSignature"] as? String
                     ))
                 }

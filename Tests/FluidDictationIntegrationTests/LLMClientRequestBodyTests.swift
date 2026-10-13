@@ -858,7 +858,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
     }
 
     func testGeminiThoughtSignatureIsParsedAndReplayedWithFunctionCall() throws {
-        let parsed = LLMClient.shared.geminiParts(from: [
+        let parsed = try LLMClient.shared.geminiParts(from: [
             "response": [
                 "candidates": [[
                     "content": [

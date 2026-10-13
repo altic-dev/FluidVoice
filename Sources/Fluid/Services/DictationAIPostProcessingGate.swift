@@ -59,13 +59,7 @@ enum DictationAIPostProcessingGate {
         let providerID = route.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = route.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !providerID.isEmpty, !model.isEmpty else { return false }
-        guard let storedFingerprint = settings.verifiedProviderFingerprints[route.providerKey] else { return false }
-
-        let baseURL = route.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let apiKey = route.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard self.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
-
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == storedFingerprint
+        return settings.isProviderVerified(providerID)
     }
 
     static func baseURL(for providerID: String, settings: SettingsStore) -> String {

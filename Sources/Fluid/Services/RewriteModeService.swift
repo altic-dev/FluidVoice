@@ -355,6 +355,7 @@ final class RewriteModeService: ObservableObject {
 
         // Build LLMClient configuration
         var config = LLMClient.Config(
+            providerID: providerID,
             messages: apiMessages,
             model: model,
             baseURL: baseURL,
@@ -460,12 +461,7 @@ final class RewriteModeService: ObservableObject {
 
     private func isProviderVerified(_ providerID: String, settings: SettingsStore) -> Bool {
         guard !self.isPrivateAIProviderID(providerID) else { return false }
-        let key = self.providerKey(for: providerID)
-        guard let stored = settings.verifiedProviderFingerprints[key] else { return false }
-        let baseURL = self.providerBaseURL(for: providerID, settings: settings)
-        let apiKey = settings.getAPIKey(for: providerID) ?? ""
-        let current = self.providerFingerprint(baseURL: baseURL, apiKey: apiKey)
-        return current == stored
+        return settings.isProviderVerified(providerID)
     }
 
     private func isPrivateAIProviderID(_ providerID: String) -> Bool {

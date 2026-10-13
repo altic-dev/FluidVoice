@@ -26,7 +26,7 @@ final class ProviderStreamCompletionTests: XCTestCase {
     }
 
     func testMalformedToolArgumentsRejectCompletedStreams() async {
-        for wire in [Wire.responses, .anthropic] {
+        for wire in [Wire.responses, .anthropic, .gemini] {
             await self.assertRejected(wire, scenario: "bad-tool")
         }
     }
@@ -110,6 +110,9 @@ private final class CompletionFixtureProtocol: URLProtocol {
             }
             return [text, #"{"type":"message_stop"}"#]
         default:
+            if scenario == "bad-tool" {
+                return [#"{"candidates":[{"index":0,"content":{"parts":[{"functionCall":{"name":"test_tool","args":"invalid"}}]},"finishReason":"STOP"}]}"#]
+            }
             if scenario == "unfinished-candidate" {
                 return [#"{"candidates":[{"index":0,"content":{"parts":[{"text":"Done"}]},"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"Partial"}]}}]}"#]
             }

@@ -4365,6 +4365,10 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    func isProviderVerified(_ providerID: String) -> Bool {
+        self.isVerifiedProviderForCurrentConfiguration(providerID)
+    }
+
     private func isVerifiedProviderForCurrentConfiguration(_ providerID: String) -> Bool {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
