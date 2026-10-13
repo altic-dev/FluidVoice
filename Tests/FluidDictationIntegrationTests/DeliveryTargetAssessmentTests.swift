@@ -155,6 +155,24 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
         }
     }
 
+    func testAsyncFocusObservationKeepsMainActorResponsive() async {
+        let releaseRead = DispatchSemaphore(value: 0)
+        var heartbeatRan = false
+        let observation = DeliveryTargetAssessment.FocusObservation(pid: 100, assessment: .editable(role: "AXTextField"))
+        let sut = await DeliveryTargetAssessment.observeFocusedElementOffMain(
+            on: DispatchQueue(label: "test.fluid.clipboard-focus"),
+            readFocus: {
+                XCTAssertFalse(Thread.isMainThread, "Clipboard AX reads must run off main")
+                DispatchQueue.main.async { heartbeatRan = true; releaseRead.signal() }
+                XCTAssertEqual(releaseRead.wait(timeout: .now() + 1), .success)
+                return observation
+            }
+        )
+        XCTAssertEqual(sut?.pid, 100)
+        XCTAssertEqual(sut?.assessment, .editable(role: "AXTextField"))
+        XCTAssertTrue(heartbeatRan)
+    }
+
     func testSlowFocusReadDoesNotBlockMainActorAndRechecksCancellation() async {
         let releaseRead = DispatchSemaphore(value: 0)
         var isValid = true

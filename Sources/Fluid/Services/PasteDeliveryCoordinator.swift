@@ -645,7 +645,7 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
-        validateTarget: @MainActor () -> TextDeliveryFailure? = { nil },
+        validateTarget: @MainActor () async -> TextDeliveryFailure? = { nil },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
@@ -660,15 +660,23 @@ final class PasteDeliveryCoordinator {
         }
 
         guard isOutputValid() else { return .cancelled }
-        if let failure = validateTarget() {
+        let validationChangeCount = self.pasteboard.changeCount
+        let admissionFailure = await validateTarget()
+        guard isOutputValid() else { return .cancelled }
+        if let failure = admissionFailure {
             if preserveTranscriptOnClipboard,
                self.pasteboard.changeCount == requestedChangeCount ||
                self.pasteboard.changeCount == self.lastWrittenChangeCount
             {
+                self.generation &+= 1
                 self.writeBackup(text)
             }
             self.log("delivery_failed reason=\(failure.rawValue) at=slot_acquired")
             return .recoverableFailure(failure)
+        }
+        guard self.pasteboard.changeCount == validationChangeCount else {
+            self.log("delivery_failed reason=clipboard_changed at=slot_acquired")
+            return .recoverableFailure(.clipboardWriteFailed)
         }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
@@ -702,10 +710,20 @@ final class PasteDeliveryCoordinator {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
         }
-        if let failure = validateTarget() {
+        let dispatchFailure = await validateTarget()
+        guard isOutputValid() else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
+            return .cancelled
+        }
+        if let failure = dispatchFailure {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
             self.log("delivery_failed reason=\(failure.rawValue) at=before_command")
             return .recoverableFailure(failure)
+        }
+        guard self.pasteboard.isOwned(sessionID: sessionID, expectedText: text) else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
+            self.log("delivery_failed reason=clipboard_changed at=before_command")
+            return .recoverableFailure(.clipboardWriteFailed)
         }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime
@@ -751,7 +769,9 @@ final class PasteDeliveryCoordinator {
         let ready = await prepare()
         guard isOutputValid() else { return false }
         if !ready, self.generation == generation {
-            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount, isOutputValid: isOutputValid)
+            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount, isOutputValid: {
+                isOutputValid() && self.generation == generation
+            })
         }
         return ready
     }

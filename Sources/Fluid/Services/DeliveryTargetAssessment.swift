@@ -116,6 +116,15 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
         self.observeFocusedElement()?.assessment ?? .unavailable(reason: "no_focused_element")
     }
 
+    static func observeFocusedElementOffMain(
+        on queue: DispatchQueue,
+        readFocus: @escaping @Sendable () -> FocusObservation? = { Self.observeFocusedElement() }
+    ) async -> FocusObservation? {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: readFocus()) }
+        }
+    }
+
     nonisolated static func observeFocusedElement() -> FocusObservation? {
         guard AXIsProcessTrusted() else { return nil }
         var focusedRef: CFTypeRef?

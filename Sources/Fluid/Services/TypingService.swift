@@ -543,8 +543,9 @@ final class TypingService {
                 source: "TypingService"
             )
         }
-        let validateTarget: @MainActor () -> TextDeliveryFailure? = {
-            Self.assessDeliveryFocus(observation: DeliveryTargetAssessment.observeFocusedElement(), capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .refuse ? .noEditableTarget : nil
+        let validateTarget: @MainActor () async -> TextDeliveryFailure? = {
+            let observation = await DeliveryTargetAssessment.observeFocusedElementOffMain(on: Self.directInsertionQueue)
+            return Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .refuse ? .noEditableTarget : nil
         }
         let usesClipboard = focus.decision == .reliablePasteFallback || mode == .reliablePaste ||
             self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID) != nil
