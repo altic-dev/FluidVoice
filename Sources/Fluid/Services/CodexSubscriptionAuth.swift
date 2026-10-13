@@ -1,13 +1,15 @@
 import Foundation
 import Security
 
-@MainActor
-final class InFlightTaskCoalescer<Value> {
+final nonisolated class InFlightTaskCoalescer<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
     private var flight: (id: UUID, task: Task<Value, Error>)?
 
-    func value(operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+    @_optimize(none)
+    func value(operation: @Sendable @escaping () async throws -> Value) async throws -> Value {
         let activeFlight: (id: UUID, task: Task<Value, Error>)
-        if let flight {
+        self.lock.lock()
+        if let flight = self.flight {
             activeFlight = flight
         } else {
             let newFlight = (
@@ -17,28 +19,41 @@ final class InFlightTaskCoalescer<Value> {
             self.flight = newFlight
             activeFlight = newFlight
         }
+        self.lock.unlock()
 
         do {
             let value = try await activeFlight.task.value
+            self.lock.lock()
             if self.flight?.id == activeFlight.id {
                 self.flight = nil
             }
+            self.lock.unlock()
             return value
         } catch {
+            self.lock.lock()
             if self.flight?.id == activeFlight.id {
                 self.flight = nil
             }
+            self.lock.unlock()
             throw error
         }
     }
 
+    @_optimize(none)
     func cancelAndWait() async {
-        guard let activeFlight = self.flight else { return }
+        self.lock.lock()
+        let activeFlight = self.flight
+        self.lock.unlock()
+
+        guard let activeFlight else { return }
         activeFlight.task.cancel()
         _ = try? await activeFlight.task.value
+
+        self.lock.lock()
         if self.flight?.id == activeFlight.id {
             self.flight = nil
         }
+        self.lock.unlock()
     }
 }
 
