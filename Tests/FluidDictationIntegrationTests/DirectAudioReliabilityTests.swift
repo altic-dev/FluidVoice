@@ -949,7 +949,18 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertTrue(pipeline.contains("if wasRewriteMode {"))
         XCTAssertTrue(pipeline.contains("if wasCommandMode {"))
         XCTAssertTrue(pipeline.contains("!cancelledAtASRStop, await self.routePromptTestResult"))
-        XCTAssertTrue(pipeline.contains("!cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled"))
+        let scenarios: [(ContentView.DictationOutputRoute, SettingsStore.TextInsertionMode, Bool)] = [
+            (.normal, .reliablePaste, true), (.normal, .clipboardOnly, false),
+            (.historyOnly, .reliablePaste, false),
+        ]
+        for (route, insertionMode, shouldSend) in scenarios {
+            let parsed = SpokenSendParser.parseArmed("Hello send now",
+            phrase: "send now",
+                                                    enabled: route.supportsSpokenSend(in: insertionMode),
+                                                    wasArmed: true)
+            XCTAssertEqual(parsed.shouldSend, shouldSend)
+            if !shouldSend { XCTAssertEqual(parsed.text, "Hello send now") }
+        }
         XCTAssertTrue(pipeline.contains("guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else"))
     }
 

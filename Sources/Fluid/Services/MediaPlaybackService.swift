@@ -36,6 +36,7 @@ final class MediaPlaybackService {
 
     func recordingStarted(sessionID: Int, enabled: Bool) {
         guard !self.isShuttingDown else { return }
+        RecordingVolumeDucking.shared.start(sessionID: sessionID)
         self.session = enabled ? Session(id: sessionID, mayPause: true) : nil
         self.revision &+= 1
         self.log("recording_started session=\(sessionID) enabled=\(enabled)")
@@ -45,6 +46,7 @@ final class MediaPlaybackService {
     /// Prevent a slow query from issuing pause after the hotkey is released.
     /// A previously confirmed pause stays owned until transcription finishes.
     func recordingStopped(sessionID: Int) {
+        RecordingVolumeDucking.shared.stop(sessionID: sessionID)
         guard self.session?.id == sessionID else { return }
         self.session?.mayPause = false
         self.revision &+= 1
@@ -54,6 +56,7 @@ final class MediaPlaybackService {
 
     /// An older transcription finishing cannot resume a newer recording's media.
     func sessionFinished(sessionID: Int) {
+        RecordingVolumeDucking.shared.stop(sessionID: sessionID)
         guard self.session?.id == sessionID else { return }
         self.session = nil
         self.revision &+= 1
@@ -62,6 +65,7 @@ final class MediaPlaybackService {
     }
 
     func beginShutdown() {
+        RecordingVolumeDucking.shared.restore()
         guard !self.isShuttingDown else { return }
         self.isShuttingDown = true
         self.session = nil

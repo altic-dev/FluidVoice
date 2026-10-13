@@ -497,6 +497,10 @@ final class TypingService {
             return result
         }
 
+        if mode == .clipboardOnly {
+            return await PasteDeliveryCoordinator.shared.deliverCopyOnly(text, isOutputValid: isOutputValid)
+        }
+
         // Check accessibility permissions first
         guard AXIsProcessTrusted() else {
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)

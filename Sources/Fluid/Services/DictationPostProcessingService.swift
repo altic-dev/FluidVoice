@@ -305,7 +305,9 @@ final class DictationPostProcessingService {
             throw AIProcessingError.emptyResponse
         }
         return Result(
-            text: ASRService.applyGAAVFormatting(response.content),
+            text: ASRService.applyGAAVFormatting(DictationPromptRequest.cleanedText(
+                response: response.content, instructions: promptText, transcript: trimmed
+            )),
             providerID: resolved.providerID,
             model: resolved.model
         )
