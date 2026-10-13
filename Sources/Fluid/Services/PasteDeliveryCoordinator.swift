@@ -651,6 +651,7 @@ final class PasteDeliveryCoordinator {
         guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
+        let requestedChangeCount = self.pasteboard.changeCount
         await self.acquireDeliverySlot()
         let slotAcquiredAt = ProcessInfo.processInfo.systemUptime
         var settlementOwnsSlot = false
@@ -660,7 +661,10 @@ final class PasteDeliveryCoordinator {
 
         guard isOutputValid() else { return .cancelled }
         if let failure = validateTarget() {
-            if preserveTranscriptOnClipboard {
+            if preserveTranscriptOnClipboard,
+               self.pasteboard.changeCount == requestedChangeCount ||
+               self.pasteboard.changeCount == self.lastWrittenChangeCount
+            {
                 self.writeBackup(text)
             }
             self.log("delivery_failed reason=\(failure.rawValue) at=slot_acquired")

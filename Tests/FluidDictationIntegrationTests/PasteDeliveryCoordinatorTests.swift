@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testRefusedQueuedPastePreservesNewerUserClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await sut.deliver("first", preserveTranscriptOnClipboard: false)
+        var targetMatches = true
+        var queued = false
+        let delivery = Task { @MainActor in
+            queued = true
+            return await sut.deliver("refused transcript", preserveTranscriptOnClipboard: true, validateTarget: { targetMatches ? nil : .noEditableTarget })
+        }
+        await self.waitUntil { queued }
+        pasteboard.simulateExternalCopy("new user copy")
+        targetMatches = false
+        sut.runPendingSettlementForTesting()
+        let result = await delivery.value
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget))
+        XCTAssertEqual(poster.postCount, 1)
+        XCTAssertEqual(pasteboard.text, "new user copy", "Refusing a queued paste must preserve a newer explicit clipboard copy")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+    }
+
     func testChangedDestinationWhileQueuedDoesNotPostPaste() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()
