@@ -78,13 +78,14 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
                     })
                 }
                 await self.waitUntil { resumeValidation != nil }
+                XCTAssertEqual(pasteboard.text, "before", "A manual paste during slow validation must see the original item")
                 valid = false
                 resumeValidation?.resume(returning: failure)
                 let result = await delivery.value
                 XCTAssertEqual(result, .cancelled, "Cancellation must win over either validation verdict at stage \(stage)")
                 XCTAssertEqual(pasteboard.text, "before")
                 XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
-                XCTAssertEqual(pasteboard.temporaryWriteCount, stage - 1)
+                XCTAssertEqual(pasteboard.temporaryWriteCount, 0, "Pending focus validation must leave the original clipboard installed")
                 XCTAssertEqual(poster.postCount, 0)
                 sut.runPendingSettlementForTesting()
                 let next = await sut.deliver("next", preserveTranscriptOnClipboard: false)
@@ -113,6 +114,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
                         })
                     }
                     await self.waitUntil { resumeValidation != nil }
+                    XCTAssertEqual(pasteboard.text, "before", "Do not expose dictation text during either AX wait")
                     pasteboard.simulateExternalCopy("new user copy")
                     resumeValidation?.resume(returning: failure)
                     let result = await delivery.value
@@ -157,7 +159,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
                 })
             }
             await self.waitUntil { secondEntered }
-            XCTAssertEqual(pasteboard.temporaryWriteCount, stage - 1)
+            XCTAssertEqual(pasteboard.temporaryWriteCount, 0, "Pending focus validation must leave the original clipboard installed")
             XCTAssertEqual(poster.postCount, 0, "The queued delivery cannot bypass suspended validation")
             XCTAssertEqual(secondValidations, 0)
             resumeValidation?.resume(returning: stage == 1 ? .noEditableTarget : nil)
@@ -220,7 +222,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.text, "preserved transcript", "The requested transcript backup survives refusal")
     }
 
-    func testChangedDestinationBeforeCommandRestoresClipboardWithoutPosting() async {
+    func testChangedDestinationBeforeCommandLeavesClipboardUntouched() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()
         let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
@@ -231,8 +233,9 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         })
         XCTAssertEqual(result, .recoverableFailure(.noEditableTarget), "Recheck immediately before dispatch must refuse a changed destination")
         XCTAssertEqual(poster.postCount, 0, "Unsafe paste command must not be posted")
-        XCTAssertEqual(pasteboard.text, "before", "Original clipboard must be restored after refusal")
-        XCTAssertEqual(pasteboard.restoreCount, 1)
+        XCTAssertEqual(pasteboard.text, "before", "Refusal must leave the original clipboard untouched")
+        XCTAssertEqual(pasteboard.restoreCount, 0)
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 0)
     }
 
     func testCancelledFocusPreparationDoesNotCopyBackup() async {

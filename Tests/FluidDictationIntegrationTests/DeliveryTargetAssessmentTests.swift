@@ -1,3 +1,4 @@
+import ApplicationServices
 @testable import FluidVoice_Debug
 import XCTest
 
@@ -75,6 +76,55 @@ final class DeliveryTargetAssessmentTests: XCTestCase {
         for test in cases {
             let sut = test.assessment.deliveryDecision(capturedTarget: test.captured, focusedTarget: test.focused, frontmostPID: test.frontmostPID, ownPID: 999)
             XCTAssertEqual(sut, test.decision, test.expectation)
+        }
+    }
+
+    func testDifferentFieldInCapturedAppRefusesEveryDeliveryMode() {
+        let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        for assessment: DeliveryTargetAssessment in [.editable(role: "AXTextArea"), .notEditable(role: "AXButton"), .unknown(reason: "role_AXWebArea")] {
+            let sut = assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 100, ownPID: 999, matchesCapturedElement: false)
+            XCTAssertEqual(sut, .refuse, "Matching app identity must not authorize a different field")
+            let partial = self.simulateDirectDelivery([.insert, .insert, sut, .insert])
+            XCTAssertFalse(partial.pastes, "Changing fields after a partial insertion must suppress full replay")
+            XCTAssertFalse(partial.canResume)
+        }
+    }
+
+    func testFrontmostChangeRefusesStaleFocusWhileStableLauncherStillInserts() {
+        for bundleIdentifier: String? in ["test.launcher", nil] {
+            let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: bundleIdentifier, hasFocusedElement: true)
+            for assessment: DeliveryTargetAssessment in [.editable(role: "AXTextArea"), .unknown(reason: "role_AXGroup")] {
+                XCTAssertEqual(assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 200, ownPID: 999, expectedFrontmostPID: 200), .insert, "Stable frontmost mismatch preserves nonactivating launchers")
+                XCTAssertEqual(assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 300, ownPID: 999, expectedFrontmostPID: 200), .refuse, "A stale AX observation cannot authorize paste after an app switch")
+            }
+        }
+    }
+
+    func testObservationRejectsFocusChangesDuringAssessment() {
+        let first = DeliveryTargetAssessment.FocusIdentity(element: AXUIElementCreateApplication(100))
+        let second = DeliveryTargetAssessment.FocusIdentity(element: AXUIElementCreateApplication(200))
+        var current = first
+        let sut = DeliveryTargetAssessment.observeFocusedElement(expectedElement: first, readElement: { current }, assessElement: { _ in
+            current = second
+            return .init(pid: 100, assessment: .editable(role: "AXTextArea"))
+        })
+        XCTAssertNil(sut, "A read describing the old field must not authorize the newly focused field")
+    }
+
+    func testObservationComparesRetainedIdentityAcrossSameAppFields() {
+        let captured = DeliveryTargetAssessment.FocusIdentity(element: AXUIElementCreateApplication(100))
+        let other = DeliveryTargetAssessment.FocusIdentity(element: AXUIElementCreateApplication(200))
+        let target = DeliveryTargetAssessment.Target(pid: 100, bundleIdentifier: "test.editor", hasFocusedElement: true)
+        for (element, matches) in [(captured, true), (other, false)] {
+            for assessment: DeliveryTargetAssessment in [.editable(role: "AXTextArea"), .notEditable(role: "AXButton"), .unknown(reason: "role_AXWebArea")] {
+                // The fake reader keeps PID/role constant so only retained element identity distinguishes fields.
+                let observation = DeliveryTargetAssessment.observeFocusedElement(expectedElement: captured, readElement: { element }, assessElement: { _ in
+                    .init(pid: 100, assessment: assessment)
+                })
+                XCTAssertEqual(observation?.matchesCapturedElement, matches)
+                let sut = assessment.deliveryDecision(capturedTarget: target, focusedTarget: target, frontmostPID: 100, ownPID: 999, matchesCapturedElement: observation?.matchesCapturedElement ?? false)
+                XCTAssertEqual(sut, matches ? (assessment == .notEditable(role: "AXButton") ? .reliablePasteFallback : .insert) : .refuse)
+            }
         }
     }
 

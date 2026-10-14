@@ -32,7 +32,7 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
         }
     }
 
-    func deliveryDecision(capturedTarget: Target?, focusedTarget: Target?, frontmostPID: pid_t?, ownPID: pid_t) -> DeliveryDecision {
+    func deliveryDecision(capturedTarget: Target?, focusedTarget: Target?, frontmostPID: pid_t?, ownPID: pid_t, matchesCapturedElement: Bool = true, expectedFrontmostPID: pid_t? = nil) -> DeliveryDecision {
         guard let focusedTarget, focusedTarget.hasFocusedElement,
               focusedTarget.pid > 0, focusedTarget.pid != ownPID,
               let frontmostPID, frontmostPID > 0, frontmostPID != ownPID,
@@ -40,8 +40,11 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
               focusedTarget.bundleIdentifier != "com.FluidApp.app.debug",
               !focusedTarget.isSecureTextField
         else { return .refuse }
+        if let expectedFrontmostPID, expectedFrontmostPID != frontmostPID {
+            return .refuse
+        }
         if let capturedTarget {
-            guard capturedTarget.pid == focusedTarget.pid,
+            guard matchesCapturedElement, capturedTarget.pid == focusedTarget.pid,
                   capturedTarget.bundleIdentifier == focusedTarget.bundleIdentifier,
                   !capturedTarget.isSecureTextField
             else { return .refuse }
@@ -107,9 +110,19 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
         "AXTextField", "AXTextArea", "AXComboBox",
     ]
 
+    /// Retained AX handles are shared read-only; equality adds no remote attribute query.
+    struct FocusIdentity: @unchecked Sendable {
+        let element: AXUIElement
+
+        func matches(_ other: FocusIdentity) -> Bool {
+            CFEqual(self.element, other.element)
+        }
+    }
+
     struct FocusObservation: Sendable {
         let pid: pid_t
         let assessment: DeliveryTargetAssessment
+        var matchesCapturedElement = true
     }
 
     nonisolated static func assessFocusedElement() -> DeliveryTargetAssessment {
@@ -125,7 +138,25 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
         }
     }
 
-    nonisolated static func observeFocusedElement() -> FocusObservation? {
+    nonisolated static func observeFocusedElement(
+        expectedElement: FocusIdentity? = nil,
+        readElement: () -> FocusIdentity? = { Self.readFocusedElement() },
+        assessElement: (FocusIdentity) -> FocusObservation? = { Self.assessFocus($0) }
+    ) -> FocusObservation? {
+        guard let element = readElement(), let observation = assessElement(element) else { return nil }
+        // Role/subrole queries can wait on another process. Do not authorize their stale focus afterward.
+        guard let finalElement = readElement(), element.matches(finalElement) else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=focus_changed", source: "TypingService")
+            return nil
+        }
+        return FocusObservation(
+            pid: observation.pid,
+            assessment: observation.assessment,
+            matchesCapturedElement: expectedElement.map { $0.matches(element) } ?? true
+        )
+    }
+
+    private nonisolated static func readFocusedElement() -> FocusIdentity? {
         guard AXIsProcessTrusted() else {
             DebugLogger.shared.info("FOCUS_READ unavailable stage=permission", source: "TypingService")
             return nil
@@ -143,14 +174,17 @@ nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
             )
             return nil
         }
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+        return FocusIdentity(element: unsafeBitCast(focusedRef, to: AXUIElement.self))
+    }
+
+    private nonisolated static func assessFocus(_ focus: FocusIdentity) -> FocusObservation? {
         var pid: pid_t = 0
-        let pidResult = AXUIElementGetPid(element, &pid)
+        let pidResult = AXUIElementGetPid(focus.element, &pid)
         guard pidResult == .success, pid > 0 else {
             DebugLogger.shared.info("FOCUS_READ unavailable stage=pid axError=\(pidResult.rawValue)", source: "TypingService")
             return nil
         }
-        return FocusObservation(pid: pid, assessment: self.assess(element))
+        return FocusObservation(pid: pid, assessment: self.assess(focus.element))
     }
 
     nonisolated static func isSecureTextField(_ element: AXUIElement) -> Bool {

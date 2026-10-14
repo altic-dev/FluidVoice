@@ -693,6 +693,21 @@ final class PasteDeliveryCoordinator {
             return .recoverableFailure(.clipboardSnapshotFailed)
         }
 
+        // Validate after snapshot materialization, while the user's clipboard is still installed.
+        let dispatchFailure = await validateTarget()
+        guard isOutputValid() else { return .cancelled }
+        if let failure = dispatchFailure {
+            if preserveTranscriptOnClipboard, self.pasteboard.changeCount == originalChangeCount {
+                self.writeBackup(text)
+            }
+            self.log("delivery_failed reason=\(failure.rawValue) at=before_command")
+            return .recoverableFailure(failure)
+        }
+        guard self.pasteboard.changeCount == originalChangeCount else {
+            self.log("delivery_failed reason=clipboard_changed at=before_command")
+            return .recoverableFailure(.clipboardWriteFailed)
+        }
+
         let sessionID = UUID().uuidString
         let writeStartedAt = ProcessInfo.processInfo.systemUptime
         guard self.pasteboard.writeTemporaryText(text, sessionID: sessionID) else {
@@ -701,24 +716,11 @@ final class PasteDeliveryCoordinator {
             return .recoverableFailure(.clipboardWriteFailed)
         }
         self.lastWrittenChangeCount = self.pasteboard.changeCount
-        self.log(
-            "clipboard_write generation=\(generation) elapsedMs=\(Self.elapsedMs(since: writeStartedAt))"
-        )
-
+        self.log("clipboard_write generation=\(generation) elapsedMs=\(Self.elapsedMs(since: writeStartedAt))")
         self.pasteboard.recordAudit("command_before", detail: "session=\(sessionID)")
         guard isOutputValid() else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
-        }
-        let dispatchFailure = await validateTarget()
-        guard isOutputValid() else {
-            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
-            return .cancelled
-        }
-        if let failure = dispatchFailure {
-            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
-            self.log("delivery_failed reason=\(failure.rawValue) at=before_command")
-            return .recoverableFailure(failure)
         }
         guard self.pasteboard.isOwned(sessionID: sessionID, expectedText: text) else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)

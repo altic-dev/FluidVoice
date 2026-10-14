@@ -520,7 +520,14 @@ final class TypingService {
 
         // Paste Last and rewrite actions have no stop snapshot; retain their requested cursor.
         let deliveryTarget = capturedTarget ?? Self.captureRecordingTargetContext()
-        let focus = Self.assessDeliveryFocus(observation: DeliveryTargetAssessment.observeFocusedElement(), capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID)
+        let capturedElement = deliveryTarget?.element.map { DeliveryTargetAssessment.FocusIdentity(element: $0) }
+        let deliveryFrontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focus = Self.assessDeliveryFocus(
+            observation: DeliveryTargetAssessment.observeFocusedElement(expectedElement: capturedElement),
+            capturedTarget: deliveryTarget,
+            preferredTargetPID: preferredTargetPID,
+            expectedFrontmostPID: deliveryFrontmostPID
+        )
         DebugLogger.shared.info("FOCUS_ASSESS \(focus.assessment.logDescription) decision=\(focus.decision)", source: "TypingService")
         if focus.decision == .refuse {
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
@@ -544,8 +551,11 @@ final class TypingService {
             )
         }
         let validateTarget: @MainActor () async -> TextDeliveryFailure? = {
-            let observation = await DeliveryTargetAssessment.observeFocusedElementOffMain(on: Self.directInsertionQueue)
-            return Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision == .refuse ? .noEditableTarget : nil
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == deliveryFrontmostPID else { return .noEditableTarget }
+            let observation = await DeliveryTargetAssessment.observeFocusedElementOffMain(on: Self.directInsertionQueue, readFocus: {
+                DeliveryTargetAssessment.observeFocusedElement(expectedElement: capturedElement)
+            })
+            return Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID, expectedFrontmostPID: deliveryFrontmostPID).decision == .refuse ? .noEditableTarget : nil
         }
         let usesClipboard = focus.decision == .reliablePasteFallback || mode == .reliablePaste ||
             self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID) != nil
@@ -568,16 +578,17 @@ final class TypingService {
         } else if await self.insertTextDirectlyOffMain(
             text,
             preferredTargetPID: preferredTargetPID,
+            capturedElement: capturedElement,
             canStartInsertion: { observation in
                 isOutputValid() && directState.canStart(
-                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID, expectedFrontmostPID: deliveryFrontmostPID).decision
                 )
             },
             isOutputValid: { observation in
                 // Once direct typing starts, a role change alone must not replay a partly typed transcript.
                 guard isOutputValid() else { return false }
                 return directState.canContinue(
-                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID).decision
+                    Self.assessDeliveryFocus(observation: observation, capturedTarget: deliveryTarget, preferredTargetPID: preferredTargetPID, expectedFrontmostPID: deliveryFrontmostPID).decision
                 )
             }
         ) {
@@ -724,9 +735,11 @@ final class TypingService {
     private static func assessDeliveryFocus(
         observation: DeliveryTargetAssessment.FocusObservation?,
         capturedTarget: RecordingTargetContext?,
-        preferredTargetPID: pid_t?
+        preferredTargetPID: pid_t?,
+        expectedFrontmostPID: pid_t?
     ) -> (assessment: DeliveryTargetAssessment, decision: DeliveryTargetAssessment.DeliveryDecision) {
         let assessment = observation?.assessment ?? .unavailable(reason: "no_focused_element")
+        guard let expectedFrontmostPID else { return (assessment, .refuse) }
         let focused = observation.map {
             DeliveryTargetAssessment.Target(
                 pid: $0.pid,
@@ -754,7 +767,9 @@ final class TypingService {
             capturedTarget: captured,
             focusedTarget: focused,
             frontmostPID: frontmost?.processIdentifier,
-            ownPID: ProcessInfo.processInfo.processIdentifier
+            ownPID: ProcessInfo.processInfo.processIdentifier,
+            matchesCapturedElement: observation?.matchesCapturedElement ?? false,
+            expectedFrontmostPID: expectedFrontmostPID
         ))
     }
 
@@ -845,12 +860,13 @@ final class TypingService {
     private func insertTextDirectlyOffMain(
         _ text: String,
         preferredTargetPID: pid_t?,
+        capturedElement: DeliveryTargetAssessment.FocusIdentity?,
         canStartInsertion: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
         isOutputValid: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool
     ) async -> Bool {
         await DirectInsertionExecutor.run(
             on: Self.directInsertionQueue,
-            readFocus: { DeliveryTargetAssessment.observeFocusedElement() },
+            readFocus: { DeliveryTargetAssessment.observeFocusedElement(expectedElement: capturedElement) },
             canStart: canStartInsertion,
             canContinue: isOutputValid,
             insert: { valid in self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: valid) }
