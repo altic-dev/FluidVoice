@@ -573,6 +573,8 @@ final class RewritingDefaults: UserDefaults {
         var handle: OpaquePointer?
         precondition(sqlite3_open(url.path, &handle) == SQLITE_OK)
         defer { sqlite3_close(handle) }
+        // A writer released by the previous load may still be closing its connection.
+        sqlite3_busy_timeout(handle, 2000)
         precondition(sqlite3_exec(handle, command, nil, nil, nil) == SQLITE_OK)
     }
 }
