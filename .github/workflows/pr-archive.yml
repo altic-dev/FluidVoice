@@ -171,6 +171,11 @@ jobs:
           codesign --force --sign - --timestamp=none "$CTRANSCRIBE_FRAMEWORK"
           codesign --force --sign - --timestamp=none \
             "$APP_PATH/Contents/Frameworks/MediaRemoteAdapter.framework"
+          # fv-serve ships in Contents/Helpers. Sign it before the app so the
+          # app's seal records a valid nested signature.
+          FV_SERVE="$APP_PATH/Contents/Helpers/fv-serve"
+          test -x "$FV_SERVE"
+          codesign --force --sign - --timestamp=none --options runtime "$FV_SERVE"
           codesign --force --sign - --timestamp=none --options runtime \
             --entitlements "$EFFECTIVE_ENTITLEMENTS" \
             --identifier "$BUNDLE_IDENTIFIER" \

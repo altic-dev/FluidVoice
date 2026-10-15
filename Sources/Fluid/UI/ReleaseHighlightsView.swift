@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ReleaseHighlightsView: View {
     let canExplore: Bool
+    let version: String
     let content: ReleaseHighlightsContent
     let onClose: (ReleaseHighlightsContent.Destination?) -> Void
     @Environment(\.theme) private var theme
@@ -10,7 +11,7 @@ struct ReleaseHighlightsView: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("FLUIDVOICE \(self.content.release)")
+                    Text("FLUIDVOICE \(self.version)")
                         .font(self.theme.typography.captionStrong)
                         .tracking(2)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -35,6 +36,10 @@ struct ReleaseHighlightsView: View {
                     self.feature(feature)
                 }
             }
+            Text(.init(self.content.officialSiteNotice))
+                .font(self.theme.typography.body)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
             Text("Always here in Help → What’s new.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)

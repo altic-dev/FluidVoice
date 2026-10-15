@@ -111,6 +111,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
+    /// When live captions last heard words in the current recording. Nil without live captions.
+    private(set) var lastLiveSpeechAt: Date?
 
     /// Sustained application-audio silence, in seconds, before the silence watchdog degrades the session.
     private static let silenceWatchdogThresholdSeconds: TimeInterval = 90
@@ -447,6 +449,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                           self.liveTranscriptionCoordinator != nil,
                           self.liveTranscript.accepts(snapshot, generation: generation, activeGeneration: self.captureGeneration)
                     else { return }
+                    if snapshot.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
                     self.liveTranscript = snapshot
                 }
             }
@@ -454,6 +457,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
+        self.lastLiveSpeechAt = nil
         liveTranscriptionCoordinator.start(mode: configuration.mode, languageCode: configuration.languageCode)
 
         do {

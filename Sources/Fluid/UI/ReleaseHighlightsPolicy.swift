@@ -9,6 +9,7 @@ struct ReleaseHighlightsPolicy {
         let id = UUID()
         let owner: UUID
         let version: String
+        let build: String
         let manual: Bool
         var dismissing = false
         var acknowledge = false
@@ -27,8 +28,8 @@ struct ReleaseHighlightsPolicy {
         self.seenVersions = Array(unique.suffix(Self.historyLimit))
     }
 
-    static func matches(version: String, release: String) -> Bool {
-        !release.isEmpty && (version == release || version.hasPrefix(release + "-"))
+    static func updateID(version: String, build: String) -> String {
+        build.isEmpty ? version : "\(version) (\(build))"
     }
 
     mutating func requestManual(owner: UUID) {
@@ -37,11 +38,13 @@ struct ReleaseHighlightsPolicy {
         self.manualRequests.insert(owner)
     }
 
-    mutating func request(owner: UUID, version: String, release: String, eligible: Bool, manual: Bool = false) -> Session? {
+    mutating func request(owner: UUID, version: String, build: String = "", eligible: Bool, manual: Bool = false) -> Session? {
         if manual { self.requestManual(owner: owner) }
-        guard eligible, self.session == nil, Self.matches(version: version, release: release),
-              self.manualRequests.contains(owner) || !self.seenVersions.contains(version) else { return nil }
-        let session = Session(owner: owner, version: version, manual: self.manualRequests.contains(owner))
+        // Content may describe an earlier release. Every newly installed version/build
+        // still gets a presentation, without interrupting an ineligible activity.
+        guard eligible, self.session == nil, !version.isEmpty,
+              self.manualRequests.contains(owner) || !self.seenVersions.contains(Self.updateID(version: version, build: build)) else { return nil }
+        let session = Session(owner: owner, version: version, build: build, manual: self.manualRequests.contains(owner))
         self.manualRequests.remove(owner)
         self.session = session
         return session
@@ -69,8 +72,9 @@ struct ReleaseHighlightsPolicy {
         let acknowledged = eligible && (!session.dismissing || session.acknowledge)
         if !acknowledged, session.manual { self.manualRequests.insert(session.owner) }
         if acknowledged {
-            self.seenVersions.removeAll { $0 == session.version }
-            self.seenVersions.append(session.version)
+            let updateID = Self.updateID(version: session.version, build: session.build)
+            self.seenVersions.removeAll { $0 == updateID }
+            self.seenVersions.append(updateID)
             self.seenVersions = Array(self.seenVersions.suffix(Self.historyLimit))
         }
         return acknowledged

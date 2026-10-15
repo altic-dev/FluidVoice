@@ -7,6 +7,7 @@ actor MeetingModelPreparationQueue {
         let id: UUID
         let continuation: CheckedContinuation<Void, Error>
     }
+
     private var isPreparing = false
     private var waiters: [Waiter] = []
 

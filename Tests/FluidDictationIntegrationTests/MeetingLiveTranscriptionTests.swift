@@ -42,6 +42,7 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
             if self.isOpen { return }
             await withCheckedContinuation { self.continuation = $0 }
         }
+
         func open() {
             self.isOpen = true
             self.continuation?.resume()
@@ -164,6 +165,25 @@ final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
         XCTAssertFalse(MeetingLiveTranscriptSnapshot.empty.accepts(latest, generation: generation, activeGeneration: UUID()))
         XCTAssertEqual(current.revision, 2, "Rejected deliveries do not mutate existing captions")
         XCTAssertNotEqual(current.availability, .available)
+    }
+
+    func testNewWordsCountAsSpeechAndCaptionHousekeepingDoesNot() {
+        let empty = MeetingLiveTranscriptSnapshot.empty
+        let partial = MeetingLivePartial(id: UUID(), text: "so the", start: 1)
+        let talking = empty.settingPartial(partial, for: .them)
+        XCTAssertTrue(talking.hasNewWords(since: empty))
+        XCTAssertFalse(talking.hasNewWords(since: talking))
+
+        var longer = partial
+        longer.text = "so the plan"
+        XCTAssertTrue(talking.settingPartial(longer, for: .them).hasNewWords(since: talking))
+
+        let finished = talking.inserting(self.utterance(.them, "so the plan", start: 1, end: 2)).settingPartial(nil, for: .them)
+        XCTAssertTrue(finished.hasNewWords(since: talking))
+
+        XCTAssertFalse(talking.settingPartial(nil, for: .them).hasNewWords(since: talking), "a caption going away is not speech")
+        XCTAssertFalse(finished.settingAvailability(.available).hasNewWords(since: finished))
+        XCTAssertFalse(finished.markingFinalized(UUID()).hasNewWords(since: finished))
     }
 
     private func utterance(_ speaker: MeetingLiveSpeaker, _ text: String, start: TimeInterval, end: TimeInterval) -> MeetingLiveUtterance {
