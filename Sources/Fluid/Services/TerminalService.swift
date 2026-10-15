@@ -100,30 +100,33 @@ final class TerminalService {
         do {
             try process.run()
 
-            // Wait with timeout
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if process.isRunning {
-                    process.terminate()
+            // waitUntilExit() and the pipe reads block, so they run on a dispatch
+            // queue rather than on the main actor or a Swift concurrency thread.
+            let (outputData, errorData, timedOut) = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: Self.waitForExit(
+                        of: process,
+                        outputPipe: outputPipe,
+                        errorPipe: errorPipe,
+                        timeout: timeout
+                    ))
                 }
             }
 
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
             let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var errorOutput = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if timedOut {
+                let note = "Timed out after \(String(format: "%g", timeout))s."
+                errorOutput = errorOutput.isEmpty ? note : errorOutput + "\n" + note
+            }
 
             let executionTime = Int(Date().timeIntervalSince(startTime) * 1000)
 
             return CommandResult(
-                success: process.terminationStatus == 0,
+                success: !timedOut && process.terminationStatus == 0,
                 command: command,
                 output: output,
-                error: errorOutput?.isEmpty == true ? nil : errorOutput,
+                error: errorOutput.isEmpty ? nil : errorOutput,
                 exitCode: process.terminationStatus,
                 executionTimeMs: executionTime
             )
@@ -139,6 +142,28 @@ final class TerminalService {
                 executionTimeMs: executionTime
             )
         }
+    }
+
+    /// Waits for the command and reads its output. Blocks; returns whether the timeout fired.
+    nonisolated private static func waitForExit(
+        of process: Process,
+        outputPipe: Pipe,
+        errorPipe: Pipe,
+        timeout: TimeInterval
+    ) -> (Data, Data, Bool) {
+        let deadline = TerminalCommandDeadline(process: process)
+        let timeoutWork = DispatchWorkItem { deadline.expire() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+
+        process.waitUntilExit()
+
+        // The reads end at EOF, which only arrives once every copy of the write
+        // ends has been closed, so keep the timeout armed until both finish.
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let timedOut = deadline.finish()
+        timeoutWork.cancel()
+        return (outputData, errorData, timedOut)
     }
 
     /// Convert result to JSON string for AI processing
@@ -167,5 +192,50 @@ final class TerminalService {
 
         // If serialization fails for any reason, return minimal safe JSON
         return #"{"success":false,"output":"<json-serialization-failed>","exitCode":-1}"#
+    }
+}
+
+/// Stops a timed-out command. On macOS, Process launches the shell as the leader
+/// of a new process group (pgid == pid), and whatever the command starts inherits
+/// that group unless it moves itself out (setsid, setpgid). Signal the group
+/// directly: a descendant can outlive the shell and keep stdout/stderr open, and
+/// once the shell has exited there is nothing left for process.terminate() to reach.
+private final nonisolated class TerminalCommandDeadline: @unchecked Sendable {
+    private static let killGracePeriod: TimeInterval = 2
+
+    private let lock = NSLock()
+    private let process: Process
+    private var finished = false
+    private var expired = false
+
+    init(process: Process) { self.process = process }
+
+    /// SIGTERM now, then SIGKILL after the grace period if the reads still haven't finished.
+    func expire() {
+        guard self.signal(SIGTERM, expiring: true) else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.killGracePeriod) {
+            _ = self.signal(SIGKILL, expiring: false)
+        }
+    }
+
+    /// Marks the reads finished so no further signal is sent. Returns whether the timeout fired.
+    func finish() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.finished = true
+        return self.expired
+    }
+
+    private func signal(_ signal: Int32, expiring: Bool) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        // kill(0, ...) would signal FluidVoice's own process group.
+        let processGroup = self.process.processIdentifier
+        guard !self.finished, processGroup > 0 else { return false }
+        if expiring { self.expired = true }
+        if kill(-processGroup, signal) != 0, self.process.isRunning {
+            kill(processGroup, signal)
+        }
+        return true
     }
 }
