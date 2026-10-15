@@ -1406,12 +1406,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
     }
 
-    private func isFluidMainWindow(_ window: NSWindow) -> Bool {
-        guard window.level == .normal else { return false }
-        guard window.styleMask.contains(.titled) else { return false }
+    func isFluidMainWindow(_ window: NSWindow) -> Bool {
+        guard MainWindowIdentity.matches(window) else { return false }
         guard window.canBecomeKey else { return false }
         guard window.isMiniaturized == false else { return false }
-        return window.title == "FluidVoice" || window.title.contains("FluidVoice")
+        return true
     }
 
     @objc private func openPreferences() {

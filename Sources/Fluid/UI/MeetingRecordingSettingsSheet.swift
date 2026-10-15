@@ -46,6 +46,9 @@ struct MeetingRecordingSettingsSheet: View {
     @Environment(\.theme) private var theme
 
     @State private var selectedSection: MeetingSettingsSection
+    /// What the sheet opened with, to tell whether leaving it would throw edits away.
+    @State private var openedDraft: MeetingTranscriptionSetupDraft
+    @State private var openedRetentionPolicy: MeetingAudioRetentionPolicy
 
     // Keeps the existing sheet's bindings and callbacks together at its presentation boundary.
     init(
@@ -78,6 +81,19 @@ struct MeetingRecordingSettingsSheet: View {
         self.onCancel = onCancel
         self.onSave = onSave
         self._selectedSection = State(initialValue: initialSection)
+        self._openedDraft = State(initialValue: draft.wrappedValue)
+        self._openedRetentionPolicy = State(initialValue: retentionPolicy.wrappedValue)
+    }
+
+    private var hasUnsavedChanges: Bool {
+        self.draft != self.openedDraft || self.retentionPolicy != self.openedRetentionPolicy
+    }
+
+    /// Nothing on Integrations waits for Save, so the button there only closes. With edits made
+    /// on another tab still unsaved it would discard them, and has to say so.
+    static func dismissTitle(isFirstSetup: Bool, section: MeetingSettingsSection, hasUnsavedChanges: Bool) -> String {
+        if isFirstSetup { return "Not now" }
+        return section == .integrations && !hasUnsavedChanges ? "Close" : "Cancel"
     }
 
     private var canSave: Bool {
@@ -157,7 +173,7 @@ struct MeetingRecordingSettingsSheet: View {
                     HStack(spacing: self.theme.metrics.spacing.sm) {
                         Image(systemName: section.symbol)
                             .frame(width: self.theme.metrics.spacing.lg)
-                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .foregroundStyle(self.selectedSection == section ? self.theme.palette.accent : self.theme.palette.secondaryText)
                         Text(section.rawValue)
                             .font(self.selectedSection == section ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.primaryText)
@@ -167,13 +183,19 @@ struct MeetingRecordingSettingsSheet: View {
                     .padding(.horizontal, self.theme.metrics.spacing.md)
                     .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
                     .padding(.vertical, self.theme.metrics.spacing.xs)
+                    // The selected tab uses the app's selected-row tint, so it reads as "you are here"
+                    // and not as one more hover outline.
                     .background(
-                        self.selectedSection == section ? self.theme.palette.cardBackground : Color.clear,
+                        self.selectedSection == section
+                            ? self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
+                            : Color.clear,
                         in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
                 }
                 .buttonStyle(.plain)
+                // The keyboard focus ring otherwise sits on the first tab whichever tab is open.
+                .focusEffectDisabled()
                 .meetingHoverFeedback(cornerRadius: self.theme.metrics.corners.sm)
                 .accessibilityAddTraits(self.selectedSection == section ? .isSelected : [])
             }
@@ -338,11 +360,11 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) != nil }
+        self.applications.pickerSections.usual
     }
 
     private var otherApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) == nil }
+        self.applications.pickerSections.others
     }
 
     private var selectedApplicationName: String {
@@ -458,49 +480,13 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var integrationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Claude & ChatGPT MCP links") {
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    self.integrationRow(name: "Claude", provider: "by Anthropic", assetName: "Provider_Anthropic")
-                    Divider()
-                    self.integrationRow(name: "ChatGPT", provider: "by OpenAI", assetName: "Provider_OpenAI")
-                }
-            }
+            MeetingAgentIntegrations()
 
-            Label("MCP connections are coming in a future update. No meeting notes are shared with Claude or ChatGPT.", systemImage: "lock.fill")
+            Label("A meeting an agent reads is sent to that agent.", systemImage: "lock.fill")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func integrationRow(name: String, provider: String, assetName: String) -> some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Image(assetName)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 26, height: 26)
-                .frame(width: 44, height: 44)
-                .background(Color(nsColor: .white), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text(name)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text(provider)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-            Spacer(minLength: self.theme.metrics.spacing.md)
-            Text("Coming soon")
-                .font(self.theme.typography.badge)
-                .foregroundStyle(self.theme.palette.secondaryText)
-            Toggle("Enable \(name) MCP link — coming soon", isOn: .constant(false))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(true)
-                .help("\(name) MCP links are coming soon.")
-        }
-        .padding(.vertical, self.theme.metrics.spacing.sm)
     }
 
     private var footer: some View {
@@ -514,7 +500,11 @@ struct MeetingRecordingSettingsSheet: View {
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Spacer(minLength: self.theme.metrics.spacing.md)
                     Button(action: self.onCancel) {
-                        Text(self.isFirstSetup ? "Not now" : "Cancel").frame(minWidth: 72)
+                        Text(Self.dismissTitle(
+                            isFirstSetup: self.isFirstSetup,
+                            section: self.selectedSection,
+                            hasUnsavedChanges: self.hasUnsavedChanges
+                        )).frame(minWidth: 72)
                     }
                     .meetingGlassAction()
                     .keyboardShortcut(.cancelAction)

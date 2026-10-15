@@ -93,6 +93,13 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
         }
     }
 
+    /// True when this snapshot holds words the earlier one did not: somebody is talking. A caption
+    /// that only went away, or captions becoming available, is not speech.
+    func hasNewWords(since earlier: MeetingLiveTranscriptSnapshot) -> Bool {
+        if self.utterances != earlier.utterances, !self.utterances.isEmpty { return true }
+        return self.partials.contains { speaker, partial in earlier.partials[speaker]?.text != partial.text }
+    }
+
     func settingAvailability(_ availability: MeetingLiveAvailability) -> MeetingLiveTranscriptSnapshot {
         var copy = self
         copy.availability = availability

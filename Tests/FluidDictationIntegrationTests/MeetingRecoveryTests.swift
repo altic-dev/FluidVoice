@@ -563,6 +563,19 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(decoded.displayTitle, "original.wav")
     }
 
+    func testSettingsSheetOnlySaysCloseWhenLeavingDiscardsNothing() {
+        typealias Sheet = MeetingRecordingSettingsSheet
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .integrations, hasUnsavedChanges: false), "Close")
+        XCTAssertEqual(
+            Sheet.dismissTitle(isFirstSetup: false, section: .integrations, hasUnsavedChanges: true),
+            "Cancel",
+            "edits made on another tab would be thrown away"
+        )
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .recording, hasUnsavedChanges: false), "Cancel")
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .automation, hasUnsavedChanges: true), "Cancel")
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: true, section: .integrations, hasUnsavedChanges: false), "Not now")
+    }
+
     func testNotesSetupDraftDoesNotPersistDetectionChanges() {
         let native = SettingsStore.shared.meetingAutoDetectEnabled
         let browser = SettingsStore.shared.meetingAutoDetectBrowserEnabled

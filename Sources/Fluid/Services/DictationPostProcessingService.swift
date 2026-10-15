@@ -295,7 +295,7 @@ final class DictationPostProcessingService {
             apiKey: resolved.apiKey,
             streaming: false,
             tools: [],
-            temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.2,
+            temperature: settings.isTemperatureUnsupported(resolved.model, baseURL: resolved.baseURL) ? nil : 0.2,
             extraParameters: extraParams
         )
         config.timeoutSeconds = 120

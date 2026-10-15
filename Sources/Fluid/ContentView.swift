@@ -2874,7 +2874,7 @@ struct ContentView: View {
         }
 
         // Check if this model doesn't support the temperature parameter
-        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel)
+        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel, baseURL: derivedBaseURL)
 
         // Get reasoning config for this model (uses per-model settings or auto-detection)
         // This handles custom parameters like reasoning_effort, enable_thinking, etc.
@@ -3378,13 +3378,14 @@ struct ContentView: View {
 
         // A sidebar search field that was already focused when recording began gets
         // the text through its field editor, which also fires change notifications.
+        // So does an in-app editor that opted in with `DictationTextTarget`.
         if isFluidFrontmost, shouldDeliverOutputs, !sendsExistingDraft,
            let focusTarget = self.recordingFocusTarget,
            focusTarget.pid == ProcessInfo.processInfo.processIdentifier,
            TypingService.isExactFocusTargetActive(focusTarget),
            let window = NSApp.keyWindow,
            let editor = window.firstResponder as? NSTextView,
-           SidebarSearchField.owns(editor, in: window)
+           SidebarSearchField.owns(editor, in: window) || DictationTextTarget.accepts(editor)
         {
             editor.insertText(finalText, replacementRange: editor.selectedRange())
         }
