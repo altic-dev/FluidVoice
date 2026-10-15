@@ -1,3 +1,4 @@
+---
 name: Nix flake
 
 # Validates flake.nix on both darwin systems (Apple Silicon + Intel).
@@ -12,7 +13,7 @@ name: Nix flake
 #      GUI app with no CLI smoke flag, and this avoids executing a
 #      downloaded binary on the runner.
 
-on:
+"on":
   workflow_dispatch: {}
   release:
     types: [published]
@@ -28,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: nix-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: nix-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,12 +43,13 @@ jobs:
         runner: [macos-26, macos-26-intel]
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           persist-credentials: false
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        # DeterminateSystems/nix-installer-action v23
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa  # yamllint disable-line rule:line-length
 
       - name: nix flake check --all-systems
         run: nix flake check --all-systems --no-build
@@ -58,8 +60,10 @@ jobs:
       - name: Verify app bundle
         run: |
           set -euo pipefail
-          APP="$(nix build .#default --print-out-paths)/Applications/FluidVoice.app"
+          OUT="$(nix build .#default --print-out-paths)"
+          APP="$OUT/Applications/FluidVoice.app"
           test -x "$APP/Contents/MacOS/FluidVoice"
           codesign --verify --deep --strict "$APP"
           echo "signature OK"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            "$APP/Contents/Info.plist"

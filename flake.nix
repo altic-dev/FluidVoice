@@ -28,7 +28,7 @@
       };
 
       systems = builtins.attrNames assets;
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
+      forAllSystems = f: nixpkgs.lib.genAttrs systems f;
 
       pkgsFor = system:
         if system == "x86_64-darwin"
@@ -46,7 +46,7 @@
 
           src = pkgs.fetchurl {
             url = "https://github.com/altic-dev/FluidVoice/releases/download/v${version}/${asset.file}";
-            sha256 = asset.sha256;
+            inherit (asset) sha256;
           };
 
           nativeBuildInputs = [ pkgs.unzip ];
