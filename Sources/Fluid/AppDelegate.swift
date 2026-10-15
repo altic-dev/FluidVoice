@@ -18,10 +18,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     static func restartAfterSaving() {
         guard !self.restartInProgress else { return }
         self.restartInProgress = true
+        GlobalHotkeyManager.suspendForTermination()
         Task { @MainActor in
             await TranscriptionHistoryStore.shared.finishPendingWrites()
             guard TranscriptionHistoryStore.shared.persistenceError == nil else {
                 self.restartInProgress = false
+                GlobalHotkeyManager.resumeAfterCancelledTermination()
                 DebugLogger.shared.error("Restart cancelled: history could not be saved", source: "AppDelegate")
                 return
             }
@@ -133,6 +135,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        GlobalHotkeyManager.suspendForTermination()
         self.applyMainWindowRestorability()
         if Self.restartPrepared { return .terminateNow }
         Task { @MainActor in
@@ -143,7 +146,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 alert.informativeText = error
                 alert.addButton(withTitle: "Keep Open")
                 alert.addButton(withTitle: "Quit Anyway")
-                sender.reply(toApplicationShouldTerminate: alert.runModal() == .alertSecondButtonReturn)
+                let shouldQuit = alert.runModal() == .alertSecondButtonReturn
+                if !shouldQuit {
+                    GlobalHotkeyManager.resumeAfterCancelledTermination()
+                }
+                sender.reply(toApplicationShouldTerminate: shouldQuit)
                 return
             }
             sender.reply(toApplicationShouldTerminate: true)
