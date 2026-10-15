@@ -16,9 +16,19 @@ final class DictationAudioHistoryStore {
     static let shared = DictationAudioHistoryStore()
     var usageBytes: Int64 = 0
     var orphanSweeps = 0
-    @discardableResult func deleteAudio(fileName: String) -> Int64 { 0 }
+    var usageMeasurements = 0
+    var deletedFileNames: [String] = []
+    @discardableResult func deleteAudio(fileName: String) -> Int64 {
+        self.deletedFileNames.append(fileName)
+        return 0
+    }
+
     func deleteAllAudioFiles() {}
-    func audioUsageBytes() -> Int64 { self.usageBytes }
+    func audioUsageBytes() -> Int64 {
+        self.usageMeasurements += 1
+        return self.usageBytes
+    }
+
     func deleteUnreferencedAudioFiles(referencedFileNames: Set<String>) -> (fileCount: Int, byteCount: Int64) {
         self.orphanSweeps += 1
         return (0, 0)
@@ -216,12 +226,12 @@ final class RewritingDefaults: UserDefaults {
         print("PASS: restore during loading replaces both memory and disk")
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
         try await self.testStars(root: root, defaults: defaults, audio: audio)
-        try await self.testLegacyImportAcrossBuilds(root: root)
+        try await self.testLegacyImportAcrossBuilds(root: root, audio: audio)
     }
 
     /// The database is shared by every build on the Mac, but each bundle and each older
     /// version keeps legacy history in its own defaults. Neither may lose unimported entries.
-    @MainActor static func testLegacyImportAcrossBuilds(root: URL) async throws {
+    @MainActor static func testLegacyImportAcrossBuilds(root: URL, audio: DictationAudioMetadata) async throws {
         let key = "TranscriptionHistoryEntries"
         let suites = (0..<3).map { "fluid-history-legacy-\($0)-\(UUID())" }
         defer { suites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
@@ -285,17 +295,31 @@ final class RewritingDefaults: UserDefaults {
         precondition(upgradeDefaults.data(forKey: key) == unreadable, "Unreadable legacy history must never be deleted")
         print("PASS: unreadable legacy history is preserved without blocking saved history or new dictations")
 
-        // Audio referenced only by unimported legacy history must not be swept as orphaned.
+        // Unimported legacy history may own audio the loaded entries do not reference, so usage over
+        // budget must neither sweep that audio as orphaned nor delete new recordings to pay for it.
         let audioStore = DictationAudioHistoryStore.shared
         audioStore.usageBytes = 2_000_000
         defer { audioStore.usageBytes = 0 }
         let sweeps = audioStore.orphanSweeps
+        let measurements = audioStore.usageMeasurements
+        let deletions = audioStore.deletedFileNames.count
+        store.attachAudio(audio, to: newID)
+        for _ in 0..<200 where audioStore.usageMeasurements == measurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(audioStore.usageMeasurements > measurements, "Attaching audio must measure usage against the budget")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(store.entries.first { $0.id == newID }?.audio == audio, "A new recording must not pay for legacy audio")
         store.pruneAudioToBudget()
-        precondition(audioStore.orphanSweeps == sweeps, "Unreadable legacy history must block the orphaned audio sweep")
+        precondition(store.entries.first { $0.id == newID }?.audio == audio, "Lowering the budget must not delete recordings while legacy history remains")
+        precondition(audioStore.deletedFileNames.count == deletions, "Unimported legacy history must block deleting recordings")
+        precondition(audioStore.orphanSweeps == sweeps, "Unimported legacy history must block the orphaned audio sweep")
         upgradeDefaults.removeObject(forKey: key)
         store.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == sweeps + 1, "Fully imported history must allow the orphaned audio sweep")
-        print("PASS: unimported legacy history blocks only the orphaned audio sweep")
+        precondition(audioStore.deletedFileNames.dropFirst(deletions) == [audio.fileName], "Fully imported history must allow pruning recordings to the budget")
+        precondition(store.entries.allSatisfy { $0.audio == nil })
+        print("PASS: unimported legacy history defers audio budget pruning until it is imported")
 
         // An older instance saves a newer legacy array after this load read the key.
         let racingSuite = "fluid-history-legacy-race-\(UUID())"
