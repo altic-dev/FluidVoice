@@ -77,6 +77,76 @@ final class FileTranscriptionAudioTests: XCTestCase {
         }
     }
 
+    #if arch(arm64)
+    func testNemotronNativeFilePadsSubsecondInput() async throws {
+        for mode in [NemotronProvider.Mode.offline, .streaming, .streaming320] {
+            for frameCount in [1, 8000, 15_999] {
+                try await self.withNemotronFile(mode: mode, frameCount: frameCount) { result, inputs in
+                    XCTAssertEqual(inputs.count, 1, "Mode: \(mode), frames: \(frameCount)")
+                    let input = try XCTUnwrap(inputs.first)
+                    XCTAssertEqual(input, Array(repeating: 0.25, count: frameCount) + Array(repeating: 0, count: 16_000 - frameCount))
+                    XCTAssertEqual(result.text, "chunk-1")
+                }
+            }
+        }
+    }
+
+    func testNemotronNativeFileHandlesEmptyAndBoundaryInputs() async throws {
+        for mode in [NemotronProvider.Mode.offline, .streaming, .streaming320] {
+            for frameCount in [0, 16_000, 16_001] {
+                try await self.withNemotronFile(mode: mode, frameCount: frameCount) { result, inputs in
+                    XCTAssertEqual(inputs.count, frameCount == 0 ? 0 : 1)
+                    XCTAssertEqual(inputs.flatMap { $0 }, Array(repeating: 0.25, count: frameCount))
+                    XCTAssertEqual(result.text, frameCount == 0 ? "" : "chunk-1")
+                }
+            }
+        }
+    }
+
+    func testNemotronNativeFileKeepsAudioAcrossBatches() async throws {
+        for mode in [NemotronProvider.Mode.offline, .streaming, .streaming320] {
+            try await self.withNemotronFile(mode: mode, frameCount: 244_000) { result, inputs in
+                XCTAssertGreaterThan(inputs.count, 1)
+                XCTAssertTrue(inputs.allSatisfy { $0.count >= 16_000 && $0.count <= 240_000 })
+                XCTAssertEqual(inputs.flatMap { $0 }, Array(repeating: 0.25, count: 244_000))
+                XCTAssertEqual(result.text, inputs.indices.map { "chunk-\($0 + 1)" }.joined(separator: " "))
+            }
+        }
+    }
+
+    func testNemotronNativeFileRequiresReadyProvider() async throws {
+        for mode in [NemotronProvider.Mode.offline, .streaming, .streaming320] {
+            let provider = NemotronProvider(mode: mode)
+            do {
+                _ = try await provider.transcribeFile(at: URL(fileURLWithPath: "/unused.wav"))
+                XCTFail("A provider without loaded models must not transcribe")
+            } catch {
+                XCTAssertEqual((error as NSError).domain, "NemotronProvider")
+                XCTAssertEqual(error.localizedDescription, "Nemotron provider is not ready.")
+            }
+        }
+    }
+
+    private func withNemotronFile(
+        mode: NemotronProvider.Mode,
+        frameCount: Int,
+        check: (ASRTranscriptionResult, [[Float]]) throws -> Void
+    ) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NemotronFileAudio-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("synthetic.wav")
+        try Self.writeAudio(to: fileURL, frameCount: frameCount, sample: 0.25)
+        var inputs: [[Float]] = []
+        let result = try await NemotronProvider(mode: mode).transcribeFile(at: fileURL) { samples in
+            inputs.append(samples)
+            return "chunk-\(inputs.count)"
+        }
+        try check(result, inputs)
+    }
+    #endif
+
     private func withTranscription(
         frameCount: Int,
         sample: Float = 0.25,
