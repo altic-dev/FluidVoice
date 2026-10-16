@@ -118,18 +118,25 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
     private var database: TranscriptionHistoryDatabase?
     private var writeError: Error?
     private let defaults: UserDefaults
+    private let otherInstallDefaults: [UserDefaults]
     private let url: URL
     private let legacyKey = "TranscriptionHistoryEntries"
 
-    init(defaults: UserDefaults = .standard, url: URL? = nil) {
+    /// `otherInstallDefaults` lists the installs sharing a custom `url`. Release and Debug keep separate
+    /// defaults but share the default database and audio folder.
+    init(defaults: UserDefaults = .standard, url: URL? = nil, otherInstallDefaults: [UserDefaults] = []) {
         self.defaults = defaults
         self.url = url ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/FluidVoice/TranscriptionHistory.sqlite3")
+        self.otherInstallDefaults = url != nil ? otherInstallDefaults : ["com.FluidApp.app", "com.FluidApp.app.debug"]
+            .filter { $0 != Bundle.main.bundleIdentifier }
+            .compactMap { UserDefaults(suiteName: $0) }
     }
 
-    /// Legacy history left in defaults (unreadable, or rewritten during a load) is not in the loaded entries.
+    /// Legacy history left in defaults (unreadable, rewritten during a load, or not yet imported by another
+    /// install) is not in the loaded entries.
     var hasUnimportedLegacyHistory: Bool {
-        self.defaults.data(forKey: self.legacyKey) != nil
+        ([self.defaults] + self.otherInstallDefaults).contains { $0.data(forKey: self.legacyKey) != nil }
     }
 
     func load() async throws -> [TranscriptionHistoryEntry] {

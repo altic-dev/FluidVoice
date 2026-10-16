@@ -321,6 +321,29 @@ final class RewritingDefaults: UserDefaults {
         precondition(store.entries.allSatisfy { $0.audio == nil })
         print("PASS: unimported legacy history defers audio budget pruning until it is imported")
 
+        // Another install shares the audio folder, so recordings in its unimported legacy history look orphaned here.
+        let installSuites = (0..<2).map { "fluid-history-install-\($0)-\(UUID())" }
+        defer { installSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let ownDefaults = UserDefaults(suiteName: installSuites[0]),
+              let otherInstallDefaults = UserDefaults(suiteName: installSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        let otherInstallLegacy = try JSONEncoder().encode([entry(1, "recorded by the other install")])
+        otherInstallDefaults.set(otherInstallLegacy, forKey: key)
+        let installStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: ownDefaults,
+            url: root.appendingPathComponent("installs.sqlite3"),
+            otherInstallDefaults: [otherInstallDefaults]
+        ))
+        try await installStore.waitUntilLoaded()
+        let installSweeps = audioStore.orphanSweeps
+        installStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == installSweeps, "Another install's unimported legacy history must block the orphaned audio sweep")
+        precondition(otherInstallDefaults.data(forKey: key) == otherInstallLegacy, "Another install's legacy history is left for that install")
+        otherInstallDefaults.removeObject(forKey: key)
+        installStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == installSweeps + 1, "Once every install has imported, the orphaned audio sweep runs")
+        print("PASS: another install's unimported legacy history defers audio budget pruning")
+
         // An older instance saves a newer legacy array after this load read the key.
         let racingSuite = "fluid-history-legacy-race-\(UUID())"
         defer { UserDefaults().removePersistentDomain(forName: racingSuite) }
