@@ -65,5 +65,9 @@ jobs:
           test -x "$APP/Contents/MacOS/FluidVoice"
           codesign --verify --deep --strict "$APP"
           echo "signature OK"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-            "$APP/Contents/Info.plist"
+          EXPECTED="$(basename "$OUT" | sed 's/^.*-fluidvoice-//')"
+          ACTUAL="$(/usr/libexec/PlistBuddy \
+            -c 'Print :CFBundleShortVersionString' \
+            "$APP/Contents/Info.plist")"
+          echo "package version: $EXPECTED, bundle version: $ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
