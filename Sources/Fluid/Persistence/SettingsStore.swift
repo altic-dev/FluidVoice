@@ -3702,6 +3702,8 @@ final class SettingsStore: ObservableObject {
             overlayTint: self.overlayTint,
             overlayHighlight: self.overlayHighlight,
             overlayClosingAnimationEnabled: self.overlayClosingAnimationEnabled,
+            duckAudioDuringRecording: self.duckAudioDuringRecording,
+            recordingDuckVolume: self.recordingDuckVolume,
             meetingOverlayPreference: self.meetingOverlayPreference,
             transcriptionPreviewCharLimit: self.transcriptionPreviewCharLimit,
             userTypingWPM: self.userTypingWPM,
@@ -3896,6 +3898,8 @@ final class SettingsStore: ObservableObject {
         if let enabled = payload.overlayClosingAnimationEnabled {
             self.overlayClosingAnimationEnabled = enabled
         }
+        if let enabled = payload.duckAudioDuringRecording { self.duckAudioDuringRecording = enabled }
+        if let volume = payload.recordingDuckVolume { self.recordingDuckVolume = volume }
         if let meetingOverlayPreference = payload.meetingOverlayPreference {
             self.meetingOverlayPreference = meetingOverlayPreference
         }
@@ -5000,6 +5004,33 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Media Playback Control
 
+    static let recordingDuckVolumeRange: ClosedRange<Double> = 0.05...1
+    private static let defaultRecordingDuckVolume = 0.15
+
+    var duckAudioDuringRecording: Bool {
+        get { self.defaults.bool(forKey: Keys.duckAudioDuringRecording) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.duckAudioDuringRecording)
+        }
+    }
+
+    var recordingDuckVolume: Double {
+        get {
+            let stored = self.defaults.object(forKey: Keys.recordingDuckVolume) as? Double ?? Self.defaultRecordingDuckVolume
+            return stored.isFinite ? Self.clampedRecordingDuckVolume(stored) : Self.defaultRecordingDuckVolume
+        }
+        set {
+            guard newValue.isFinite else { return }
+            objectWillChange.send()
+            self.defaults.set(Self.clampedRecordingDuckVolume(newValue), forKey: Keys.recordingDuckVolume)
+        }
+    }
+
+    private static func clampedRecordingDuckVolume(_ volume: Double) -> Double {
+        min(self.recordingDuckVolumeRange.upperBound, max(self.recordingDuckVolumeRange.lowerBound, volume))
+    }
+
     /// When enabled, automatically pauses system media playback when transcription starts.
     /// Only resumes if FluidVoice was the one that paused it.
     var pauseMediaDuringTranscription: Bool {
@@ -6024,6 +6055,8 @@ private extension SettingsStore {
 
         /// Media Playback Control
         static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"
+        static let duckAudioDuringRecording = "DuckAudioDuringRecording"
+        static let recordingDuckVolume = "RecordingDuckVolume"
 
         /// Custom Dictation Prompt
         static let customDictationPrompt = "CustomDictationPrompt"
@@ -6132,6 +6165,7 @@ extension SettingsStore {
 
     enum TextInsertionMode: String, CaseIterable, Identifiable, Codable {
         case reliablePaste
+        case clipboardOnly
         case standard
 
         var id: String {
@@ -6140,6 +6174,8 @@ extension SettingsStore {
 
         var displayName: String {
             switch self {
+            case .clipboardOnly:
+                return "Copy to Clipboard Only"
             case .standard:
                 return "Direct Paste"
             case .reliablePaste:
@@ -6149,6 +6185,8 @@ extension SettingsStore {
 
         var description: String {
             switch self {
+            case .clipboardOnly:
+                return "Copies finished text without pasting or sending it."
             case .standard:
                 return "Posts text directly without changing the clipboard. Some editors may reject or truncate it."
             case .reliablePaste:
