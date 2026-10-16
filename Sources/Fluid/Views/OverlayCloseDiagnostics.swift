@@ -81,7 +81,13 @@ enum RecordingOverlayHideOutcome: Equatable {
 final class BottomOverlayPanel: NSPanel {
     var allowsOffscreenParking = false
 
+    /// Users drag the overlay off a screen edge to get it out of the way, so AppKit's
+    /// default "keep the window on screen" clamping must be bypassed for user moves too.
+    var allowsUserDragging = false
+
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
-        self.allowsOffscreenParking ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+        self.allowsOffscreenParking || self.allowsUserDragging
+            ? frameRect
+            : super.constrainFrameRect(frameRect, to: screen)
     }
 }
