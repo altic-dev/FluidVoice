@@ -140,6 +140,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     // MARK: - Configuration
 
     struct Config: @unchecked Sendable {
+        var providerID: String?
         let messages: [[String: Any]]
         let model: String
         let baseURL: String
@@ -173,6 +174,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var onToolCallStart: (@Sendable (String) -> Void)?
 
         init(
+            providerID: String? = nil,
             messages: [[String: Any]],
             model: String,
             baseURL: String,
@@ -184,6 +186,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             extraParameters: [String: Any] = [:],
             benchmarkID: String? = nil
         ) {
+            self.providerID = providerID
             self.messages = messages
             self.model = model
             self.baseURL = baseURL
@@ -203,6 +206,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Supports both streaming and non-streaming modes.
     /// Handles thinking token extraction, tool call parsing, and retries.
     @concurrent func call(_ config: Config) async throws -> Response {
+        if config.providerID == AppleIntelligenceProvider.providerID {
+            return try await AppleIntelligenceProvider.call(config)
+        }
         self.benchmark(config, "call_enter")
         var request = try buildRequest(config)
         self.benchmark(config, "request_built bodyBytes=\(request.httpBody?.count ?? 0)")
