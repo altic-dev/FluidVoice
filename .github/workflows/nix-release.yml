@@ -100,6 +100,22 @@ jobs:
                   f"hash mismatch. ASSET_MAP currently covers: "
                   f"{sorted(asset_map.keys())}")
 
+
+          # Each selector must match exactly one asset. `names` is a set,
+          # so a broad substring (e.g. ".zip" while a win-x64.zip also
+          # exists) would otherwise pick whichever asset iterates first
+          # and silently pin the wrong archive into the flake.
+          def match_one(sys_, sub):
+              matches = sorted(n for n in names if sub in n)
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"asset selector '{sub}' for {sys_} matched "
+                      f"{len(matches)} assets in {tag}: "
+                      f"{matches or 'none'} — each ASSET_MAP substring "
+                      f"must match exactly one asset; make it more "
+                      f"specific")
+              return matches[0]
+
           # --- Hash-based staleness check ---
           # Compare the first asset's SRI hash against flake.nix. Hash
           # comparison (not version comparison) is authoritative: if the
@@ -107,12 +123,7 @@ jobs:
           # regardless of what the version field says.
           first_sys = next(iter(asset_map))
           first_sub = asset_map[first_sys]
-          first_match = next(
-              (n for n in names if first_sub in n), None)
-          if not first_match:
-              raise SystemExit(
-                  f"no asset for {first_sys} ({first_sub}) in {tag}; "
-                  f"have: {sorted(names)}")
+          first_match = match_one(first_sys, first_sub)
           first_url = (
               f"https://github.com/{repo}/releases/download/"
               f"{tag}/{first_match}")
@@ -155,11 +166,7 @@ jobs:
           if n > 0:
               print(f"bumped version to {version}")
           for sys_, sub in asset_map.items():
-              match = next((n for n in names if sub in n), None)
-              if not match:
-                  raise SystemExit(
-                      f"no asset for {sys_} ({sub}) in {tag}; "
-                      f"have: {sorted(names)}")
+              match = match_one(sys_, sub)
               url = (
                   f"https://github.com/{repo}/releases/download/"
                   f"{tag}/{match}")
