@@ -487,7 +487,13 @@ final class SearchIndexCoordinatorTests: XCTestCase {
             let deleted = self.entry("startup deleted while unavailable")
             let stale = self.entry("startup stale index record")
             let pending = self.entry("startup new dictation")
-            fixture.defaults.set(Data("invalid JSON".utf8), forKey: "TranscriptionHistoryEntries")
+            // An unreadable saved row makes the load fail.
+            _ = try TranscriptionHistoryDatabase(url: fixture.historyURL)
+            var connection: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(fixture.historyURL.path, &connection), SQLITE_OK)
+            let database = try XCTUnwrap(connection)
+            defer { sqlite3_close(database) }
+            XCTAssertEqual(sqlite3_exec(database, "INSERT INTO history VALUES ('\(UUID().uuidString)', x'00')", nil, nil, nil), SQLITE_OK)
             try await fixture.index.reconcile(.history, with: [saved, deleted, stale].map(\.searchRecord))
 
             let history = TranscriptionHistoryStore(writer: fixture.writer)
@@ -518,6 +524,7 @@ final class SearchIndexCoordinatorTests: XCTestCase {
             let afterEdits = try await self.indexedIDs(fixture.index)
             XCTAssertEqual(afterEdits, [saved.id, deleted.id, stale.id], "Edits after a failed load are still an incomplete snapshot")
 
+            XCTAssertEqual(sqlite3_exec(database, "DELETE FROM history", nil, nil, nil), SQLITE_OK)
             try fixture.defaults.set(JSONEncoder().encode([saved, deleted]), forKey: "TranscriptionHistoryEntries")
             history.retryLoadingIfNeeded()
             try await history.waitUntilLoaded()

@@ -291,6 +291,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     private var todaySummaryDay: DateInterval?
     private var audioBudgetRevision: UInt64 = 0
     private var automaticAudioBudgetTask: Task<Void, Never>?
+    private var hasLoggedDeferredAudioPrune = false
     private(set) var audioSaveGeneration: UInt64 = 0
     private var calendarObservers: [NSObjectProtocol] = []
     private let summaryNow: () -> Date
@@ -542,6 +543,16 @@ final class TranscriptionHistoryStore: ObservableObject {
 
         var currentBytes = initialCurrentBytes
         guard currentBytes > budgetBytes else { return 0 }
+
+        // Unimported legacy history can own audio these entries do not reference, so usage cannot be
+        // attributed to them. Keep all audio until that history is imported.
+        guard !self.writer.hasUnimportedLegacyHistory else {
+            if !self.hasLoggedDeferredAudioPrune {
+                self.hasLoggedDeferredAudioPrune = true
+                DebugLogger.shared.info("Deferred audio budget pruning until legacy history is imported", source: "TranscriptionHistoryStore")
+            }
+            return 0
+        }
 
         var updatedEntries = self.entries
         let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
