@@ -2,16 +2,85 @@ import ApplicationServices
 import Foundation
 
 /// Decides, before pasting, whether the focused UI element can take text.
-/// `notEditable` is only returned when the answer is certain; every ambiguous
-/// case is `unknown` so delivery proceeds exactly as before.
-enum DeliveryTargetAssessment: Equatable {
+/// A button fallback requires a matching captured destination; unknown roles retain the chosen mode.
+nonisolated enum DeliveryTargetAssessment: Equatable, Sendable {
+    struct Target {
+        let pid: pid_t
+        let bundleIdentifier: String?
+        let hasFocusedElement: Bool
+        var isSecureTextField = false
+    }
+
+    enum DeliveryDecision: Equatable {
+        case insert
+        case reliablePasteFallback
+        case refuse
+    }
+
+    struct DirectInsertionState {
+        private(set) var wasRefused = false
+
+        func canStart(_ decision: DeliveryDecision) -> Bool {
+            !self.wasRefused && decision == .insert
+        }
+
+        mutating func canContinue(_ decision: DeliveryDecision) -> Bool {
+            if decision == .refuse {
+                self.wasRefused = true
+            }
+            return !self.wasRefused
+        }
+    }
+
+    func deliveryDecision(capturedTarget: Target?, focusedTarget: Target?, frontmostPID: pid_t?, ownPID: pid_t, matchesCapturedElement: Bool = true, expectedFrontmostPID: pid_t? = nil) -> DeliveryDecision {
+        guard let focusedTarget, focusedTarget.hasFocusedElement,
+              focusedTarget.pid > 0, focusedTarget.pid != ownPID,
+              let frontmostPID, frontmostPID > 0, frontmostPID != ownPID,
+              focusedTarget.bundleIdentifier != "com.FluidApp.app",
+              focusedTarget.bundleIdentifier != "com.FluidApp.app.debug",
+              !focusedTarget.isSecureTextField
+        else { return .refuse }
+        if let expectedFrontmostPID, expectedFrontmostPID != frontmostPID {
+            return .refuse
+        }
+        if let capturedTarget {
+            guard matchesCapturedElement, capturedTarget.pid == focusedTarget.pid,
+                  capturedTarget.bundleIdentifier == focusedTarget.bundleIdentifier,
+                  !capturedTarget.isSecureTextField
+            else { return .refuse }
+        }
+        // Captured AX focus can belong to a non-activating launcher while another app stays frontmost.
+        guard frontmostPID == focusedTarget.pid || capturedTarget?.hasFocusedElement == true else { return .refuse }
+        switch self {
+        case .editable:
+            return .insert
+        case .secure, .unavailable:
+            return .refuse
+        case .notEditable(role: "AXButton"):
+            // Web-view composers can report a button even while their editor has the caret.
+            guard capturedTarget?.hasFocusedElement == true,
+                  let bundleIdentifier = capturedTarget?.bundleIdentifier, !bundleIdentifier.isEmpty,
+                  frontmostPID == focusedTarget.pid
+            else { return .refuse }
+            return .reliablePasteFallback
+        case .unknown:
+            return capturedTarget?.hasFocusedElement == true ? .insert : .refuse
+        case .notEditable:
+            return .refuse
+        }
+    }
+
     case editable(role: String)
     case notEditable(role: String)
     case unknown(reason: String)
+    case secure(role: String)
+    case unavailable(reason: String)
 
     var isCertainlyNotEditable: Bool {
-        if case .notEditable = self { return true }
-        return false
+        switch self {
+        case .notEditable, .secure, .unavailable: true
+        case .editable, .unknown: false
+        }
     }
 
     var logDescription: String {
@@ -19,10 +88,12 @@ enum DeliveryTargetAssessment: Equatable {
         case let .editable(role): "editable role=\(role)"
         case let .notEditable(role): "notEditable role=\(role)"
         case let .unknown(reason): "unknown reason=\(reason)"
+        case let .secure(role): "secure role=\(role)"
+        case let .unavailable(reason): "unavailable reason=\(reason)"
         }
     }
 
-    /// Roles that never accept typed text. Containers are deliberately absent:
+    /// Roles ordinarily unable to accept typed text. Containers are deliberately absent:
     /// AXGroup and AXWebArea are what web editors report, a selected spreadsheet
     /// cell reports AXCell or AXTable, and apps that draw their own UI
     /// (GPU terminals, remote desktops, VMs, games) report AXWindow, AXSheet or
@@ -36,11 +107,60 @@ enum DeliveryTargetAssessment: Equatable {
     ]
 
     private static let editableRoles: Set<String> = [
-        "AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField",
+        "AXTextField", "AXTextArea", "AXComboBox",
     ]
 
+    /// Retained AX handles are shared read-only; equality adds no remote attribute query.
+    struct FocusIdentity: @unchecked Sendable {
+        let element: AXUIElement
+
+        func matches(_ other: FocusIdentity) -> Bool {
+            CFEqual(self.element, other.element)
+        }
+    }
+
+    struct FocusObservation: Sendable {
+        let pid: pid_t
+        let assessment: DeliveryTargetAssessment
+        var matchesCapturedElement = true
+    }
+
     nonisolated static func assessFocusedElement() -> DeliveryTargetAssessment {
-        guard AXIsProcessTrusted() else { return .unknown(reason: "accessibility_not_trusted") }
+        self.observeFocusedElement()?.assessment ?? .unavailable(reason: "no_focused_element")
+    }
+
+    static func observeFocusedElementOffMain(
+        on queue: DispatchQueue,
+        readFocus: @escaping @Sendable () -> FocusObservation? = { Self.observeFocusedElement() }
+    ) async -> FocusObservation? {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: readFocus()) }
+        }
+    }
+
+    nonisolated static func observeFocusedElement(
+        expectedElement: FocusIdentity? = nil,
+        readElement: () -> FocusIdentity? = { Self.readFocusedElement() },
+        assessElement: (FocusIdentity) -> FocusObservation? = { Self.assessFocus($0) }
+    ) -> FocusObservation? {
+        guard let element = readElement(), let observation = assessElement(element) else { return nil }
+        // Role/subrole queries can wait on another process. Do not authorize their stale focus afterward.
+        guard let finalElement = readElement(), element.matches(finalElement) else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=focus_changed", source: "TypingService")
+            return nil
+        }
+        return FocusObservation(
+            pid: observation.pid,
+            assessment: observation.assessment,
+            matchesCapturedElement: expectedElement.map { $0.matches(element) } ?? true
+        )
+    }
+
+    private nonisolated static func readFocusedElement() -> FocusIdentity? {
+        guard AXIsProcessTrusted() else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=permission", source: "TypingService")
+            return nil
+        }
         var focusedRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
             AXUIElementCreateSystemWide(),
@@ -48,24 +168,97 @@ enum DeliveryTargetAssessment: Equatable {
             &focusedRef
         )
         guard result == .success, let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
-            return .unknown(reason: "focused_element_\(result.rawValue)")
+            DebugLogger.shared.info(
+                "FOCUS_READ unavailable stage=focused_element axError=\(result.rawValue)",
+                source: "TypingService"
+            )
+            return nil
         }
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+        return FocusIdentity(element: unsafeBitCast(focusedRef, to: AXUIElement.self))
+    }
 
+    private nonisolated static func assessFocus(_ focus: FocusIdentity) -> FocusObservation? {
+        var pid: pid_t = 0
+        let pidResult = AXUIElementGetPid(focus.element, &pid)
+        guard pidResult == .success, pid > 0 else {
+            DebugLogger.shared.info("FOCUS_READ unavailable stage=pid axError=\(pidResult.rawValue)", source: "TypingService")
+            return nil
+        }
+        return FocusObservation(pid: pid, assessment: self.assess(focus.element))
+    }
+
+    nonisolated static func isSecureTextField(_ element: AXUIElement) -> Bool {
+        let attributes = self.roleAttributes(of: element)
+        return self.isSecureRole(attributes.role, subrole: attributes.subrole)
+    }
+
+    private nonisolated static func roleAttributes(of element: AXUIElement) -> (role: String?, subrole: String?) {
         var roleRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
-              let role = roleRef as? String
-        else { return .unknown(reason: "role_unreadable") }
+        let roleResult = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        var subroleRef: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef)
+        return (roleResult == .success ? roleRef as? String : nil, subroleRef as? String)
+    }
 
+    private nonisolated static func isSecureRole(_ role: String?, subrole: String?) -> Bool {
+        role == "AXSecureTextField" || subrole?.localizedCaseInsensitiveContains("secure") == true
+    }
+
+    nonisolated static func assess(_ element: AXUIElement) -> DeliveryTargetAssessment {
+        let attributes = self.roleAttributes(of: element)
+        if self.isSecureRole(attributes.role, subrole: attributes.subrole) {
+            return .secure(role: attributes.role ?? "unknown")
+        }
+        guard let role = attributes.role else { return .unknown(reason: "role_unreadable") }
+        let assessment = self.classify(role: role, valueSettable: false, subrole: attributes.subrole)
+        if case .editable = assessment {
+            return assessment
+        }
         var valueSettable = DarwinBoolean(false)
         let settableResult = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
-        return self.classify(role: role, valueSettable: settableResult == .success && valueSettable.boolValue)
+        return settableResult == .success && valueSettable.boolValue ? .editable(role: role) : assessment
+    }
+
+    var isSecureTextField: Bool {
+        if case .secure = self {
+            return true
+        }
+        return false
     }
 
     /// Pure role decision, kept separate from the AX queries so it can be tested.
-    nonisolated static func classify(role: String, valueSettable: Bool) -> DeliveryTargetAssessment {
-        if self.editableRoles.contains(role) || valueSettable { return .editable(role: role) }
+    nonisolated static func classify(role: String, valueSettable: Bool, subrole: String? = nil) -> DeliveryTargetAssessment {
+        if self.isSecureRole(role, subrole: subrole) {
+            return .secure(role: role)
+        }
+        if self.editableRoles.contains(role) || valueSettable {
+            return .editable(role: role)
+        }
         guard self.nonEditableRoles.contains(role) else { return .unknown(reason: "role_\(role)") }
         return .notEditable(role: role)
+    }
+}
+
+/// Keeps remote AX reads on the insertion queue and lifecycle decisions on the main actor.
+enum DirectInsertionExecutor {
+    @MainActor
+    static func run(
+        on queue: DispatchQueue,
+        readFocus: @escaping @Sendable () -> DeliveryTargetAssessment.FocusObservation?,
+        canStart: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
+        canContinue: @escaping @MainActor (DeliveryTargetAssessment.FocusObservation?) -> Bool,
+        insert: @escaping @Sendable (@Sendable () -> Bool) -> Bool
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let initialFocus = readFocus()
+                let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { canStart(initialFocus) } }
+                guard valid else { continuation.resume(returning: false); return }
+                continuation.resume(returning: insert {
+                    let focus = readFocus()
+                    return DispatchQueue.main.sync { MainActor.assumeIsolated { canContinue(focus) } }
+                })
+            }
+        }
     }
 }
