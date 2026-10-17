@@ -230,27 +230,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     func addTrainedReplacement() {
         guard self.canSave, !self.isCancelled else { return }
         self.isAutomaticCaptureEnabled = false
-        self.capturePhase = .processing
-        let variants = self.variants
-        let pronunciationGeneration = DictionaryMatcherExperiment.generation
-        Task { @MainActor in
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled, pronunciationGeneration == DictionaryMatcherExperiment.generation else {
-                self.capturePhase = .idle
-                return
-            }
-            let filtered = await VoiceTrainingAliasFilter.filter(variants)
-            self.capturePhase = .idle
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
-                  pronunciationGeneration == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
-            guard !filtered.accepted.isEmpty else {
-                self.hasError = true
-                self.statusMessage = filtered.lookupAvailable
-                    ? "These recordings contain everyday words. Try again, or add the correction manually."
-                    : "Couldn't check these words. Try saving again, or add the correction manually."
-                return
-            }
-            self.persist(triggers: filtered.accepted)
-        }
+        self.persist(triggers: self.variants)
     }
 
     func removeVariant(_ variant: String) {
@@ -492,7 +472,8 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             )
         }
         guard mergedEntries != currentEntries else {
-            self.completeSave(title: "Already in Dictionary")
+            self.hasError = true
+            self.statusMessage = "These spellings are already covered. No new spelling corrections were saved."
             return
         }
 
