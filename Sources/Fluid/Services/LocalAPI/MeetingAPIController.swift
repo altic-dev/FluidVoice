@@ -43,7 +43,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
 
     private func listMeetings(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         do {
-            let sessions = try await self.store.loadAll()
+            let sessions = try await self.store.loadAllMetadata()
             let items = sessions.prefix(LocalAPI.boundedLimit(from: request)).map { session in
                 MeetingItem(
                     id: session.id,

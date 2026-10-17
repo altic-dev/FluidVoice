@@ -166,6 +166,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var sweepPending = false
+    private var isSweeping = false
     private var retentionTimerTask: Task<Void, Never>?
 
     private enum TranscriptCorrection {
@@ -1105,28 +1106,38 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func releaseMutationGate() {
         self.isMutatingSession = false
+        self.schedulePendingSweepIfNeeded()
+    }
+
+    private func schedulePendingSweepIfNeeded() {
+        guard self.sweepPending, !self.isSweeping, !self.isMutatingSession else { return }
         // A sweep re-armed during termination would race the app's exit.
-        guard self.sweepPending else { return }
         self.sweepPending = false
         guard self.terminationTask == nil else { return }
         Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
     }
 
-    /// Skips (pending) while another mutation holds the gate; the releasing op reschedules it.
+    /// Skips (pending) while another sweep runs or a mutation holds the gate; whichever finishes
+    /// reschedules it.
     func sweepExpiredAudio() async {
-        guard !self.isMutatingSession else {
+        guard self.terminationTask == nil else { return }
+        guard !self.isSweeping, !self.isMutatingSession else {
             self.sweepPending = true
             return
         }
-        self.isMutatingSession = true
-        defer { self.releaseMutationGate() }
+        self.isSweeping = true
+        defer {
+            self.isSweeping = false
+            self.schedulePendingSweepIfNeeded()
+        }
 
-        // A queued tail save landing after our deletes would resurrect the audio manifest.
+        // Scan metadata on the store's background reader without holding the mutation gate.
+        // Audio verification is unnecessary for retention; flush to include queued recovery stamps.
         await self.flushQueuedPersistence()
 
         let sessions: [MeetingSession]
         do {
-            sessions = try await self.store.loadAll()
+            sessions = try await self.store.loadAllMetadata()
         } catch {
             DebugLogger.shared.warning(
                 "Retention sweep could not load sessions; leaving the current timer as-is: \(error)",
@@ -1137,16 +1148,64 @@ final class MeetingSessionCoordinator: ObservableObject {
         let policy = SettingsStore.shared.meetingAudioRetentionPolicy
         let now = Date()
         var nextDeadline: Date?
+        var leftoverIDs: [MeetingSessionID] = []
+        var expiredIDs: [MeetingSessionID] = []
 
         for session in sessions {
-            await self.healLeftoverAudio(for: session)
-
-            guard session.retention.audioDeletedAt == nil else { continue }
-            guard Self.isSweepEligible(session) else { continue }
-            guard let deadline = policy.deadline(endedAt: session.endedAt, startedAt: session.startedAt) else { continue }
-
+            guard session.retention.audioDeletedAt == nil else {
+                if await self.hasLeftoverAudio(for: session) {
+                    leftoverIDs.append(session.id)
+                }
+                continue
+            }
+            guard let deadline = Self.sweepDeadline(for: session, policy: policy) else { continue }
             guard deadline <= now else {
                 if nextDeadline.map({ deadline < $0 }) ?? true { nextDeadline = deadline }
+                continue
+            }
+            expiredIDs.append(session.id)
+        }
+
+        guard self.terminationTask == nil else { return }
+        guard !leftoverIDs.isEmpty || !expiredIDs.isEmpty else {
+            self.scheduleRetentionTimer(nextDeadline: nextDeadline)
+            return
+        }
+        guard !self.isMutatingSession else {
+            // An op took the gate during the scan; its release reruns the sweep.
+            self.sweepPending = true
+            return
+        }
+        self.isMutatingSession = true
+        defer { self.releaseMutationGate() }
+
+        // A queued tail save landing after our deletes would resurrect the audio manifest.
+        await self.flushQueuedPersistence()
+
+        // audioDeletedAt is terminal, so the scan's verdict still holds under the gate.
+        for id in leftoverIDs {
+            try? await self.store.deleteAudioFiles(for: id)
+        }
+
+        for id in expiredIDs {
+            // Reload under the gate: a correction may have saved this session after the scan.
+            let session: MeetingSession
+            do {
+                guard let loaded = try await self.store.loadMetadata(id: id) else { continue }
+                session = loaded
+            } catch {
+                DebugLogger.shared.warning(
+                    "Retention sweep could not reload \(id): \(error)",
+                    source: "MeetingSessionCoordinator"
+                )
+                continue
+            }
+            guard self.terminationTask == nil else { return }
+            guard session.retention.audioDeletedAt == nil,
+                  let deadline = Self.sweepDeadline(for: session, policy: SettingsStore.shared.meetingAudioRetentionPolicy)
+            else { continue }
+            guard deadline <= Date() else {
+                nextDeadline = min(nextDeadline ?? .distantFuture, deadline)
                 continue
             }
             guard self.isSafeToSweep(sessionID: session.id) else {
@@ -1169,15 +1228,21 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.scheduleRetentionTimer(nextDeadline: nextDeadline)
     }
 
+    private static func sweepDeadline(for session: MeetingSession, policy: MeetingAudioRetentionPolicy) -> Date? {
+        guard self.isSweepEligible(session) else { return nil }
+        return policy.deadline(endedAt: session.endedAt, startedAt: session.startedAt)
+    }
+
     /// An empty recreated `tracks/` is not crash-window residue — heal only real content.
-    private func healLeftoverAudio(for session: MeetingSession) async {
+    private func hasLeftoverAudio(for session: MeetingSession) async -> Bool {
         guard session.retention.audioDeletedAt != nil,
               let directory = try? await self.store.existingSessionDirectory(for: session.id)
-        else { return }
+        else { return false }
         let tracksPath = directory.appendingPathComponent("tracks", isDirectory: true).path
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: tracksPath), !contents.isEmpty
-        else { return }
-        try? await self.store.deleteAudioFiles(for: session.id)
+        return await Task.detached(priority: .utility) {
+            guard let contents = try? FileManager.default.contentsOfDirectory(atPath: tracksPath) else { return false }
+            return !contents.isEmpty
+        }.value
     }
 
     /// A quiescent active slot (resolved offer, parked completed session) is safe to sweep.
