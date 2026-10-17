@@ -882,6 +882,10 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func latestRollbackBackup() -> URL? {
+        // Rollback swaps the bundle in place, which fails in the read-only
+        // /nix/store — report no backups so rollback controls stay disabled
+        // even if a previous non-Nix install left backups behind.
+        if Self.isNixManaged { return nil }
         let currentVersion = self.currentAppVersion
         return self.availableRollbackBackups().first {
             Self.isRollbackVersion(self.versionString(for: $0), differentFrom: currentVersion)
