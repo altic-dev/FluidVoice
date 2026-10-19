@@ -285,33 +285,46 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         } catch {}
     }
 
-    func testVoiceTrainingKeepsPronunciationWithoutEverydayTextAliases() async {
-        let filtered = await VoiceTrainingAliasFilter.filter(["but", "now", "right now"]) { _ in .checked([]) }
+    func testVoiceTrainingSavesOrdinaryWordsAndReplacesThemInDictation() {
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
-            current: [], replacement: "Lyft", triggers: filtered.accepted, savePronunciation: true
+            current: [], replacement: "Supabase", triggers: ["Super base.", "super bass", "superbase"]
         )
         XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries.first?.replacement, "Lyft")
-        XCTAssertEqual(entries.first?.triggers, ["lyft"], "Only the canonical spelling anchors the voice profile")
+        XCTAssertEqual(entries.first?.triggers, ["super base", "super bass", "superbase"])
+        self.withRestoredDictionary(entries) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("Super base."), "Supabase.")
+            XCTAssertEqual(ASRService.applyCustomDictionary("Use super bass and superbase."), "Use Supabase and Supabase.")
+            XCTAssertEqual(ASRService.applyCustomDictionary("super basement"), "super basement")
+        }
     }
 
-    func testVoiceTrainingFilterPreservesExistingManualRules() async {
-        let manual = SettingsStore.CustomDictionaryEntry(triggers: ["now"], replacement: "Lyft")
+    func testVoiceRetrainingPreservesExistingRulesAndAddsOrdinarySpellings() {
+        let manual = SettingsStore.CustomDictionaryEntry(triggers: ["superbez"], replacement: "Supabase")
         let unrelated = SettingsStore.CustomDictionaryEntry(triggers: ["but"], replacement: "ManualChoice")
-        let filtered = await VoiceTrainingAliasFilter.filter(["now", "hello"]) { _ in .checked([]) }
         let entries = CustomDictionaryTrainingMerge.mergedEntries(
-            current: [manual, unrelated], replacement: "Lyft", triggers: filtered.accepted, savePronunciation: true
+            current: [manual, unrelated], replacement: "Supabase", triggers: ["super base", "super bass"]
         )
-        XCTAssertEqual(entries, [manual, unrelated])
-        XCTAssertEqual(CustomDictionaryManualEntry.normalizedTriggers(["but", "now", "right now"]), ["but", "now", "right now"])
+        XCTAssertEqual(entries.first?.id, manual.id)
+        XCTAssertEqual(entries.first?.triggers, ["superbez", "super base", "super bass"])
+        XCTAssertEqual(entries.last, unrelated)
     }
 
-    func testUnavailableVocabularyCannotCreateTextOnlyTrainingRules() async {
-        let filtered = await VoiceTrainingAliasFilter.filter(["now"]) { _ in .unavailable }
-        let entries = CustomDictionaryTrainingMerge.mergedEntries(
-            current: [], replacement: "Lyft", triggers: filtered.accepted
-        )
-        XCTAssertTrue(entries.isEmpty)
+    func testRepeatedCorrectionDoesNotReportAnotherSuccessfulSave() {
+        let entry = SettingsStore.CustomDictionaryEntry(triggers: ["super base"], replacement: "Supabase")
+        self.withRestoredDictionary([entry]) {
+            let session = AutomaticDictionaryTrainingSession(
+                candidate: .init(heardText: "Super base", correctedText: "Supabase"),
+                asr: AppServices.shared.asr
+            )
+            var successes = 0
+            session.onSuccess = { successes += 1 }
+            session.addOnlyCorrection()
+            XCTAssertEqual(SettingsStore.shared.customDictionaryEntries, [entry])
+            XCTAssertEqual(session.screen, .choice)
+            XCTAssertEqual(successes, 0)
+            XCTAssertTrue(session.hasError)
+            XCTAssertTrue(session.statusMessage.contains("No new spelling corrections were saved"))
+        }
     }
 
     func testKeepsWhitespaceOnlyReplacements() {

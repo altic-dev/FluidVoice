@@ -127,11 +127,13 @@ struct DictionaryWordWizard: View {
             .onSubmit { if !self.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.onContinue() } }
             self.primary("Continue", action: self.onContinue)
                 .disabled(self.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            self.manualAlternative
         }
     }
 
     private var capture: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+            self.manualAlternative
             HStack(alignment: .top, spacing: self.theme.metrics.spacing.lg) {
                 self.captureStage.frame(minWidth: 264, maxWidth: .infinity)
                 if self.showingRecordingTips {
@@ -141,22 +143,15 @@ struct DictionaryWordWizard: View {
                 }
             }
             self.captureError
-            Group {
-                if self.step == .review {
-                    self.manualAlternative.hidden().accessibilityHidden(true)
-                } else {
-                    self.manualAlternative
-                }
-            }
         }
     }
 
     private var manualAlternative: some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
+        HStack(spacing: self.theme.metrics.spacing.xs) {
             Text("Prefer typing?")
-                .font(self.theme.typography.body)
+                .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
-            self.manualButton.disabled(self.busy)
+            self.manualButton.disabled(self.busy || self.automaticCaptureActive)
         }
         .frame(maxWidth: .infinity)
     }
@@ -365,7 +360,7 @@ struct DictionaryWordWizard: View {
         Button(action: self.onManual) {
             Label("Add manually", systemImage: "keyboard")
         }
-        .fluidGlassAction()
+        .fluidGlassAction(tone: self.theme.palette.accent, quiet: true)
     }
 
     private var reviewActions: some View {
