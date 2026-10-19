@@ -3699,6 +3699,231 @@ final class MeetingRecoveryTests: XCTestCase {
         return try await body()
     }
 
+    func testStartRecordingIsNotRefusedWhileRetentionSweepScans() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        try await store.create(self.makeSession(state: .completed, endedAt: Date(), audioTracks: [track]))
+        let gatedStore = GatedLoadAllStore(inner: store)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [track], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.never) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            try await gatedStore.waitUntilScanning()
+            XCTAssertTrue(coordinator.isQuiescent, "A retention scan must leave recording available")
+            do {
+                let started = try await coordinator.startRecording(configuration: self.makeConfiguration())
+                XCTAssertEqual(coordinator.state, .recording(started.id))
+                XCTAssertEqual(capture.startCount, 1)
+            } catch {
+                XCTFail("Recording was refused during a no-op retention scan: \(error)")
+            }
+            await gatedStore.openGate()
+            await sweep.value
+            await coordinator.shutdownForTermination()
+        }
+    }
+
+    func testRecordingStartsWhileRealStoreMetadataScanIsBlocked() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileManager = PausingMetadataFileManager()
+        defer { fileManager.openGate() }
+        let store = MeetingSessionStore(rootDirectory: dir, fileManager: fileManager)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        try await store.create(self.makeSession(state: .completed, endedAt: Date(), audioTracks: [track]))
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [track], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+        fileManager.closeGate()
+
+        try await self.withRetentionPolicy(.never) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            for _ in 0..<200 {
+                if fileManager.scanStarted { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            XCTAssertTrue(fileManager.scanStarted, "The real filesystem scan must be parked before starting capture")
+
+            var startFinished = false
+            let start = Task {
+                defer { startFinished = true }
+                return try await coordinator.startRecording(configuration: self.makeConfiguration())
+            }
+            for _ in 0..<600 {
+                if startFinished { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            XCTAssertTrue(startFinished, "Creating and saving a new recording must not wait for background directory I/O")
+            XCTAssertTrue(coordinator.isRecording)
+            fileManager.openGate()
+            await sweep.value
+            _ = try await start.value
+            await coordinator.shutdownForTermination()
+        }
+    }
+
+    func testRecoveryScanDoesNotReconcileCompletedHistory() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let track = self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk(path: "tracks/microphone/missing.caf")])
+        let completed = self.makeSession(state: .completed, endedAt: Date(), audioTracks: [track])
+        let interrupted = self.makeSession(state: .interrupted, endedAt: Date(), audioTracks: [track])
+        for session in [completed, interrupted] {
+            try await store.create(session)
+            let directory = try await store.sessionDirectory(for: session.id)
+            let trackDirectory = directory.appendingPathComponent("tracks/microphone", isDirectory: true)
+            try FileManager.default.createDirectory(at: trackDirectory, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(track).write(to: trackDirectory.appendingPathComponent("track.json"))
+        }
+
+        let recoverable = try await store.loadRecoverable()
+        XCTAssertEqual(recoverable.map(\.id), [interrupted.id])
+        XCTAssertEqual(recoverable.first?.audioTracks.first?.chunks.first?.finalizationState, .failed)
+        let history = try await store.loadMetadata(id: completed.id)
+        XCTAssertEqual(
+            history?.audioTracks.first?.chunks.first?.finalizationState,
+            .finalized,
+            "Startup must not inspect or rewrite completed meetings' audio"
+        )
+    }
+
+    func testSweepDeletesFromFreshCopyWhenCorrectionLandsDuringScan() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let gatedStore = GatedLoadAllStore(inner: store)
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.afterTranscription) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            try await gatedStore.waitUntilScanning()
+            do {
+                _ = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speakerA, to: "Renamed during scan")
+            } catch {
+                XCTFail("Correction was refused during the retention scan: \(error)")
+            }
+            await gatedStore.openGate()
+            await sweep.value
+
+            let saved = try await store.load(id: session.id)
+            XCTAssertEqual(saved?.speakers.first(where: { $0.id == speakerA })?.displayName, "Renamed during scan")
+            XCTAssertNotNil(saved?.retention.audioDeletedAt)
+            XCTAssertTrue(saved?.audioTracks.allSatisfy { $0.chunks.isEmpty } == true)
+        }
+    }
+
+    func testConcurrentRetentionSweepsCoalesceWhileScanning() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, speakerA, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let gatedStore = GatedLoadAllStore(inner: store)
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.never) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            try await gatedStore.waitUntilScanning()
+            for _ in 0..<3 {
+                await coordinator.sweepExpiredAudio()
+            }
+            do {
+                _ = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speakerA, to: "Edited")
+            } catch {
+                XCTFail("Correction was refused during the retention scan: \(error)")
+            }
+            let callsDuringScan = await gatedStore.loadAllCallCount
+            XCTAssertEqual(callsDuringScan, 1, "Neither sweep triggers nor a correction release should start a parallel scan")
+            await gatedStore.openGate()
+            await sweep.value
+            for _ in 0..<100 {
+                if await gatedStore.loadAllCallCount >= 2 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            await coordinator.shutdownForTermination()
+            let callsAfterScan = await gatedStore.loadAllCallCount
+            XCTAssertEqual(callsAfterScan, 2, "Overlapping triggers should schedule a single follow-up sweep")
+        }
+    }
+
+    func testRetentionScanDoesNotRearmAfterTermination() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(
+            state: .completed, endedAt: Date(), audioTracks: [self.makeMicrophoneTrack(chunks: [])]
+        )
+        try await store.create(session)
+        let gatedStore = GatedLoadAllStore(inner: store)
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.days7) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            try await gatedStore.waitUntilScanning()
+            await coordinator.sweepExpiredAudio() // Queue a follow-up before shutdown.
+            await coordinator.shutdownForTermination()
+            await gatedStore.openGate()
+            await sweep.value
+            await coordinator.sweepExpiredAudio()
+
+            XCTAssertFalse(coordinator.hasScheduledRetentionSweep)
+            let calls = await gatedStore.loadAllCallCount
+            XCTAssertEqual(calls, 1, "Termination must suppress pending and newly requested sweeps")
+        }
+    }
+
+    func testSweepRechecksRetentionPolicyAfterReloadingCandidate() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let gatedStore = GatedLoadAllStore(inner: store, onLoad: { @MainActor in
+            SettingsStore.shared.meetingAudioRetentionPolicy = .never
+        })
+        let coordinator = MeetingSessionCoordinator(
+            store: gatedStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+
+        try await self.withRetentionPolicy(.afterTranscription) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            try await gatedStore.waitUntilScanning()
+            await gatedStore.openGate()
+            await sweep.value
+
+            let saved = try await store.load(id: session.id)
+            XCTAssertNil(saved?.retention.audioDeletedAt, "Changing retention to Forever must prevent a stale candidate from being deleted")
+            XCTAssertFalse(coordinator.hasScheduledRetentionSweep)
+            let reloads = await gatedStore.loadCallCount
+            XCTAssertEqual(reloads, 1)
+        }
+    }
+
     func testDeleteAudioClearsFilesAndChunksKeepsTranscriptIdempotent() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -5267,6 +5492,127 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
             await withCheckedContinuation { self.continuation = $0 }
         }
         return try await self.inner.loadRecoverable()
+    }
+}
+
+/// Blocks actual directory enumeration on the worker, rather than suspending an actor method.
+private final class PausingMetadataFileManager: FileManager, @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isOpen = true
+    private var hasStarted = false
+
+    var scanStarted: Bool {
+        self.condition.lock()
+        defer { self.condition.unlock() }
+        return self.hasStarted
+    }
+
+    func closeGate() {
+        self.condition.lock()
+        defer { self.condition.unlock() }
+        self.isOpen = false
+        self.hasStarted = false
+    }
+
+    func openGate() {
+        self.condition.lock()
+        defer { self.condition.unlock() }
+        self.isOpen = true
+        self.condition.broadcast()
+    }
+
+    override func contentsOfDirectory(
+        at url: URL,
+        // FileManager's override signature requires an optional collection.
+        // swiftlint:disable:next discouraged_optional_collection
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions = []
+    ) throws -> [URL] {
+        let directories = try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+        self.condition.lock()
+        defer { self.condition.unlock() }
+        self.hasStarted = true
+        while !self.isOpen {
+            self.condition.wait()
+        }
+        return directories
+    }
+}
+
+/// Pauses after taking the scan snapshot so tests can interleave starts, corrections, and shutdown.
+private actor GatedLoadAllStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private let onLoad: @Sendable () async -> Void
+    private var isOpen = false
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var loadAllCallCount = 0
+    private(set) var loadCallCount = 0
+
+    init(inner: MeetingSessionStore, onLoad: @escaping @Sendable () async -> Void = {}) {
+        self.inner = inner
+        self.onLoad = onLoad
+    }
+
+    func waitUntilScanning() async throws {
+        for _ in 0..<200 {
+            if self.loadAllCallCount > 0 { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        self.openGate()
+        throw GateTimeoutError()
+    }
+
+    func openGate() {
+        self.isOpen = true
+        let pending = self.gateWaiters
+        self.gateWaiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+
+    func create(_ session: MeetingSession) async throws {
+        try await self.inner.create(session)
+    }
+
+    func save(_ session: MeetingSession) async throws {
+        try await self.inner.save(session)
+    }
+
+    func load(id: MeetingSessionID) async throws -> MeetingSession? {
+        self.loadCallCount += 1
+        let session = try await self.inner.load(id: id)
+        await self.onLoad()
+        return session
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        let snapshot = try await self.inner.loadAll()
+        self.loadAllCallCount += 1
+        if !self.isOpen {
+            await withCheckedContinuation { self.gateWaiters.append($0) }
+        }
+        return snapshot
+    }
+
+    func loadRecoverable() async throws -> [MeetingSession] {
+        try await self.inner.loadRecoverable()
+    }
+
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL {
+        try await self.inner.sessionDirectory(for: id)
+    }
+
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? {
+        try await self.inner.existingSessionDirectory(for: id)
+    }
+
+    func delete(id: MeetingSessionID) async throws {
+        try await self.inner.delete(id: id)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID) async throws {
+        try await self.inner.deleteAudioFiles(for: id)
     }
 }
 

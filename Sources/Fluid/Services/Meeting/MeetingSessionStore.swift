@@ -7,6 +7,9 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
     func loadAll() async throws -> [MeetingSession]
+    /// Manifest snapshots for listing and retention. Audio must be validated with `load(id:)` before use.
+    func loadAllMetadata() async throws -> [MeetingSession]
+    func loadMetadata(id: MeetingSessionID) async throws -> MeetingSession?
     func loadRecoverable() async throws -> [MeetingSession]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
@@ -14,6 +17,16 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
+}
+
+extension MeetingSessionStoring {
+    func loadAllMetadata() async throws -> [MeetingSession] {
+        try await self.loadAll()
+    }
+
+    func loadMetadata(id: MeetingSessionID) async throws -> MeetingSession? {
+        try await self.load(id: id)
+    }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -103,7 +116,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
         guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
         let session = try self.decodeSession(at: url)
         let reconciled = try self.reconcileTrackManifests(in: session)
-        let migrated = self.migrateCanonicalTranscriptTimelineIfNeeded(reconciled)
+        let migrated = Self.migrateCanonicalTranscriptTimelineIfNeeded(
+            reconciled, sessionDirectory: self.sessionDirectoryURL(for: id)
+        )
         if migrated != session {
             try self.writeSession(migrated)
         }
@@ -133,23 +148,57 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return sessions.sorted { $0.startedAt > $1.startedAt }
     }
 
-    func loadRecoverable() throws -> [MeetingSession] {
-        try self.loadAll().filter {
-            guard $0.recoveryResolvedAt == nil, $0.retention.audioDeletedAt == nil else { return false }
-            switch $0.state {
-            case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
-                return true
-            case .failed:
-                return $0.failures.last?.recoverable == true &&
-                    $0.endedAt != nil &&
-                    $0.audioTracks.contains { track in
-                        track.chunks.contains {
-                            $0.finalizationState == .finalized && $0.byteCount > 0
-                        }
-                    }
-            case .completed:
-                return false
+    func loadAllMetadata() async throws -> [MeetingSession] {
+        try self.prepareRootDirectory()
+        let indexedIDs = (try? self.readIndex().sessionIDs) ?? []
+        let rootDirectory = self.rootDirectory
+        let fileSystem = self.fileSystem
+        let scan = Task.detached(priority: .utility) {
+            try MetadataReader(rootDirectory: rootDirectory, fileManager: fileSystem.manager)
+                .loadAll(indexedIDs: indexedIDs)
+        }
+        let sessions = try await withTaskCancellationHandler {
+            try await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+        return sessions.filter { !self.tombstonedIDs.contains($0.id) }
+    }
+
+    func loadMetadata(id: MeetingSessionID) async throws -> MeetingSession? {
+        guard !self.tombstonedIDs.contains(id) else { return nil }
+        return try MetadataReader(rootDirectory: self.rootDirectory, fileManager: self.fileSystem.manager).load(id: id)
+    }
+
+    func loadRecoverable() async throws -> [MeetingSession] {
+        let snapshots = try await self.loadAllMetadata()
+        var recoverable: [MeetingSession] = []
+        for snapshot in snapshots where Self.isRecoveryCandidate(snapshot) {
+            // Completed history does not need audio verification during launch. Recovery does,
+            // including crash-window track manifests, so reload candidates through the full path.
+            do {
+                guard let session = try self.load(id: snapshot.id), Self.isRecoveryCandidate(session) else { continue }
+                if session.state == .failed, !session.hasFinalizedAudio { continue }
+                recoverable.append(session)
+            } catch {
+                DebugLogger.shared.error(
+                    "Failed to load recoverable meeting \(snapshot.id): \(error.localizedDescription)",
+                    source: "MeetingSessionStore"
+                )
             }
+        }
+        return recoverable
+    }
+
+    private static func isRecoveryCandidate(_ session: MeetingSession) -> Bool {
+        guard session.recoveryResolvedAt == nil, session.retention.audioDeletedAt == nil else { return false }
+        switch session.state {
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
+            return true
+        case .failed:
+            return session.failures.last?.recoverable == true && session.endedAt != nil
+        case .completed:
+            return false
         }
     }
 
@@ -208,8 +257,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
     /// segment/gap times in absolute host presentation seconds. The immutable sidecar remains in
     /// analysis time and carries the verified presentation origin, so migrate only `session.json`
     /// once and never rewrite the sidecar it references.
-    private func migrateCanonicalTranscriptTimelineIfNeeded(
-        _ inputSession: MeetingSession
+    private nonisolated static func migrateCanonicalTranscriptTimelineIfNeeded(
+        _ inputSession: MeetingSession,
+        sessionDirectory: URL
     ) -> MeetingSession {
         guard inputSession.transcriptTimeDomain == nil,
               let reference = inputSession.resultSidecarReference,
@@ -220,10 +270,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
               let backendID = attempt.backendID.map({ MeetingBackendID(rawValue: $0) })
         else { return inputSession }
 
-        let directory = self.sessionDirectoryURL(for: inputSession.id)
         let verifiedOrigin: TimeInterval?
         do {
-            let sidecar = try MeetingResultSidecarStore(sessionDirectory: directory).read(
+            let sidecar = try MeetingResultSidecarStore(sessionDirectory: sessionDirectory).read(
                 expectedAttemptID: attempt.id,
                 expectedBackendID: backendID,
                 reference: reference
@@ -596,6 +645,55 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private func sessionManifestURL(for id: MeetingSessionID) -> URL {
         self.sessionDirectoryURL(for: id)
             .appendingPathComponent("session.json", isDirectory: false)
+    }
+
+    /// Each background scan owns its decoder; none of the actor's mutable state crosses threads.
+    private nonisolated struct MetadataReader {
+        let rootDirectory: URL
+        let fileManager: FileManager
+        private let decoder: JSONDecoder
+
+        init(rootDirectory: URL, fileManager: FileManager) {
+            self.rootDirectory = rootDirectory
+            self.fileManager = fileManager
+            self.decoder = JSONDecoder()
+            self.decoder.dateDecodingStrategy = .iso8601
+        }
+
+        func load(id: MeetingSessionID) throws -> MeetingSession? {
+            let directory = self.rootDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
+            let manifest = directory.appendingPathComponent("session.json", isDirectory: false)
+            guard self.fileManager.fileExists(atPath: manifest.path) else { return nil }
+            let data = try Data(contentsOf: manifest, options: .mappedIfSafe)
+            let session = try self.decoder.decode(MeetingSession.self, from: data)
+            try session.validateForPersistence()
+            return MeetingSessionStore.migrateCanonicalTranscriptTimelineIfNeeded(session, sessionDirectory: directory)
+        }
+
+        func loadAll(indexedIDs: [MeetingSessionID]) throws -> [MeetingSession] {
+            let directories = try self.fileManager.contentsOfDirectory(
+                at: self.rootDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            let discoveredIDs = directories.compactMap { directory -> MeetingSessionID? in
+                guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+                return UUID(uuidString: directory.lastPathComponent)
+            }
+            var sessions: [MeetingSession] = []
+            for id in Set(indexedIDs).union(discoveredIDs) {
+                try Task.checkCancellation()
+                do {
+                    if let session = try self.load(id: id) { sessions.append(session) }
+                } catch {
+                    DebugLogger.shared.error(
+                        "Failed to read meeting metadata \(id): \(error.localizedDescription)",
+                        source: "MeetingSessionStore"
+                    )
+                }
+            }
+            return sessions.sorted { $0.startedAt > $1.startedAt }
+        }
     }
 }
 
