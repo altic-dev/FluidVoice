@@ -1,0 +1,234 @@
+---
+name: Update Nix flake
+
+# Checks whether flake.nix's hashes lag behind the latest GitHub release.
+# Prefetches the release zip and compares its SRI hash against what's in
+# flake.nix. If they differ, rewrites version + hashes and opens a PR.
+#
+# Runs on a schedule instead of release: published because releases are
+# created externally/manually, so there is no release workflow to attach a
+# job to. A daily lag-check is fully decoupled from how releases are
+# created and needs no PAT.
+
+"on":
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: nix-flake-release
+  cancel-in-progress: true
+
+jobs:
+  update-flake:
+    name: Bump flake hashes if lagging
+    runs-on: ubuntu-latest
+    if: github.repository == 'altic-dev/FluidVoice'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        # DeterminateSystems/nix-installer-action v23
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa  # yamllint disable-line rule:line-length
+
+      - name: Check for lag and rewrite flake.nix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # system|asset-substring — one per line. The release ships a
+          # single universal (x86_64 + arm64) zip, so both darwin systems
+          # match the same asset. The substring must uniquely match the
+          # asset filename (.zip so it does not match the sibling .dmg).
+          ASSET_MAP: |
+            x86_64-darwin|.zip
+            aarch64-darwin|.zip
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import json, os, re, subprocess, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/releases/latest",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+          with urllib.request.urlopen(req) as r:
+              release = json.load(r)
+          tag = release["tag_name"]
+          version = tag.lstrip("v")
+          # Drop sibling checksum files (.sha256) so an archive substring
+          # does not also match its "<archive>.sha256" companion.
+          names = {a["name"] for a in release["assets"]
+                   if not a["name"].endswith(".sha256")}
+          asset_map = {}
+          for line in os.environ["ASSET_MAP"].splitlines():
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              sys_, sub = line.split("|", 1)
+              asset_map[sys_.strip()] = sub.strip()
+          # Reverse-check guard: flag any .tar.gz/.zip release asset that
+          # no ASSET_MAP substring matches, so no platform's hash goes
+          # stale while its URL still gets the version bump.
+          IGNORED = (
+              "musl", "pnpr-", "-source", "source-code",
+              "win32", "win-x64", "win-arm64")
+          matched_subs = set(asset_map.values())
+          unmatched = [
+              name for name in sorted(names)
+              if name.endswith((".tar.gz", ".zip"))
+              and not any(sub in name for sub in matched_subs)
+              and not any(ign in name.lower() for ign in IGNORED)
+          ]
+          if unmatched:
+              plats = ", ".join(unmatched)
+              raise SystemExit(
+                  f"RELEASE ASSET COMPLETENESS CHECK FAILED: release "
+                  f"{tag} has platform archives not covered by ASSET_MAP: "
+                  f"{plats}. Add them to ASSET_MAP or the hash for those "
+                  f"platforms will go stale while the URL gets the "
+                  f"version bump — users on the omitted platform get a "
+                  f"hash mismatch. ASSET_MAP currently covers: "
+                  f"{sorted(asset_map.keys())}")
+
+
+          # Each selector must match exactly one asset. `names` is a set,
+          # so a broad substring (e.g. ".zip" while a win-x64.zip also
+          # exists) would otherwise pick whichever asset iterates first
+          # and silently pin the wrong archive into the flake.
+          def match_one(sys_, sub):
+              matches = sorted(n for n in names if sub in n)
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"asset selector '{sub}' for {sys_} matched "
+                      f"{len(matches)} assets in {tag}: "
+                      f"{matches or 'none'} — each ASSET_MAP substring "
+                      f"must match exactly one asset; make it more "
+                      f"specific")
+              return matches[0]
+
+          # --- Hash-based staleness check ---
+          # Compare the first asset's SRI hash against flake.nix. Hash
+          # comparison (not version comparison) is authoritative: if the
+          # hash matches, the flake is up to date for this release
+          # regardless of what the version field says.
+          first_sys = next(iter(asset_map))
+          first_sub = asset_map[first_sys]
+          first_match = match_one(first_sys, first_sub)
+          first_url = (
+              f"https://github.com/{repo}/releases/download/"
+              f"{tag}/{first_match}")
+          first_out = json.loads(subprocess.check_output(
+              ["nix", "store", "prefetch-file", "--json",
+               "--hash-type", "sha256", first_url]))
+          first_sri = first_out["hash"]
+
+          src = open("flake.nix").read()
+          # Extract the current hash for the first system
+          # (`assets` block shape).
+          pat_assets = re.compile(
+              r'("' + re.escape(first_sys)
+              + r'" = \{[^}]*sha256 = ")([^"]*)(")', re.S)
+          current_hash = None
+          m = pat_assets.search(src)
+          if m:
+              current_hash = m.group(2)
+          if current_hash is None:
+              raise SystemExit(
+                  f"could not find hash for {first_sys} in flake.nix")
+
+          print(f"flake.nix hash for {first_sys}: {current_hash}")
+          print(f"latest release {tag} hash for {first_sys}: {first_sri}")
+          if current_hash == first_sri:
+              print("flake.nix is up to date; nothing to do.")
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("LAGGING=no\n")
+              raise SystemExit(0)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("LAGGING=yes\n")
+              f.write(f"VERSION={version}\n")
+
+          # Stale — prefetch all assets and rewrite all hashes.
+          # Also rewrite `version = "..."` (the flake has a static
+          # version).
+          src, n = re.subn(
+              r'version = "[^"]*";',
+              f'version = "{version}";', src, count=1)
+          if n > 0:
+              print(f"bumped version to {version}")
+          for sys_, sub in asset_map.items():
+              match = match_one(sys_, sub)
+              url = (
+                  f"https://github.com/{repo}/releases/download/"
+                  f"{tag}/{match}")
+              # Cross-check against the published .sha256 sibling asset
+              # before pinning the hash, when one exists.
+              expected = None
+              if f"{match}.sha256" in {
+                      a["name"] for a in release["assets"]}:
+                  with urllib.request.urlopen(f"{url}.sha256") as r:
+                      hexd = r.read().decode().split()[0]
+                  expected = "sha256:" + hexd
+              # Reuse the first asset's prefetched hash (already
+              # downloaded).
+              if sys_ == first_sys:
+                  sri = first_sri
+              else:
+                  out = json.loads(subprocess.check_output(
+                      ["nix", "store", "prefetch-file", "--json",
+                       "--hash-type", "sha256"]
+                      + (["--expected-hash", expected]
+                          if expected else [])
+                      + [url]))
+                  sri = out["hash"]
+              pat = re.compile(
+                  r'("' + re.escape(sys_) + r'" = \{[^}]*\})', re.S)
+              def repl(m):
+                  b = m.group(1)
+                  b = re.sub(
+                      r'file = "[^"]*";',
+                      f'file = "{match}";', b, count=1)
+                  b = re.sub(
+                      r'sha256 = "[^"]*";',
+                      f'sha256 = "{sri}";', b, count=1)
+                  return b
+              src, n = pat.subn(repl, src, count=1)
+              if n != 1:
+                  raise SystemExit(
+                      f"could not find hash entry for {sys_} "
+                      f"in flake.nix")
+          open("flake.nix", "w").write(src)
+          print(f"bumped flake.nix to {version}: {list(asset_map)}")
+          PYEOF
+
+      - name: Open PR
+        if: env.LAGGING == 'yes'
+        # peter-evans/create-pull-request v8.1.1
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # yamllint disable-line rule:line-length
+        with:
+          commit-message: "chore(nix): bump flake to v${{ env.VERSION }}"
+          title: "chore(nix): bump flake to v${{ env.VERSION }}"
+          branch: chore/nix-flake-v${{ env.VERSION }}
+          base: main
+          body: |
+            Auto-generated by the `Update Nix flake` workflow
+            (daily lag-check).
+            The latest GitHub release is v${{ env.VERSION }} but
+            `flake.nix`'s hashes are stale. This PR refreshes the
+            per-platform SRI hashes (and `version`) by prefetching
+            the new release assets.
+
+            Note: PRs opened by `GITHUB_TOKEN` do not trigger
+            downstream workflow runs (e.g. CI), so this PR will
+            show no checks. Review the diff before merging — it
+            should be a version bump plus per-platform hash
+            refresh with no source changes.

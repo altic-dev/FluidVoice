@@ -1,0 +1,73 @@
+---
+name: Nix flake
+
+# Validates flake.nix on both darwin systems (Apple Silicon + Intel).
+# Steps, in order of what they catch:
+#   1. nix flake check --all-systems --no-build — every system's outputs
+#      evaluate (including x86_64-darwin via the legacy nixpkgs pin).
+#   2. nix build .#default — fetchurl + unzip + install layout actually
+#      realises for the runner's system.
+#   3. Verify app bundle — the packaged .app keeps its Developer ID
+#      signature (notarized upstream binary) and reports the expected
+#      version. Replaces `nix run -- --version` because FluidVoice is a
+#      GUI app with no CLI smoke flag, and this avoids executing a
+#      downloaded binary on the runner.
+
+"on":
+  workflow_dispatch: {}
+  release:
+    types: [published]
+  pull_request:
+    branches: [main]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "**/*.nix"
+      - ".github/workflows/nix.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: nix flake check (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        # DeterminateSystems/nix-installer-action v23
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa  # yamllint disable-line rule:line-length
+
+      - name: nix flake check --all-systems
+        run: nix flake check --all-systems --no-build
+
+      - name: nix build .#default
+        run: nix build .#default --print-build-logs
+
+      - name: Verify app bundle
+        run: |
+          set -euo pipefail
+          OUT="$(nix build .#default --print-out-paths)"
+          APP="$OUT/Applications/FluidVoice.app"
+          test -x "$APP/Contents/MacOS/FluidVoice"
+          codesign --verify --deep --strict "$APP"
+          echo "signature OK"
+          EXPECTED="$(basename "$OUT" | sed 's/^.*-fluidvoice-//')"
+          ACTUAL="$(/usr/libexec/PlistBuddy \
+            -c 'Print :CFBundleShortVersionString' \
+            "$APP/Contents/Info.plist")"
+          echo "package version: $EXPECTED, bundle version: $ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"

@@ -164,10 +164,26 @@ Whisper supports up to 99 languages, depending on the model size you choose.
 ## Quick Start
 
 1. **Install** with Homebrew:
+
    ```bash
    brew install --cask fluidvoice
    ```
+
+   Or with Nix (flakes, macOS Apple Silicon & Intel):
+
+   ```bash
+   # Run without installing
+   nix run github:altic-dev/FluidVoice
+
+   # Install into your profile
+   nix profile add github:altic-dev/FluidVoice
+   ```
+
    Or download the [latest release](https://github.com/altic-dev/FluidVoice/releases/latest).
+
+   The flake serves the signed, notarized release build (universal binary)
+   and is auto-bumped to the latest release by a daily
+   [workflow](.github/workflows/nix-release.yml).
 
 2. **Grant permissions** — FluidVoice will ask for microphone and accessibility access. Both are required for dictation and typing into other apps.
 

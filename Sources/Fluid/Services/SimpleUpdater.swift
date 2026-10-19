@@ -132,6 +132,17 @@ final class SimpleUpdater: ObservableObject {
     }
 
     static let shared = SimpleUpdater()
+
+    /// Whether this copy of the app is managed by Nix — i.e. the .app bundle
+    /// lives inside the read-only /nix/store. The in-app updater replaces the
+    /// bundle in place, which always fails for store paths, so update checks
+    /// are suppressed and users are directed to update via Nix instead.
+    /// `resolvingSymlinksInPath` covers bundles reached through a Nix profile
+    /// or home-manager link that still resolves into the store.
+    static let isNixManaged: Bool = {
+        Bundle.main.bundleURL.resolvingSymlinksInPath().path.hasPrefix("/nix/store/")
+    }()
+
     init(
         session: URLSession = .shared,
         defaults: UserDefaults = .standard,
@@ -419,6 +430,15 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func startUpdateCheck(explicit: Bool) {
+        if Self.isNixManaged {
+            if explicit {
+                self.showUpdateCheckResult(
+                    title: "Managed by Nix",
+                    message: "This copy of FluidVoice is installed via Nix and cannot update itself. Update it through Nix instead (e.g. `nix profile upgrade` or `nix run github:altic-dev/FluidVoice` once the flake is bumped to the new release)."
+                )
+            }
+            return
+        }
         guard !self.isUpdateInProgress else { return }
         if explicit { self.updatePrompts.dismissUpdateCheckResults() }
         self.updateChannelDidChange()
@@ -862,6 +882,10 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func latestRollbackBackup() -> URL? {
+        // Rollback swaps the bundle in place, which fails in the read-only
+        // /nix/store — report no backups so rollback controls stay disabled
+        // even if a previous non-Nix install left backups behind.
+        if Self.isNixManaged { return nil }
         let currentVersion = self.currentAppVersion
         return self.availableRollbackBackups().first {
             Self.isRollbackVersion(self.versionString(for: $0), differentFrom: currentVersion)
