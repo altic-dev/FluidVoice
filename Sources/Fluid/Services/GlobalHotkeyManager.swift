@@ -262,6 +262,10 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
 
 @MainActor
 final class GlobalHotkeyManager: NSObject {
+    private static let instances = NSHashTable<GlobalHotkeyManager>.weakObjects()
+    private(set) static var isTerminating = false
+    private static var terminationRevision: UInt64 = 0
+
     enum CancelHandlingResult {
         case unhandled
         case dismissedOverlay
@@ -518,6 +522,8 @@ final class GlobalHotkeyManager: NSObject {
     private var isProcessingStop = false
 
     private var isInitialized = false
+    private var shouldStopHoldAfterCancelledTermination = false
+    private var hasPendingStopRequest = false
     private var initializationTask: Task<Void, Never>?
     private var healthCheckTask: Task<Void, Never>?
     private var maxRetryAttempts = 5
@@ -574,6 +580,7 @@ final class GlobalHotkeyManager: NSObject {
         self.shortcutCaptureHandler = shortcutCaptureHandler
         self.isSessionLockedProvider = isSessionLockedProvider
         super.init()
+        Self.instances.add(self)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(self.holdSpaceSettingChanged),
@@ -582,22 +589,6 @@ final class GlobalHotkeyManager: NSObject {
         )
 
         self.initializeWithDelay()
-    }
-
-    private func initializeWithDelay() {
-        DebugLogger.shared.debug("Starting delayed initialization...", source: "GlobalHotkeyManager")
-
-        self.initializationTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
-            } catch {
-                return
-            }
-
-            await MainActor.run { [weak self] in
-                self?.setupGlobalHotkeyWithRetry()
-            }
-        }
     }
 
     func setStopAndProcessCallback(_ callback: @escaping (TimeInterval?) async -> Void) {
@@ -708,6 +699,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func setupGlobalHotkeyWithRetry() {
+        guard !Self.isTerminating else { return }
         for attempt in 1...self.maxRetryAttempts {
             DebugLogger.shared.debug("Setup attempt \(attempt)/\(self.maxRetryAttempts)", source: "GlobalHotkeyManager")
 
@@ -720,9 +712,10 @@ final class GlobalHotkeyManager: NSObject {
 
             if attempt < self.maxRetryAttempts {
                 DebugLogger.shared.warning("Attempt \(attempt) failed, retrying in \(self.retryDelay) seconds...", source: "GlobalHotkeyManager")
-                Task { [weak self] in
+                Task { [weak self, revision = Self.terminationRevision] in
                     try? await Task.sleep(nanoseconds: UInt64((self?.retryDelay ?? 0.5) * 1_000_000_000))
                     await MainActor.run { [weak self] in
+                        guard revision == Self.terminationRevision else { return }
                         self?.setupGlobalHotkeyWithRetry()
                     }
                 }
@@ -735,6 +728,7 @@ final class GlobalHotkeyManager: NSObject {
 
     @discardableResult
     private func setupGlobalHotkey() -> Bool {
+        guard !Self.isTerminating else { return false }
         self.finishInterruptedMouseShortcutPress(reason: "hotkey tap reinitialized")
         self.cleanupEventTap()
 
@@ -977,6 +971,7 @@ final class GlobalHotkeyManager: NSObject {
 
     // Listen-only: macOS delivers clicks to apps whether or not this callback runs.
     private func setupMouseObserverTap() {
+        guard !Self.isTerminating else { return }
         self.cleanupMouseObserverTap()
 
         guard let tap = CGEvent.tapCreate(
@@ -1010,6 +1005,7 @@ final class GlobalHotkeyManager: NSObject {
 
     // Filter tap, created only for the button families that have a shortcut.
     private func setupMouseShortcutTap(mouseButtons: Set<Int>, preservePrimaryPress: Bool = false) {
+        guard !Self.isTerminating else { return }
         let preservesHeldPress = preservePrimaryPress && self.activePrimaryShortcutPress?.mouseButton != nil
         if !preservesHeldPress { self.finishInterruptedMouseShortcutPress(reason: "mouse shortcut tap rebuilt") }
         self.cleanupMouseShortcutTap(preservePrimaryPress: preservesHeldPress)
@@ -1092,6 +1088,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func handleMouseObserverEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard !Self.isTerminating else { return Unmanaged.passUnretained(event) }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             self.reenableMouseTap(self.mouseObserverTap, label: "Mouse observer") { self.setupMouseObserverTap() }
             return Unmanaged.passUnretained(event)
@@ -1106,6 +1103,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func handleMouseShortcutEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard !Self.isTerminating else { return Unmanaged.passUnretained(event) }
         let previousInput = self.currentInputTiming
         self.currentInputTiming = HotkeyInputTiming(
             receivedAt: ProcessInfo.processInfo.systemUptime,
@@ -1256,6 +1254,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func handleKeyEvent(type: CGEventType, event: CGEvent, proxy: CGEventTapProxy? = nil) -> Unmanaged<CGEvent>? {
+        guard !Self.isTerminating else { return Unmanaged.passUnretained(event) }
         let previousInput = self.currentInputTiming
         self.currentInputTiming = HotkeyInputTiming(
             receivedAt: ProcessInfo.processInfo.systemUptime,
@@ -2284,8 +2283,9 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func triggerPasteLastTranscription(isAutorepeat: Bool) {
+        let revision = Self.terminationRevision
         Task { @MainActor [weak self] in
-            guard let self = self else { return }
+            guard let self = self, !Self.isTerminating, revision == Self.terminationRevision else { return }
             // Holding the chord auto-repeats the key-down; act only on the initial press.
             guard !isAutorepeat else { return }
             guard self.canTriggerRecordingAction("Paste last transcription hotkey") else { return }
@@ -2347,6 +2347,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func canTriggerRecordingAction(_ label: String) -> Bool {
+        guard !Self.isTerminating else { return false }
         guard !self.isSessionLockedProvider() else {
             DebugLogger.shared.info("Ignoring \(label) - screen is locked", source: "GlobalHotkeyManager")
             return false
@@ -2363,12 +2364,13 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func toggleRecording() {
+        let revision = Self.terminationRevision
         let toggleStopRequestedAt = ProcessInfo.processInfo.systemUptime
         if self.asrService.isRunningOrStarting {
             self.logStopInput(requestedAt: toggleStopRequestedAt, route: "toggle")
         }
         Task { @MainActor [weak self] in
-            guard let self = self else { return }
+            guard let self = self, !Self.isTerminating, revision == Self.terminationRevision else { return }
 
             // Prevent new operations while stop is processing
             guard self.canTriggerRecordingAction("toggle") else { return }
@@ -2421,10 +2423,14 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private func stopRecordingIfNeeded(toggleStopRequestedAt: TimeInterval? = nil) {
+        let revision = Self.terminationRevision
+        self.hasPendingStopRequest = true
         let toggleStopRequestedAt = toggleStopRequestedAt ?? ProcessInfo.processInfo.systemUptime
         self.logStopInput(requestedAt: toggleStopRequestedAt, route: "stop_if_needed")
         Task { @MainActor [weak self] in
-            guard let self = self else { return }
+            guard let self = self, revision == Self.terminationRevision else { return }
+            self.hasPendingStopRequest = false
+            guard !Self.isTerminating else { return }
 
             if self.isProcessingStop {
                 DebugLogger.shared.debug("Ignoring stop - already processing", source: "GlobalHotkeyManager")
@@ -2482,16 +2488,6 @@ final class GlobalHotkeyManager: NSObject {
             self.isInitialized = true
         }
         return enabled
-    }
-
-    func reinitialize() {
-        DebugLogger.shared.info("Manual reinitialization requested", source: "GlobalHotkeyManager")
-
-        self.initializationTask?.cancel()
-        self.healthCheckTask?.cancel()
-        self.resetModifierOnlyShortcutTracking(reason: .reinitialize)
-        self.isInitialized = false
-        self.initializeWithDelay()
     }
 
     private func startHealthCheckTimer() {
@@ -2869,6 +2865,74 @@ extension GlobalHotkeyManager {
                 do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
                 guard let self, self.holdToMuteKeyState.ownsSpace else { return }
                 self.reconcileHoldToMute(isPhysicallyDown: CGEventSource.keyState(.hidSystemState, key: 49))
+            }
+        }
+    }
+}
+
+extension GlobalHotkeyManager {
+    /// Release global input before quit starts saving or pumping a nested run loop.
+    static func suspendForTermination() {
+        guard !self.isTerminating else { return }
+        self.isTerminating = true
+        self.terminationRevision &+= 1
+        for manager in self.instances.allObjects {
+            manager.initializationTask?.cancel()
+            manager.healthCheckTask?.cancel()
+            manager.muteReleaseRecoveryTask?.cancel()
+            manager.holdToMuteSpaceTap.cancel()
+            manager.shouldStopHoldAfterCancelledTermination = manager.hotkeyMode != .toggle
+                && manager.asrService.isRunningOrStarting
+                && (manager.isKeyPressed || manager.isPromptModeKeyPressed || manager.isCommandModeKeyPressed
+                    || manager.isRewriteKeyPressed || manager.isPromptAssignmentKeyPressed
+                    || manager.hasPendingStopRequest
+                    || manager.state.withLock { !manager.state.pendingReleaseStopTokens.isEmpty })
+            manager.hasPendingStopRequest = false
+            manager.resetModifierOnlyShortcutTracking(reason: .cancel)
+            manager.cleanupEventTap()
+            manager.isInitialized = false
+        }
+    }
+
+    static func resumeAfterCancelledTermination() {
+        guard self.isTerminating else { return }
+        self.isTerminating = false
+        for manager in self.instances.allObjects {
+            if manager.shouldStopHoldAfterCancelledTermination {
+                manager.shouldStopHoldAfterCancelledTermination = false
+                manager.stopRecordingIfNeeded()
+            }
+            if manager.holdToMuteChecksPhysicalKeyState {
+                manager.reconcileHoldToMute(isPhysicallyDown: CGEventSource.keyState(.hidSystemState, key: 49))
+                manager.startMuteReleaseRecovery()
+            }
+            manager.setupGlobalHotkeyWithRetry()
+        }
+    }
+
+    func reinitialize() {
+        DebugLogger.shared.info("Manual reinitialization requested", source: "GlobalHotkeyManager")
+
+        self.initializationTask?.cancel()
+        self.healthCheckTask?.cancel()
+        self.resetModifierOnlyShortcutTracking(reason: .reinitialize)
+        self.isInitialized = false
+        self.initializeWithDelay()
+    }
+
+    private func initializeWithDelay() {
+        guard !Self.isTerminating else { return }
+        DebugLogger.shared.debug("Starting delayed initialization...", source: "GlobalHotkeyManager")
+
+        self.initializationTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 second delay
+            } catch {
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                self?.setupGlobalHotkeyWithRetry()
             }
         }
     }

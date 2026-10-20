@@ -150,6 +150,43 @@ final class HoldToMuteTests: XCTestCase {
     }
 
     @MainActor
+    func testTerminationPreservesMuteAndCancelsPendingSpaceReplay() throws {
+        try self.withMuteSetting {
+            let asr = ASRService()
+            asr.isRunning = true
+            defer {
+                asr.isRunning = false
+                GlobalHotkeyManager.resumeAfterCancelledTermination()
+            }
+            let manager = self.manager(asr: asr)
+            var posted = 0
+            manager.holdToMuteSpaceTap.postEvent = { _, _ in posted += 1 }
+            for releasedWhileSuspended in [false, true] {
+                XCTAssertNil(try self.send(manager, type: .keyDown, at: 1_000_000_000))
+                XCTAssertTrue(asr.isDictationMuted)
+                GlobalHotkeyManager.suspendForTermination()
+                XCTAssertTrue(asr.isDictationMuted, "Quitting must not unmute audio while capture is still shutting down")
+                if releasedWhileSuspended {
+                    XCTAssertNotNil(try self.send(manager, type: .keyUp, at: 1_050_000_000))
+                    XCTAssertTrue(asr.isDictationMuted, "Suspended input must not change the recording's mute state")
+                }
+                GlobalHotkeyManager.resumeAfterCancelledTermination()
+                // This replay manager never reads the real keyboard; supply its physical state.
+                manager.reconcileHoldToMute(isPhysicallyDown: !releasedWhileSuspended)
+                XCTAssertEqual(asr.isDictationMuted, !releasedWhileSuspended)
+                if !releasedWhileSuspended {
+                    XCTAssertNil(try self.send(manager, type: .keyUp, at: 1_100_000_000))
+                }
+                XCTAssertFalse(asr.isDictationMuted)
+                XCTAssertEqual(posted, 0, "An interrupted short Space press must never replay after cancelling quit")
+            }
+            _ = try self.send(manager, type: .keyDown, at: 2_000_000_000)
+            _ = try self.send(manager, type: .keyUp, at: 2_100_000_000)
+            XCTAssertEqual(posted, 2, "A fresh quick tap must still replay one Space after recovery")
+        }
+    }
+
+    @MainActor
     func testExistingSpaceChordsAndOtherModesPassThrough() throws {
         try self.withMuteSetting {
             let asr = ASRService()
