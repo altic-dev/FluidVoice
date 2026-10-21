@@ -21,6 +21,9 @@ enum KeychainServiceError: Error, LocalizedError {
 /// Lightweight helper for storing provider API keys in the system Keychain.
 /// Keys are stored as generic passwords scoped to the FluidVoice service.
 final class KeychainService {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let shared = KeychainService()
 
     private struct TestingBackend {

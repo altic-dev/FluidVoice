@@ -4,6 +4,9 @@ import Carbon.HIToolbox
 import Foundation
 
 final class TypingService {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     nonisolated static let synthesizedEventUserData: Int64 = 0x46565353
 
     struct CapturedFocusTarget {

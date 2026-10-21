@@ -200,6 +200,9 @@ struct StreamingTranscriptionWorkState {
 /// Cancelling a pending start releases its waiter without completing the active handoff.
 @MainActor
 final class RecordingBufferHandoffGate {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     struct Token: Equatable {
         private let id = UUID()
     }
@@ -250,6 +253,9 @@ final class RecordingBufferHandoffGate {
 /// stop cancels only the delay; an active provider operation is allowed to settle.
 @MainActor
 final class StreamingTaskLifecycle {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     private var scheduler: (id: UUID, task: Task<Void, Never>)?
     private var active: (sessionID: Int, operationID: UUID, task: Task<Void, Never>)?
     private var drainWaiters: [UUID: (operationID: UUID, continuation: CheckedContinuation<Bool, Never>, timer: Task<Void, Never>)] = [:]

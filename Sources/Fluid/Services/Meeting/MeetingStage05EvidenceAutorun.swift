@@ -1130,6 +1130,9 @@ nonisolated struct MeetingStage05TimingFailureRecord: Codable, Equatable, Sendab
 }
 
 final class MeetingStage05PCMCollector: @unchecked Sendable {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     enum Output { case render, capture }
     private let root: URL
     private let inputUID: String
@@ -1538,6 +1541,9 @@ final class MeetingStage05PCMCollector: @unchecked Sendable {
 }
 
 private final class WAVWriter {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     let url: URL
     private let handle: FileHandle
     private(set) var sampleRateHz = 48_000.0

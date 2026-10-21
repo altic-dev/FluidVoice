@@ -32,6 +32,9 @@ nonisolated struct HoldToMuteKeyState {
 /// without re-entering the hotkey handler or changing the clipboard.
 @MainActor
 final class HoldToMuteSpaceTap {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let maximumDuration: UInt64 = 250_000_000
 
     struct Context: Equatable {

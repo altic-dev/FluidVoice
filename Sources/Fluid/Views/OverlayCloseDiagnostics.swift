@@ -55,6 +55,9 @@ enum OverlayCloseRunLoopProbe {
     }
 
     private final class ProbeState: @unchecked Sendable {
+        // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+        nonisolated deinit {}
+
         var previousAt = ProcessInfo.processInfo.systemUptime
         var previousPhase: CFOptionFlags = 0
     }

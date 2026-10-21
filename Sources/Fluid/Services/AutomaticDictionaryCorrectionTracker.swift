@@ -20,6 +20,9 @@ enum AutomaticDictionarySuggestionOutcome {
 
 @MainActor
 final class AutomaticDictionarySuggestionPolicy {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     static let shared = AutomaticDictionarySuggestionPolicy()
 
     private struct PairRecord: Codable {

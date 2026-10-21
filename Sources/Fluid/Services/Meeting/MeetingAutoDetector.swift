@@ -8,6 +8,9 @@ import Foundation
 /// Every ambiguity resolves to no prompt: a false negative here is free, a false positive is not.
 @MainActor
 final class MeetingAutoDetector {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     // MARK: - Tunables (Phase A plan v2)
 
     static let coincidenceWindowSeconds: TimeInterval = 30

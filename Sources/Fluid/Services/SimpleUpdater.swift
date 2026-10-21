@@ -117,6 +117,9 @@ private struct SemanticVersion: Comparable {
 
 @MainActor
 final class SimpleUpdater: ObservableObject {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     struct ReleaseBuildOption {
         let version: String
         let url: URL

@@ -140,6 +140,9 @@ struct BottomWaveformView: View {
 /// first and ripples outward, the spectrum tilts the shape, and a slow idle wave keeps the
 /// bars breathing while the user is quiet.
 final class WaveformSimulation {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     private var heights: [CGFloat] = []
     private var velocities: [CGFloat] = []
     private var energyHistory: [CGFloat] = Array(repeating: 0, count: 32)
