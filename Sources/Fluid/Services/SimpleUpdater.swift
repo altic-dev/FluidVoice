@@ -709,9 +709,7 @@ final class SimpleUpdater: ObservableObject {
         content.material = .popover
         content.blendingMode = .behindWindow
         content.state = .active
-        content.wantsLayer = true
-        content.layer?.cornerRadius = 16
-        content.layer?.masksToBounds = true
+        content.maskImage = .roundedRectMask(cornerRadius: 16)
         content.autoresizingMask = [.width, .height]
 
         let icon = NSImageView(frame: NSRect(x: 22, y: 42, width: 52, height: 52))
