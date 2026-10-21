@@ -18,6 +18,8 @@ final class DictationAudioHistoryStore {
     var orphanSweeps = 0
     var usageMeasurements = 0
     var deletedFileNames: [String] = []
+    /// Files in the shared audio folder that the orphan sweep may delete.
+    var storedFileNames: Set<String> = []
     @discardableResult func deleteAudio(fileName: String) -> Int64 {
         self.deletedFileNames.append(fileName)
         return 0
@@ -31,7 +33,10 @@ final class DictationAudioHistoryStore {
 
     func deleteUnreferencedAudioFiles(referencedFileNames: Set<String>) -> (fileCount: Int, byteCount: Int64) {
         self.orphanSweeps += 1
-        return (0, 0)
+        let orphans = self.storedFileNames.subtracting(referencedFileNames).sorted()
+        self.storedFileNames.subtract(orphans)
+        self.deletedFileNames.append(contentsOf: orphans)
+        return (orphans.count, 0)
     }
 }
 
@@ -343,6 +348,80 @@ final class RewritingDefaults: UserDefaults {
         installStore.pruneAudioToBudget()
         precondition(audioStore.orphanSweeps == installSweeps + 1, "Once every install has imported, the orphaned audio sweep runs")
         print("PASS: another install's unimported legacy history defers audio budget pruning")
+
+        // While both apps run, the other install imports its legacy history and saves a new recording
+        // after this store loaded. Their audio is referenced only by rows this store has not loaded.
+        let runningSuites = (0..<2).map { "fluid-history-running-\($0)-\(UUID())" }
+        defer { runningSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let runningDefaults = UserDefaults(suiteName: runningSuites[0]),
+              let otherRunningDefaults = UserDefaults(suiteName: runningSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        func recorded(_ seconds: TimeInterval, _ fileName: String) -> TranscriptionHistoryEntry {
+            TranscriptionHistoryEntry(
+                timestamp: Date(timeIntervalSince1970: seconds),
+                rawText: fileName,
+                processedText: fileName,
+                appName: "Test",
+                windowTitle: "Test",
+                wasAIProcessed: false,
+                audio: DictationAudioMetadata(
+                    fileName: fileName,
+                    durationMilliseconds: 1000,
+                    byteCount: 32_000,
+                    sampleRate: 16_000,
+                    channels: 1,
+                    model: "test"
+                )
+            )
+        }
+        let runningURL = root.appendingPathComponent("running.sqlite3")
+        try otherRunningDefaults.set(JSONEncoder().encode([recorded(1, "imported-by-other.wav")]), forKey: key)
+        let runningStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: runningDefaults,
+            url: runningURL,
+            otherInstallDefaults: [otherRunningDefaults]
+        ))
+        try await runningStore.waitUntilLoaded()
+        let otherWriter = TranscriptionHistoryWriter(defaults: otherRunningDefaults, url: runningURL)
+        _ = try await otherWriter.load()
+        precondition(otherRunningDefaults.data(forKey: key) == nil, "The other install imported its legacy history")
+        let otherSaveError = await withCheckedContinuation { continuation in
+            otherWriter.write(upserts: [recorded(2, "recorded-by-other.wav")]) { continuation.resume(returning: $0) }
+        }
+        precondition(otherSaveError == nil)
+        audioStore.storedFileNames = ["imported-by-other.wav", "recorded-by-other.wav", "orphan.wav"]
+        defer { audioStore.storedFileNames = [] }
+        let runningDeletions = audioStore.deletedFileNames.count
+        runningStore.pruneAudioToBudget()
+        precondition(
+            audioStore.deletedFileNames.dropFirst(runningDeletions) == ["orphan.wav"],
+            "Audio referenced by rows another running install added must not be swept as orphaned"
+        )
+        precondition(audioStore.storedFileNames == ["imported-by-other.wav", "recorded-by-other.wav"])
+        // The automatic prune after a new recording reads the database off the main actor.
+        let ownID = UUID()
+        runningStore.addEntry(id: ownID, rawText: "own", processedText: "Own dictation", appName: "Test", windowTitle: "Test")
+        audioStore.storedFileNames.insert("orphan.wav")
+        let automaticMeasurements = audioStore.usageMeasurements
+        let automaticDeletions = audioStore.deletedFileNames.count
+        runningStore.attachAudio(audio, to: ownID)
+        for _ in 0..<200 where audioStore.usageMeasurements == automaticMeasurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(
+            audioStore.deletedFileNames.dropFirst(automaticDeletions) == ["orphan.wav", audio.fileName],
+            "The automatic prune must keep another install's audio and prune this install's own recording"
+        )
+        precondition(audioStore.storedFileNames == ["imported-by-other.wav", "recorded-by-other.wav"])
+        // A row that cannot be read here may reference audio too.
+        try self.sql(runningURL, "INSERT INTO history VALUES ('\(UUID().uuidString)', x'00')")
+        audioStore.storedFileNames.insert("orphan.wav")
+        let unreadableSweeps = audioStore.orphanSweeps
+        runningStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == unreadableSweeps, "An unreadable saved row must block the orphaned audio sweep")
+        precondition(audioStore.storedFileNames.contains("orphan.wav"))
+        print("PASS: the orphan sweep keeps audio referenced by rows another running install added to the shared database")
 
         // An older instance saves a newer legacy array after this load read the key.
         let racingSuite = "fluid-history-legacy-race-\(UUID())"

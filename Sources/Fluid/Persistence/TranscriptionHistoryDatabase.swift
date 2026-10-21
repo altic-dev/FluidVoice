@@ -180,6 +180,34 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
         }
     }
 
+    /// Audio referenced by the database, including rows another running install added after this load.
+    /// Both run after every write already queued here.
+    func savedAudioFileNames() throws -> Set<String> {
+        try self.queue.sync { try self.readSavedAudioFileNames() }
+    }
+
+    func savedAudioFileNames() async throws -> Set<String> {
+        try await withCheckedThrowingContinuation { continuation in
+            self.queue.async {
+                continuation.resume(with: Result { try self.readSavedAudioFileNames() })
+            }
+        }
+    }
+
+    private func readSavedAudioFileNames() throws -> Set<String> {
+        guard let database = self.database else {
+            throw NSError(domain: "HistoryDatabase", code: 1, userInfo: [NSLocalizedDescriptionKey: "History is not loaded."])
+        }
+        return try Set(database.read().compactMap {
+            try JSONDecoder().decode(AudioReference.self, from: $0.payload).audio?.fileName
+        })
+    }
+
+    private nonisolated struct AudioReference: Decodable {
+        nonisolated struct Audio: Decodable { let fileName: String }
+        let audio: Audio?
+    }
+
     func write(
         upserts: [TranscriptionHistoryEntry], deletes: [UUID] = [], replacing: Bool = false,
         completion: @escaping @Sendable (Error?) -> Void

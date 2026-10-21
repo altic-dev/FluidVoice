@@ -533,10 +533,14 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.invalidateAutomaticAudioBudgetMeasurement()
         let budgetBytes = SettingsStore.shared.audioHistoryBudgetBytes
         let currentBytes = DictationAudioHistoryStore.shared.audioUsageBytes()
-        return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes)
+        return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes, savedAudioFileNames: nil)
     }
 
-    private func pruneAudioToBudget(currentBytes initialCurrentBytes: Int64, budgetBytes: Int64) -> Int {
+    private func pruneAudioToBudget(
+        currentBytes initialCurrentBytes: Int64,
+        budgetBytes: Int64,
+        savedAudioFileNames: Result<Set<String>, Error>?
+    ) -> Int {
         guard budgetBytes > 0 else {
             return self.deleteAllSavedAudio()
         }
@@ -554,8 +558,18 @@ final class TranscriptionHistoryStore: ObservableObject {
             return 0
         }
 
+        // Another running install shares the database and audio folder, and its rows added after this
+        // load are not in these entries. Keep all audio if the database cannot be read.
+        let savedFileNames: Set<String>
+        do {
+            savedFileNames = try (savedAudioFileNames ?? Result { try self.writer.savedAudioFileNames() }).get()
+        } catch {
+            DebugLogger.shared.warning("Deferred audio budget pruning; saved audio could not be read: \(error)", source: "TranscriptionHistoryStore")
+            return 0
+        }
+
         var updatedEntries = self.entries
-        let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
+        let referencedFileNames = savedFileNames.union(updatedEntries.compactMap { $0.audio?.fileName })
         let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
         if orphanedAudio.fileCount > 0 {
             currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
@@ -603,6 +617,15 @@ final class TranscriptionHistoryStore: ObservableObject {
                 let currentBytes = await Task.detached(priority: .utility) {
                     DictationAudioHistoryStore.shared.audioUsageBytes()
                 }.value
+                // Pruning reads every saved row. Read them on the writer's queue, not the main actor.
+                var savedAudioFileNames: Result<Set<String>, Error>?
+                if gate.budgetBytes > 0, currentBytes > gate.budgetBytes {
+                    do {
+                        savedAudioFileNames = try await .success(self.writer.savedAudioFileNames())
+                    } catch {
+                        savedAudioFileNames = .failure(error)
+                    }
+                }
                 guard gate.accepts(
                     currentRevision: self.audioBudgetRevision,
                     currentBudgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
@@ -612,7 +635,8 @@ final class TranscriptionHistoryStore: ObservableObject {
 
                 _ = self.pruneAudioToBudget(
                     currentBytes: currentBytes,
-                    budgetBytes: gate.budgetBytes
+                    budgetBytes: gate.budgetBytes,
+                    savedAudioFileNames: savedAudioFileNames
                 )
                 self.automaticAudioBudgetTask = nil
                 return
