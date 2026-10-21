@@ -5,6 +5,239 @@ import XCTest
 
 @MainActor
 final class PasteDeliveryCoordinatorTests: XCTestCase {
+    func testOlderPreparationCannotOverwriteNewerRefusedBackup() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        var resumeFocus: CheckedContinuation<Bool, Never>?
+        let preparation = Task { @MainActor in
+            await sut.prepareForDelivery("older transcript", preserveTranscriptOnClipboard: true) {
+                await withCheckedContinuation { resumeFocus = $0 }
+            }
+        }
+        await self.waitUntil { resumeFocus != nil }
+        let refusal = await sut.deliver("newer transcript", preserveTranscriptOnClipboard: true, validateTarget: { .noEditableTarget })
+        XCTAssertEqual(refusal, .recoverableFailure(.noEditableTarget))
+        resumeFocus?.resume(returning: false)
+        let ready = await preparation.value
+        XCTAssertFalse(ready)
+        XCTAssertEqual(pasteboard.text, "newer transcript", "Older recovery must not replace a newer intentional backup")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 1)
+        XCTAssertEqual(poster.postCount, 0)
+    }
+
+    func testQueuedPreparationCannotOverwriteRefusedBackupDuringValidation() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        var resumeFocus: CheckedContinuation<Bool, Never>?
+        var preparationFinishedFocus = false
+        let preparation = Task { @MainActor in
+            await sut.prepareForDelivery("older transcript", preserveTranscriptOnClipboard: true) {
+                let ready = await withCheckedContinuation { resumeFocus = $0 }
+                preparationFinishedFocus = true
+                return ready
+            }
+        }
+        await self.waitUntil { resumeFocus != nil }
+        var resumeValidation: CheckedContinuation<TextDeliveryFailure?, Never>?
+        let delivery = Task { @MainActor in
+            await sut.deliver("newer transcript", preserveTranscriptOnClipboard: true, validateTarget: {
+                await withCheckedContinuation { resumeValidation = $0 }
+            })
+        }
+        await self.waitUntil { resumeValidation != nil }
+        resumeFocus?.resume(returning: false)
+        await self.waitUntil { preparationFinishedFocus }
+        resumeValidation?.resume(returning: .noEditableTarget)
+        let result = await delivery.value
+        let ready = await preparation.value
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget))
+        XCTAssertFalse(ready)
+        XCTAssertEqual(pasteboard.text, "newer transcript")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 1, "Queued stale preparation must not replace newer backup")
+        XCTAssertEqual(poster.postCount, 0)
+    }
+
+    func testSuspendedTargetValidationRechecksCancellationAtBothStages() async {
+        for stage in [1, 2] {
+            for failure: TextDeliveryFailure? in [nil, .noEditableTarget] {
+                let pasteboard = FakePasteboardManager(text: "before")
+                let poster = FakePasteCommandPoster()
+                let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+                var valid = true
+                var validations = 0
+                var resumeValidation: CheckedContinuation<TextDeliveryFailure?, Never>?
+                let delivery = Task { @MainActor in
+                    await sut.deliver("cancelled", preserveTranscriptOnClipboard: true, isOutputValid: { valid }, validateTarget: {
+                        validations += 1
+                        if validations == stage {
+                            return await withCheckedContinuation { resumeValidation = $0 }
+                        }
+                        return nil
+                    })
+                }
+                await self.waitUntil { resumeValidation != nil }
+                XCTAssertEqual(pasteboard.text, "before", "A manual paste during slow validation must see the original item")
+                valid = false
+                resumeValidation?.resume(returning: failure)
+                let result = await delivery.value
+                XCTAssertEqual(result, .cancelled, "Cancellation must win over either validation verdict at stage \(stage)")
+                XCTAssertEqual(pasteboard.text, "before")
+                XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+                XCTAssertEqual(pasteboard.temporaryWriteCount, 0, "Pending focus validation must leave the original clipboard installed")
+                XCTAssertEqual(poster.postCount, 0)
+                sut.runPendingSettlementForTesting()
+                let next = await sut.deliver("next", preserveTranscriptOnClipboard: false)
+                XCTAssertEqual(next, .commandPosted, "Cancellation must release the delivery slot")
+                sut.runPendingSettlementForTesting()
+            }
+        }
+    }
+
+    func testSuspendedTargetValidationPreservesExternalCopyAtBothStages() async {
+        for stage in [1, 2] {
+            for keepBackup in [false, true] {
+                for failure: TextDeliveryFailure? in [nil, .noEditableTarget] {
+                    let pasteboard = FakePasteboardManager(text: "before")
+                    let poster = FakePasteCommandPoster()
+                    let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+                    var validations = 0
+                    var resumeValidation: CheckedContinuation<TextDeliveryFailure?, Never>?
+                    let delivery = Task { @MainActor in
+                        await sut.deliver("dictation", preserveTranscriptOnClipboard: keepBackup, validateTarget: {
+                            validations += 1
+                            if validations == stage {
+                                return await withCheckedContinuation { resumeValidation = $0 }
+                            }
+                            return nil
+                        })
+                    }
+                    await self.waitUntil { resumeValidation != nil }
+                    XCTAssertEqual(pasteboard.text, "before", "Do not expose dictation text during either AX wait")
+                    pasteboard.simulateExternalCopy("new user copy")
+                    resumeValidation?.resume(returning: failure)
+                    let result = await delivery.value
+                    XCTAssertEqual(result, .recoverableFailure(failure ?? .clipboardWriteFailed))
+                    XCTAssertEqual(pasteboard.text, "new user copy")
+                    XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+                    XCTAssertEqual(poster.postCount, 0, "Never paste an external copy that replaced the transcript")
+                    sut.runPendingSettlementForTesting()
+                    let next = await sut.deliver("next", preserveTranscriptOnClipboard: false)
+                    XCTAssertEqual(next, .commandPosted)
+                    sut.runPendingSettlementForTesting()
+                    XCTAssertEqual(pasteboard.text, "new user copy")
+                }
+            }
+        }
+    }
+
+    func testSuspendedTargetValidationRetainsExclusiveDeliverySlot() async {
+        for stage in [1, 2] {
+            let pasteboard = FakePasteboardManager(text: "before")
+            let poster = FakePasteCommandPoster()
+            let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+            var validations = 0
+            var resumeValidation: CheckedContinuation<TextDeliveryFailure?, Never>?
+            let first = Task { @MainActor in
+                await sut.deliver("first", preserveTranscriptOnClipboard: false, validateTarget: {
+                    validations += 1
+                    if validations == stage {
+                        return await withCheckedContinuation { resumeValidation = $0 }
+                    }
+                    return nil
+                })
+            }
+            await self.waitUntil { resumeValidation != nil }
+            var secondEntered = false
+            var secondValidations = 0
+            let second = Task { @MainActor in
+                secondEntered = true
+                return await sut.deliver("second", preserveTranscriptOnClipboard: false, validateTarget: {
+                    secondValidations += 1
+                    return nil
+                })
+            }
+            await self.waitUntil { secondEntered }
+            XCTAssertEqual(pasteboard.temporaryWriteCount, 0, "Pending focus validation must leave the original clipboard installed")
+            XCTAssertEqual(poster.postCount, 0, "The queued delivery cannot bypass suspended validation")
+            XCTAssertEqual(secondValidations, 0)
+            resumeValidation?.resume(returning: stage == 1 ? .noEditableTarget : nil)
+            let result = await first.value
+            if stage == 2 {
+                XCTAssertEqual(result, .commandPosted)
+                XCTAssertEqual(secondValidations, 0, "Slot remains exclusive until consumption settlement")
+                XCTAssertEqual(pasteboard.text, "first")
+                sut.runPendingSettlementForTesting()
+            } else {
+                XCTAssertEqual(result, .recoverableFailure(.noEditableTarget))
+            }
+            let delivered = await second.value
+            XCTAssertEqual(delivered, .commandPosted)
+            XCTAssertEqual(poster.postCount, stage)
+            sut.runPendingSettlementForTesting()
+        }
+    }
+
+    func testRefusedQueuedPastePreservesNewerUserClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await sut.deliver("first", preserveTranscriptOnClipboard: false)
+        var targetMatches = true
+        var queued = false
+        let delivery = Task { @MainActor in
+            queued = true
+            return await sut.deliver("refused transcript", preserveTranscriptOnClipboard: true, validateTarget: { targetMatches ? nil : .noEditableTarget })
+        }
+        await self.waitUntil { queued }
+        pasteboard.simulateExternalCopy("new user copy")
+        targetMatches = false
+        sut.runPendingSettlementForTesting()
+        let result = await delivery.value
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget))
+        XCTAssertEqual(poster.postCount, 1)
+        XCTAssertEqual(pasteboard.text, "new user copy", "Refusing a queued paste must preserve a newer explicit clipboard copy")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+    }
+
+    func testChangedDestinationWhileQueuedDoesNotPostPaste() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        _ = await sut.deliver("first", preserveTranscriptOnClipboard: false)
+        var targetMatches = true
+        var queued = false
+        let delivery = Task { @MainActor in
+            queued = true
+            return await sut.deliver("preserved transcript", preserveTranscriptOnClipboard: true, validateTarget: { targetMatches ? nil : .noEditableTarget })
+        }
+        await self.waitUntil { queued }
+        targetMatches = false
+        sut.runPendingSettlementForTesting()
+        let result = await delivery.value
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget), "Destination drift is a recoverable delivery failure")
+        XCTAssertEqual(poster.postCount, 1, "Only the first delivery may post paste")
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1, "The refused delivery must not write temporary clipboard text")
+        XCTAssertEqual(pasteboard.text, "preserved transcript", "The requested transcript backup survives refusal")
+    }
+
+    func testChangedDestinationBeforeCommandLeavesClipboardUntouched() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let poster = FakePasteCommandPoster()
+        let sut = PasteDeliveryCoordinator(pasteboard: pasteboard, commandPoster: poster, settlementDelayNanoseconds: .max)
+        var validations = 0
+        let result = await sut.deliver("dictation", preserveTranscriptOnClipboard: false, validateTarget: {
+            validations += 1
+            return validations == 1 ? nil : .noEditableTarget
+        })
+        XCTAssertEqual(result, .recoverableFailure(.noEditableTarget), "Recheck immediately before dispatch must refuse a changed destination")
+        XCTAssertEqual(poster.postCount, 0, "Unsafe paste command must not be posted")
+        XCTAssertEqual(pasteboard.text, "before", "Refusal must leave the original clipboard untouched")
+        XCTAssertEqual(pasteboard.restoreCount, 0)
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 0)
+    }
+
     func testCancelledFocusPreparationDoesNotCopyBackup() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let poster = FakePasteCommandPoster()

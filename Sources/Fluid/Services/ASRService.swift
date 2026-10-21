@@ -7351,6 +7351,7 @@ final class ASRService: ObservableObject {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
         toggleStopRequestedAt: TimeInterval? = nil,
+        capturedTarget: TypingService.RecordingTargetContext? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
@@ -7368,6 +7369,7 @@ final class ASRService: ObservableObject {
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
+            capturedTarget: capturedTarget,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
             isOutputValid: isOutputValid
@@ -7403,6 +7405,7 @@ final class ASRService: ObservableObject {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
         toggleStopRequestedAt: TimeInterval? = nil,
+        capturedTarget: TypingService.RecordingTargetContext? = nil,
         tracksDictionaryCorrections: Bool = false,
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
@@ -7423,6 +7426,7 @@ final class ASRService: ObservableObject {
                 preferredTargetPID: preferredTargetPID,
                 textReadyAt: textReadyAt,
                 toggleStopRequestedAt: toggleStopRequestedAt,
+                capturedTarget: capturedTarget,
                 tracksDictionaryCorrections: tracksDictionaryCorrections,
                 postInsertionKey: postInsertionKey,
                 requiredFocusTarget: requiredFocusTarget,

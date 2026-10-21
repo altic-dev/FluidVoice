@@ -645,11 +645,13 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
+        validateTarget: @MainActor () async -> TextDeliveryFailure? = { nil },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
+        let requestedChangeCount = self.pasteboard.changeCount
         await self.acquireDeliverySlot()
         let slotAcquiredAt = ProcessInfo.processInfo.systemUptime
         var settlementOwnsSlot = false
@@ -658,6 +660,24 @@ final class PasteDeliveryCoordinator {
         }
 
         guard isOutputValid() else { return .cancelled }
+        let validationChangeCount = self.pasteboard.changeCount
+        let admissionFailure = await validateTarget()
+        guard isOutputValid() else { return .cancelled }
+        if let failure = admissionFailure {
+            if preserveTranscriptOnClipboard,
+               self.pasteboard.changeCount == requestedChangeCount ||
+               self.pasteboard.changeCount == self.lastWrittenChangeCount
+            {
+                self.generation &+= 1
+                self.writeBackup(text)
+            }
+            self.log("delivery_failed reason=\(failure.rawValue) at=slot_acquired")
+            return .recoverableFailure(failure)
+        }
+        guard self.pasteboard.changeCount == validationChangeCount else {
+            self.log("delivery_failed reason=clipboard_changed at=slot_acquired")
+            return .recoverableFailure(.clipboardWriteFailed)
+        }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
         let generation = self.generation
@@ -673,6 +693,21 @@ final class PasteDeliveryCoordinator {
             return .recoverableFailure(.clipboardSnapshotFailed)
         }
 
+        // Validate after snapshot materialization, while the user's clipboard is still installed.
+        let dispatchFailure = await validateTarget()
+        guard isOutputValid() else { return .cancelled }
+        if let failure = dispatchFailure {
+            if preserveTranscriptOnClipboard, self.pasteboard.changeCount == originalChangeCount {
+                self.writeBackup(text)
+            }
+            self.log("delivery_failed reason=\(failure.rawValue) at=before_command")
+            return .recoverableFailure(failure)
+        }
+        guard self.pasteboard.changeCount == originalChangeCount else {
+            self.log("delivery_failed reason=clipboard_changed at=before_command")
+            return .recoverableFailure(.clipboardWriteFailed)
+        }
+
         let sessionID = UUID().uuidString
         let writeStartedAt = ProcessInfo.processInfo.systemUptime
         guard self.pasteboard.writeTemporaryText(text, sessionID: sessionID) else {
@@ -681,14 +716,16 @@ final class PasteDeliveryCoordinator {
             return .recoverableFailure(.clipboardWriteFailed)
         }
         self.lastWrittenChangeCount = self.pasteboard.changeCount
-        self.log(
-            "clipboard_write generation=\(generation) elapsedMs=\(Self.elapsedMs(since: writeStartedAt))"
-        )
-
+        self.log("clipboard_write generation=\(generation) elapsedMs=\(Self.elapsedMs(since: writeStartedAt))")
         self.pasteboard.recordAudit("command_before", detail: "session=\(sessionID)")
         guard isOutputValid() else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
+        }
+        guard self.pasteboard.isOwned(sessionID: sessionID, expectedText: text) else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
+            self.log("delivery_failed reason=clipboard_changed at=before_command")
+            return .recoverableFailure(.clipboardWriteFailed)
         }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime
@@ -734,7 +771,9 @@ final class PasteDeliveryCoordinator {
         let ready = await prepare()
         guard isOutputValid() else { return false }
         if !ready, self.generation == generation {
-            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount, isOutputValid: isOutputValid)
+            await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount, isOutputValid: {
+                isOutputValid() && self.generation == generation
+            })
         }
         return ready
     }
