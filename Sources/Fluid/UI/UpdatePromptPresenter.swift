@@ -241,8 +241,12 @@ private final class FloatingPromptButton: NSButton {
 
 extension NSImage {
     static func roundedRectMask(cornerRadius: CGFloat) -> NSImage {
-        let side = cornerRadius * 2 + 1
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+        let stretchableCenter: CGFloat = 1
+        let maskSize = NSSize(
+            width: cornerRadius + stretchableCenter + cornerRadius,
+            height: cornerRadius + stretchableCenter + cornerRadius
+        )
+        let image = NSImage(size: maskSize, flipped: false) { rect in
             NSColor.black.setFill()
             NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
             return true
