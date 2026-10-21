@@ -618,8 +618,10 @@ final class TranscriptionHistoryStore: ObservableObject {
                     DictationAudioHistoryStore.shared.audioUsageBytes()
                 }.value
                 // Pruning reads every saved row. Read them on the writer's queue, not the main actor.
+                // Check legacy history first: an import that finishes during the read would otherwise
+                // retire its key after a snapshot that lacks the imported rows.
                 var savedAudioFileNames: Result<Set<String>, Error>?
-                if gate.budgetBytes > 0, currentBytes > gate.budgetBytes {
+                if gate.budgetBytes > 0, currentBytes > gate.budgetBytes, !self.writer.hasUnimportedLegacyHistory {
                     do {
                         savedAudioFileNames = try await .success(self.writer.savedAudioFileNames())
                     } catch {

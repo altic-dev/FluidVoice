@@ -67,6 +67,19 @@ final class RewritingDefaults: UserDefaults {
     }
 }
 
+/// Stands in for another app that finishes importing its legacy history when this app next checks for it.
+final class ImportingDefaults: UserDefaults {
+    var onNextRead: (() -> Void)?
+
+    override func data(forKey name: String) -> Data? {
+        if let onNextRead {
+            self.onNextRead = nil
+            onNextRead()
+        }
+        return super.data(forKey: name)
+    }
+}
+
 @main struct HistoryPersistenceBoundaryTests {
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("fluid-history-tests-\(UUID())")
@@ -418,10 +431,58 @@ final class RewritingDefaults: UserDefaults {
         try self.sql(runningURL, "INSERT INTO history VALUES ('\(UUID().uuidString)', x'00')")
         audioStore.storedFileNames.insert("orphan.wav")
         let unreadableSweeps = audioStore.orphanSweeps
+        let unreadableDeletions = audioStore.deletedFileNames.count
+        let unreadableMeasurements = audioStore.usageMeasurements
+        runningStore.attachAudio(audio, to: ownID)
         runningStore.pruneAudioToBudget()
+        // The settings prune measures once and the automatic prune it restarted measures once more.
+        for _ in 0..<200 where audioStore.usageMeasurements < unreadableMeasurements + 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
         precondition(audioStore.orphanSweeps == unreadableSweeps, "An unreadable saved row must block the orphaned audio sweep")
+        precondition(audioStore.deletedFileNames.count == unreadableDeletions, "An unreadable saved row must block pruning recordings too")
+        precondition(runningStore.entries.first { $0.id == ownID }?.audio == audio)
         precondition(audioStore.storedFileNames.contains("orphan.wav"))
         print("PASS: the orphan sweep keeps audio referenced by rows another running install added to the shared database")
+
+        // The other install finishes importing while this install's automatic prune runs: it commits the rows,
+        // then removes its legacy key. The prune must not sweep with references read before that commit.
+        let importingSuites = (0..<2).map { "fluid-history-importing-\($0)-\(UUID())" }
+        defer { importingSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let importingOwnDefaults = UserDefaults(suiteName: importingSuites[0]),
+              let importingDefaults = ImportingDefaults(suiteName: importingSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        let importingURL = root.appendingPathComponent("importing.sqlite3")
+        let lateImport = recorded(3, "imported-during-prune.wav")
+        try importingDefaults.set(JSONEncoder().encode([lateImport]), forKey: key)
+        let importingStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: importingOwnDefaults,
+            url: importingURL,
+            otherInstallDefaults: [importingDefaults]
+        ))
+        try await importingStore.waitUntilLoaded()
+        let lateImportPayload = try JSONEncoder().encode(lateImport).map { String(format: "%02x", $0) }.joined()
+        importingDefaults.onNextRead = {
+            try? self.sql(importingURL, "INSERT INTO history VALUES ('\(lateImport.id.uuidString)', x'\(lateImportPayload)')")
+            importingDefaults.removeObject(forKey: key)
+        }
+        let importingOwnID = UUID()
+        importingStore.addEntry(id: importingOwnID, rawText: "own", processedText: "Own dictation", appName: "Test", windowTitle: "Test")
+        audioStore.storedFileNames = ["imported-during-prune.wav", "orphan.wav"]
+        let importingMeasurements = audioStore.usageMeasurements
+        let importingDeletions = audioStore.deletedFileNames.count
+        importingStore.attachAudio(audio, to: importingOwnID)
+        for _ in 0..<200 where audioStore.usageMeasurements == importingMeasurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(importingDefaults.onNextRead == nil, "The automatic prune must check the other install's legacy history")
+        precondition(
+            audioStore.deletedFileNames.dropFirst(importingDeletions) == ["orphan.wav", audio.fileName],
+            "Audio imported by another install during the automatic prune must not be swept as orphaned"
+        )
+        print("PASS: an import another install finishes during the automatic prune keeps its audio")
 
         // An older instance saves a newer legacy array after this load read the key.
         let racingSuite = "fluid-history-legacy-race-\(UUID())"
