@@ -39,6 +39,26 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         }
     }
 
+    func testBackupRestoresAudioDuckingChoice() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            settings.duckAudioDuringRecording = true
+            settings.recordingDuckVolume = 0.25
+            let encoded = try JSONEncoder().encode(settings.makeBackupPayload())
+            settings.duckAudioDuringRecording = false
+            settings.recordingDuckVolume = 0.50
+
+            settings.restore(
+                from: try JSONDecoder().decode(SettingsBackupPayload.self, from: encoded),
+                promptProfiles: [],
+                appPromptBindings: []
+            )
+
+            XCTAssertTrue(settings.duckAudioDuringRecording)
+            XCTAssertEqual(settings.recordingDuckVolume, 0.25, accuracy: 0.001)
+        }
+    }
+
     func testLegacyAbsentFieldsPreserveCurrentPreferences() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared

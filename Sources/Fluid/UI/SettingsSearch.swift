@@ -55,6 +55,7 @@ enum SettingsSearchTarget: Hashable {
     case audio
     case inputDevicePriority
     case outputDevice
+    case duckAudioDuringRecording
 
     case overlay
     case overlaySensitivity
@@ -117,7 +118,7 @@ enum SettingsSearchTarget: Hashable {
         case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck:
             return .notifications
 
-        case .audio, .inputDevicePriority, .outputDevice:
+        case .audio, .inputDevicePriority, .outputDevice, .duckAudioDuringRecording:
             return .audio
 
         case .overlay,
@@ -387,6 +388,11 @@ enum SettingsSearchIndex {
             target: .outputDevice,
             title: "Output Device",
             terms: ["speaker headphones audio system default refresh loading"]
+        ),
+        .init(
+            target: .duckAudioDuringRecording,
+            title: "Lower Audio During Recording",
+            terms: ["lower audio during recording ducking volume system mute attenuate quieter"]
         ),
 
         .init(target: .overlay, title: "Overlay", terms: ["recording indicator notch pill visualizer"]),

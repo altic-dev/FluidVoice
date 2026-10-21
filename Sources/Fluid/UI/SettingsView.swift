@@ -1143,6 +1143,29 @@ struct SettingsView: View {
                             }
                             .settingsSearchTarget(.outputDevice)
 
+                            Divider().opacity(0.2)
+                            let mediaPauseOverridesDucking = self.settings.pauseMediaDuringTranscription
+                            Group {
+                                self.optionToggleRow(
+                                    title: "Lower Audio During Recording",
+                                    description: mediaPauseOverridesDucking
+                                        ? "Unavailable while Pause Media During Transcription is on."
+                                        : "Lower system volume while recording.",
+                                    isOn: self.$settings.duckAudioDuringRecording
+                                )
+                                if self.settings.duckAudioDuringRecording {
+                                    HStack {
+                                        Text("Recording volume").font(self.theme.typography.bodySmall)
+                                        Slider(value: self.$settings.recordingDuckVolume, in: SettingsStore.recordingDuckVolumeRange)
+                                            .accessibilityLabel("Recording volume")
+                                        Text("\(Int(self.settings.recordingDuckVolume * 100))%")
+                                            .monospacedDigit().frame(width: 45)
+                                    }
+                                }
+                            }
+                            .settingsSearchTarget(.duckAudioDuringRecording)
+                            .disabled(mediaPauseOverridesDucking)
+
                             self.microphoneQualityGuidance
                         }
                     }

@@ -251,6 +251,10 @@ struct ContentView: View {
 
         var savesHistory: Bool { self != .onboardingSandbox }
         var deliversText: Bool { self == .normal }
+
+        func supportsSpokenSend(in insertionMode: SettingsStore.TextInsertionMode) -> Bool {
+            self.deliversText && insertionMode != .clipboardOnly
+        }
         var publishesEditorResult: Bool { self != .historyOnly }
     }
 
@@ -537,6 +541,11 @@ struct ContentView: View {
             }
             .onReceive(self.asr.$partialTranscription) { text in
                 self.handleSpokenSendPartialTranscription(text)
+            }
+            .onChange(of: self.settings.textInsertionMode) { _, mode in
+                if mode == .clipboardOnly {
+                    self.cancelSpokenSendCountdownForCopyOnly()
+                }
             }
             .overlay(alignment: .center) {}
             .modifier(ReleaseHighlightsPresenter(
@@ -2839,8 +2848,13 @@ struct ContentView: View {
             let fluidIntelligenceLatencyMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - fluidIntelligenceStartedAt) * 1000).rounded()
             )
+            let cleanedText = DictationPromptRequest.cleanedText(
+                response: response.outputText,
+                instructions: "",
+                transcript: inputText
+            )
             return AITextProcessingResult(
-                text: response.outputText,
+                text: cleanedText,
                 tokensPerSecond: tokensPerSecond,
                 fluidIntelligenceLatencyMilliseconds: fluidIntelligenceLatencyMilliseconds
             )
@@ -3000,8 +3014,15 @@ struct ContentView: View {
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }
+        let cleanedContent = isDictationCall
+            ? DictationPromptRequest.cleanedText(
+                response: response.content,
+                instructions: promptText,
+                transcript: inputText
+            )
+            : response.content
         return AITextProcessingResult(
-            text: response.content,
+            text: cleanedContent,
             tokensPerSecond: nil,
             fluidIntelligenceLatencyMilliseconds: nil
         )
@@ -3068,7 +3089,7 @@ struct ContentView: View {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
         let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
+            && !promptTest.isActive && !shouldUseAIOnStop && !(self.settings.spokenSendEnabled && self.settings.textInsertionMode != .clipboardOnly))
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3186,7 +3207,7 @@ struct ContentView: View {
         let spokenSendParse = SpokenSendParser.parseArmed(
             punctuationFormattedText,
             phrase: self.settings.spokenSendPhrase,
-            enabled: !cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled,
+            enabled: !cancelledAtASRStop && self.settings.spokenSendEnabled && route.supportsSpokenSend(in: self.settings.textInsertionMode),
             wasArmed: self.spokenSendArming.wasArmed
         )
         self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)
@@ -3409,6 +3430,40 @@ struct ContentView: View {
 
         self.appBench("typing_decision snapshotTarget=\(stopSnapshot != nil) external=\(shouldTypeExternally)")
 
+        if shouldDeliverOutputs, self.settings.textInsertionMode == .clipboardOnly {
+            let deliveryResult = await PasteDeliveryCoordinator.shared.deliverCopyOnly(
+                finalText,
+                isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
+            )
+            guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
+                saveCancelledSendOnlyHistory()
+                return
+            }
+            let didCopy = deliveryResult.wasDispatched
+            self.handleTypingDelivery(
+                didCopy ? .inserted : .insertionFailed,
+                pipelineID: pipelineID,
+                pipelineStartedAt: pipelineStartedAt,
+                textReadyAt: finalTextReadyAt,
+                shouldHideOverlay: didCopy && !shouldShowAIProcessingFailure && !stopOverlay.didRequestHide,
+                expectedOverlayLifecycleID: expectedOverlayLifecycleID
+            )
+            if case let .recoverableFailure(failure) = deliveryResult {
+                self.showStoppedDictationDeliveryFailure(failure, transcript: finalText, snapshot: stopSnapshot)
+            } else if !shouldShowAIProcessingFailure, !stopOverlay.didRequestHide {
+                self.hideOverlayAfterOutput()
+            }
+            if shouldShowAIProcessingFailure {
+                self.pendingAIReprocessText = spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText
+                NotchContentState.shared.showAIProcessingFailure()
+                self.menuBarManager.finishProcessingKeepingOverlayVisible()
+                if let aiFallbackNotificationError {
+                    NotificationService.showAIProcessingFallback(error: aiFallbackNotificationError)
+                }
+            }
+            return
+        }
+
         // A sidebar search field that was already focused when recording began gets
         // the text through its field editor, which also fires change notifications.
         // So does an in-app editor that opted in with `DictationTextTarget`.
@@ -3493,6 +3548,7 @@ struct ContentView: View {
                     toggleStopRequestedAt: toggleStopRequestedAt,
                     tracksDictionaryCorrections: true,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
+                    allowsCopyOnly: true,
                     isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 didTypeExternally = deliveryResult.wasDispatched
@@ -3858,12 +3914,30 @@ struct ContentView: View {
         NotchContentState.shared.clearTextDeliveryFailure()
     }
 
+    private func cancelSpokenSendCountdownForCopyOnly() {
+        self.spokenSendAutoStopTask?.cancel()
+        self.spokenSendAutoStopTask = nil
+        self.stopSpokenSendVoiceActivityMonitoring()
+        self.spokenSendCountdownStartedAt = nil
+        self.spokenSendArming.reset()
+        if !self.spokenSendAutoStopTriggered,
+           NotchContentState.shared.spokenSendIndicatorState == .countingDown || NotchContentState.shared.spokenSendIndicatorState == .detected
+        {
+            NotchContentState.shared.setSpokenSendIndicatorState(.hidden)
+        }
+    }
+
     private func handleSpokenSendPartialTranscription(_ text: String) {
         guard self.settings.spokenSendEnabled else { return }
+        guard self.settings.textInsertionMode != .clipboardOnly else {
+            self.cancelSpokenSendCountdownForCopyOnly()
+            return
+        }
         let isDictationMode = self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode
         let isEligible = isDictationMode &&
             self.cancelledOutputLifecycleID != self.overlayLifecycleID &&
             self.currentDictationOutputRouteForHotkeyStop() == .normal &&
+            self.settings.textInsertionMode != .clipboardOnly &&
             self.asr.isRunning &&
             !self.spokenSendAutoStopTriggered
         let isArmed = self.spokenSendArming.update(
@@ -3912,6 +3986,7 @@ struct ContentView: View {
                   self.asr.isRunning,
                   self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode,
                   self.currentDictationOutputRouteForHotkeyStop() == .normal,
+                  self.settings.textInsertionMode != .clipboardOnly,
                   !self.spokenSendAutoStopTriggered,
                   SpokenSendParser.canCompleteImmediateStop(
                       self.asr.partialTranscription,

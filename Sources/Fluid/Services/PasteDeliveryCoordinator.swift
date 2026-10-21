@@ -760,6 +760,12 @@ final class PasteDeliveryCoordinator {
         return self.writeBackup(text)
     }
 
+    func deliverCopyOnly(_ text: String, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> TextDeliveryResult {
+        let copied = await self.copyBackup(text, enabled: true, isOutputValid: isOutputValid)
+        guard isOutputValid() else { return .cancelled }
+        return copied ? .commandPosted : .recoverableFailure(.clipboardWriteFailed)
+    }
+
     @discardableResult
     private func writeBackup(_ text: String) -> Bool {
         guard !text.isEmpty else { return false }

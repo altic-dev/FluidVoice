@@ -262,8 +262,13 @@ final class DictationPostProcessingService {
                 )
             )
             settings.recordFluidIntelligenceUse(output: response.outputText)
+            let cleanedText = DictationPromptRequest.cleanedText(
+                response: response.outputText,
+                instructions: "",
+                transcript: trimmed
+            )
             return Result(
-                text: ASRService.applyGAAVFormatting(response.outputText),
+                text: ASRService.applyGAAVFormatting(cleanedText),
                 providerID: resolved.providerID,
                 model: resolved.model
             )
@@ -305,7 +310,9 @@ final class DictationPostProcessingService {
             throw AIProcessingError.emptyResponse
         }
         return Result(
-            text: ASRService.applyGAAVFormatting(response.content),
+            text: ASRService.applyGAAVFormatting(DictationPromptRequest.cleanedText(
+                response: response.content, instructions: promptText, transcript: trimmed
+            )),
             providerID: resolved.providerID,
             model: resolved.model
         )

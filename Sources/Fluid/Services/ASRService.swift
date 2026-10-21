@@ -7359,6 +7359,7 @@ final class ASRService: ObservableObject {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
+        allowsCopyOnly: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -7376,6 +7377,7 @@ final class ASRService: ObservableObject {
             toggleStopRequestedAt: toggleStopRequestedAt,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            allowsCopyOnly: allowsCopyOnly,
             isOutputValid: isOutputValid
         )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
@@ -7413,6 +7415,7 @@ final class ASRService: ObservableObject {
         postInsertionKey: SettingsStore.SpokenSendKey? = nil,
         requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        allowsCopyOnly: Bool = false,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TypingService.DeliveryOutcome {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -7433,6 +7436,7 @@ final class ASRService: ObservableObject {
                 postInsertionKey: postInsertionKey,
                 requiredFocusTarget: requiredFocusTarget,
                 preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+                allowsCopyOnly: allowsCopyOnly,
                 isOutputValid: isOutputValid
             ) { outcome in
                 continuation.resume(returning: outcome)

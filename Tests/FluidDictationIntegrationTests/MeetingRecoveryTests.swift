@@ -5733,8 +5733,11 @@ final class MeetingProcessingSerializationGateTests: XCTestCase {
 
     func testPreCancelledAcquireThrowsImmediatelyAndLeavesGateFreeForNextAcquire() async throws {
         let gate = MeetingProcessingSerializationGate()
-        let task = Task<Void, Error> { try await gate.acquire() }
-        task.cancel()
+        let task = Task<Void, Error> {
+            // Cancellation must precede acquisition, independent of scheduler timing.
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await gate.acquire()
+        }
 
         do {
             try await task.value
