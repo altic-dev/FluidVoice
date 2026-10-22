@@ -569,15 +569,55 @@ final class SystemPasteboardManager: PasteboardManaging {
 
 @MainActor
 final class SystemPasteCommandPoster: PasteCommandPosting {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
+    /// Pause after Command goes down, before V is pressed.
+    nonisolated static let commandPressSettleNanoseconds: UInt64 = 10_000_000
+    /// Hold between V down and V up, like a real key press.
+    nonisolated static let keyPressHoldNanoseconds: UInt64 = 10_000_000
+    /// Keep Command held after V is released so the target reads Command
+    /// as down while it handles V.
+    nonisolated static let commandReleaseDelayNanoseconds: UInt64 = 40_000_000
+
+    /// Wait before each event in `makePasteEvents()`, in order.
+    ///
+    /// Posting all four events back to back let Command up reach the session
+    /// state before the target had handled V down. Apps that resolve the
+    /// shortcut from the live modifier state (instead of the event's flags)
+    /// then saw a bare V and inserted "v" in place of the transcript (#1168).
+    nonisolated static let pasteEventDelaysNanoseconds: [UInt64] = [
+        0,
+        commandPressSettleNanoseconds,
+        keyPressHoldNanoseconds,
+        commandReleaseDelayNanoseconds,
+    ]
+
+    private let isTrusted: () -> Bool
+    private let post: (CGEvent) -> Void
+    private let sleep: (UInt64) async -> Void
+
+    init(
+        isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
+        post: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
+        sleep: @escaping (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) }
+    ) {
+        self.isTrusted = isTrusted
+        self.post = post
+        self.sleep = sleep
+    }
+
     func postGlobalPasteCommand() async -> Bool {
-        guard AXIsProcessTrusted() else { return false }
+        guard self.isTrusted() else { return false }
         let events = Self.makePasteEvents()
-        guard !events.isEmpty else { return false }
+        guard events.count == Self.pasteEventDelaysNanoseconds.count else { return false }
 
         // The coordinator verifies pasteboard ownership before reaching this point,
         // so the temporary item is ready to consume without an additional delay.
-        for event in events {
-            event.post(tap: .cghidEventTap)
+        // The short pauses inside the chord keep Command held while V is handled.
+        for (event, delay) in zip(events, Self.pasteEventDelaysNanoseconds) {
+            if delay > 0 { await self.sleep(delay) }
+            self.post(event)
         }
         return true
     }

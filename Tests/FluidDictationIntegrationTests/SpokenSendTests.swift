@@ -356,6 +356,54 @@ final class SpokenSendTests: XCTestCase {
         XCTAssertEqual(events[3].flags, CGEventFlags(), "the final event must release Command")
     }
 
+    func testPasteCommandKeepsCommandHeldWhileVIsHandled() async {
+        enum Step: Equatable {
+            case post(CGEventType, CGKeyCode, CGEventFlags)
+            case sleep(UInt64)
+        }
+        var steps: [Step] = []
+        let poster = SystemPasteCommandPoster(
+            isTrusted: { true },
+            post: { event in
+                steps.append(.post(event.type, CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)), event.flags))
+            },
+            sleep: { steps.append(.sleep($0)) }
+        )
+
+        let posted = await poster.postGlobalPasteCommand()
+
+        XCTAssertTrue(posted)
+        let command = CGKeyCode(kVK_Command)
+        let paste = TypingService.pasteVirtualKeyCode
+        // Posting the four events back to back let Command up land before the
+        // target handled V down, so it saw a bare V and typed "v" (#1168).
+        XCTAssertEqual(steps, [
+            .post(.flagsChanged, command, .maskCommand),
+            .sleep(SystemPasteCommandPoster.commandPressSettleNanoseconds),
+            .post(.keyDown, paste, .maskCommand),
+            .sleep(SystemPasteCommandPoster.keyPressHoldNanoseconds),
+            .post(.keyUp, paste, .maskCommand),
+            .sleep(SystemPasteCommandPoster.commandReleaseDelayNanoseconds),
+            .post(.flagsChanged, command, CGEventFlags()),
+        ])
+        XCTAssertGreaterThan(SystemPasteCommandPoster.commandPressSettleNanoseconds, 0)
+        XCTAssertGreaterThan(SystemPasteCommandPoster.commandReleaseDelayNanoseconds, 0)
+    }
+
+    func testPasteCommandPostsNothingWithoutAccessibility() async {
+        var postedCount = 0
+        let poster = SystemPasteCommandPoster(
+            isTrusted: { false },
+            post: { _ in postedCount += 1 },
+            sleep: { _ in }
+        )
+
+        let posted = await poster.postGlobalPasteCommand()
+
+        XCTAssertFalse(posted)
+        XCTAssertEqual(postedCount, 0)
+    }
+
     func testPasteSequenceIsInvisibleToTheHotkeyTap() throws {
         let events = SystemPasteCommandPoster.makePasteEvents()
         XCTAssertEqual(events.count, 4)
