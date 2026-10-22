@@ -306,13 +306,19 @@ final class DictationPostProcessingService {
         }
 
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
-        let request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
+        let request: DictationPromptRequest
+        if resolved.providerID == AppleIntelligenceProvider.providerID {
+            let prompt = AppleIntelligenceProvider.dictationPrompt(instructions: promptText, transcript: trimmed)
+            request = DictationPromptRequest(systemPrompt: prompt.instructions, userContent: prompt.text)
+        } else {
+            request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
+        }
 
         guard !resolved.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIProcessingError.missingModel(provider: resolved.providerKey)
         }
 
-        let isLocal = ModelRepository.shared.isLocalEndpoint(resolved.baseURL)
+        let isLocal = resolved.providerID == AppleIntelligenceProvider.providerID || ModelRepository.shared.isLocalEndpoint(resolved.baseURL)
         if !isLocal, resolved.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw AIProcessingError.missingAPIKey(provider: resolved.providerKey)
         }
@@ -325,6 +331,7 @@ final class DictationPostProcessingService {
         }
 
         var config = LLMClient.Config(
+            providerID: resolved.providerID,
             messages: request.messages,
             model: resolved.model,
             baseURL: resolved.baseURL,
@@ -340,8 +347,13 @@ final class DictationPostProcessingService {
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }
+        let content = resolved.providerID == AppleIntelligenceProvider.providerID
+            ? AppleIntelligenceProvider.unwrappedDictationText(response.content, originalTranscript: trimmed)
+            : response.content
         return Result(
-            text: ASRService.applyGAAVFormatting(response.content),
+            text: ASRService.applyGAAVFormatting(DictationPromptRequest.cleanedText(
+                response: content, instructions: request.systemPrompt, transcript: trimmed
+            )),
             providerID: resolved.providerID,
             model: resolved.model
         )
