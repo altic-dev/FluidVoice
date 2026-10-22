@@ -1012,6 +1012,46 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertTrue(command.contains("guard isOutputValid() else {\n            self.commandModeService.cancelInvalidPendingCommand()"))
     }
 
+    func testExpandedCommandOutputOnlyAbortsForSupersedingPresentation() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let overlay = try String(
+            contentsOf: root.appendingPathComponent("Sources/Fluid/Services/NotchOverlayManager.swift"),
+            encoding: .utf8
+        )
+        let show = try XCTUnwrap(
+            overlay.components(separatedBy: "func show(audioLevelPublisher:").last?
+                .components(separatedBy: "private func showInternal(").first
+        )
+        let immediateHide = try XCTUnwrap(
+            overlay.components(separatedBy: "func hideImmediately() {").last?
+                .components(separatedBy: "func hideAndWait()").first
+        )
+        let expansion = try XCTUnwrap(
+            overlay.components(separatedBy: "func showExpandedCommandOutput() {").last?
+                .components(separatedBy: "private func showExpandedCommandOutputInternal()").first
+        )
+
+        XCTAssertTrue(show.contains("self.recordingPresentationGeneration &+= 1"))
+        XCTAssertFalse(immediateHide.contains("recordingPresentationGeneration"))
+        let capture = try XCTUnwrap(
+            expansion.range(of: "let recordingGeneration = self.recordingPresentationGeneration")
+        )
+        let taskStart = try XCTUnwrap(expansion.range(of: "Task { [weak self] in"))
+        XCTAssertLessThan(capture.lowerBound, taskStart.lowerBound)
+        XCTAssertEqual(
+            expansion.components(
+                separatedBy: "guard self.recordingPresentationGeneration == recordingGeneration else { return }"
+            ).count - 1,
+            2
+        )
+        XCTAssertTrue(expansion.contains("guard await self.hideAndWait() == .hidden else { return }"))
+        XCTAssertTrue(
+            expansion.contains(
+                "guard self.recordingPresentationGeneration == recordingGeneration, self.notch == nil else { return }"
+            )
+        )
+    }
+
     func testCancelledProcessingCannotPublishDelayedOverlayOrPracticeResult() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("Sources/Fluid/ContentView.swift"), encoding: .utf8)
