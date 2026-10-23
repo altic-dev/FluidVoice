@@ -662,7 +662,7 @@ final class TypingService {
                 return
             }
 
-            let modifiersReleased = await self.waitForPhysicalModifiersToRelease(timeout: 2)
+            let modifiersReleased = await Self.waitForPhysicalModifiersToRelease(timeout: 2)
             guard isOutputValid(), Self.canDispatchPostInsertionAction(
                 preferredTargetPID: preferredTargetPID,
                 requiredTargetPID: requiredFocusTarget.pid,
@@ -872,7 +872,7 @@ final class TypingService {
     /// Reads the modifier keys themselves. The session flag state is not
     /// reliable here: the synthesized Cmd+V paste can leave Command reported
     /// as held until the next real event, which used to time this wait out.
-    private func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool {
+    static func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool {
         let startedAt = ProcessInfo.processInfo.systemUptime
         while ProcessInfo.processInfo.systemUptime - startedAt < timeout {
             if Self.heldPhysicalModifiers().isEmpty {
@@ -881,7 +881,7 @@ final class TypingService {
             try? await Task.sleep(nanoseconds: 15_000_000)
         }
         DebugLogger.shared.warning(
-            "Post-insertion send suppressed: modifiers still held after \(Int(timeout * 1000))ms held=\(Self.heldPhysicalModifiers()) sessionFlags=\(CGEventSource.flagsState(.combinedSessionState).rawValue)",
+            "Modifiers still held after \(Int(timeout * 1000))ms held=\(Self.heldPhysicalModifiers()) sessionFlags=\(CGEventSource.flagsState(.combinedSessionState).rawValue)",
             source: "TypingService"
         )
         return false

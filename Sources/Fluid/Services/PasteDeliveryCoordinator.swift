@@ -569,8 +569,11 @@ final class SystemPasteboardManager: PasteboardManaging {
 
 @MainActor
 final class SystemPasteCommandPoster: PasteCommandPosting {
+    nonisolated static let modifierReleaseTimeoutSeconds: TimeInterval = 1
+
     func postGlobalPasteCommand() async -> Bool {
         guard AXIsProcessTrusted() else { return false }
+        _ = await TypingService.waitForPhysicalModifiersToRelease(timeout: Self.modifierReleaseTimeoutSeconds)
         let events = Self.makePasteEvents()
         guard !events.isEmpty else { return false }
 
