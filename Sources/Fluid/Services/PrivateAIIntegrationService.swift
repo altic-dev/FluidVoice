@@ -29,6 +29,9 @@ actor PrivateAIIntegrationService {
         let bundleID: String
         let windowTitle: String
         let appVersion: String?
+        /// Raw text for models trained to read it; others ignore both.
+        var textBeforeCursor: String? = nil
+        var screenText: [String]? = nil
     }
 
     struct EnhancementResult: Sendable, Equatable {
@@ -277,6 +280,10 @@ actor PrivateAIIntegrationService {
 
     nonisolated static func shouldHandleDictation(model: String) -> Bool {
         self.provider.shouldHandleDictation(model: model)
+    }
+
+    nonisolated static func readsDictationContext(model: String) -> Bool {
+        self.provider.readsDictationContext(model: model)
     }
 
     func status(for runtime: RuntimeConfiguration) async -> PrivateAIStatus {
