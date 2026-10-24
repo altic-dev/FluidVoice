@@ -11,6 +11,13 @@ nonisolated enum DictationScreenContextScope: String, CaseIterable, Sendable {
     case off
     /// The window being dictated into; for a browser, its current tab.
     case frontWindow
+
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .frontWindow: "Front window"
+        }
+    }
 }
 
 /// Raw text around a dictation, for models trained to read it.

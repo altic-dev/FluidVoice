@@ -721,6 +721,9 @@ extension AIEnhancementSettingsView {
             if self.privateAIShowsBoostRow {
                 self.privateAIBoostRow(isBusy: isBusy)
             }
+            if PrivateAIIntegrationService.readsDictationContext(model: model.id) {
+                DictationScreenContextSettings(settings: self.settings, isBusy: isBusy)
+            }
 
             if self.viewModel.connectionStatus(for: PrivateAIProviderFeature.shared.providerID) == .failed,
                !self.viewModel.connectionErrorMessage.isEmpty
