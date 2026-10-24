@@ -385,6 +385,48 @@ nonisolated protocol DirectCoreAudioInputControlling: AnyObject, Sendable {
     func invalidate() -> OSStatus
 }
 
+nonisolated enum BuiltInOutputKeepAlivePolicy {
+    static func prepare(
+        inputDeviceID: AudioObjectID,
+        devices: [AudioDevice.Device],
+        isAppleSilicon: Bool
+    ) -> [AudioObjectID] {
+        guard isAppleSilicon,
+              let input = devices.first(where: { $0.id == inputDeviceID }),
+              input.hasInput,
+              input.isUnavailableWhenClamshellClosed
+        else {
+            return []
+        }
+
+        return devices.filter { $0.hasOutput && $0.isBuiltIn }.map(\.id)
+    }
+
+    static func start(
+        outputDeviceIDs: [AudioObjectID],
+        startDevice: (AudioObjectID) -> OSStatus
+    ) -> AudioObjectID? {
+        outputDeviceIDs.first { startDevice($0) == noErr }
+    }
+
+    static func stop(
+        deviceID: inout AudioObjectID?,
+        stopDevice: (AudioObjectID) -> OSStatus
+    ) -> OSStatus {
+        guard let activeDeviceID = deviceID else { return noErr }
+        var status: OSStatus = noErr
+        // One immediate retry; retain failed cleanup for the next Stop or teardown.
+        for _ in 0..<2 {
+            status = stopDevice(activeDeviceID)
+            if status == noErr {
+                deviceID = nil
+                return noErr
+            }
+        }
+        return status
+    }
+}
+
 private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputControlling, @unchecked Sendable {
     private struct SendableCaptureHandle: @unchecked Sendable {
         let rawValue: FVCoreAudioCaptureRef
@@ -397,6 +439,8 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
 
     private var capture: FVCoreAudioCaptureRef?
     private var poisonedStopStatus: OSStatus?
+    private let outputKeepAliveDeviceIDs: [AudioObjectID]
+    private var outputKeepAliveDeviceID: AudioObjectID?
     private let packetHandler: DirectCoreAudioPacketHandler
     private let workerQueue = DispatchQueue(
         label: "com.fluidvoice.audio.direct-input-consumer",
@@ -442,10 +486,27 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
         self.sampleRate = sampleRate
         self.hardwareBufferFrameSize = hardwareBufferFrameSize
         self.packetHandler = packetHandler
+        // Discover output candidates during idle preparation, not on each Start.
+        // The lifecycle controller rebuilds this input after topology changes.
+        #if arch(arm64)
+        self.outputKeepAliveDeviceIDs = BuiltInOutputKeepAlivePolicy.prepare(
+            inputDeviceID: deviceID,
+            devices: AudioDevice.listAllDevices(),
+            isAppleSilicon: true
+        )
+        #else
+        self.outputKeepAliveDeviceIDs = []
+        #endif
     }
 
     deinit {
         _ = self.invalidate()
+        if let deviceID = self.outputKeepAliveDeviceID {
+            DebugLogger.shared.warning(
+                "Built-in output keep-alive cleanup still unconfirmed at final input teardown device=\(deviceID)",
+                source: "DirectCoreAudioInput"
+            )
+        }
     }
 
     var isRunning: Bool {
@@ -465,8 +526,10 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
         guard fv_core_audio_capture_is_running(capture) == false else { return }
 
         fv_core_audio_capture_clear(capture)
+        self.startOutputKeepAlive()
         let status = fv_core_audio_capture_start(capture)
         guard status == noErr else {
+            self.stopOutputKeepAlive()
             throw Self.error(status: status, operation: "start direct Core Audio input")
         }
 
@@ -494,6 +557,7 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
     /// by the realtime callback before returning.
     @discardableResult
     func stop() -> OSStatus {
+        defer { self.stopOutputKeepAlive() }
         if let poisonedStopStatus {
             return poisonedStopStatus
         }
@@ -515,7 +579,10 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
 
     @discardableResult
     func invalidate() -> OSStatus {
-        guard let capture else { return self.poisonedStopStatus ?? noErr }
+        guard let capture else {
+            self.stopOutputKeepAlive()
+            return self.poisonedStopStatus ?? noErr
+        }
         let stopStatus = self.stop()
         guard stopStatus == noErr else {
             // A failed AudioDeviceStop does not establish that HAL stopped
@@ -532,6 +599,27 @@ private final nonisolated class DirectCoreAudioInput: DirectCoreAudioInputContro
         }
         self.capture = nil
         return noErr
+    }
+
+    private func startOutputKeepAlive() {
+        guard self.outputKeepAliveDeviceID == nil else { return }
+        self.outputKeepAliveDeviceID = BuiltInOutputKeepAlivePolicy.start(
+            outputDeviceIDs: self.outputKeepAliveDeviceIDs,
+            startDevice: { AudioDeviceStart($0, nil) }
+        )
+    }
+
+    private func stopOutputKeepAlive() {
+        let status = BuiltInOutputKeepAlivePolicy.stop(
+            deviceID: &self.outputKeepAliveDeviceID,
+            stopDevice: { AudioDeviceStop($0, nil) }
+        )
+        if status != noErr, let deviceID = self.outputKeepAliveDeviceID {
+            DebugLogger.shared.warning(
+                "Built-in output keep-alive stop failed twice device=\(deviceID) status=\(status); retained for later cleanup",
+                source: "DirectCoreAudioInput"
+            )
+        }
     }
 
     private nonisolated static func consumePackets(
