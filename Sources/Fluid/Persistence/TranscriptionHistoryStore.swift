@@ -291,6 +291,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     private var todaySummaryDay: DateInterval?
     private var audioBudgetRevision: UInt64 = 0
     private var automaticAudioBudgetTask: Task<Void, Never>?
+    private var hasLoggedDeferredAudioPrune = false
     private(set) var audioSaveGeneration: UInt64 = 0
     private var calendarObservers: [NSObjectProtocol] = []
     private let summaryNow: () -> Date
@@ -532,10 +533,14 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.invalidateAutomaticAudioBudgetMeasurement()
         let budgetBytes = SettingsStore.shared.audioHistoryBudgetBytes
         let currentBytes = DictationAudioHistoryStore.shared.audioUsageBytes()
-        return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes)
+        return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes, savedAudioFileNames: nil)
     }
 
-    private func pruneAudioToBudget(currentBytes initialCurrentBytes: Int64, budgetBytes: Int64) -> Int {
+    private func pruneAudioToBudget(
+        currentBytes initialCurrentBytes: Int64,
+        budgetBytes: Int64,
+        savedAudioFileNames: Result<Set<String>, Error>?
+    ) -> Int {
         guard budgetBytes > 0 else {
             return self.deleteAllSavedAudio()
         }
@@ -543,8 +548,28 @@ final class TranscriptionHistoryStore: ObservableObject {
         var currentBytes = initialCurrentBytes
         guard currentBytes > budgetBytes else { return 0 }
 
+        // Unimported legacy history can own audio these entries do not reference, so usage cannot be
+        // attributed to them. Keep all audio until that history is imported.
+        guard !self.writer.hasUnimportedLegacyHistory else {
+            if !self.hasLoggedDeferredAudioPrune {
+                self.hasLoggedDeferredAudioPrune = true
+                DebugLogger.shared.info("Deferred audio budget pruning until legacy history is imported", source: "TranscriptionHistoryStore")
+            }
+            return 0
+        }
+
+        // Another running install shares the database and audio folder, and its rows added after this
+        // load are not in these entries. Keep all audio if the database cannot be read.
+        let savedFileNames: Set<String>
+        do {
+            savedFileNames = try (savedAudioFileNames ?? Result { try self.writer.savedAudioFileNames() }).get()
+        } catch {
+            DebugLogger.shared.warning("Deferred audio budget pruning; saved audio could not be read: \(error)", source: "TranscriptionHistoryStore")
+            return 0
+        }
+
         var updatedEntries = self.entries
-        let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
+        let referencedFileNames = savedFileNames.union(updatedEntries.compactMap { $0.audio?.fileName })
         let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
         if orphanedAudio.fileCount > 0 {
             currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
@@ -592,6 +617,17 @@ final class TranscriptionHistoryStore: ObservableObject {
                 let currentBytes = await Task.detached(priority: .utility) {
                     DictationAudioHistoryStore.shared.audioUsageBytes()
                 }.value
+                // Pruning reads every saved row. Read them on the writer's queue, not the main actor.
+                // Check legacy history first: an import that finishes during the read would otherwise
+                // retire its key after a snapshot that lacks the imported rows.
+                var savedAudioFileNames: Result<Set<String>, Error>?
+                if gate.budgetBytes > 0, currentBytes > gate.budgetBytes, !self.writer.hasUnimportedLegacyHistory {
+                    do {
+                        savedAudioFileNames = try await .success(self.writer.savedAudioFileNames())
+                    } catch {
+                        savedAudioFileNames = .failure(error)
+                    }
+                }
                 guard gate.accepts(
                     currentRevision: self.audioBudgetRevision,
                     currentBudgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
@@ -601,7 +637,8 @@ final class TranscriptionHistoryStore: ObservableObject {
 
                 _ = self.pruneAudioToBudget(
                     currentBytes: currentBytes,
-                    budgetBytes: gate.budgetBytes
+                    budgetBytes: gate.budgetBytes,
+                    savedAudioFileNames: savedAudioFileNames
                 )
                 self.automaticAudioBudgetTask = nil
                 return

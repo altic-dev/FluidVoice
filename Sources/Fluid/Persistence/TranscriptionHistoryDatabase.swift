@@ -26,7 +26,6 @@ final class TranscriptionHistoryDatabase {
             try self.execute("PRAGMA synchronous=FULL")
             try self.execute("PRAGMA secure_delete=ON")
             try self.execute("CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, payload BLOB NOT NULL)")
-            try self.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY)")
         } catch {
             sqlite3_close(handle)
             throw error
@@ -35,23 +34,12 @@ final class TranscriptionHistoryDatabase {
 
     deinit { sqlite3_close(self.connection) }
 
-    var isMigrated: Bool {
-        get throws {
-            let statement = try self.prepare("SELECT 1 FROM metadata WHERE key='legacy_imported'")
-            defer { sqlite3_finalize(statement) }
-            let result = sqlite3_step(statement)
-            guard result == SQLITE_ROW || result == SQLITE_DONE else { throw self.error() }
-            return result == SQLITE_ROW
-        }
-    }
-
-    func migrate(_ records: [Record]) throws {
-        guard try !self.isMigrated else { return }
+    /// Adds legacy entries the database does not have yet. For an id in both, the database copy wins.
+    func importLegacy(_ records: [Record]) throws {
         try self.transaction {
             for record in records {
-                try self.upsert(record)
+                try self.upsert(record, overwriting: false)
             }
-            try self.execute("INSERT INTO metadata(key) VALUES ('legacy_imported')")
         }
     }
 
@@ -84,8 +72,9 @@ final class TranscriptionHistoryDatabase {
         }
     }
 
-    private func upsert(_ record: Record) throws {
-        let statement = try self.prepare("INSERT OR REPLACE INTO history(id,payload) VALUES ('\(record.id.uuidString)',?)")
+    private func upsert(_ record: Record, overwriting: Bool = true) throws {
+        let conflict = overwriting ? "REPLACE" : "IGNORE"
+        let statement = try self.prepare("INSERT OR \(conflict) INTO history(id,payload) VALUES ('\(record.id.uuidString)',?)")
         defer { sqlite3_finalize(statement) }
         let result = record.payload.withUnsafeBytes { bytes in
             sqlite3_bind_blob(statement, 1, bytes.baseAddress, Int32(bytes.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
@@ -123,19 +112,31 @@ final class TranscriptionHistoryDatabase {
     }
 }
 
-/// All disk queries and Codable work happen here, including the one-time legacy import.
+/// All disk queries and Codable work happen here, including the legacy import.
 final class TranscriptionHistoryWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fluid.history.persistence", qos: .utility)
     private var database: TranscriptionHistoryDatabase?
     private var writeError: Error?
     private let defaults: UserDefaults
+    private let otherInstallDefaults: [UserDefaults]
     private let url: URL
     private let legacyKey = "TranscriptionHistoryEntries"
 
-    init(defaults: UserDefaults = .standard, url: URL? = nil) {
+    /// `otherInstallDefaults` lists the installs sharing a custom `url`. Release and Debug keep separate
+    /// defaults but share the default database and audio folder.
+    init(defaults: UserDefaults = .standard, url: URL? = nil, otherInstallDefaults: [UserDefaults] = []) {
         self.defaults = defaults
         self.url = url ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/FluidVoice/TranscriptionHistory.sqlite3")
+        self.otherInstallDefaults = url != nil ? otherInstallDefaults : ["com.FluidApp.app", "com.FluidApp.app.debug"]
+            .filter { $0 != Bundle.main.bundleIdentifier }
+            .compactMap { UserDefaults(suiteName: $0) }
+    }
+
+    /// Legacy history left in defaults (unreadable, rewritten during a load, or not yet imported by another
+    /// install) is not in the loaded entries.
+    var hasUnimportedLegacyHistory: Bool {
+        ([self.defaults] + self.otherInstallDefaults).contains { $0.data(forKey: self.legacyKey) != nil }
     }
 
     func load() async throws -> [TranscriptionHistoryEntry] {
@@ -144,17 +145,32 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
                 do {
                     let database = try self.database ?? TranscriptionHistoryDatabase(url: self.url)
                     self.database = database
-                    if try !database.isMigrated {
-                        let legacy = try self.defaults.data(forKey: self.legacyKey).map {
-                            try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: $0)
-                        } ?? []
-                        try database.migrate(legacy.map { try self.record($0) })
+                    // The database is shared by every build, while legacy history lives in each
+                    // bundle's defaults and older versions write it again after a downgrade.
+                    var imported: Data?
+                    if let data = self.defaults.data(forKey: self.legacyKey) {
+                        do {
+                            let legacy = try JSONDecoder().decode([TranscriptionHistoryEntry].self, from: data)
+                            try database.importLegacy(legacy.map { try self.record($0) })
+                            imported = data
+                        } catch let error as DecodingError {
+                            // Keep the bytes for recovery, but never let them block saved history.
+                            DebugLogger.shared.warning(
+                                "Skipped unreadable legacy history (\(data.count) bytes); it was left in place: \(error)",
+                                source: "TranscriptionHistoryStore"
+                            )
+                        }
                     }
                     let entries = try database.read().map {
                         try JSONDecoder().decode(TranscriptionHistoryEntry.self, from: $0.payload)
                     }.sorted { $0.timestamp > $1.timestamp }
                     // The transaction is committed and every payload decoded before retiring legacy storage.
-                    self.defaults.removeObject(forKey: self.legacyKey)
+                    // An older app instance may rewrite the key meanwhile, so only retire the bytes that were
+                    // imported and leave newer ones for the next load. This narrows the window; it is not
+                    // atomic across processes.
+                    if let imported, self.defaults.data(forKey: self.legacyKey) == imported {
+                        self.defaults.removeObject(forKey: self.legacyKey)
+                    }
                     DebugLogger.shared.debug("HISTORY_BENCH loaded entries=\(entries.count) storage=sqlite", source: "TranscriptionHistoryStore")
                     continuation.resume(returning: entries)
                 } catch {
@@ -162,6 +178,34 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Audio referenced by the database, including rows another running install added after this load.
+    /// Both run after every write already queued here.
+    func savedAudioFileNames() throws -> Set<String> {
+        try self.queue.sync { try self.readSavedAudioFileNames() }
+    }
+
+    func savedAudioFileNames() async throws -> Set<String> {
+        try await withCheckedThrowingContinuation { continuation in
+            self.queue.async {
+                continuation.resume(with: Result { try self.readSavedAudioFileNames() })
+            }
+        }
+    }
+
+    private func readSavedAudioFileNames() throws -> Set<String> {
+        guard let database = self.database else {
+            throw NSError(domain: "HistoryDatabase", code: 1, userInfo: [NSLocalizedDescriptionKey: "History is not loaded."])
+        }
+        return try Set(database.read().compactMap {
+            try JSONDecoder().decode(AudioReference.self, from: $0.payload).audio?.fileName
+        })
+    }
+
+    private nonisolated struct AudioReference: Decodable {
+        nonisolated struct Audio: Decodable { let fileName: String }
+        let audio: Audio?
     }
 
     func write(

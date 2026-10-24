@@ -14,10 +14,30 @@ struct DictationAudioMetadata: Codable, Equatable, Sendable {
 
 final class DictationAudioHistoryStore {
     static let shared = DictationAudioHistoryStore()
-    @discardableResult func deleteAudio(fileName: String) -> Int64 { 0 }
+    var usageBytes: Int64 = 0
+    var orphanSweeps = 0
+    var usageMeasurements = 0
+    var deletedFileNames: [String] = []
+    /// Files in the shared audio folder that the orphan sweep may delete.
+    var storedFileNames: Set<String> = []
+    @discardableResult func deleteAudio(fileName: String) -> Int64 {
+        self.deletedFileNames.append(fileName)
+        return 0
+    }
+
     func deleteAllAudioFiles() {}
-    func audioUsageBytes() -> Int64 { 0 }
-    func deleteUnreferencedAudioFiles(referencedFileNames: Set<String>) -> (fileCount: Int, byteCount: Int64) { (0, 0) }
+    func audioUsageBytes() -> Int64 {
+        self.usageMeasurements += 1
+        return self.usageBytes
+    }
+
+    func deleteUnreferencedAudioFiles(referencedFileNames: Set<String>) -> (fileCount: Int, byteCount: Int64) {
+        self.orphanSweeps += 1
+        let orphans = self.storedFileNames.subtracting(referencedFileNames).sorted()
+        self.storedFileNames.subtract(orphans)
+        self.deletedFileNames.append(contentsOf: orphans)
+        return (orphans.count, 0)
+    }
 }
 
 @MainActor final class SettingsStore {
@@ -29,7 +49,35 @@ final class DictationAudioHistoryStore {
 final class DebugLogger {
     static let shared = DebugLogger()
     func info(_ message: String, source: String) {}
+    func warning(_ message: String, source: String) {}
     func debug(_ message: String, source: String) {}
+}
+
+/// Stands in for an older app instance that saves legacy history while a load is running.
+final class RewritingDefaults: UserDefaults {
+    var replacement: Data?
+
+    override func data(forKey name: String) -> Data? {
+        let snapshot = super.data(forKey: name)
+        if let replacement {
+            self.replacement = nil
+            super.set(replacement, forKey: name)
+        }
+        return snapshot
+    }
+}
+
+/// Stands in for another app that finishes importing its legacy history when this app next checks for it.
+final class ImportingDefaults: UserDefaults {
+    var onNextRead: (() -> Void)?
+
+    override func data(forKey name: String) -> Data? {
+        if let onNextRead {
+            self.onNextRead = nil
+            onNextRead()
+        }
+        return super.data(forKey: name)
+    }
 }
 
 @main struct HistoryPersistenceBoundaryTests {
@@ -145,26 +193,31 @@ final class DebugLogger {
         await store.finishPendingWrites()
         let afterClear = try await writer.load()
         precondition(afterClear.isEmpty, "Late audio must not resurrect deleted entries")
-        try defaults.set(JSONEncoder().encode(legacy), forKey: key)
+        // Imported legacy history is retired, so nothing is left to resurrect cleared history.
+        // Legacy history written later is new to the database and is imported (see testLegacyImportAcrossBuilds).
+        precondition(defaults.data(forKey: key) == nil)
         let afterRestart = try await TranscriptionHistoryWriter(defaults: defaults, url: url).load()
-        precondition(afterRestart.isEmpty, "Migration marker must prevent old history resurrection")
-        print("PASS: clear, late audio, restart and stale legacy cannot resurrect history")
+        precondition(afterRestart.isEmpty, "Cleared history must stay cleared after restart")
+        print("PASS: clear, late audio and restart cannot resurrect history")
 
         let badURL = root.appendingPathComponent("bad.sqlite3")
-        let badData = Data("invalid JSON".utf8)
-        defaults.set(badData, forKey: key)
+        let source = try JSONEncoder().encode([legacy[0]])
+        defaults.set(source, forKey: key)
+        _ = try TranscriptionHistoryDatabase(url: badURL)
+        try self.sql(badURL, "INSERT INTO history VALUES ('\(UUID().uuidString)', x'00')")
         let badStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(defaults: defaults, url: badURL))
         do {
             try await badStore.waitUntilLoaded()
-            preconditionFailure("Corrupt legacy must fail visibly")
+            preconditionFailure("An unreadable saved row must fail visibly")
         } catch {}
         precondition(!badStore.isLoading && badStore.persistenceError != nil)
-        precondition(defaults.data(forKey: key) == badData)
-        try defaults.set(JSONEncoder().encode([legacy[0]]), forKey: key)
+        precondition(defaults.data(forKey: key) == source, "A failed load must keep legacy history")
+        try self.sql(badURL, "DELETE FROM history WHERE id != '\(legacy[0].id.uuidString)'")
         badStore.retryPersistence()
         try await badStore.waitUntilLoaded()
         precondition(badStore.entries == [legacy[0]])
-        print("PASS: corrupt migration preserves source, exits loading and supports retry")
+        precondition(defaults.data(forKey: key) == nil)
+        print("PASS: unreadable saved history preserves legacy source, exits loading and supports retry")
 
         let restoreStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(defaults: defaults, url: url))
         restoreStore.restore(from: [legacy[3]])
@@ -191,6 +244,297 @@ final class DebugLogger {
         print("PASS: restore during loading replaces both memory and disk")
         try await self.testTodaySummary(root: root, defaults: defaults, audio: audio)
         try await self.testStars(root: root, defaults: defaults, audio: audio)
+        try await self.testLegacyImportAcrossBuilds(root: root, audio: audio)
+    }
+
+    /// The database is shared by every build on the Mac, but each bundle and each older
+    /// version keeps legacy history in its own defaults. Neither may lose unimported entries.
+    @MainActor static func testLegacyImportAcrossBuilds(root: URL, audio: DictationAudioMetadata) async throws {
+        let key = "TranscriptionHistoryEntries"
+        let suites = (0..<3).map { "fluid-history-legacy-\($0)-\(UUID())" }
+        defer { suites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let debugDefaults = UserDefaults(suiteName: suites[0]),
+              let releaseDefaults = UserDefaults(suiteName: suites[1]),
+              let upgradeDefaults = UserDefaults(suiteName: suites[2])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        func entry(_ seconds: TimeInterval, _ text: String, starred: Bool = false) -> TranscriptionHistoryEntry {
+            TranscriptionHistoryEntry(
+                timestamp: Date(timeIntervalSince1970: seconds),
+                rawText: text,
+                processedText: text,
+                appName: "Test",
+                windowTitle: "Test",
+                wasAIProcessed: false,
+                isStarred: starred
+            )
+        }
+
+        // Another build created the database first and recorded its own (empty) import.
+        let sharedURL = root.appendingPathComponent("shared.sqlite3")
+        let debugLoad = try await TranscriptionHistoryWriter(defaults: debugDefaults, url: sharedURL).load()
+        precondition(debugLoad.isEmpty)
+        let release = [entry(2, "release two"), entry(1, "release one")]
+        try releaseDefaults.set(JSONEncoder().encode(release), forKey: key)
+        let releaseLoad = try await TranscriptionHistoryWriter(defaults: releaseDefaults, url: sharedURL).load()
+        precondition(releaseLoad == release, "History another build never imported must be imported, not deleted")
+        precondition(releaseDefaults.data(forKey: key) == nil, "Legacy history is retired once it is in the database")
+        print("PASS: legacy history is imported when another build created the database first")
+
+        // Upgrade, star an entry, run an older version that writes legacy history again, upgrade.
+        let upgradeURL = root.appendingPathComponent("upgrade.sqlite3")
+        let original = entry(1, "before downgrade")
+        try upgradeDefaults.set(JSONEncoder().encode([original]), forKey: key)
+        let upgradeWriter = TranscriptionHistoryWriter(defaults: upgradeDefaults, url: upgradeURL)
+        _ = try await upgradeWriter.load()
+        var starred = original
+        starred.isStarred = true
+        let starError = await withCheckedContinuation { continuation in
+            upgradeWriter.write(upserts: [starred]) { continuation.resume(returning: $0) }
+        }
+        precondition(starError == nil)
+        let downgraded = entry(2, "dictated after downgrade")
+        try upgradeDefaults.set(JSONEncoder().encode([downgraded, original]), forKey: key)
+        let reupgraded = try await TranscriptionHistoryWriter(defaults: upgradeDefaults, url: upgradeURL).load()
+        precondition(reupgraded == [downgraded, starred], "Re-upgrading must add new legacy entries and keep newer database rows")
+        precondition(upgradeDefaults.data(forKey: key) == nil)
+        print("PASS: entries written by an older version after upgrading are merged without overwriting database rows")
+
+        // Unreadable legacy data is kept for recovery without blocking saved history.
+        let unreadable = Data("invalid JSON".utf8)
+        upgradeDefaults.set(unreadable, forKey: key)
+        let store = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(defaults: upgradeDefaults, url: upgradeURL))
+        try await store.waitUntilLoaded()
+        precondition(store.entries == [downgraded, starred], "Unreadable legacy history must not block saved history")
+        let newID = UUID()
+        store.addEntry(id: newID, rawText: "new", processedText: "New dictation", appName: "Test", windowTitle: "Test")
+        await store.finishPendingWrites()
+        let restarted = try await TranscriptionHistoryWriter(defaults: upgradeDefaults, url: upgradeURL).load()
+        precondition(restarted.map(\.id) == [newID, downgraded.id, original.id], "New dictations must persist beside unreadable legacy history")
+        precondition(upgradeDefaults.data(forKey: key) == unreadable, "Unreadable legacy history must never be deleted")
+        print("PASS: unreadable legacy history is preserved without blocking saved history or new dictations")
+
+        // Unimported legacy history may own audio the loaded entries do not reference, so usage over
+        // budget must neither sweep that audio as orphaned nor delete new recordings to pay for it.
+        let audioStore = DictationAudioHistoryStore.shared
+        audioStore.usageBytes = 2_000_000
+        defer { audioStore.usageBytes = 0 }
+        let sweeps = audioStore.orphanSweeps
+        let measurements = audioStore.usageMeasurements
+        let deletions = audioStore.deletedFileNames.count
+        store.attachAudio(audio, to: newID)
+        for _ in 0..<200 where audioStore.usageMeasurements == measurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(audioStore.usageMeasurements > measurements, "Attaching audio must measure usage against the budget")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(store.entries.first { $0.id == newID }?.audio == audio, "A new recording must not pay for legacy audio")
+        store.pruneAudioToBudget()
+        precondition(store.entries.first { $0.id == newID }?.audio == audio, "Lowering the budget must not delete recordings while legacy history remains")
+        precondition(audioStore.deletedFileNames.count == deletions, "Unimported legacy history must block deleting recordings")
+        precondition(audioStore.orphanSweeps == sweeps, "Unimported legacy history must block the orphaned audio sweep")
+        upgradeDefaults.removeObject(forKey: key)
+        store.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == sweeps + 1, "Fully imported history must allow the orphaned audio sweep")
+        precondition(audioStore.deletedFileNames.dropFirst(deletions) == [audio.fileName], "Fully imported history must allow pruning recordings to the budget")
+        precondition(store.entries.allSatisfy { $0.audio == nil })
+        print("PASS: unimported legacy history defers audio budget pruning until it is imported")
+
+        // Another install shares the audio folder, so recordings in its unimported legacy history look orphaned here.
+        let installSuites = (0..<2).map { "fluid-history-install-\($0)-\(UUID())" }
+        defer { installSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let ownDefaults = UserDefaults(suiteName: installSuites[0]),
+              let otherInstallDefaults = UserDefaults(suiteName: installSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        let otherInstallLegacy = try JSONEncoder().encode([entry(1, "recorded by the other install")])
+        otherInstallDefaults.set(otherInstallLegacy, forKey: key)
+        let installStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: ownDefaults,
+            url: root.appendingPathComponent("installs.sqlite3"),
+            otherInstallDefaults: [otherInstallDefaults]
+        ))
+        try await installStore.waitUntilLoaded()
+        let installSweeps = audioStore.orphanSweeps
+        installStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == installSweeps, "Another install's unimported legacy history must block the orphaned audio sweep")
+        precondition(otherInstallDefaults.data(forKey: key) == otherInstallLegacy, "Another install's legacy history is left for that install")
+        otherInstallDefaults.removeObject(forKey: key)
+        installStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == installSweeps + 1, "Once every install has imported, the orphaned audio sweep runs")
+        print("PASS: another install's unimported legacy history defers audio budget pruning")
+
+        // While both apps run, the other install imports its legacy history and saves a new recording
+        // after this store loaded. Their audio is referenced only by rows this store has not loaded.
+        let runningSuites = (0..<2).map { "fluid-history-running-\($0)-\(UUID())" }
+        defer { runningSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let runningDefaults = UserDefaults(suiteName: runningSuites[0]),
+              let otherRunningDefaults = UserDefaults(suiteName: runningSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        func recorded(_ seconds: TimeInterval, _ fileName: String) -> TranscriptionHistoryEntry {
+            TranscriptionHistoryEntry(
+                timestamp: Date(timeIntervalSince1970: seconds),
+                rawText: fileName,
+                processedText: fileName,
+                appName: "Test",
+                windowTitle: "Test",
+                wasAIProcessed: false,
+                audio: DictationAudioMetadata(
+                    fileName: fileName,
+                    durationMilliseconds: 1000,
+                    byteCount: 32_000,
+                    sampleRate: 16_000,
+                    channels: 1,
+                    model: "test"
+                )
+            )
+        }
+        let runningURL = root.appendingPathComponent("running.sqlite3")
+        try otherRunningDefaults.set(JSONEncoder().encode([recorded(1, "imported-by-other.wav")]), forKey: key)
+        let runningStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: runningDefaults,
+            url: runningURL,
+            otherInstallDefaults: [otherRunningDefaults]
+        ))
+        try await runningStore.waitUntilLoaded()
+        let otherWriter = TranscriptionHistoryWriter(defaults: otherRunningDefaults, url: runningURL)
+        _ = try await otherWriter.load()
+        precondition(otherRunningDefaults.data(forKey: key) == nil, "The other install imported its legacy history")
+        let otherSaveError = await withCheckedContinuation { continuation in
+            otherWriter.write(upserts: [recorded(2, "recorded-by-other.wav")]) { continuation.resume(returning: $0) }
+        }
+        precondition(otherSaveError == nil)
+        audioStore.storedFileNames = ["imported-by-other.wav", "recorded-by-other.wav", "orphan.wav"]
+        defer { audioStore.storedFileNames = [] }
+        let runningDeletions = audioStore.deletedFileNames.count
+        runningStore.pruneAudioToBudget()
+        precondition(
+            audioStore.deletedFileNames.dropFirst(runningDeletions) == ["orphan.wav"],
+            "Audio referenced by rows another running install added must not be swept as orphaned"
+        )
+        precondition(audioStore.storedFileNames == ["imported-by-other.wav", "recorded-by-other.wav"])
+        // The automatic prune after a new recording reads the database off the main actor.
+        let ownID = UUID()
+        runningStore.addEntry(id: ownID, rawText: "own", processedText: "Own dictation", appName: "Test", windowTitle: "Test")
+        audioStore.storedFileNames.insert("orphan.wav")
+        let automaticMeasurements = audioStore.usageMeasurements
+        let automaticDeletions = audioStore.deletedFileNames.count
+        runningStore.attachAudio(audio, to: ownID)
+        for _ in 0..<200 where audioStore.usageMeasurements == automaticMeasurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(
+            audioStore.deletedFileNames.dropFirst(automaticDeletions) == ["orphan.wav", audio.fileName],
+            "The automatic prune must keep another install's audio and prune this install's own recording"
+        )
+        precondition(audioStore.storedFileNames == ["imported-by-other.wav", "recorded-by-other.wav"])
+        // A row that cannot be read here may reference audio too.
+        try self.sql(runningURL, "INSERT INTO history VALUES ('\(UUID().uuidString)', x'00')")
+        audioStore.storedFileNames.insert("orphan.wav")
+        let unreadableSweeps = audioStore.orphanSweeps
+        let unreadableDeletions = audioStore.deletedFileNames.count
+        let unreadableMeasurements = audioStore.usageMeasurements
+        runningStore.attachAudio(audio, to: ownID)
+        runningStore.pruneAudioToBudget()
+        // The settings prune measures once and the automatic prune it restarted measures once more.
+        for _ in 0..<200 where audioStore.usageMeasurements < unreadableMeasurements + 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(audioStore.orphanSweeps == unreadableSweeps, "An unreadable saved row must block the orphaned audio sweep")
+        precondition(audioStore.deletedFileNames.count == unreadableDeletions, "An unreadable saved row must block pruning recordings too")
+        precondition(runningStore.entries.first { $0.id == ownID }?.audio == audio)
+        precondition(audioStore.storedFileNames.contains("orphan.wav"))
+        print("PASS: the orphan sweep keeps audio referenced by rows another running install added to the shared database")
+
+        // The other install finishes importing while this install's automatic prune runs: it commits the rows,
+        // then removes its legacy key. The prune must not sweep with references read before that commit.
+        let importingSuites = (0..<2).map { "fluid-history-importing-\($0)-\(UUID())" }
+        defer { importingSuites.forEach { UserDefaults().removePersistentDomain(forName: $0) } }
+        guard let importingOwnDefaults = UserDefaults(suiteName: importingSuites[0]),
+              let importingDefaults = ImportingDefaults(suiteName: importingSuites[1])
+        else { preconditionFailure("Unable to create isolated history defaults") }
+        let importingURL = root.appendingPathComponent("importing.sqlite3")
+        let lateImport = recorded(3, "imported-during-prune.wav")
+        try importingDefaults.set(JSONEncoder().encode([lateImport]), forKey: key)
+        let importingStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(
+            defaults: importingOwnDefaults,
+            url: importingURL,
+            otherInstallDefaults: [importingDefaults]
+        ))
+        try await importingStore.waitUntilLoaded()
+        let lateImportPayload = try JSONEncoder().encode(lateImport).map { String(format: "%02x", $0) }.joined()
+        importingDefaults.onNextRead = {
+            try? self.sql(importingURL, "INSERT INTO history VALUES ('\(lateImport.id.uuidString)', x'\(lateImportPayload)')")
+            importingDefaults.removeObject(forKey: key)
+        }
+        let importingOwnID = UUID()
+        importingStore.addEntry(id: importingOwnID, rawText: "own", processedText: "Own dictation", appName: "Test", windowTitle: "Test")
+        audioStore.storedFileNames = ["imported-during-prune.wav", "orphan.wav"]
+        let importingMeasurements = audioStore.usageMeasurements
+        let importingDeletions = audioStore.deletedFileNames.count
+        importingStore.attachAudio(audio, to: importingOwnID)
+        for _ in 0..<200 where audioStore.usageMeasurements == importingMeasurements {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(importingDefaults.onNextRead == nil, "The automatic prune must check the other install's legacy history")
+        precondition(
+            audioStore.deletedFileNames.dropFirst(importingDeletions) == ["orphan.wav", audio.fileName],
+            "Audio imported by another install during the automatic prune must not be swept as orphaned"
+        )
+        print("PASS: an import another install finishes during the automatic prune keeps its audio")
+
+        // An older instance saves a newer legacy array after this load read the key.
+        let racingSuite = "fluid-history-legacy-race-\(UUID())"
+        defer { UserDefaults().removePersistentDomain(forName: racingSuite) }
+        guard let racingDefaults = RewritingDefaults(suiteName: racingSuite) else {
+            preconditionFailure("Unable to create isolated history defaults")
+        }
+        let racingURL = root.appendingPathComponent("racing.sqlite3")
+        let first = entry(1, "imported")
+        let concurrent = entry(2, "saved by the older instance during load")
+        try racingDefaults.set(JSONEncoder().encode([first]), forKey: key)
+        let rewritten = try JSONEncoder().encode([concurrent, first])
+        racingDefaults.replacement = rewritten
+        let racedStore = TranscriptionHistoryStore(writer: TranscriptionHistoryWriter(defaults: racingDefaults, url: racingURL))
+        try await racedStore.waitUntilLoaded()
+        precondition(racedStore.entries == [first])
+        let racedSweeps = audioStore.orphanSweeps
+        racedStore.pruneAudioToBudget()
+        precondition(audioStore.orphanSweeps == racedSweeps, "Legacy history retained for the next load must block the orphaned audio sweep")
+        precondition(racingDefaults.data(forKey: key) == rewritten, "Legacy history rewritten during a load must not be retired")
+        let nextLoad = try await TranscriptionHistoryWriter(defaults: racingDefaults, url: racingURL).load()
+        precondition(nextLoad == [concurrent, first], "The next load must import the rewritten legacy history")
+        precondition(racingDefaults.data(forKey: key) == nil)
+        print("PASS: legacy history rewritten during a load is kept and imported on the next load")
+
+        // A database written by 1.6.10-1.6.11 still carries the old import marker.
+        let markedURL = root.appendingPathComponent("marked.sqlite3")
+        try self.sql(markedURL, "CREATE TABLE history (id TEXT PRIMARY KEY, payload BLOB NOT NULL)")
+        try self.sql(markedURL, "CREATE TABLE metadata (key TEXT PRIMARY KEY)")
+        try self.sql(markedURL, "INSERT INTO metadata(key) VALUES ('legacy_imported')")
+        let markedSuite = "fluid-history-legacy-marked-\(UUID())"
+        defer { UserDefaults().removePersistentDomain(forName: markedSuite) }
+        guard let markedDefaults = UserDefaults(suiteName: markedSuite) else {
+            preconditionFailure("Unable to create isolated history defaults")
+        }
+        let unimported = [entry(2, "never imported two"), entry(1, "never imported one")]
+        try markedDefaults.set(JSONEncoder().encode(unimported), forKey: key)
+        let markedLoad = try await TranscriptionHistoryWriter(defaults: markedDefaults, url: markedURL).load()
+        precondition(markedLoad == unimported, "An old import marker must not skip legacy history")
+        precondition(markedDefaults.data(forKey: key) == nil)
+        print("PASS: legacy history is imported into a database carrying the old import marker")
+
+        // Only unreadable legacy bytes are skipped; a failed import still fails the load.
+        let source = try JSONEncoder().encode([entry(3, "import fails")])
+        markedDefaults.set(source, forKey: key)
+        try self.sql(markedURL, "CREATE TRIGGER reject_import BEFORE INSERT ON history BEGIN SELECT RAISE(FAIL, 'test disk failure'); END")
+        do {
+            _ = try await TranscriptionHistoryWriter(defaults: markedDefaults, url: markedURL).load()
+            preconditionFailure("A failed legacy import must fail the load")
+        } catch {}
+        precondition(markedDefaults.data(forKey: key) == source, "A failed legacy import must keep legacy history")
+        print("PASS: a failed legacy import fails the load and keeps legacy history")
     }
 
     @MainActor static func testStars(root: URL, defaults: UserDefaults, audio: DictationAudioMetadata) async throws {
@@ -392,6 +736,8 @@ final class DebugLogger {
         var handle: OpaquePointer?
         precondition(sqlite3_open(url.path, &handle) == SQLITE_OK)
         defer { sqlite3_close(handle) }
+        // A writer released by the previous load may still be closing its connection.
+        sqlite3_busy_timeout(handle, 2000)
         precondition(sqlite3_exec(handle, command, nil, nil, nil) == SQLITE_OK)
     }
 }
