@@ -109,25 +109,6 @@ jobs:
       run: |
         set -o pipefail
         mkdir -p build/test-results
-        # Capture the stack if the caption surface test stalls before its screenshot.
-        (
-          until [ -s build/test-results/caption-phase.txt ] || grep -q 'testCaptionSurfaces.*started' build/test-results/xcodebuild.log 2>/dev/null; do
-            sleep 1
-          done
-          sleep 5
-          if ! grep -q 'phase=finished' build/test-results/caption-phase.txt 2>/dev/null && ! grep -q 'testCaptionSurfaces.*passed' build/test-results/xcodebuild.log; then
-            ps -axo pid,comm | grep 'FluidVoice' > build/test-results/caption-processes.txt || true
-            caption_pid=$(sed -nE 's/^Caption surface pid=([0-9]+) phase=.*/\1/p' build/test-results/caption-phase.txt 2>/dev/null || true)
-            if [ -z "$caption_pid" ]; then
-              caption_pid=$(pgrep -n -f '^/.*\.app/Contents/MacOS/FluidVoice Debug( |$)' || true)
-            fi
-            if [ -n "$caption_pid" ]; then
-              sample "$caption_pid" 2 -file build/test-results/caption-stall.txt >build/test-results/caption-sample.log 2>&1 || true
-            fi
-          fi
-        ) &
-        caption_probe_pid=$!
-        trap 'kill "$caption_probe_pid" 2>/dev/null || true' EXIT
         xcodebuild test \
           -project Fluid.xcodeproj \
           -scheme Fluid \
