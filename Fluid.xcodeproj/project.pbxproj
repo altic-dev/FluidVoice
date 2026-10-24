@@ -119,6 +119,7 @@
 		B51800000000000000000002 /* SpokenSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51800000000000000000001 /* SpokenSendTests.swift */; };
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
 		C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */; };
+		C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */; };
 		CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */; };
 		FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
@@ -275,6 +276,7 @@
 		B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIProviderPromptFormatTests.swift; sourceTree = "<group>"; };
 		B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIDictationTokenBudgetTests.swift; sourceTree = "<group>"; };
 		C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperLanguageSelectionTests.swift; sourceTree = "<group>"; };
+		C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechLocaleSelectionTests.swift; sourceTree = "<group>"; };
 		CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceCacheTests.swift; sourceTree = "<group>"; };
 		FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteDeliveryCoordinatorTests.swift; sourceTree = "<group>"; };
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -542,6 +544,7 @@
 				B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */,
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
+				C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
 				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
@@ -946,6 +949,7 @@
 				B51800000000000000000002 /* SpokenSendTests.swift in Sources */,
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
+				C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
 				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,

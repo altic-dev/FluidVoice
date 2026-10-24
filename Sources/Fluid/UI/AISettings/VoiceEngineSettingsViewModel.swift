@@ -145,6 +145,28 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
     }
 
+    /// The analyzer provider binds its locale during preparation, so a new locale needs a
+    /// provider reset. Preparation downloads the locale's model when it isn't installed.
+    func selectAppleSpeechLocale(_ localeIdentifier: String) {
+        guard !self.areSpeechModelActionsBlocked,
+              localeIdentifier != self.settings.selectedAppleSpeechLocaleIdentifier
+        else { return }
+        self.settings.selectedAppleSpeechLocaleIdentifier = localeIdentifier
+        self.asr.resetTranscriptionProvider()
+        Task {
+            do {
+                try await self.asr.ensureAsrReady(source: .settings)
+            } catch is CancellationError {
+                DebugLogger.shared.info("Apple Speech locale change cancelled: \(localeIdentifier)", source: "AISettingsView")
+            } catch {
+                DebugLogger.shared.error("Failed to prepare Apple Speech locale \(localeIdentifier): \(error)", source: "AISettingsView")
+                self.asr.errorTitle = "Language Change Failed"
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
+    }
+
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel, updateWeights: Bool = false) {
         guard !self.areSpeechModelActionsBlocked else { return }
         Task { [weak self] in

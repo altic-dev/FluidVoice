@@ -56,7 +56,22 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
     }
 }
 
+struct AppleSpeechLocaleOption: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
 enum VoiceEngineLanguageCatalog {
+    static func appleSpeechLocaleOptions(
+        identifiers: [String],
+        displayLocale: Locale = .current
+    ) -> [AppleSpeechLocaleOption] {
+        let uniqueIdentifiers = Set(identifiers.map { Self.normalizedLocaleIdentifier($0) })
+        return uniqueIdentifiers
+            .map { AppleSpeechLocaleOption(id: $0, displayName: displayLocale.localizedString(forIdentifier: $0) ?? $0) }
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
     static func allLanguages(
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
     ) -> [VoiceEngineLanguage] {
