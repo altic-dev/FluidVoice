@@ -5034,6 +5034,30 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled || self.contextAwareCapitalizationEnabled
     }
 
+    // MARK: - Dictation Screen Context
+
+    /// Which windows a context-trained dictation model may read.
+    var dictationScreenContextScope: DictationScreenContextScope {
+        get {
+            self.defaults.string(forKey: Keys.dictationScreenContextScope)
+                .flatMap(DictationScreenContextScope.init(rawValue:)) ?? .frontWindow
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.dictationScreenContextScope)
+        }
+    }
+
+    /// Reads the window with OCR when Accessibility finds little text. Needs
+    /// Screen Recording, which dictation never asks for on its own.
+    var dictationScreenContextOCREnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.dictationScreenContextOCREnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.dictationScreenContextOCREnabled)
+        }
+    }
+
     // MARK: - Media Playback Control
 
     /// When enabled, automatically pauses system media playback when transcription starts.
@@ -6029,6 +6053,8 @@ private extension SettingsStore {
         static let continuousDictationModeEnabled = "ContinuousDictationModeEnabled"
         static let continuousDictationSpacingEnabled = "ContinuousDictationSpacingEnabled"
         static let contextAwareCapitalizationEnabled = "ContextAwareCapitalizationEnabled"
+        static let dictationScreenContextScope = "DictationScreenContextScope"
+        static let dictationScreenContextOCREnabled = "DictationScreenContextOCREnabled"
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"

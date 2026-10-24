@@ -337,6 +337,7 @@ struct ContentView: View {
     @State private var showsReleaseHighlights = false
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
+    @State private var dictationContextCapture: DictationContextCapture?
     @State private var recordingFocusTarget: TypingService.CapturedFocusTarget? = nil
 
     // Command Mode State
@@ -2519,6 +2520,45 @@ struct ContentView: View {
         self.captureRecordingFormattingContextIfNeeded()
     }
 
+    /// Starts reading the text around the cursor when the dictation model was
+    /// trained to use it. Every other model skips this entirely.
+    private func startDictationContextCaptureIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
+        self.dictationContextCapture?.cancel()
+        self.dictationContextCapture = nil
+        let route = DictationProviderRoute.resolve(
+            settings: .shared,
+            dictationSlot: slot,
+            appBundleID: self.recordingAppInfo?.bundleId
+        )
+        guard route.usesPrivateAI,
+              PrivateAIIntegrationService.readsDictationContext(model: route.model),
+              let target = NotchContentState.shared.recordingTargetContext,
+              target.pid != ProcessInfo.processInfo.processIdentifier
+        else { return }
+        self.dictationContextCapture = DictationContextCapture.start(
+            target: target,
+            textBeforeCursor: self.settings.needsDictationFormattingContext ? self.recordingPrecedingText : nil,
+            settings: .shared
+        )
+    }
+
+    private func attachDictationContext(to stopSnapshot: inout DictationStopSnapshot?) async {
+        guard let capture = self.dictationContextCapture else { return }
+        self.dictationContextCapture = nil
+        // Text read from another app's window would mislead the model.
+        guard let target = stopSnapshot?.target, target.pid == capture.pid else {
+            capture.cancel()
+            return
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let context = await capture.result(timeout: .milliseconds(300))
+        stopSnapshot?.typingContext = context
+        self.appBench(
+            "dictation_context waitMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded())) "
+                + "beforeCursorChars=\(context?.textBeforeCursor?.count ?? 0) screenLines=\(context?.screenText?.count ?? 0)"
+        )
+    }
+
     private func captureDictationStopSnapshot(slot: SettingsStore.DictationShortcutSlot) -> DictationStopSnapshot {
         let current = TypingService.captureRecordingTargetContext()
         let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -2806,6 +2846,13 @@ struct ContentView: View {
                 self.logDictationPromptTrace("Private AI Provider task", value: "dictationEnhancement")
                 self.logDictationPromptTrace("Input transcription (Q)", value: inputText)
                 self.logDictationPromptTrace("Selected context text", value: "<none (dictation mode)>")
+                if let typingContext = stopSnapshot?.typingContext {
+                    // Sizes only: the typed and screen text are never logged.
+                    self.logDictationPromptTrace(
+                        "Dictation context",
+                        value: "beforeCursorChars=\(typingContext.textBeforeCursor?.count ?? 0) screenLines=\(typingContext.screenText?.count ?? 0)"
+                    )
+                }
             }
 
             self.appBench("ai_private_call")
@@ -2827,7 +2874,9 @@ struct ContentView: View {
                     appName: appInfo.name,
                     bundleID: appInfo.bundleId,
                     windowTitle: appInfo.windowTitle,
-                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    textBeforeCursor: stopSnapshot?.typingContext?.textBeforeCursor,
+                    screenText: stopSnapshot?.typingContext?.screenText
                 ),
                 streamHandler: streamHandler
             )
@@ -3098,6 +3147,9 @@ struct ContentView: View {
         )
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
         self.completeDictationStopSnapshot(&stopSnapshot)
+        if self.dictationContextCapture != nil {
+            await self.attachDictationContext(to: &stopSnapshot)
+        }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
@@ -4696,6 +4748,7 @@ struct ContentView: View {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
+                self.startDictationContextCaptureIfNeeded(for: .primary)
                 self.prewarmPrivateAIDictationIfNeeded(for: .primary)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
@@ -5492,6 +5545,7 @@ extension ContentView {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
+                self.startDictationContextCaptureIfNeeded(for: slot)
                 self.prewarmPrivateAIDictationIfNeeded(for: slot)
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })

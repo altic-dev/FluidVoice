@@ -18,6 +18,8 @@ struct DictationStopSnapshot {
     /// True when the preceding text must be read from the field focused at
     /// stop rather than reused from recording start.
     let readsContextFromFocusedField: Bool
+    /// Read at recording start for a context-trained model; nil otherwise.
+    var typingContext: DictationTypingContext?
 
     /// Fills the fields that need WindowServer or Accessibility round-trips.
     /// Called after the microphone has stopped so they never delay it.
