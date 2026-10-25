@@ -1506,11 +1506,6 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             Label("Fluid Intelligence", systemImage: "sparkles")
                                 .font(.fluidSystem(.headline))
-                            Text("Experimental dictation context for supported Fluid Intelligence models. Requires Accessibility access; OCR also needs Screen Recording.")
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.settingsSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Divider()
                             DictationScreenContextSettings(settings: self.settings, isBusy: self.asr.isRunningOrStarting)
                         }
                         .padding(16)

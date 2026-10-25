@@ -584,6 +584,9 @@ struct ContentView: View {
             .onChange(of: self.audioObserver.inputAvailabilityTick) { _, _ in
                 self.refreshInputDevices()
             }
+            .onChange(of: self.settings.dictationScreenContextEnabled) { _, enabled in
+                if !enabled { self.cancelDictationContextCapture() }
+            }
             .onDisappear {
                 Task { await self.asr.stopWithoutTranscription() }
                 self.cancelPrewarmDictationIfNeeded()
@@ -2534,7 +2537,7 @@ struct ContentView: View {
             dictationSlot: slot,
             appBundleID: self.recordingAppInfo?.bundleId
         )
-        guard route.usesPrivateAI,
+        guard self.settings.dictationScreenContextEnabled, route.usesPrivateAI,
               PrivateAIIntegrationService.readsDictationContext(model: route.model),
               let target = NotchContentState.shared.recordingTargetContext,
               target.pid != ProcessInfo.processInfo.processIdentifier
@@ -2553,7 +2556,8 @@ struct ContentView: View {
 
     private func attachDictationContext(_ capture: DictationContextCapture, to stopSnapshot: inout DictationStopSnapshot?) async {
         // Context must belong to the exact destination field and a supported local model.
-        guard let snapshot = stopSnapshot, snapshot.usesAI, snapshot.route.usesPrivateAI,
+        guard self.settings.dictationScreenContextEnabled,
+              let snapshot = stopSnapshot, snapshot.usesAI, snapshot.route.usesPrivateAI,
               PrivateAIIntegrationService.readsDictationContext(model: snapshot.route.model),
               let target = snapshot.target, capture.matches(target)
         else {
@@ -2562,6 +2566,7 @@ struct ContentView: View {
         }
         let startedAt = ProcessInfo.processInfo.systemUptime
         let context = await capture.result(timeout: .milliseconds(300))
+        guard self.settings.dictationScreenContextEnabled else { return }
         stopSnapshot?.typingContext = context
         self.appBench(
             "dictation_context waitMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded())) "

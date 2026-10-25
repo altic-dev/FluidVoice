@@ -4,18 +4,50 @@ import XCTest
 
 @MainActor
 final class DictationContextCaptureTests: XCTestCase {
-    func testScreenOffNeverInvokesOCRWithStoredToggleEnabled() async {
-        let request = self.request(scope: .off, readsWindowImage: true)
+    func testContextDefaultsOffAndDoesNotStartCaptureWhileDisabled() {
+        let key = "DictationScreenContextEnabled"
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        defaults.removeObject(forKey: key)
+        let settings = SettingsStore.shared
+        XCTAssertFalse(settings.dictationScreenContextEnabled)
+        settings.dictationScreenContextEnabled = true
+        XCTAssertTrue(settings.dictationScreenContextEnabled)
+        settings.dictationScreenContextEnabled = false
+        XCTAssertNil(DictationContextCapture.start(target: self.target(), textBeforeCursor: "private", settings: settings))
+    }
+
+    func testDisabledContextReadsNeitherCursorNorScreen() async {
+        let request = self.request(isEnabled: false)
         let context = await DictationContextReader.read(request) { _, _ in
-            XCTFail("Screen words Off must prevent screenshots")
+            XCTFail("Screen context Off must prevent screenshots")
             return ["unexpected screen text"]
         }
-        XCTAssertNil(context?.screenText)
+        XCTAssertNil(context)
+    }
+
+    func testEnabledContextAutomaticallyUsesOCRWhenAppTextIsMissing() async {
+        let request = DictationContextReader.Request(
+            pid: 999_999,
+            bundleID: "test.context",
+            window: AXUIElementCreateApplication(999_999),
+            element: nil,
+            textBeforeCursor: "Known cursor text",
+            isEnabled: true
+        )
+        let context = await DictationContextReader.read(request) { _, window in
+            XCTAssertNotNil(window)
+            return ["A name from the target window"]
+        }
         XCTAssertEqual(context?.textBeforeCursor, "Known cursor text")
+        XCTAssertEqual(context?.screenText, ["A name from the target window"])
     }
 
     func testMissingCapturedWindowNeverFallsBackToAnotherWindow() async {
-        let context = await DictationContextReader.read(self.request(scope: .frontWindow, readsWindowImage: true)) { _, _ in
+        let context = await DictationContextReader.read(self.request(isEnabled: true)) { _, _ in
             XCTFail("A missing target window must not fall back to another window")
             return ["unexpected screen text"]
         }
@@ -23,7 +55,7 @@ final class DictationContextCaptureTests: XCTestCase {
     }
 
     func testPasswordManagerDropsCursorAndScreenContext() async {
-        let context = await DictationContextReader.read(self.request(bundleID: "com.1password", scope: .frontWindow, readsWindowImage: true)) { _, _ in
+        let context = await DictationContextReader.read(self.request(bundleID: "com.1password", isEnabled: true)) { _, _ in
             XCTFail("Private apps must not invoke OCR")
             return []
         }
@@ -37,8 +69,7 @@ final class DictationContextCaptureTests: XCTestCase {
             window: nil,
             element: nil,
             textBeforeCursor: String(repeating: "a", count: 2100) + "end",
-            scope: .off,
-            readsWindowImage: false
+            isEnabled: true
         )
         let context = await DictationContextReader.read(request)
         XCTAssertEqual(context?.textBeforeCursor?.count, 2000)
@@ -122,7 +153,7 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
-    func testEnablingOCRRequestsMissingPermission() async {
+    func testEnablingContextRequestsMissingPermission() async {
         var requests = 0
         let permission = DictationScreenPermissionController(check: { false }, request: {
             requests += 1
@@ -151,7 +182,7 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(permission.isAllowed)
     }
 
-    func testDisablingOCRBeforePermissionCheckCompletesDoesNotPrompt() async {
+    func testDisablingContextBeforePermissionCheckCompletesDoesNotPrompt() async {
         let started = DispatchSemaphore(value: 0)
         let resume = DispatchSemaphore(value: 0)
         var enabled = true
@@ -160,7 +191,7 @@ final class DictationContextCaptureTests: XCTestCase {
             _ = resume.wait(timeout: .now() + 2)
             return false
         }, request: {
-            XCTFail("Disabling OCR must cancel the pending permission request")
+            XCTFail("Disabling context must cancel the pending permission request")
             return true
         })
         let request = Task { await permission.requestIfNeeded { enabled } }
@@ -213,15 +244,14 @@ final class DictationContextCaptureTests: XCTestCase {
         }
     }
 
-    private func request(bundleID: String = "test.context", scope: DictationScreenContextScope, readsWindowImage: Bool) -> DictationContextReader.Request {
+    private func request(bundleID: String = "test.context", isEnabled: Bool) -> DictationContextReader.Request {
         .init(
             pid: 999_999,
             bundleID: bundleID,
             window: nil,
             element: nil,
             textBeforeCursor: "Known cursor text",
-            scope: scope,
-            readsWindowImage: readsWindowImage
+            isEnabled: isEnabled
         )
     }
 }

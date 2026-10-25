@@ -4,22 +4,6 @@ import Carbon.HIToolbox
 import ScreenCaptureKit
 import Vision
 
-/// Which windows a context-trained dictation model may read text from.
-/// A wider scope adds a case here and its windows in
-/// `DictationContextReader.windows(for:)`.
-nonisolated enum DictationScreenContextScope: String, CaseIterable, Sendable {
-    case off
-    /// The window being dictated into; for a browser, its current tab.
-    case frontWindow
-
-    var displayName: String {
-        switch self {
-        case .off: "Off"
-        case .frontWindow: "Front window"
-        }
-    }
-}
-
 /// Raw text around a dictation, for models trained to read it.
 /// Fluid Intelligence picks the useful words and writes the prompt lines,
 /// so nothing here formats them.
@@ -64,15 +48,14 @@ final nonisolated class DictationContextCapture: @unchecked Sendable {
         textBeforeCursor: String?,
         settings: SettingsStore
     ) -> DictationContextCapture? {
-        guard AXIsProcessTrusted() else { return nil }
+        guard settings.dictationScreenContextEnabled, AXIsProcessTrusted() else { return nil }
         let request = DictationContextReader.Request(
             pid: target.pid,
             bundleID: target.bundleIdentifier,
             window: target.window,
             element: target.element,
             textBeforeCursor: textBeforeCursor,
-            scope: settings.dictationScreenContextScope,
-            readsWindowImage: settings.dictationScreenContextOCREnabled
+            isEnabled: settings.dictationScreenContextEnabled
         )
         let task = Task.detached(priority: .userInitiated) {
             await DictationContextReader.read(request)
@@ -162,8 +145,7 @@ nonisolated enum DictationContextReader {
         let element: AXUIElement?
         /// Already read for dictation formatting; nil reads it here.
         let textBeforeCursor: String?
-        let scope: DictationScreenContextScope
-        let readsWindowImage: Bool
+        let isEnabled: Bool
     }
 
     static let maxTextBeforeCursorCharacters = 2000
@@ -199,7 +181,7 @@ nonisolated enum DictationContextReader {
         _ request: Request,
         recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [String] = { await DictationContextReader.recognizedWindowText(pid: $0, window: $1) }
     ) async -> DictationTypingContext? {
-        guard !Task.isCancelled else { return nil }
+        guard request.isEnabled, !Task.isCancelled else { return nil }
         if let element = request.element { AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds) }
         guard !self.isPrivate(request) else { return nil }
 
@@ -211,7 +193,7 @@ nonisolated enum DictationContextReader {
         for window in windows where !Task.isCancelled {
             self.collectAccessibilityText(in: window, into: &lines)
         }
-        if request.scope != .off, request.readsWindowImage, let window = windows.first,
+        if let window = windows.first,
            lines.wordCount < self.minimumAccessibilityWords, !Task.isCancelled
         {
             for line in await recognizeWindow(request.pid, window) {
@@ -228,15 +210,10 @@ nonisolated enum DictationContextReader {
     }
 
     private static func windows(for request: Request) -> [AXUIElement] {
-        switch request.scope {
-        case .off:
-            return []
-        case .frontWindow:
-            guard let window = request.window else { return [] }
-            let app = AXUIElementCreateApplication(request.pid)
-            self.exposeWebContent(of: app, pid: request.pid)
-            return [window]
-        }
+        guard let window = request.window else { return [] }
+        let app = AXUIElementCreateApplication(request.pid)
+        self.exposeWebContent(of: app, pid: request.pid)
+        return [window]
     }
 
     private static let webContentLock = NSLock()
