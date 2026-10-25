@@ -557,6 +557,16 @@ final class FluidAudioProvider: TranscriptionProvider {
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
                 models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+            } else if descriptor.variant == .pro {
+                progressRelay.report(.loading)
+                do {
+                    models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                } catch AsrModelsError.modelNotFound {
+                    throw NSError(
+                        domain: "FluidAudioProvider", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "\(descriptor.displayName) can’t be downloaded yet."]
+                    )
+                }
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     version: asrModelVersion,
@@ -1844,7 +1854,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         switch selectedModel {
         case .fluidParakeetMini, .fluidParakeetPico:
             return SpeechModelInstallationSnapshot.shared.isInstalled(modelID: selectedModel.id)
-        case .parakeetTDT, .parakeetTDTv2:
+        case .parakeetTDT, .parakeetTDTv2, .fluidParakeetPro:
             return selectedModel.isInstalled
         default:
             return false
@@ -1865,8 +1875,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         return installed.contains(model.id)
     }
 
+    /// Pro is installed by hand and cannot be downloaded again, so it is never repaired by deletion either.
     var preservesInstalledCompactWeights: Bool {
-        self.resolvedSpeechModel == .fluidParakeetMini || self.resolvedSpeechModel == .fluidParakeetPico
+        [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro].contains(self.resolvedSpeechModel)
     }
 
     var shouldClearCacheAfterCancellation: Bool {

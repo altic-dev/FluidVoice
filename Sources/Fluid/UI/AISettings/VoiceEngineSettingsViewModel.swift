@@ -212,7 +212,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "Parakeet TDT v3 uses CoreML and Neural Engine for fastest transcription (25 languages) on Apple Silicon."
         case .parakeetTDTv2:
             return "Parakeet TDT v2 is an English-only model optimized for accuracy and consistency on Apple Silicon."
-        case .fluidParakeetMini, .fluidParakeetPico:
+        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return "\(model.cardDescription) Requires Apple silicon."
         case .parakeetRealtime:
             return "Parakeet Flash uses FluidAudio's true streaming EOU pipeline for low-latency English dictation. Best when you want words to appear live as you speak."
