@@ -1,15 +1,13 @@
-import AppKit
 import SwiftUI
 
-/// Reuse AppKit's cached app icon; no asset lookup or filesystem query in the view.
+/// The current FluidVoice icon (Edge Shine) for in-app badges. The app icon
+/// AppKit hands back can be the older artwork the icon set keeps for earlier
+/// macOS, so badges use their own copy of the new one.
 struct FluidVoiceBrandIcon: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSImage(size: NSSize(width: 32, height: 32))
-
     let size: CGFloat
 
     var body: some View {
-        Image(nsImage: Self.appIconImage)
+        Image("BrandIcon")
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
