@@ -164,7 +164,7 @@ final class DictationContextCaptureTests: XCTestCase {
             return true
         })
         let request = Task { await permission.requestIfNeeded { enabled } }
-        let didStart = await Task.detached { started.wait(timeout: .now() + 2) == .success }.value
+        let didStart = await Task.detached { Self.waitForSignal(started) }.value
         XCTAssertTrue(didStart)
         enabled = false
         resume.signal()
@@ -196,6 +196,10 @@ final class DictationContextCaptureTests: XCTestCase {
             overlayAtBottom: false,
             privateAIAvailable: privateAIAvailable
         )
+    }
+
+    private nonisolated static func waitForSignal(_ semaphore: DispatchSemaphore) -> Bool {
+        semaphore.wait(timeout: .now() + 2) == .success
     }
 
     private func target(pid: pid_t = 1, window: AXUIElement? = nil, element: AXUIElement? = nil) -> TypingService.RecordingTargetContext {
