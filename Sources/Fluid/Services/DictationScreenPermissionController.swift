@@ -36,12 +36,13 @@ final class DictationScreenPermissionController: ObservableObject {
             self.refreshTask = task
         }
         let allowed = await task.value
-        guard generation == self.generation, !Task.isCancelled else { return }
+        guard generation == self.generation else { return }
+        self.refreshTask = nil
+        guard !Task.isCancelled else { return }
         if self.isAllowed, !allowed { self.requiresSettings = true }
         self.isAllowed = allowed
         if allowed { self.requiresSettings = false }
         self.hasChecked = true
-        self.refreshTask = nil
     }
 
     func requestIfNeeded(shouldRequest: @MainActor () -> Bool) async {

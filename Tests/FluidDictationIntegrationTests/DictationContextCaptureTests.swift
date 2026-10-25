@@ -339,10 +339,12 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(permission.requiresSettings)
     }
 
-    func testLeavingSettingsCancelsPendingPermissionPrompt() async {
+    func testLeavingSettingsCancelsPromptAndAllowsFreshPermissionCheck() async {
         let started = DispatchSemaphore(value: 0)
         let resume = DispatchSemaphore(value: 0)
+        let state = ScreenPermissionCheck()
         let permission = DictationScreenPermissionController(check: {
+            if state.isAllowed { return true }
             started.signal()
             _ = resume.wait(timeout: .now() + 2)
             return false
@@ -358,6 +360,9 @@ final class DictationContextCaptureTests: XCTestCase {
         await request.value
         XCTAssertFalse(permission.isRequesting)
         XCTAssertFalse(permission.isAllowed)
+        state.isAllowed = true
+        await permission.refresh()
+        XCTAssertTrue(permission.isAllowed)
     }
 
     func testRepeatedPermissionActionsProduceOnlyOneRequest() async {
