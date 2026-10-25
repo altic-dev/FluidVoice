@@ -5196,7 +5196,6 @@ final class SettingsStore: ObservableObject {
 
         /// Relative product ratings for display and sorting, not benchmark accuracy.
         var hasPerformanceRatings: Bool {
-            guard self != .qwen3Asr17B else { return false }
             guard let descriptor = self.parakeetDescriptor else { return true }
             return descriptor.performanceRatings != nil
         }
@@ -5528,7 +5527,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 2
             case .whisperLargeTurbo: return 3
             case .whisperLarge: return 1
-            case .qwen3Asr17B: return 0
+            case .qwen3Asr17B: return 3
             }
         }
 
@@ -5549,7 +5548,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 4
             case .whisperLargeTurbo: return 5
             case .whisperLarge: return 5
-            case .qwen3Asr17B: return 0
+            case .qwen3Asr17B: return 5
             }
         }
 
@@ -5570,7 +5569,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.40
             case .whisperLargeTurbo: return 0.65
             case .whisperLarge: return 0.20
-            case .qwen3Asr17B: return 0
+            case .qwen3Asr17B: return 0.50
             }
         }
 
@@ -5591,7 +5590,7 @@ final class SettingsStore: ObservableObject {
             case .whisperMedium: return 0.80
             case .whisperLargeTurbo: return 0.95
             case .whisperLarge: return 1.00
-            case .qwen3Asr17B: return 0
+            case .qwen3Asr17B: return 1.00
             }
         }
 
@@ -6291,6 +6290,9 @@ extension SettingsStore.SpeechModel {
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
+        case .qwen3Asr, .qwen3Asr17B:
+            // https://huggingface.co/Qwen/Qwen3-ASR-1.7B#released-models-description-and-download
+            return "ZH, EN, YUE, AR, DE, FR, ES, PT, ID, IT, KO, RU, TH, VI, JA, TR, HI, MS, NL, SV, DA, FI, PL, CS, FIL, FA, EL, HU, MK, RO"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "40 language-locales"
         case .appleSpeechAnalyzer:
@@ -6310,6 +6312,10 @@ extension SettingsStore.SpeechModel {
             return "English"
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
+        case .qwen3Asr, .qwen3Asr17B:
+            return "Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, " +
+                "Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, " +
+                "Hungarian, Macedonian, and Romanian"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "Spanish, Italian, Portuguese, Hindi, Korean, English, German, French, Russian, Turkish, Vietnamese, Dutch, Japanese, Arabic, " +
                 "Ukrainian; Polish, Norwegian Bokmal, Finnish, Mandarin, Czech, Bulgarian, Slovak, Swedish, Croatian, Romanian, Estonian, " +

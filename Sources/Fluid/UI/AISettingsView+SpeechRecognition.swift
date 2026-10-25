@@ -203,6 +203,7 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
+                            .help(model.supportedLanguageNames ?? supportedLanguageCodes)
                     }
 
                     // Memory warning for large models

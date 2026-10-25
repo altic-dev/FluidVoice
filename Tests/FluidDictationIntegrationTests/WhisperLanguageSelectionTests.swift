@@ -46,7 +46,7 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertEqual(model.provider, .qwen)
         XCTAssertFalse(model.isWhisperModel)
         XCTAssertFalse(model.supportsStreaming)
-        XCTAssertFalse(model.hasPerformanceRatings)
+        XCTAssertTrue(model.hasPerformanceRatings)
         XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
         XCTAssertFalse(SettingsStore.SpeechModel.availableModels.contains(.qwen3Asr))
     }
