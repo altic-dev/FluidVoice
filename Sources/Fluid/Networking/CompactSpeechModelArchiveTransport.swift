@@ -47,7 +47,7 @@ nonisolated enum CompactSpeechModelArchiveTransport {
         chunkBytes: Int64
     ) async throws -> (URL, URLResponse) {
         try Task.checkCancellation()
-        guard descriptor.variant == .mini || descriptor.variant == .pico,
+        guard descriptor.isHostedPack,
               descriptor.folderName == ParakeetSpeechModelCatalog.descriptor(for: descriptor.variant).folderName,
               modelsDirectory.isFileURL,
               let url = descriptor.archiveURL, url.scheme == "https", url.host == SpeechModelFeed.host,

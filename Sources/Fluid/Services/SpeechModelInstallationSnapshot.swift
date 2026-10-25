@@ -207,7 +207,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             case .builtIn:
                 exists = true
             case let .parakeet(descriptor):
-                if descriptor.variant == .mini || descriptor.variant == .pico {
+                if descriptor.isHostedPack {
                     let hash = models.flatMap { descriptor.installedArchiveSHA256(at: descriptor.cacheDirectory(in: $0)) }
                     exists = hash != nil
                     if let hash {

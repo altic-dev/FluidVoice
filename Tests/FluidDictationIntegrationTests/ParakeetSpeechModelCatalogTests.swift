@@ -178,13 +178,17 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Fluid Speech Pico")
     }
 
-    func testProIsLocalOnlyAndNeverDownloadedOrUpdated() throws {
+    func testProDownloadsItsHostedPackLikeMiniAndPico() throws {
         let descriptor = ParakeetSpeechModelCatalog.pro
         let model = SettingsStore.SpeechModel.fluidParakeetPro
         XCTAssertEqual(model.parakeetDescriptor, descriptor)
         XCTAssertEqual(descriptor.asrModelVersion, .fluidParakeetPro)
-        XCTAssertNil(descriptor.archiveURL, "Pro is not hosted; it must never be fetched from a guessed address")
-        XCTAssertNil(descriptor.archiveSHA256)
+        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
+        XCTAssertEqual(descriptor.archiveSHA256?.count, 64)
+        XCTAssertEqual(descriptor.manifestSHA256?.count, 64)
+        XCTAssertEqual(descriptor.expectedDownloadBytes, 652_482_560)
+        XCTAssertTrue(descriptor.isHostedPack)
+        XCTAssertFalse(ParakeetSpeechModelCatalog.v3.isHostedPack)
         XCTAssertNil(CompactSpeechModelReleaseCatalog.shared.descriptor(for: model), "The signed feed only updates Mini and Pico")
         XCTAssertEqual(descriptor.folderName, "fluid-parakeet-pro-coreml")
         XCTAssertEqual(descriptor.requiredModelNames, ParakeetSpeechModelCatalog.standardModelNames, "The Mac pack has one encoder")
@@ -199,7 +203,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: descriptor.modelID), descriptor)
         XCTAssertFalse(ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(descriptor.modelID))
         XCTAssertTrue(FluidAudioProvider(modelOverride: model, configureWordBoosting: false).preservesInstalledCompactWeights,
-                      "A hand-installed model cannot be downloaded again, so a failed load must not delete it")
+                      "Like Mini and Pico, a failed load must not delete verified hosted weights")
         XCTAssertFalse(FluidAudioProvider(modelOverride: .parakeetTDT, configureWordBoosting: false).preservesInstalledCompactWeights)
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -213,12 +217,11 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         }
         XCTAssertFalse(descriptor.artifactsAreComplete(at: directory))
         try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
-        XCTAssertTrue(descriptor.artifactsAreComplete(at: directory), "A hand-installed folder needs no archive marker")
+        XCTAssertFalse(descriptor.artifactsAreComplete(at: directory), "Without the archive marker it is not the hosted release")
         XCTAssertNil(descriptor.installedArchiveSHA256(at: directory))
         try descriptor.writeInstallationRevision(at: directory)
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: directory.appendingPathComponent(ParakeetSpeechModelCatalog.installationRevisionFileName).path
-        ))
+        XCTAssertTrue(descriptor.artifactsAreComplete(at: directory))
+        XCTAssertEqual(descriptor.installedArchiveSHA256(at: directory), descriptor.archiveSHA256)
     }
 
     func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
