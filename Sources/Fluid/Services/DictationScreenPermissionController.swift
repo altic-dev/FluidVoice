@@ -1,12 +1,13 @@
 import Combine
 import CoreGraphics
 
-/// Permission checks are read-only. Only an explicit OCR enable action may prompt.
+/// Permission checks are read-only. Only the permission button may prompt.
 @MainActor
 final class DictationScreenPermissionController: ObservableObject {
     @Published private(set) var isAllowed = false
     @Published private(set) var hasChecked = false
     @Published private(set) var isRequesting = false
+    @Published private(set) var requiresSettings = false
 
     private let check: @Sendable () -> Bool
     private let request: @MainActor () -> Bool
@@ -36,7 +37,9 @@ final class DictationScreenPermissionController: ObservableObject {
         }
         let allowed = await task.value
         guard generation == self.generation, !Task.isCancelled else { return }
+        if self.isAllowed, !allowed { self.requiresSettings = true }
         self.isAllowed = allowed
+        if allowed { self.requiresSettings = false }
         self.hasChecked = true
         self.refreshTask = nil
     }
@@ -51,6 +54,7 @@ final class DictationScreenPermissionController: ObservableObject {
         self.refreshTask?.cancel()
         self.refreshTask = nil
         self.isAllowed = self.request()
+        self.requiresSettings = !self.isAllowed
         self.hasChecked = true
     }
 }

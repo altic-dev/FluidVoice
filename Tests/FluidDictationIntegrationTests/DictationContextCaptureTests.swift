@@ -230,7 +230,31 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
-    func testEnablingContextRequestsMissingPermission() async {
+    func testChangingContextToggleNeverRequestsPermission() async {
+        let key = "DictationScreenContextEnabled"
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        let prompted = self.expectation(description: "The feature toggle must never prompt")
+        prompted.isInverted = true
+        let permission = DictationScreenPermissionController(check: { false }, request: {
+            prompted.fulfill()
+            return true
+        })
+        let settings = SettingsStore.shared
+        let view = DictationScreenContextSettings(settings: settings, isBusy: false, permission: permission)
+        view.enabledBinding.wrappedValue = true
+        XCTAssertTrue(settings.dictationScreenContextEnabled)
+        await self.fulfillment(of: [prompted], timeout: 0.2)
+        XCTAssertFalse(permission.hasChecked)
+        XCTAssertFalse(permission.isAllowed)
+        view.enabledBinding.wrappedValue = false
+        XCTAssertFalse(settings.dictationScreenContextEnabled)
+    }
+
+    func testExplicitPermissionActionRequestsMissingAccess() async {
         var requests = 0
         let permission = DictationScreenPermissionController(check: { false }, request: {
             requests += 1
@@ -239,6 +263,7 @@ final class DictationContextCaptureTests: XCTestCase {
         await permission.requestIfNeeded { true }
         XCTAssertTrue(permission.isAllowed)
         XCTAssertFalse(permission.isRequesting)
+        XCTAssertFalse(permission.requiresSettings)
         XCTAssertEqual(requests, 1)
     }
 
@@ -248,6 +273,7 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(permission.hasChecked)
         XCTAssertFalse(permission.isAllowed)
         XCTAssertFalse(permission.isRequesting)
+        XCTAssertTrue(permission.requiresSettings)
     }
 
     func testGrantedPermissionDoesNotPromptAgain() async {
@@ -257,9 +283,10 @@ final class DictationContextCaptureTests: XCTestCase {
         })
         await permission.requestIfNeeded { true }
         XCTAssertTrue(permission.isAllowed)
+        XCTAssertFalse(permission.requiresSettings)
     }
 
-    func testDisablingContextBeforePermissionCheckCompletesDoesNotPrompt() async {
+    func testRequestEligibilityIsRecheckedBeforePrompt() async {
         let started = DispatchSemaphore(value: 0)
         let resume = DispatchSemaphore(value: 0)
         var enabled = true
@@ -268,7 +295,7 @@ final class DictationContextCaptureTests: XCTestCase {
             _ = resume.wait(timeout: .now() + 2)
             return false
         }, request: {
-            XCTFail("Disabling context must cancel the pending permission request")
+            XCTFail("An ineligible action must not show a pending permission request")
             return true
         })
         let request = Task { await permission.requestIfNeeded { enabled } }
@@ -278,6 +305,81 @@ final class DictationContextCaptureTests: XCTestCase {
         resume.signal()
         await request.value
         XCTAssertFalse(permission.isAllowed)
+        XCTAssertFalse(permission.isRequesting)
+    }
+
+    func testReturningFromSystemSettingsUpdatesGrantedStatusWithoutPrompting() async {
+        let state = ScreenPermissionCheck()
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: { state.isAllowed }, request: {
+            requests += 1
+            return false
+        })
+        await permission.requestIfNeeded { true }
+        XCTAssertTrue(permission.requiresSettings)
+        state.isAllowed = true
+        await permission.refresh()
+        XCTAssertTrue(permission.isAllowed)
+        XCTAssertFalse(permission.requiresSettings)
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testRevokedPermissionRemovesGrantedStatusWithoutPrompting() async {
+        let state = ScreenPermissionCheck()
+        state.isAllowed = true
+        let permission = DictationScreenPermissionController(check: { state.isAllowed }, request: {
+            XCTFail("Revoked permission must not trigger an automatic request")
+            return true
+        })
+        await permission.refresh()
+        XCTAssertTrue(permission.isAllowed)
+        state.isAllowed = false
+        await permission.refresh()
+        XCTAssertFalse(permission.isAllowed)
+        XCTAssertTrue(permission.requiresSettings)
+    }
+
+    func testLeavingSettingsCancelsPendingPermissionPrompt() async {
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let permission = DictationScreenPermissionController(check: {
+            started.signal()
+            _ = resume.wait(timeout: .now() + 2)
+            return false
+        }, request: {
+            XCTFail("A cancelled action must not open the permission prompt")
+            return true
+        })
+        let request = Task { await permission.requestIfNeeded { true } }
+        let didStart = await Task.detached { Self.waitForSignal(started) }.value
+        XCTAssertTrue(didStart)
+        request.cancel()
+        resume.signal()
+        await request.value
+        XCTAssertFalse(permission.isRequesting)
+        XCTAssertFalse(permission.isAllowed)
+    }
+
+    func testRepeatedPermissionActionsProduceOnlyOneRequest() async {
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        var requests = 0
+        let permission = DictationScreenPermissionController(check: {
+            started.signal()
+            _ = resume.wait(timeout: .now() + 2)
+            return false
+        }, request: {
+            requests += 1
+            return true
+        })
+        let first = Task { await permission.requestIfNeeded { true } }
+        let didStart = await Task.detached { Self.waitForSignal(started) }.value
+        XCTAssertTrue(didStart)
+        await permission.requestIfNeeded { true }
+        resume.signal()
+        await first.value
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(permission.isAllowed)
         XCTAssertFalse(permission.isRequesting)
     }
 
@@ -339,5 +441,15 @@ final class DictationContextCaptureTests: XCTestCase {
             textBeforeCursor: "Known cursor text",
             isEnabled: isEnabled
         )
+    }
+}
+
+private final nonisolated class ScreenPermissionCheck: @unchecked Sendable {
+    private let lock = NSLock()
+    private var allowed = false
+
+    var isAllowed: Bool {
+        get { self.lock.withLock { self.allowed } }
+        set { self.lock.withLock { self.allowed = newValue } }
     }
 }
