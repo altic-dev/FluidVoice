@@ -5,7 +5,7 @@ import Foundation
 /// Resolving a descriptor performs no hardware, network or filesystem queries.
 nonisolated enum ParakeetSpeechModelCatalog {
     enum Variant: String, CaseIterable, Sendable {
-        case v2, v3, mini, pico
+        case v2, v3, mini, pico, pro
     }
 
     struct PerformanceRatings: Equatable, Sendable {
@@ -39,14 +39,14 @@ nonisolated enum ParakeetSpeechModelCatalog {
         var attribution: String {
             switch self.variant {
             case .v2, .v3: "NVIDIA Parakeet"
-            case .mini, .pico: "NVIDIA Parakeet · Moondream Parakeet Ultra"
+            case .mini, .pico, .pro: "NVIDIA Parakeet · Moondream Parakeet Ultra"
             }
         }
 
         var creditLine: String {
             switch self.variant {
             case .v2, .v3: "Built on NVIDIA Parakeet."
-            case .mini, .pico: "Made by FluidVoice, built on NVIDIA Parakeet and Moondream’s Parakeet Ultra."
+            case .mini, .pico, .pro: "Made by FluidVoice, built on NVIDIA Parakeet and Moondream’s Parakeet Ultra."
             }
         }
 
@@ -57,6 +57,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
             case .v2: "parakeet-v2"
             case .v3: "parakeet-v3"
             case .mini, .pico: "\(self.modelID):sha256:\(self.archiveSHA256 ?? "unavailable")"
+            case .pro: self.modelID
             }
         }
 
@@ -251,7 +252,30 @@ nonisolated enum ParakeetSpeechModelCatalog {
         manifestSHA256: "a87ee649edc18aca6d30f251e75237f48c995448b865ffee35ab343ed3e66121"
     )
 
-    static let descriptors = [ParakeetSpeechModelCatalog.v2, ParakeetSpeechModelCatalog.v3, ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico]
+    /// Not hosted yet: installed by hand into the FluidAudio models folder, never downloaded.
+    static let proName = "Fluid Speech Pro"
+    static let pro = Descriptor(
+        modelID: "fluid-parakeet-pro",
+        variant: .pro,
+        folderName: "fluid-parakeet-pro-coreml",
+        expectedDownloadBytes: 652_457_697,
+        archiveURL: nil,
+        archiveSHA256: nil,
+        requiredModelNames: ParakeetSpeechModelCatalog.standardModelNames,
+        vocabularyFile: "parakeet_vocab.json",
+        displayName: ParakeetSpeechModelCatalog.proName,
+        humanReadableName: ParakeetSpeechModelCatalog.proName,
+        languageSupport: "English Only",
+        supportedLanguageCodes: ["en"],
+        downloadSize: "~622.2 MiB",
+        cardDescription: "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac.",
+        performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.98)
+    )
+
+    static let descriptors = [
+        ParakeetSpeechModelCatalog.v2, ParakeetSpeechModelCatalog.v3, ParakeetSpeechModelCatalog.mini,
+        ParakeetSpeechModelCatalog.pico, ParakeetSpeechModelCatalog.pro,
+    ]
 
     /// Dictionary sharing is separate from the exact identity used to load model files.
     static func sharesPronunciationFamily(_ source: String, with target: String) -> Bool {
@@ -259,7 +283,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
     }
 
     private static func isParakeetPronunciationKey(_ key: String) -> Bool {
-        if key == "parakeet-v2" || key == "parakeet-v3" { return true }
+        if key == "parakeet-v2" || key == "parakeet-v3" || key == self.pro.pronunciationModelKey { return true }
         for descriptor in [self.mini, self.pico] {
             if key == descriptor.modelID { return true }
             let prefix = descriptor.modelID + ":sha256:"
@@ -285,6 +309,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
     static func descriptor(forInstalledPronunciationModelKey modelKey: String) -> Descriptor? {
         if modelKey == self.v2.pronunciationModelKey { return self.v2 }
         if modelKey == self.v3.pronunciationModelKey { return self.v3 }
+        if modelKey == self.pro.pronunciationModelKey { return self.pro }
         for source in [self.mini, self.pico] {
             let prefix = source.modelID + ":sha256:"
             guard modelKey.hasPrefix(prefix) else { continue }
@@ -326,6 +351,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         case .v3: self.v3
         case .mini: self.mini
         case .pico: self.pico
+        case .pro: self.pro
         }
     }
 }

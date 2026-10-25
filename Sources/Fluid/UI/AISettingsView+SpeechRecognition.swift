@@ -669,7 +669,7 @@ extension VoiceEngineSettingsView {
     }
 
     private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
-        if model == .fluidParakeetMini || model == .fluidParakeetPico {
+        if [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro].contains(model) {
             return model.languageSupport
         }
         switch model {
