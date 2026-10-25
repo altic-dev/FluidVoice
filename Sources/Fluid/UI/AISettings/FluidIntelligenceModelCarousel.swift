@@ -42,19 +42,13 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                         }
                         .overlay(alignment: .bottom) {
                             if position == 0, let model = self.models.first(where: { $0.id == id }) {
-                                self.controls(model).padding(.horizontal, 16).padding(.bottom, 16)
-                            }
-                        }
-                        .overlay(alignment: .topLeading) {
-                            // Sits in the card's empty top row; that row shows the
-                            // recommendation instead when this model is recommended.
-                            if position == 0, let model = self.models.first(where: { $0.id == id }),
-                               self.recommendedModelID != model.id,
-                               PrivateAIIntegrationService.readsDictationContext(model: model.id)
-                            {
-                                ScreenContextChip(settings: SettingsStore.shared)
-                                    .padding(.top, self.spacing.xl - 2)
-                                    .padding(.leading, self.spacing.xl)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    if PrivateAIIntegrationService.readsDictationContext(model: model.id) {
+                                        ScreenContextChip(settings: SettingsStore.shared)
+                                    }
+                                    self.controls(model)
+                                }
+                                .padding(.horizontal, 16).padding(.bottom, 16)
                             }
                         }
                         .frame(width: position == 0 ? cardWidth : sideWidth, height: AppTheme.Metrics.Showcase.cardHeight)
