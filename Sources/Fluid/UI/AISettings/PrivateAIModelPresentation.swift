@@ -9,7 +9,7 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .quad: "Fluid 1 Quad"
-        case .multilingual: "Fluid 1.1 Wave Multilingual"
+        case .multilingual: "Fluid 1.1 Wave"
         }
     }
 
