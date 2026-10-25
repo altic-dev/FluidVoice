@@ -11,6 +11,7 @@ struct ReleaseFeaturePreview: View {
             case .meeting: self.meeting
             case .dashboard: self.dashboard
             case .models: self.models
+            case .speech: self.speech
             }
         }
         .padding(16)
@@ -91,13 +92,23 @@ struct ReleaseFeaturePreview: View {
             Label(PrivateAIProviderFeature.shared.isAvailable ? "Fluid Intelligence" : "AI Providers", systemImage: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
             if PrivateAIProviderFeature.shared.isAvailable {
-                self.model("Fluid-1 Pico", detail: "Light & quick", symbol: "bolt")
-                self.model("Fluid-1 Mini", detail: "Everyday writing", symbol: "text.alignleft")
-                self.model("Fluid-1 Quad", detail: "More capable", symbol: "cpu")
+                self.model("Fluid 1.1 Splash", detail: "Reads your screen", symbol: "text.viewfinder")
+                self.model("Fluid 1 Mini", detail: "Everyday writing", symbol: "text.alignleft")
+                self.model("Fluid 1 Pico", detail: "Light & quick", symbol: "bolt")
             } else {
                 self.model("Your provider", detail: "Your choice", symbol: "sparkles")
                 self.model("Your model", detail: "Your workflow", symbol: "cpu")
             }
+        }
+    }
+
+    private var speech: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Voice Engine", systemImage: "waveform")
+                .font(.system(size: 11, weight: .semibold))
+            self.model("Fluid Speech Pro", detail: "Most accurate", symbol: "star")
+            self.model("Fluid Speech Mini", detail: "Half the size", symbol: "waveform")
+            self.model("Fluid Speech Pico", detail: "Smallest", symbol: "bolt")
         }
     }
 

@@ -134,6 +134,7 @@ struct ReleaseHighlightsPresenter: ViewModifier {
             case .meetings: self.onExplore(.meetingTranscription)
             case .dashboard: self.onExplore(.welcome)
             case .aiProviders: self.onExplore(.aiEnhancements)
+            case .voiceEngine: self.onExplore(.voiceEngine)
             }
         } else if result == false {
             self.presentIfNeeded()
