@@ -59,8 +59,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
             switch self.variant {
             case .v2: "parakeet-v2"
             case .v3: "parakeet-v3"
-            case .mini, .pico: "\(self.modelID):sha256:\(self.archiveSHA256 ?? "unavailable")"
-            case .pro: self.modelID
+            case .mini, .pico, .pro: "\(self.modelID):sha256:\(self.archiveSHA256 ?? "unavailable")"
             }
         }
 
@@ -287,8 +286,8 @@ nonisolated enum ParakeetSpeechModelCatalog {
     }
 
     private static func isParakeetPronunciationKey(_ key: String) -> Bool {
-        if key == "parakeet-v2" || key == "parakeet-v3" || key == self.pro.pronunciationModelKey { return true }
-        for descriptor in [self.mini, self.pico] {
+        if key == "parakeet-v2" || key == "parakeet-v3" { return true }
+        for descriptor in [self.mini, self.pico, self.pro] {
             if key == descriptor.modelID { return true }
             let prefix = descriptor.modelID + ":sha256:"
             guard key.hasPrefix(prefix) else { continue }
@@ -313,8 +312,9 @@ nonisolated enum ParakeetSpeechModelCatalog {
     static func descriptor(forInstalledPronunciationModelKey modelKey: String) -> Descriptor? {
         if modelKey == self.v2.pronunciationModelKey { return self.v2 }
         if modelKey == self.v3.pronunciationModelKey { return self.v3 }
-        if modelKey == self.pro.pronunciationModelKey { return self.pro }
-        for source in [self.mini, self.pico] {
+        // Pro's first-download session originally saved this unversioned key.
+        if modelKey == self.pro.modelID { return self.pro }
+        for source in [self.mini, self.pico, self.pro] {
             let prefix = source.modelID + ":sha256:"
             guard modelKey.hasPrefix(prefix) else { continue }
             let hash = String(modelKey.dropFirst(prefix.count))

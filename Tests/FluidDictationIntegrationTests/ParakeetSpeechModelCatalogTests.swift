@@ -198,12 +198,14 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(model.brandName, "FluidVoice")
         XCTAssertEqual(model.provider, .nvidia)
         XCTAssertEqual(descriptor.creditLine, ParakeetSpeechModelCatalog.mini.creditLine)
-        XCTAssertEqual(descriptor.pronunciationModelKey, descriptor.modelID)
+        XCTAssertEqual(descriptor.pronunciationModelKey, try descriptor.modelID + ":sha256:" + XCTUnwrap(descriptor.archiveSHA256))
         XCTAssertTrue(ParakeetSpeechModelCatalog.sharesPronunciationFamily(descriptor.pronunciationModelKey, with: "parakeet-v3"))
         XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: descriptor.modelID), descriptor)
         XCTAssertFalse(ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(descriptor.modelID))
-        XCTAssertTrue(FluidAudioProvider(modelOverride: model, configureWordBoosting: false).preservesInstalledCompactWeights,
-                      "Like Mini and Pico, a failed load must not delete verified hosted weights")
+        XCTAssertTrue(
+            FluidAudioProvider(modelOverride: model, configureWordBoosting: false).preservesInstalledCompactWeights,
+            "Like Mini and Pico, a failed load must not delete verified hosted weights"
+        )
         XCTAssertFalse(FluidAudioProvider(modelOverride: .parakeetTDT, configureWordBoosting: false).preservesInstalledCompactWeights)
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

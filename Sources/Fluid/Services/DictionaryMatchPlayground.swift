@@ -79,7 +79,9 @@ actor DictionaryMatchPlayground {
     ) throws -> PronunciationDictionaryProfile {
         let matching = profiles.filter { $0.label.caseInsensitiveCompare(target) == .orderedSame }
         if let current = matching.first(where: {
-            compatibleModelKeys.contains($0.modelKey)
+            (compatibleModelKeys.contains($0.modelKey)
+                || ($0.modelKey == ParakeetSpeechModelCatalog.pro.modelID
+                    && compatibleModelKeys.contains(ParakeetSpeechModelCatalog.pro.pronunciationModelKey)))
                 && ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: $0.modelKey) != nil
         }) {
             return current

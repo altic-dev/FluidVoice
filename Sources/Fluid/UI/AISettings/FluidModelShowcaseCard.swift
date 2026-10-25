@@ -76,6 +76,13 @@ struct FluidModelShowcaseCard: View {
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 // Separate sibling controls are overlaid by the carousel; never nest buttons.
                 Color.clear.frame(height: 64)
+                    .overlay(alignment: .bottomLeading) {
+                        if self.compact, self.isSelected {
+                            Text("Active")
+                                .font(self.theme.typography.captionStrong)
+                                .foregroundStyle(FluidBrandColors.blue)
+                        }
+                    }
             }
             .padding(self.theme.metrics.spacing.xl)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

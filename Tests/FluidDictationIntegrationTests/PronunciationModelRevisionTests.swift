@@ -23,6 +23,58 @@ final class PronunciationModelRevisionTests: XCTestCase {
         XCTAssertFalse(ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey("parakeet-v3"))
     }
 
+    func testProFirstDownloadAndInstalledKeysResolveToTheSameCheckpoint() throws {
+        let descriptor = ParakeetSpeechModelCatalog.pro
+        let installedKey = try descriptor.modelID + ":sha256:" + XCTUnwrap(descriptor.archiveSHA256)
+        XCTAssertEqual(descriptor.pronunciationModelKey, installedKey)
+        XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(forPronunciationModelKey: installedKey), descriptor)
+        let installed = try XCTUnwrap(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: installedKey))
+        XCTAssertEqual(installed.pronunciationModelKey, installedKey)
+        XCTAssertEqual(installed.archiveSHA256, descriptor.archiveSHA256)
+        XCTAssertEqual(installed.requiredModelNames, descriptor.requiredModelNames)
+        XCTAssertNil(installed.archiveURL, "Resolving stored evidence must never download replacement weights")
+
+        let olderKey = descriptor.modelID + ":sha256:" + String(repeating: "a", count: 64)
+        let older = try XCTUnwrap(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: olderKey))
+        XCTAssertEqual(older.pronunciationModelKey, olderKey)
+        XCTAssertNil(older.archiveURL)
+        for key in [installedKey, olderKey, descriptor.modelID] {
+            for other in ParakeetSpeechModelCatalog.descriptors {
+                XCTAssertTrue(ParakeetSpeechModelCatalog.sharesPronunciationFamily(key, with: other.pronunciationModelKey))
+                XCTAssertTrue(ParakeetSpeechModelCatalog.sharesPronunciationFamily(other.pronunciationModelKey, with: key))
+            }
+        }
+        for hash in ["", "bad", String(repeating: "G", count: 64), String(repeating: "a", count: 63), String(repeating: "a", count: 65)] {
+            let key = descriptor.modelID + ":sha256:" + hash
+            XCTAssertNil(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: key))
+            XCTAssertFalse(ParakeetSpeechModelCatalog.sharesPronunciationFamily(key, with: installedKey))
+        }
+    }
+
+    func testProReloadKeepsLegacyAndSharedProfilesWithoutRewritingStorage() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        let store = PronunciationDictionaryStore(fileURL: url)
+        let descriptor = ParakeetSpeechModelCatalog.pro
+        let legacy = Self.profile(entryID: UUID(), key: descriptor.modelID)
+        let current = Self.profile(entryID: UUID(), key: descriptor.pronunciationModelKey)
+        let shared = Self.profile(entryID: UUID(), key: "parakeet-v3")
+        for profile in [legacy, current, shared] {
+            try await store.upsert(dictionaryEntryID: profile.dictionaryEntryID, label: profile.label, modelKey: profile.modelKey, enrollments: profile.enrollments)
+        }
+        let before = try Data(contentsOf: url)
+        let reloaded = PronunciationDictionaryStore(fileURL: url)
+        let profiles = await reloaded.sharedProfiles(modelKey: descriptor.pronunciationModelKey, hiddenSize: legacy.hiddenSize)
+        XCTAssertEqual(Set(profiles.map(\.modelKey)), [legacy.modelKey, current.modelKey, shared.modelKey])
+        XCTAssertEqual(try Data(contentsOf: url), before)
+        XCTAssertEqual(try DictionaryMatchPlayground.targetProfile(from: [legacy], target: legacy.label), legacy)
+        XCTAssertThrowsError(try DictionaryMatchPlayground.targetProfile(from: [legacy], target: legacy.label, compatibleModelKeys: ["parakeet-v3"]))
+        #if arch(arm64)
+        XCTAssertEqual(DictionaryPronunciationReferences.make(profiles: profiles, compatibleModelKey: descriptor.pronunciationModelKey).count, 9)
+        #endif
+    }
+
     func testRetrainingKeepsOriginalStoredProfileAndTextEntryWithoutReusingOldVectors() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -191,7 +243,7 @@ final class PronunciationModelRevisionTests: XCTestCase {
     func testNormalProviderPreparationKeepsCompleteOldWeightsAndTheirActualPronunciationKey() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico] {
+        for model: SettingsStore.SpeechModel in [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro] {
             let descriptor = try XCTUnwrap(model.parakeetDescriptor)
             let installed = descriptor.cacheDirectory(in: root)
             try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
@@ -213,6 +265,8 @@ final class PronunciationModelRevisionTests: XCTestCase {
                 XCTFail("Dummy Core ML files must fail locally without deleting old weights for recovery")
             } catch {}
             XCTAssertEqual(provider.pronunciationModelKeyForTesting, descriptor.modelID + ":sha256:" + oldHash)
+            XCTAssertNotNil(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: provider.pronunciationModelKeyForTesting))
+            XCTAssertTrue(ParakeetSpeechModelCatalog.sharesPronunciationFamily(provider.pronunciationModelKeyForTesting, with: "parakeet-v3"))
             XCTAssertEqual(descriptor.installedArchiveSHA256(at: installed), oldHash, "Normal loading must never erase an older complete download")
             XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent(descriptor.vocabularyFile)), Data("{}".utf8))
         }
