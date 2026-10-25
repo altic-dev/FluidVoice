@@ -76,6 +76,83 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(context?.textBeforeCursor?.hasSuffix("end") == true)
     }
 
+    func testOCRSelectsOnlyTheMatchingAppWindow() {
+        let frame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let windows = [
+            self.windowInfo(id: 1, pid: 999, frame: frame),
+            self.windowInfo(id: 2, frame: frame.offsetBy(dx: 200, dy: 0)),
+            self.windowInfo(id: 3, frame: frame, layer: 1),
+            self.windowInfo(id: 4, frame: frame),
+        ]
+        XCTAssertEqual(DictationContextReader.windowID(pid: 101, frame: frame, windows: windows), 4)
+    }
+
+    func testOCRSkipsIdenticalWindowsRegardlessOfStackingOrder() {
+        let frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let first = self.windowInfo(id: 1, frame: frame)
+        let second = self.windowInfo(id: 2, frame: frame)
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: [first, second]))
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: [second, first]))
+    }
+
+    func testOCRSkipsWindowsThatAreAmbiguousWithinBoundsTolerance() {
+        let frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let windows = [self.windowInfo(id: 1, frame: frame), self.windowInfo(id: 2, frame: frame.offsetBy(dx: 1, dy: 1))]
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: windows))
+    }
+
+    func testOCRDoesNotUseAnotherWindowAfterTargetDisappears() {
+        let frame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        let remaining = [self.windowInfo(id: 2, frame: frame.offsetBy(dx: 200, dy: 0))]
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: remaining))
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: nil, windows: remaining))
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: .zero, windows: remaining))
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: []))
+    }
+
+    func testOCRSkipsIncompleteWindowMetadata() {
+        let frame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        var missingID = self.windowInfo(id: 1, frame: frame)
+        missingID.removeValue(forKey: kCGWindowNumber as String)
+        var missingBounds = self.windowInfo(id: 2, frame: frame)
+        missingBounds.removeValue(forKey: kCGWindowBounds as String)
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: [missingID]))
+        XCTAssertNil(DictationContextReader.windowID(pid: 101, frame: frame, windows: [missingBounds]))
+    }
+
+    func testShortScrolledFieldIncludesOnlyVisibleWords() {
+        let value = "hidden above\nVisible name\nhidden below"
+        let range = (value as NSString).range(of: "Visible name")
+        XCTAssertEqual(DictationContextReader.textEntryValue(value, visibleRange: CFRange(location: range.location, length: range.length)), "Visible name")
+    }
+
+    func testLongScrolledFieldIncludesOnlyVisibleWords() {
+        let value = String(repeating: "hidden ", count: 1000) + "Visible name"
+        let range = (value as NSString).range(of: "Visible name")
+        XCTAssertEqual(DictationContextReader.textEntryValue(value, visibleRange: CFRange(location: range.location, length: range.length)), "Visible name")
+    }
+
+    func testVisibleRangeUsesUTF16Offsets() {
+        let value = "👋 hidden\nZoë 🐈\nhidden"
+        let range = (value as NSString).range(of: "Zoë 🐈")
+        XCTAssertEqual(DictationContextReader.textEntryValue(value, visibleRange: CFRange(location: range.location, length: range.length)), "Zoë 🐈")
+    }
+
+    func testEmptyOrInvalidVisibleRangeNeverExposesTheFullValue() {
+        for range in [
+            CFRange(location: 0, length: 0), CFRange(location: -1, length: 1),
+            CFRange(location: 0, length: -1), CFRange(location: 99, length: 1),
+            CFRange(location: 5, length: Int.max), CFRange(location: Int.max, length: 1),
+        ] {
+            XCTAssertEqual(DictationContextReader.textEntryValue("hidden text", visibleRange: range), "")
+        }
+    }
+
+    func testMissingVisibleRangeKeepsOnlyTheBoundedFallback() {
+        XCTAssertEqual(DictationContextReader.textEntryValue("Short field", visibleRange: nil), "Short field")
+        XCTAssertEqual(DictationContextReader.textEntryValue(String(repeating: "x", count: 4001), visibleRange: nil), "")
+    }
+
     func testReadyContextReturnsAndCancelsItsTimeout() async throws {
         let expected = DictationTypingContext(textBeforeCursor: "ready", screenText: ["visible"])
         let task = Task<DictationTypingContext?, Never> { expected }
@@ -235,6 +312,15 @@ final class DictationContextCaptureTests: XCTestCase {
 
     private func target(pid: pid_t = 1, window: AXUIElement? = nil, element: AXUIElement? = nil) -> TypingService.RecordingTargetContext {
         .init(id: UUID(), pid: pid, bundleIdentifier: "test.context", window: window, element: element)
+    }
+
+    private func windowInfo(id: CGWindowID, pid: pid_t = 101, frame: CGRect, layer: Int = 0) -> [String: Any] {
+        [
+            kCGWindowNumber as String: id,
+            kCGWindowOwnerPID as String: pid,
+            kCGWindowLayer as String: layer,
+            kCGWindowBounds as String: frame.dictionaryRepresentation,
+        ]
     }
 
     private func delayedRead() -> Task<DictationTypingContext?, Never> {

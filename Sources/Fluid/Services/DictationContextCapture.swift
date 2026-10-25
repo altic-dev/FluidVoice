@@ -159,7 +159,7 @@ nonisolated enum DictationContextReader {
     private static let maxVisitedElements = 4000
     private static let accessibilityBudgetSeconds = 0.5
     private static let messagingTimeoutSeconds: Float = 0.1
-    /// Long text views are read for their visible part only.
+    /// Omit long text values when the app cannot report their visible range.
     private static let longValueCharacters = 4000
 
     private static let passwordManagerMarkers = [
@@ -285,6 +285,7 @@ nonisolated enum DictationContextReader {
     private static let fetchedAttributes = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXValueAttribute, kAXTitleAttribute,
         kAXDescriptionAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
+        kAXVisibleCharacterRangeAttribute,
     ] as CFArray
 
     private static func collectAccessibilityText(in window: AXUIElement, into lines: inout LineCollector) {
@@ -316,15 +317,15 @@ nonisolated enum DictationContextReader {
     private static func elementText(_ element: AXUIElement) -> ElementText? {
         var valuesRef: CFArray?
         guard AXUIElementCopyMultipleAttributeValues(element, self.fetchedAttributes, AXCopyMultipleAttributeOptions(), &valuesRef) == .success,
-              let values = valuesRef as? [AnyObject], values.count == 8
+              let values = valuesRef as? [AnyObject], values.count == 9
         else { return nil }
 
         let role = values[0] as? String ?? ""
         let subrole = values[1] as? String ?? ""
         var texts: [String] = []
         if var value = values[2] as? String {
-            if value.utf16.count > self.longValueCharacters, self.textEntryRoles.contains(role) {
-                value = self.visibleText(of: element) ?? ""
+            if self.textEntryRoles.contains(role) {
+                value = self.textEntryValue(value, visibleRange: self.axValue(values[8], as: CFRange.self, type: .cfRange))
             }
             texts.append(value)
         }
@@ -346,9 +347,16 @@ nonisolated enum DictationContextReader {
         )
     }
 
-    private static func visibleText(of element: AXUIElement) -> String? {
-        guard let visible = self.range(element, kAXVisibleCharacterRangeAttribute), visible.length > 0 else { return nil }
-        return self.string(element, in: visible)
+    /// Use the app's visible range even for short fields that may be scrolled.
+    /// Read both attributes together and slice the value without another AX call.
+    static func textEntryValue(_ value: String, visibleRange: CFRange?) -> String {
+        let text = value as NSString
+        guard let visibleRange else { return text.length <= self.longValueCharacters ? value : "" }
+        guard visibleRange.location >= 0, visibleRange.length > 0,
+              visibleRange.location <= text.length,
+              visibleRange.length <= text.length - visibleRange.location
+        else { return "" }
+        return text.substring(with: NSRange(location: visibleRange.location, length: visibleRange.length))
     }
 
     // MARK: - OCR fallback
@@ -399,19 +407,26 @@ nonisolated enum DictationContextReader {
     private static func windowID(pid: pid_t, frame: CGRect?) -> CGWindowID? {
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
-        let windows = info.filter {
-            ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
+        return self.windowID(pid: pid, frame: frame, windows: info)
+    }
+
+    static func windowID(pid: pid_t, frame: CGRect?, windows: [[String: Any]]) -> CGWindowID? {
+        guard let frame, !frame.isEmpty else { return nil }
+        var matching: CGWindowID?
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (window[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  abs(rect.minX - frame.minX) < 2, abs(rect.minY - frame.minY) < 2,
+                  abs(rect.width - frame.width) < 2, abs(rect.height - frame.height) < 2
+            else { continue }
+            // Same-sized windows cannot be distinguished by bounds. Never
+            // guess from their stacking order, which can change during a read.
+            guard matching == nil, let windowID = window[kCGWindowNumber as String] as? CGWindowID else { return nil }
+            matching = windowID
         }
-        let matching = frame.flatMap { frame in
-            windows.first { window in
-                guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary)
-                else { return false }
-                return abs(rect.minX - frame.minX) < 2 && abs(rect.minY - frame.minY) < 2
-                    && abs(rect.width - frame.width) < 2 && abs(rect.height - frame.height) < 2
-            }
-        }
-        return matching?[kCGWindowNumber as String] as? CGWindowID
+        return matching
     }
 
     // MARK: - Accessibility helpers
