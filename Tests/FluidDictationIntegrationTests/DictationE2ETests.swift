@@ -1022,6 +1022,48 @@ extension DictationE2ETests {
         )
     }
 
+    func testFinalLeadInPadsShortDictationOnly() {
+        let lead = FluidAudioProvider.finalLeadInSamples
+        XCTAssertTrue(FluidAudioProvider.usesFinalLeadIn(sampleCount: 16_000, hasPronunciationProfiles: false))
+        XCTAssertTrue(FluidAudioProvider.usesFinalLeadIn(sampleCount: 240_000 - lead, hasPronunciationProfiles: false))
+        XCTAssertFalse(FluidAudioProvider.usesFinalLeadIn(sampleCount: 240_000 - lead + 1, hasPronunciationProfiles: false))
+        XCTAssertFalse(FluidAudioProvider.usesFinalLeadIn(sampleCount: 16_000, hasPronunciationProfiles: true))
+
+        let samples: [Float] = [0.5, -0.25]
+        let padded = FluidAudioProvider.withLeadIn(samples)
+        XCTAssertEqual(padded.count, lead + samples.count)
+        XCTAssertTrue(padded.prefix(lead).allSatisfy { $0 == 0 })
+        XCTAssertEqual(Array(padded.suffix(samples.count)), samples)
+    }
+
+    func testFinalLeadInTimingsReturnToTheRecordingClock() throws {
+        let result = ASRResult(
+            text: "hi there",
+            confidence: 0.9,
+            duration: 1.25,
+            processingTime: 0.1,
+            tokenTimings: [
+                TokenTiming(token: "▁hi", tokenId: 7, startTime: 0.1, endTime: 0.4, confidence: 0.9),
+                TokenTiming(token: "▁there", tokenId: 8, startTime: 0.48, endTime: 0.8, confidence: 0.8),
+            ]
+        )
+
+        let restored = FluidAudioProvider.removingLeadIn(from: result)
+        let timings = try XCTUnwrap(restored.tokenTimings)
+
+        XCTAssertEqual(restored.text, result.text)
+        XCTAssertEqual(restored.confidence, result.confidence)
+        XCTAssertEqual(restored.processingTime, result.processingTime)
+        XCTAssertEqual(restored.duration, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(timings.map(\.tokenId), [7, 8])
+        XCTAssertEqual(timings.map(\.confidence), [0.9, 0.8])
+        XCTAssertEqual(timings[0].startTime, 0, accuracy: 1e-9)
+        XCTAssertEqual(timings[0].endTime, 0.15, accuracy: 1e-9)
+        XCTAssertEqual(timings[1].startTime, 0.23, accuracy: 1e-9)
+        XCTAssertEqual(timings[1].endTime, 0.55, accuracy: 1e-9)
+        XCTAssertNil(FluidAudioProvider.removingLeadIn(from: ASRResult(text: "", confidence: 0, duration: 0, processingTime: 0)).tokenTimings)
+    }
+
     func testPronunciationStoreRejectsInconsistentEnrollments() async {
         let store = PronunciationDictionaryStore()
         let enrollments = [

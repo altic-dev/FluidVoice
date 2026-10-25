@@ -185,6 +185,8 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private static let incrementalChunkingThresholdSamples = 240_000
     private static let incrementalAppendBlockSamples = 240_000
+    /// Mac capture opens on ~0.17 s of dead audio; 0.25 s of silence first lets Parakeet catch the first word.
+    static let finalLeadInSamples = 4000
 
     /// Stable admission keeps a ninth word from evicting references used by the next match.
     struct TemporalReferenceCache {
@@ -916,7 +918,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // manager so the user still gets a transcription (just without CTC rescoring).
         do {
             let startedAt = Date().timeIntervalSince1970
-            let outcome = try await self.transcribeFinalResult(samples, manager: manager)
+            let outcome = try await self.transcribeFinalResult(samples, manager: manager, leadIn: true)
             try self.requireCurrentRecording(generation)
             self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: false)
             return outcome.result
@@ -930,7 +932,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 source: "FluidAudioProvider"
             )
             let startedAt = Date().timeIntervalSince1970
-            let outcome = try await self.transcribeFinalResult(samples, manager: fallback)
+            let outcome = try await self.transcribeFinalResult(samples, manager: fallback, leadIn: true)
             try self.requireCurrentRecording(generation)
             self.logFinalBenchmark(samples: samples, text: outcome.result.text, startedAt: startedAt, usedFallback: true)
             return outcome.result
@@ -1211,6 +1213,38 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
     }
 
+    /// Pronunciation matching reads encoder frames against the recording itself, and a full window has no room left.
+    static func usesFinalLeadIn(sampleCount: Int, hasPronunciationProfiles: Bool) -> Bool {
+        !hasPronunciationProfiles && sampleCount + self.finalLeadInSamples <= self.incrementalChunkingThresholdSamples
+    }
+
+    static func withLeadIn(_ samples: [Float]) -> [Float] {
+        [Float](repeating: 0, count: self.finalLeadInSamples) + samples
+    }
+
+    /// Puts timings back on the recording's own clock after transcribing `withLeadIn(_:)`.
+    static func removingLeadIn(from result: ASRResult) -> ASRResult {
+        let offset = TimeInterval(Self.finalLeadInSamples) / 16_000
+        return ASRResult(
+            text: result.text,
+            confidence: result.confidence,
+            duration: max(0, result.duration - offset),
+            processingTime: result.processingTime,
+            tokenTimings: result.tokenTimings?.map {
+                TokenTiming(
+                    token: $0.token,
+                    tokenId: $0.tokenId,
+                    startTime: max(0, $0.startTime - offset),
+                    endTime: max(0, $0.endTime - offset),
+                    confidence: $0.confidence
+                )
+            },
+            performanceMetrics: result.performanceMetrics,
+            ctcDetectedTerms: result.ctcDetectedTerms,
+            ctcAppliedTerms: result.ctcAppliedTerms
+        )
+    }
+
     private func learningAlignment(for result: ASRResult) -> DictionaryLearningAlignment? {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled, SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives, !self.isWordBoostingActive,
               let timings = result.tokenTimings, !timings.isEmpty
@@ -1219,7 +1253,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     private func transcribeFinalResult(
-        _ samples: [Float], manager: AsrManager
+        _ samples: [Float], manager: AsrManager, leadIn: Bool = false
     ) async throws -> (result: ASRTranscriptionResult, tokenTimings: [TokenTiming]?, textMayBeCorrected: Bool) { // swiftlint:disable:this discouraged_optional_collection
         let generation = self.recordingGeneration
         let profiles = self.effectivePronunciationMatchingEnabled ? Self.preparedEdgeProfiles(await self.pronunciationProfiles(), cache: self.edgeReferenceCache) : []
@@ -1233,7 +1267,12 @@ final class FluidAudioProvider: TranscriptionProvider {
         let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
-            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let result: ASRResult
+            if leadIn, Self.usesFinalLeadIn(sampleCount: samples.count, hasPronunciationProfiles: !profiles.isEmpty) {
+                result = try await Self.removingLeadIn(from: manager.transcribe(Self.withLeadIn(samples), source: AudioSource.microphone))
+            } else {
+                result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            }
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled, let features, !profiles.isEmpty else {
